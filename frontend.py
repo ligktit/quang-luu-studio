@@ -990,18 +990,25 @@ class MainDashboard(ctk.CTk):
     
     def _show_tone_result(self, result):
         """Hiển thị kết quả dò tone"""
+        has_timeline = bool(result.get("key_timeline"))
+        dialog_height = 520 if has_timeline else 420
+        
         result_dialog = ctk.CTkToplevel(self)
         result_dialog.title("🎵 Kết quả Dò Tone")
-        result_dialog.geometry("450x420")
+        result_dialog.geometry(f"450x{dialog_height}")
         result_dialog.attributes("-topmost", True)
         result_dialog.transient(self)
         
         main_frame = ctk.CTkFrame(result_dialog)
         main_frame.pack(fill="both", expand=True, padx=20, pady=20)
         
+        # Header
+        header_text = "🎵 KẾT QUẢ DÒ TONE"
+        if result.get("from_cache"):
+            header_text += " (Cache)"
         ctk.CTkLabel(
             main_frame,
-            text="🎵 KẾT QUẢ DÒ TONE",
+            text=header_text,
             font=("Inter", 22, "bold"),
             text_color="#3B82F6"
         ).pack(pady=(10, 15))
@@ -1052,6 +1059,35 @@ class MainDashboard(ctk.CTk):
         conf_bar.set(max(0, min(1, confidence)))
         conf_color = "#22C55E" if confidence >= 0.7 else ("#EAB308" if confidence >= 0.5 else "#EF4444")
         conf_bar.configure(progress_color=conf_color)
+        
+        # Timeline chuyển tone (nếu có)
+        timeline = result.get("key_timeline", [])
+        if len(timeline) > 1:
+            tl_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+            tl_frame.pack(fill="x", pady=5, padx=30)
+            
+            ctk.CTkLabel(
+                tl_frame,
+                text="⏱️ Chuyển tone:",
+                font=("Inter", 12, "bold"),
+                text_color="#94A3B8"
+            ).pack(anchor="w", pady=(0, 3))
+            
+            prev_key = None
+            for entry in timeline:
+                if entry['key_display'] != prev_key:
+                    t = entry.get('time', 0)
+                    mins = t // 60
+                    secs = t % 60
+                    time_str = f"{mins}:{secs:02d}" if mins > 0 else f"{secs}s" 
+                    marker = "🟢" if prev_key is None else "🔄"
+                    ctk.CTkLabel(
+                        tl_frame,
+                        text=f"  {marker} {time_str}: {entry['key_display']}",
+                        font=("Inter", 11),
+                        text_color="#22C55E" if prev_key is None else "#EAB308"
+                    ).pack(anchor="w", pady=1)
+                    prev_key = entry['key_display']
         
         # Top alternatives
         top_results = result.get("top_results", [])
@@ -1535,23 +1571,33 @@ class MainDashboard(ctk.CTk):
                 
                 def make_play_func(song_data):
                     def play_song():
-                        # Mở URL và thiết lập tone
                         url = song_data.get("url")
                         tone = song_data.get("tone", "C")
                         
                         if url:
-                            # Mở YouTube với callback tự động chấm điểm khi video kết thúc
                             def on_video_end(score_result):
-                                """Callback khi video YouTube kết thúc"""
                                 if score_result:
-                                    # Cập nhật điểm số hiển thị
                                     self.current_score = score_result.get("total_score", 0)
                                     self.update_score_display(self.current_score)
-                                    
-                                    # Hiển thị dialog kết quả
                                     ScoringDialog(self, score_result)
                             
-                            self.engine.open_youtube_url(url, on_video_end_callback=on_video_end)
+                            def on_tone_detected(result):
+                                """Callback khi phát hiện tone/chuyển tone tự động"""
+                                if result:
+                                    key_display = result.get('key_display', 'C')
+                                    try:
+                                        if hasattr(self, 'tone_option'):
+                                            self.tone_option.set(key_display)
+                                            self.current_tone = key_display
+                                            self.on_tone_selected(key_display)
+                                    except:
+                                        pass
+                            
+                            self.engine.open_youtube_url(
+                                url,
+                                on_video_end_callback=on_video_end,
+                                on_tone_detected=on_tone_detected
+                            )
                             
                             # Thiết lập tone
                             if hasattr(self, 'tone_option'):

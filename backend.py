@@ -93,6 +93,73 @@ class MidiHandler:
             msg = mido.Message('control_change', channel=channel, control=cc_number, value=value)
             self.outport.send(msg)
 
+TONE_CACHE_FILE = "tone_cache.json"
+
+class ToneCacheManager:
+    """Quản lý cache kết quả dò tone theo YouTube video ID"""
+    
+    @staticmethod
+    def _extract_video_id(url):
+        """Trích xuất video ID từ YouTube URL"""
+        import re
+        if not url:
+            return None
+        patterns = [
+            r'(?:v=|/v/|youtu\.be/)([a-zA-Z0-9_-]{11})',
+            r'(?:embed/)([a-zA-Z0-9_-]{11})',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1)
+        return None
+    
+    @staticmethod
+    def load_cache():
+        if os.path.exists(TONE_CACHE_FILE):
+            try:
+                with open(TONE_CACHE_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+    
+    @staticmethod
+    def save_cache(cache):
+        try:
+            with open(TONE_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(cache, f, ensure_ascii=False, indent=2)
+            return True
+        except:
+            return False
+    
+    @staticmethod
+    def get_cached_tone(url):
+        """Tra cứu cache theo YouTube URL, trả về dict hoặc None"""
+        video_id = ToneCacheManager._extract_video_id(url)
+        if not video_id:
+            return None
+        cache = ToneCacheManager.load_cache()
+        return cache.get(video_id)
+    
+    @staticmethod
+    def save_tone(url, result):
+        """Lưu kết quả dò tone vào cache
+        result = {
+            'primary_key': 'Dm',
+            'key_timeline': [{time, key_display, key_index, scale, confidence}, ...],
+            'url': url
+        }
+        """
+        video_id = ToneCacheManager._extract_video_id(url)
+        if not video_id:
+            return False
+        cache = ToneCacheManager.load_cache()
+        result["detected_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        result["url"] = url
+        cache[video_id] = result
+        return ToneCacheManager.save_cache(cache)
+
 class SystemEngine:
     def __init__(self, settings=None):
         self.settings = settings or {}
@@ -104,6 +171,10 @@ class SystemEngine:
         self.current_youtube_url = None
         self.youtube_monitoring_active = False
         self.on_video_end_callback = None
+        
+        # Trạng thái dò tone liên tục
+        self.tone_detection_active = False
+        self.on_tone_detected_callback = None
     
 
     # --- MIDI WRAPPER METHODS (tương thích với code cũ) ---
@@ -241,27 +312,31 @@ class SystemEngine:
         try: os.system('taskkill /F /IM "Studio One.exe"')
         except: pass
     
-    def open_youtube_url(self, url, on_video_end_callback=None):
+    def open_youtube_url(self, url, on_video_end_callback=None, on_tone_detected=None):
         """
-        Mở YouTube URL trong browser và tự động chấm điểm khi video kết thúc
+        Mở YouTube URL trong browser, tự động dò tone và chấm điểm khi kết thúc
         
         Args:
             url: YouTube URL
-            on_video_end_callback: Callback được gọi khi video kết thúc với kết quả chấm điểm
+            on_video_end_callback: Callback(result) khi video kết thúc
+            on_tone_detected: Callback(result) khi phát hiện tone/chuyển tone
         """
         if not url:
             return
         
+        # Dừng dò tone cũ nếu có
+        self.stop_tone_detection()
+        
         # Lưu URL và callback
         self.current_youtube_url = url
         self.on_video_end_callback = on_video_end_callback
+        self.on_tone_detected_callback = on_tone_detected
         
         # Mở YouTube trong browser
         def open_browser():
             browser_path = self.settings.get("browser_path")
             browser_name = None
             
-            # Xác định tên browser process từ đường dẫn
             if browser_path:
                 browser_exe = os.path.basename(browser_path).lower()
                 if "chrome" in browser_exe:
@@ -275,7 +350,6 @@ class SystemEngine:
                 elif "opera" in browser_exe:
                     browser_name = "opera.exe"
             
-            # Kiểm tra xem browser có đang chạy không
             browser_running = False
             if browser_name:
                 for proc in psutil.process_iter(['name']):
@@ -283,49 +357,60 @@ class SystemEngine:
                         browser_running = True
                         break
             
-            # Nếu browser đã chạy, thử focus vào cửa sổ browser trước
             if browser_running:
                 try:
-                    # Tìm cửa sổ browser và focus vào
                     hwnd = None
                     def enum_callback(h, _):
                         nonlocal hwnd
                         if win32gui.IsWindowVisible(h):
                             window_text = win32gui.GetWindowText(h).lower()
-                            # Tìm cửa sổ có chứa tên browser hoặc YouTube
                             if any(keyword in window_text for keyword in ["chrome", "firefox", "edge", "brave", "opera", "youtube"]):
                                 hwnd = h
                     
                     win32gui.EnumWindows(enum_callback, None)
                     
                     if hwnd:
-                        # Focus vào cửa sổ browser
                         win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
                         win32gui.SetForegroundWindow(hwnd)
-                        time.sleep(0.3)  # Đợi một chút để window focus
+                        time.sleep(0.3)
                 except Exception as e:
                     print(f"⚠️ Không thể focus vào browser: {e}")
             
-            # Mở URL (browser sẽ tự động mở tab mới hoặc cập nhật tab hiện tại)
             if browser_path and os.path.exists(browser_path):
                 try:
                     subprocess.Popen([browser_path, url])
                 except Exception as e:
                     print(f"⚠️ Lỗi mở browser: {e}")
-                    # Fallback: mở bằng default browser
                     try:
                         os.startfile(url)
                     except:
                         print(f"⚠️ Không thể mở URL: {url}")
             else:
-                # Fallback: mở bằng default browser
                 try:
                     os.startfile(url)
                 except:
                     print(f"⚠️ Không thể mở URL: {url}")
         
-        # Chạy trong thread riêng
         threading.Thread(target=open_browser, daemon=True).start()
+        
+        # Tự động dò tone sau 5s delay
+        def auto_detect_tone():
+            print("🎵 [AUTO TONE] Đợi 5s cho nhạc bắt đầu phát...")
+            time.sleep(5)
+            
+            # Kiểm tra cache trước
+            cached = ToneCacheManager.get_cached_tone(url)
+            if cached:
+                print(f"✅ [AUTO TONE] Đã có cache: {cached.get('primary_key', '?')}")
+                # Replay timeline từ cache
+                self._replay_cached_timeline(cached)
+                return
+            
+            # Không có cache → dò tone liên tục
+            print("🔍 [AUTO TONE] Không có cache, bắt đầu dò tone liên tục...")
+            self.detect_tone_continuous(url=url)
+        
+        threading.Thread(target=auto_detect_tone, daemon=True).start()
         
         # Lấy duration của video và tạo timer
         self._start_youtube_monitoring(url)
@@ -464,37 +549,53 @@ class SystemEngine:
     
     def detect_tone(self, duration=10, on_complete=None, on_error=None, on_progress=None):
         """
-        Dò tone bài hát đang phát bằng cách thu âm loopback từ hệ thống
-        Bắt trực tiếp âm thanh đang phát trên loa/headphone, không cần tải về.
-        
-        Args:
-            duration: Thời gian thu âm (giây), mặc định 10s
-            on_complete: Callback(result_dict) khi hoàn thành
-            on_error: Callback(error_message) khi lỗi
-            on_progress: Callback(seconds_remaining) cập nhật tiến độ
+        Dò tone bài hát đang phát (single-shot). Kiểm tra cache trước.
         """
         def _detect():
             try:
+                # Kiểm tra cache nếu có YouTube URL
+                if self.current_youtube_url:
+                    cached = ToneCacheManager.get_cached_tone(self.current_youtube_url)
+                    if cached:
+                        print(f"✅ [DÒ TONE] Cache hit: {cached.get('primary_key', '?')}")
+                        # Trả về primary key từ cache
+                        timeline = cached.get('key_timeline', [])
+                        if timeline:
+                            latest = timeline[-1] if timeline else timeline[0]
+                            result = {
+                                'key_display': cached.get('primary_key', latest.get('key_display', 'C')),
+                                'key_index': latest.get('key_index', 0),
+                                'scale': latest.get('scale', 'Major'),
+                                'confidence': latest.get('confidence', 0),
+                                'from_cache': True,
+                                'key_timeline': timeline
+                            }
+                            self._send_tone_midi(result)
+                            if on_complete:
+                                on_complete(result)
+                            return
+                
                 result = ToneDetector.detect_key_from_system_audio(
                     duration=duration,
                     on_progress=on_progress
                 )
                 
                 if result:
-                    # Gửi MIDI CC đến Auto-Tune trên Studio One
-                    key_midi = ToneDetector.key_index_to_midi(result["key_index"])
-                    scale_midi = ToneDetector.scale_to_midi(result["scale"])
+                    self._send_tone_midi(result)
                     
-                    # CC 34: Key root note
-                    self.send_midi(34, key_midi)
-                    time.sleep(0.05)
-                    # CC 35: Scale type (Major/Minor)
-                    self.send_midi(35, scale_midi)
-                    
-                    print(f"📤 [DÒ TONE] Đã gửi MIDI đến Auto-Tune:")
-                    print(f"   CC 34 (Key): {key_midi} ({result['key_display']})")
-                    print(f"   CC 35 (Scale): {scale_midi} ({result['scale']})")
-                    print("=" * 60)
+                    # Lưu cache nếu có YouTube URL
+                    if self.current_youtube_url:
+                        cache_data = {
+                            'primary_key': result['key_display'],
+                            'key_timeline': [{
+                                'time': 0,
+                                'key_display': result['key_display'],
+                                'key_index': result['key_index'],
+                                'scale': result['scale'],
+                                'confidence': result.get('confidence', 0)
+                            }]
+                        }
+                        ToneCacheManager.save_tone(self.current_youtube_url, cache_data)
                     
                     if on_complete:
                         on_complete(result)
@@ -507,6 +608,155 @@ class SystemEngine:
                     on_error(str(e))
         
         threading.Thread(target=_detect, daemon=True).start()
+    
+    def _send_tone_midi(self, result):
+        """Gửi MIDI CC cho key/scale đến Auto-Tune"""
+        key_midi = ToneDetector.key_index_to_midi(result["key_index"])
+        scale_midi = ToneDetector.scale_to_midi(result["scale"])
+        self.send_midi(34, key_midi)
+        time.sleep(0.05)
+        self.send_midi(35, scale_midi)
+        print(f"📤 [TONE] MIDI → CC34={key_midi} ({result['key_display']}), CC35={scale_midi} ({result['scale']})")
+    
+    def stop_tone_detection(self):
+        """Dừng dò tone liên tục"""
+        if self.tone_detection_active:
+            print("⏹️ [TONE] Dừng dò tone liên tục")
+        self.tone_detection_active = False
+    
+    def detect_tone_continuous(self, url=None, segment_duration=10):
+        """
+        Dò tone liên tục suốt bài hát, phát hiện chuyển tone.
+        Chạy trên thread hiện tại, dừng khi youtube_monitoring_active = False.
+        """
+        self.tone_detection_active = True
+        current_key = None
+        key_timeline = []
+        elapsed = 0
+        
+        print("=" * 60)
+        print(f"🎵 [TONE CONTINUOUS] Bắt đầu dò tone liên tục (segment={segment_duration}s)")
+        
+        while self.tone_detection_active and self.youtube_monitoring_active:
+            try:
+                result = ToneDetector.detect_key_from_system_audio(
+                    duration=segment_duration
+                )
+                
+                if result:
+                    new_key = result['key_display']
+                    confidence = result.get('confidence', 0)
+                    
+                    # Ghi vào timeline
+                    entry = {
+                        'time': elapsed,
+                        'key_display': new_key,
+                        'key_index': result['key_index'],
+                        'scale': result['scale'],
+                        'confidence': round(confidence, 3)
+                    }
+                    key_timeline.append(entry)
+                    
+                    # Phát hiện chuyển tone
+                    if new_key != current_key:
+                        if current_key:
+                            print(f"🔄 [TONE] CHUYỂN TONE: {current_key} → {new_key} (t={elapsed}s, conf={confidence:.2f})")
+                        else:
+                            print(f"🎵 [TONE] Key ban đầu: {new_key} (conf={confidence:.2f})")
+                        
+                        current_key = new_key
+                        
+                        # Gửi MIDI mới
+                        self._send_tone_midi(result)
+                        
+                        # Callback UI
+                        if self.on_tone_detected_callback:
+                            try:
+                                self.on_tone_detected_callback(result)
+                            except:
+                                pass
+                    else:
+                        print(f"   🎵 [TONE] t={elapsed}s: {new_key} (stable, conf={confidence:.2f})")
+                    
+                    elapsed += segment_duration
+                else:
+                    print(f"   ⚠️ [TONE] t={elapsed}s: Không phát hiện âm thanh")
+                    elapsed += segment_duration
+                    
+            except Exception as e:
+                print(f"❌ [TONE CONTINUOUS] Lỗi segment: {e}")
+                elapsed += segment_duration
+        
+        # Kết thúc → lưu cache
+        self.tone_detection_active = False
+        
+        if key_timeline and url:
+            # Xác định primary key (key xuất hiện nhiều nhất)
+            from collections import Counter
+            key_counts = Counter(e['key_display'] for e in key_timeline)
+            primary_key = key_counts.most_common(1)[0][0]
+            
+            cache_data = {
+                'primary_key': primary_key,
+                'key_timeline': key_timeline
+            }
+            ToneCacheManager.save_tone(url, cache_data)
+            print(f"💾 [TONE] Đã lưu cache: primary={primary_key}, {len(key_timeline)} segments")
+        
+        print("🏁 [TONE CONTINUOUS] Kết thúc dò tone liên tục")
+    
+    def _replay_cached_timeline(self, cached_data):
+        """
+        Replay timeline tone từ cache: gửi MIDI đúng thời điểm.
+        Chạy trong thread riêng.
+        """
+        timeline = cached_data.get('key_timeline', [])
+        if not timeline:
+            return
+        
+        self.tone_detection_active = True
+        primary_key = cached_data.get('primary_key', timeline[0]['key_display'])
+        print(f"▶️ [TONE REPLAY] Replay từ cache: primary={primary_key}, {len(timeline)} segments")
+        
+        def _replay():
+            prev_time = 0
+            current_key = None
+            
+            for entry in timeline:
+                if not self.tone_detection_active:
+                    break
+                
+                # Đợi đến thời điểm
+                wait = entry['time'] - prev_time
+                if wait > 0:
+                    # Đợi theo chunk 1s để check dừng sớm
+                    for _ in range(int(wait)):
+                        if not self.tone_detection_active:
+                            break
+                        time.sleep(1)
+                prev_time = entry['time']
+                
+                if not self.tone_detection_active:
+                    break
+                
+                new_key = entry['key_display']
+                if new_key != current_key:
+                    current_key = new_key
+                    # Gửi MIDI
+                    self._send_tone_midi(entry)
+                    print(f"▶️ [REPLAY] t={entry['time']}s: {new_key}")
+                    
+                    # Callback UI
+                    if self.on_tone_detected_callback:
+                        try:
+                            self.on_tone_detected_callback(entry)
+                        except:
+                            pass
+            
+            self.tone_detection_active = False
+            print("🏁 [TONE REPLAY] Kết thúc replay")
+        
+        threading.Thread(target=_replay, daemon=True).start()
     
 class SongManager:
     """Quản lý danh sách bài hát đã lưu"""
