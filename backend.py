@@ -9,6 +9,26 @@ import pyautogui
 import win32gui
 import win32con
 import sys
+import ctypes
+
+# Patch numpy.fromstring TRƯỚC khi import soundcard
+# soundcard dùng np.fromstring(binary) đã bị xóa trong numpy 2.x
+import numpy as np
+_orig_np_fromstring = np.fromstring
+def _patched_fromstring(string, dtype=float, count=-1, *, sep='', like=None):
+    if not sep:
+        # Binary mode → dùng frombuffer (nhận mọi buffer-like object kể cả cffi.buffer)
+        return np.frombuffer(string, dtype=dtype, count=count)
+    return _orig_np_fromstring(string, dtype=dtype, count=count, sep=sep)
+np.fromstring = _patched_fromstring
+
+# Import soundcard ở module level (main thread) để COM init thành công
+try:
+    import soundcard as sc
+    _SOUNDCARD_AVAILABLE = True
+except Exception:
+    sc = None
+    _SOUNDCARD_AVAILABLE = False
 
 # --- CẤU HÌNH CỐT LÕI ---
 SETTINGS_FILE = "settings.json"
@@ -79,6 +99,11 @@ class SystemEngine:
         
         # Khởi tạo MidiHandler
         self.midi_handler = MidiHandler()
+        
+        # Trạng thái theo dõi YouTube
+        self.current_youtube_url = None
+        self.youtube_monitoring_active = False
+        self.on_video_end_callback = None
     
 
     # --- MIDI WRAPPER METHODS (tương thích với code cũ) ---
@@ -216,6 +241,273 @@ class SystemEngine:
         try: os.system('taskkill /F /IM "Studio One.exe"')
         except: pass
     
+    def open_youtube_url(self, url, on_video_end_callback=None):
+        """
+        Mở YouTube URL trong browser và tự động chấm điểm khi video kết thúc
+        
+        Args:
+            url: YouTube URL
+            on_video_end_callback: Callback được gọi khi video kết thúc với kết quả chấm điểm
+        """
+        if not url:
+            return
+        
+        # Lưu URL và callback
+        self.current_youtube_url = url
+        self.on_video_end_callback = on_video_end_callback
+        
+        # Mở YouTube trong browser
+        def open_browser():
+            browser_path = self.settings.get("browser_path")
+            browser_name = None
+            
+            # Xác định tên browser process từ đường dẫn
+            if browser_path:
+                browser_exe = os.path.basename(browser_path).lower()
+                if "chrome" in browser_exe:
+                    browser_name = "chrome.exe"
+                elif "firefox" in browser_exe:
+                    browser_name = "firefox.exe"
+                elif "edge" in browser_exe:
+                    browser_name = "msedge.exe"
+                elif "brave" in browser_exe:
+                    browser_name = "brave.exe"
+                elif "opera" in browser_exe:
+                    browser_name = "opera.exe"
+            
+            # Kiểm tra xem browser có đang chạy không
+            browser_running = False
+            if browser_name:
+                for proc in psutil.process_iter(['name']):
+                    if proc.info['name'].lower() == browser_name.lower():
+                        browser_running = True
+                        break
+            
+            # Nếu browser đã chạy, thử focus vào cửa sổ browser trước
+            if browser_running:
+                try:
+                    # Tìm cửa sổ browser và focus vào
+                    hwnd = None
+                    def enum_callback(h, _):
+                        nonlocal hwnd
+                        if win32gui.IsWindowVisible(h):
+                            window_text = win32gui.GetWindowText(h).lower()
+                            # Tìm cửa sổ có chứa tên browser hoặc YouTube
+                            if any(keyword in window_text for keyword in ["chrome", "firefox", "edge", "brave", "opera", "youtube"]):
+                                hwnd = h
+                    
+                    win32gui.EnumWindows(enum_callback, None)
+                    
+                    if hwnd:
+                        # Focus vào cửa sổ browser
+                        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                        win32gui.SetForegroundWindow(hwnd)
+                        time.sleep(0.3)  # Đợi một chút để window focus
+                except Exception as e:
+                    print(f"⚠️ Không thể focus vào browser: {e}")
+            
+            # Mở URL (browser sẽ tự động mở tab mới hoặc cập nhật tab hiện tại)
+            if browser_path and os.path.exists(browser_path):
+                try:
+                    subprocess.Popen([browser_path, url])
+                except Exception as e:
+                    print(f"⚠️ Lỗi mở browser: {e}")
+                    # Fallback: mở bằng default browser
+                    try:
+                        os.startfile(url)
+                    except:
+                        print(f"⚠️ Không thể mở URL: {url}")
+            else:
+                # Fallback: mở bằng default browser
+                try:
+                    os.startfile(url)
+                except:
+                    print(f"⚠️ Không thể mở URL: {url}")
+        
+        # Chạy trong thread riêng
+        threading.Thread(target=open_browser, daemon=True).start()
+        
+        # Lấy duration của video và tạo timer
+        self._start_youtube_monitoring(url)
+    
+    def _start_youtube_monitoring(self, youtube_url):
+        """Bắt đầu theo dõi video YouTube và tự động chấm điểm khi kết thúc"""
+        print("=" * 60)
+        print("📺 [YOUTUBE MONITORING] Bắt đầu theo dõi video YouTube...")
+        print(f"🔗 URL: {youtube_url}")
+        
+        def get_video_duration():
+            """Lấy duration của video YouTube bằng yt-dlp"""
+            try:
+                print("⏱️  [YOUTUBE MONITORING] Đang lấy thông tin video...")
+                import yt_dlp
+                ydl_opts = {
+                    'quiet': True,
+                    'no_warnings': True,
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(youtube_url, download=False)
+                    duration = info.get('duration', 0)  # Duration tính bằng giây
+                    title = info.get('title', 'N/A')
+                    print(f"✅ [YOUTUBE MONITORING] Thông tin video:")
+                    print(f"   📺 Tiêu đề: {title}")
+                    print(f"   ⏱️  Thời lượng: {duration} giây ({duration // 60}:{duration % 60:02d})")
+                    return duration
+            except Exception as e:
+                print(f"❌ [YOUTUBE MONITORING] Không thể lấy duration của video: {e}")
+                import traceback
+                print(traceback.format_exc())
+                return None
+        
+        def on_video_end():
+            """Callback khi video kết thúc - tự động chấm điểm"""
+            try:
+                print("=" * 60)
+                print("🎬 [CHẤM ĐIỂM] Video YouTube đã kết thúc, bắt đầu chấm điểm tự động...")
+                print(f"📺 URL: {youtube_url}")
+                
+                # Tạo ScoringEngine và chấm điểm
+                print("🔧 [CHẤM ĐIỂM] Khởi tạo ScoringEngine...")
+                scoring_engine = ScoringEngine()
+                
+                # Tải audio từ YouTube
+                print("📥 [CHẤM ĐIỂM] Đang tải audio từ YouTube...")
+                audio_path = scoring_engine.download_youtube_audio(youtube_url)
+                if not audio_path:
+                    print("❌ [CHẤM ĐIỂM] Lỗi: Không thể tải audio từ YouTube")
+                    if self.on_video_end_callback:
+                        self.on_video_end_callback(None)
+                    return
+                print(f"✅ [CHẤM ĐIỂM] Đã tải audio thành công: {audio_path}")
+                
+                # Load audio
+                print("📂 [CHẤM ĐIỂM] Đang load audio file...")
+                if not scoring_engine.load_audio(audio_path):
+                    print("❌ [CHẤM ĐIỂM] Lỗi: Không thể load audio file")
+                    scoring_engine.cleanup_temp_file()
+                    if self.on_video_end_callback:
+                        self.on_video_end_callback(None)
+                    return
+                print(f"✅ [CHẤM ĐIỂM] Đã load audio thành công (sample_rate: {scoring_engine.sample_rate} Hz)")
+                
+                # Tính điểm (với flag video_end=True để dùng thuật toán mới)
+                print("🧮 [CHẤM ĐIỂM] Đang tính điểm (chế độ video_end=True)...")
+                result = scoring_engine.calculate_score(video_end=True)
+                
+                if result:
+                    print("=" * 60)
+                    print("✅ [CHẤM ĐIỂM] Kết quả chấm điểm:")
+                    print(f"   📊 Điểm tổng: {result.get('total_score', 0):.1f}")
+                    print(f"   🔊 Độ nhất quán âm lượng: {result.get('volume_consistency', 0):.1f}")
+                    print(f"   ⏱️  Thời lượng: {result.get('duration', 0):.2f} giây")
+                    print(f"   💬 Feedback: {result.get('feedback', 'N/A')}")
+                    print("=" * 60)
+                else:
+                    print("❌ [CHẤM ĐIỂM] Lỗi: Không thể tính điểm")
+                
+                # Cleanup
+                print("🧹 [CHẤM ĐIỂM] Đang dọn dẹp file tạm...")
+                scoring_engine.cleanup_temp_file()
+                print("✅ [CHẤM ĐIỂM] Đã dọn dẹp xong")
+                
+                # Gọi callback nếu có
+                if self.on_video_end_callback and result:
+                    print("📞 [CHẤM ĐIỂM] Gọi callback với kết quả...")
+                    self.on_video_end_callback(result)
+                elif result:
+                    print(f"✅ [CHẤM ĐIỂM] Hoàn thành! Điểm số: {result.get('total_score', 0):.1f}")
+                    
+            except Exception as e:
+                print("=" * 60)
+                print(f"❌ [CHẤM ĐIỂM] Lỗi khi chấm điểm tự động: {e}")
+                import traceback
+                print(traceback.format_exc())
+                print("=" * 60)
+                if self.on_video_end_callback:
+                    self.on_video_end_callback(None)
+        
+        # Lấy duration trong thread riêng
+        def monitor_video():
+            # Đánh dấu đang monitoring
+            self.youtube_monitoring_active = True
+            print("✅ [YOUTUBE MONITORING] Đã bắt đầu monitoring...")
+            
+            duration = get_video_duration()
+            if duration and duration > 0:
+                wait_time = duration + 5  # +5 giây buffer
+                print(f"⏳ [YOUTUBE MONITORING] Đang đợi video kết thúc...")
+                print(f"   ⏱️  Thời gian chờ: {wait_time} giây ({wait_time // 60}:{wait_time % 60:02d})")
+                
+                # Đợi duration + 5 giây buffer để đảm bảo video đã kết thúc
+                time.sleep(wait_time)
+                
+                # Chỉ chấm điểm nếu vẫn đang monitoring (chưa bị hủy)
+                if self.youtube_monitoring_active:
+                    print("⏰ [YOUTUBE MONITORING] Video đã kết thúc, bắt đầu chấm điểm...")
+                    on_video_end()
+                else:
+                    print("⚠️ [YOUTUBE MONITORING] Monitoring đã bị hủy, bỏ qua chấm điểm")
+            else:
+                print("❌ [YOUTUBE MONITORING] Không thể lấy duration, bỏ qua tự động chấm điểm")
+            
+            # Kết thúc monitoring
+            self.youtube_monitoring_active = False
+            print("🏁 [YOUTUBE MONITORING] Đã kết thúc monitoring")
+            print("=" * 60)
+        
+        # Dừng monitoring cũ nếu có
+        self.youtube_monitoring_active = False
+        
+        # Bắt đầu monitoring trong thread riêng
+        monitoring_thread = threading.Thread(target=monitor_video, daemon=True)
+        monitoring_thread.start()
+    
+    def detect_tone(self, duration=10, on_complete=None, on_error=None, on_progress=None):
+        """
+        Dò tone bài hát đang phát bằng cách thu âm loopback từ hệ thống
+        Bắt trực tiếp âm thanh đang phát trên loa/headphone, không cần tải về.
+        
+        Args:
+            duration: Thời gian thu âm (giây), mặc định 10s
+            on_complete: Callback(result_dict) khi hoàn thành
+            on_error: Callback(error_message) khi lỗi
+            on_progress: Callback(seconds_remaining) cập nhật tiến độ
+        """
+        def _detect():
+            try:
+                result = ToneDetector.detect_key_from_system_audio(
+                    duration=duration,
+                    on_progress=on_progress
+                )
+                
+                if result:
+                    # Gửi MIDI CC đến Auto-Tune trên Studio One
+                    key_midi = ToneDetector.key_index_to_midi(result["key_index"])
+                    scale_midi = ToneDetector.scale_to_midi(result["scale"])
+                    
+                    # CC 34: Key root note
+                    self.send_midi(34, key_midi)
+                    time.sleep(0.05)
+                    # CC 35: Scale type (Major/Minor)
+                    self.send_midi(35, scale_midi)
+                    
+                    print(f"📤 [DÒ TONE] Đã gửi MIDI đến Auto-Tune:")
+                    print(f"   CC 34 (Key): {key_midi} ({result['key_display']})")
+                    print(f"   CC 35 (Scale): {scale_midi} ({result['scale']})")
+                    print("=" * 60)
+                    
+                    if on_complete:
+                        on_complete(result)
+                else:
+                    if on_error:
+                        on_error("Không thể dò tone. Hãy đảm bảo đang phát nhạc.")
+            except Exception as e:
+                print(f"❌ [DÒ TONE] Lỗi: {e}")
+                if on_error:
+                    on_error(str(e))
+        
+        threading.Thread(target=_detect, daemon=True).start()
+    
 class SongManager:
     """Quản lý danh sách bài hát đã lưu"""
     @staticmethod
@@ -291,6 +583,7 @@ class ScoringEngine:
     def download_youtube_audio(self, youtube_url, output_dir="temp_audio"):
         """Tải audio từ YouTube URL"""
         try:
+            print(f"📥 [DOWNLOAD] Bắt đầu tải audio từ YouTube: {youtube_url}")
             try:
                 import yt_dlp
             except ImportError:
@@ -301,6 +594,7 @@ class ScoringEngine:
             
             # Tạo thư mục temp nếu chưa có
             if not os.path.exists(output_dir):
+                print(f"📁 [DOWNLOAD] Tạo thư mục temp: {output_dir}")
                 os.makedirs(output_dir)
             
             # Tạo file tạm
@@ -311,6 +605,7 @@ class ScoringEngine:
             )
             temp_path = temp_file.name
             temp_file.close()
+            print(f"📄 [DOWNLOAD] Tạo file tạm: {temp_path}")
             
             # Cấu hình yt-dlp
             ydl_opts = {
@@ -325,22 +620,29 @@ class ScoringEngine:
                 'no_warnings': True,
             }
             
+            print("⬇️  [DOWNLOAD] Đang tải video từ YouTube...")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([youtube_url])
+            print("✅ [DOWNLOAD] Đã tải video thành công")
             
             # Tìm file đã tải (có thể có extension khác)
             base_path = temp_path.replace('.wav', '')
             for ext in ['.wav', '.mp3', '.m4a', '.webm']:
                 if os.path.exists(base_path + ext):
                     self.temp_audio_path = base_path + ext
+                    file_size = os.path.getsize(self.temp_audio_path) / (1024 * 1024)  # MB
+                    print(f"✅ [DOWNLOAD] Tìm thấy file audio: {self.temp_audio_path} ({file_size:.2f} MB)")
                     return self.temp_audio_path
             
             raise Exception("Không tìm thấy file audio đã tải")
             
         except ImportError as e:
+            print(f"❌ [DOWNLOAD] Lỗi import: {e}")
             raise e
         except Exception as e:
-            print(f"Lỗi tải YouTube audio: {e}")
+            print(f"❌ [DOWNLOAD] Lỗi tải YouTube audio: {e}")
+            import traceback
+            print(traceback.format_exc())
             return None
     
     def cleanup_temp_file(self):
@@ -356,18 +658,28 @@ class ScoringEngine:
     def load_audio(self, file_path):
         """Load file audio để phân tích"""
         try:
+            print(f"📂 [LOAD AUDIO] Đang load file: {file_path}")
             try:
                 import librosa
                 import numpy as np
             except ImportError:
                 raise ImportError("Thư viện 'librosa' chưa được cài đặt. Vui lòng chạy: pip install librosa numpy")
             
+            print("🔄 [LOAD AUDIO] Đang đọc audio file với librosa...")
             self.audio_data, self.sample_rate = librosa.load(file_path, sr=None, mono=True)
+            duration = len(self.audio_data) / self.sample_rate
+            print(f"✅ [LOAD AUDIO] Đã load thành công:")
+            print(f"   📊 Sample rate: {self.sample_rate} Hz")
+            print(f"   ⏱️  Duration: {duration:.2f} giây")
+            print(f"   📈 Samples: {len(self.audio_data)}")
             return True
         except ImportError as e:
+            print(f"❌ [LOAD AUDIO] Lỗi import: {e}")
             raise e
         except Exception as e:
-            print(f"Lỗi load audio: {e}")
+            print(f"❌ [LOAD AUDIO] Lỗi load audio: {e}")
+            import traceback
+            print(traceback.format_exc())
             return False
     
     def analyze_pitch(self):
@@ -401,24 +713,102 @@ class ScoringEngine:
             print(f"Lỗi phân tích pitch: {e}")
             return None
     
-    def calculate_score(self, target_notes=None):
-        """Tính điểm dựa trên phân tích audio"""
+    def calculate_score(self, target_notes=None, video_end=False):
+        """
+        Tính điểm dựa trên phân tích audio - Random 77-100, ưu tiên điểm cao dựa vào độ ổn định âm lượng
+        
+        Args:
+            target_notes: Target notes (không dùng trong thuật toán mới)
+            video_end: True nếu được gọi khi video YouTube kết thúc (dùng thuật toán đơn giản hơn)
+        """
         try:
             import numpy as np
+            import random
             
             if self.audio_data is None:
                 return None
             
+            # Nếu được gọi khi video YouTube kết thúc, chỉ tính điểm dựa trên volume_consistency
+            if video_end:
+                print("🎯 [CALCULATE SCORE] Chế độ: video_end=True (chỉ tính dựa trên volume_consistency)")
+                
+                # Tính volume_consistency
+                print("📊 [CALCULATE SCORE] Đang tính volume_consistency...")
+                audio_abs = np.abs(self.audio_data)
+                volume_std = np.std(audio_abs)
+                volume_mean = np.mean(audio_abs)
+                volume_consistency = max(0, 100 - (volume_std / volume_mean * 100)) if volume_mean > 0 else 50
+                volume_consistency = min(100, volume_consistency)
+                print(f"   🔊 Volume mean: {volume_mean:.4f}")
+                print(f"   📈 Volume std: {volume_std:.4f}")
+                print(f"   ✅ Volume consistency: {volume_consistency:.1f}")
+                
+                # Random điểm từ 77-100, ưu tiên điểm cao dựa vào volume_consistency
+                base_score = 77
+                score_range = 23  # 100 - 77 = 23
+                
+                # Tính điểm dựa trên volume_consistency (0-100) -> ảnh hưởng đến random range
+                volume_factor = volume_consistency / 100.0  # 0.0 - 1.0
+                random_bonus = random.uniform(0, score_range * volume_factor)
+                total_score = base_score + random_bonus
+                total_score = min(100, max(77, total_score))
+                
+                print(f"🎲 [CALCULATE SCORE] Random calculation:")
+                print(f"   📌 Base score: {base_score}")
+                print(f"   📊 Volume factor: {volume_factor:.3f}")
+                print(f"   🎲 Random bonus: {random_bonus:.2f}")
+                print(f"   ✅ Total score: {total_score:.1f}")
+                
+                duration = len(self.audio_data) / self.sample_rate
+                feedback = self._generate_feedback(total_score, 0, 0)
+                
+                return {
+                    "total_score": round(total_score, 1),
+                    "pitch_accuracy": round(0, 1),
+                    "pitch_stability": round(0, 1),
+                    "volume_consistency": round(volume_consistency, 1),
+                    "timing_accuracy": round(85, 1),
+                    "pitch_mean": round(0, 2),
+                    "pitch_std": round(0, 2),
+                    "duration": round(duration, 2),
+                    "feedback": feedback
+                }
+            
             # Phân tích pitch
             pitches = self.analyze_pitch()
             if pitches is None or len(pitches) == 0:
+                # Nếu không có pitch, vẫn tính điểm dựa trên volume
+                audio_abs = np.abs(self.audio_data)
+                volume_std = np.std(audio_abs)
+                volume_mean = np.mean(audio_abs)
+                volume_consistency = max(0, 100 - (volume_std / volume_mean * 100)) if volume_mean > 0 else 50
+                volume_consistency = min(100, volume_consistency)
+                
+                # Random điểm từ 77-100, ưu tiên điểm cao dựa vào volume_consistency
+                # Volume consistency càng cao thì điểm càng cao
+                base_score = 77
+                score_range = 23  # 100 - 77 = 23
+                
+                # Tính điểm dựa trên volume_consistency (0-100) -> ảnh hưởng đến random range
+                # Volume consistency cao -> điểm cao hơn
+                volume_factor = volume_consistency / 100.0  # 0.0 - 1.0
+                random_bonus = random.uniform(0, score_range * volume_factor)
+                total_score = base_score + random_bonus
+                total_score = min(100, max(77, total_score))
+                
+                duration = len(self.audio_data) / self.sample_rate
+                feedback = self._generate_feedback(total_score, 0, 0)
+                
                 return {
-                    "total_score": 0,
-                    "pitch_accuracy": 0,
-                    "pitch_stability": 0,
-                    "volume_consistency": 0,
-                    "timing_accuracy": 0,
-                    "feedback": "Không thể phát hiện pitch trong audio"
+                    "total_score": round(total_score, 1),
+                    "pitch_accuracy": round(0, 1),
+                    "pitch_stability": round(0, 1),
+                    "volume_consistency": round(volume_consistency, 1),
+                    "timing_accuracy": round(85, 1),
+                    "pitch_mean": round(0, 2),
+                    "pitch_std": round(0, 2),
+                    "duration": round(duration, 2),
+                    "feedback": feedback
                 }
             
             # 1. Pitch Accuracy (độ chính xác pitch)
@@ -431,24 +821,30 @@ class ScoringEngine:
             pitch_stability = max(0, 100 - (pitch_std / pitch_mean * 200)) if pitch_mean > 0 else 0
             pitch_stability = min(100, pitch_stability)
             
-            # 3. Volume Consistency (độ nhất quán âm lượng)
+            # 3. Volume Consistency (độ nhất quán âm lượng) - QUAN TRỌNG CHO ĐIỂM
             audio_abs = np.abs(self.audio_data)
             volume_std = np.std(audio_abs)
             volume_mean = np.mean(audio_abs)
-            volume_consistency = max(0, 100 - (volume_std / volume_mean * 100)) if volume_mean > 0 else 0
+            volume_consistency = max(0, 100 - (volume_std / volume_mean * 100)) if volume_mean > 0 else 50
             volume_consistency = min(100, volume_consistency)
             
             # 4. Timing Accuracy (giả lập - dựa trên độ dài audio)
             duration = len(self.audio_data) / self.sample_rate
-            timing_accuracy = 85  # Giá trị mặc định, có thể cải thiện với target timing
+            timing_accuracy = 85  # Giá trị mặc định
             
-            # Tính điểm tổng (weighted average)
-            total_score = (
-                pitch_accuracy * 0.4 +
-                pitch_stability * 0.25 +
-                volume_consistency * 0.2 +
-                timing_accuracy * 0.15
-            )
+            # THUẬT TOÁN MỚI: Random từ 77-100, ưu tiên điểm cao dựa vào độ ổn định âm lượng
+            base_score = 77
+            score_range = 23  # 100 - 77 = 23
+            
+            # Tính điểm dựa trên volume_consistency (0-100) -> ảnh hưởng đến random range
+            # Volume consistency càng cao thì điểm càng cao
+            volume_factor = volume_consistency / 100.0  # 0.0 - 1.0
+            
+            # Random bonus dựa trên volume_factor
+            # Volume consistency cao -> random bonus cao hơn
+            random_bonus = random.uniform(0, score_range * volume_factor)
+            total_score = base_score + random_bonus
+            total_score = min(100, max(77, total_score))
             
             # Tạo feedback
             feedback = self._generate_feedback(total_score, pitch_accuracy, pitch_stability)
@@ -487,6 +883,278 @@ class ScoringEngine:
             return "💪 Ổn! Hãy luyện tập nhiều hơn."
         else:
             return "📚 Cần luyện tập thêm để cải thiện!"
+
+class ToneDetector:
+    """
+    Dò Tone bài hát - Phát hiện key/tonality từ audio
+    Sử dụng thuật toán Krumhansl-Schmuckler với CQT Chroma features
+    """
+    
+    # Krumhansl-Schmuckler key profiles
+    MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+    MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+    
+    # Key names - khớp với UI tone selector
+    MAJOR_KEY_NAMES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
+    MINOR_KEY_NAMES = ["Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"]
+    
+    @staticmethod
+    def detect_key_from_audio(audio_data, sample_rate):
+        """
+        Phát hiện tone/key của bài hát từ audio data
+        Sử dụng CQT Chroma + Krumhansl-Schmuckler correlation
+        """
+        try:
+            import librosa
+            import numpy as np
+            
+            # Clean audio data: thay NaN/Inf bằng 0 (loopback có thể tạo giá trị không hợp lệ)
+            audio_data = np.nan_to_num(audio_data, nan=0.0, posinf=0.0, neginf=0.0)
+            print("🎵 [DÒ TONE] Đang phân tích chroma features...")
+            
+            # Compute CQT chroma (chính xác hơn STFT cho phát hiện key)
+            chroma = librosa.feature.chroma_cqt(y=audio_data, sr=sample_rate)
+            
+            # Average chroma across time frames
+            chroma_avg = np.mean(chroma, axis=1)
+            
+            # Normalize
+            chroma_sum = np.sum(chroma_avg)
+            if chroma_sum > 0:
+                chroma_avg = chroma_avg / chroma_sum
+            
+            print(f"📊 [DÒ TONE] Chroma: {[f'{x:.3f}' for x in chroma_avg]}")
+            
+            best_key = 0
+            best_corr = -2
+            best_scale = "Major"
+            all_results = []
+            
+            for i in range(12):
+                # Rotate chroma vector để test từng key
+                rotated = np.roll(chroma_avg, -i)
+                
+                # Correlation với major profile
+                major_corr = float(np.corrcoef(rotated, ToneDetector.MAJOR_PROFILE)[0, 1])
+                all_results.append({
+                    "key": ToneDetector.MAJOR_KEY_NAMES[i],
+                    "scale": "Major",
+                    "correlation": major_corr,
+                    "key_index": i
+                })
+                if major_corr > best_corr:
+                    best_corr = major_corr
+                    best_key = i
+                    best_scale = "Major"
+                
+                # Correlation với minor profile
+                minor_corr = float(np.corrcoef(rotated, ToneDetector.MINOR_PROFILE)[0, 1])
+                all_results.append({
+                    "key": ToneDetector.MINOR_KEY_NAMES[i],
+                    "scale": "Minor",
+                    "correlation": minor_corr,
+                    "key_index": i
+                })
+                if minor_corr > best_corr:
+                    best_corr = minor_corr
+                    best_key = i
+                    best_scale = "Minor"
+            
+            # Sort by correlation
+            all_results.sort(key=lambda x: x["correlation"], reverse=True)
+            
+            # Build display name
+            if best_scale == "Major":
+                key_display = ToneDetector.MAJOR_KEY_NAMES[best_key]
+            else:
+                key_display = ToneDetector.MINOR_KEY_NAMES[best_key]
+            
+            print(f"🎯 [DÒ TONE] Kết quả: {key_display} (confidence: {best_corr:.4f})")
+            print(f"🎯 [DÒ TONE] Top 5:")
+            for r in all_results[:5]:
+                print(f"   {r['key']}: {r['correlation']:.4f}")
+            
+            return {
+                "key": ToneDetector.MAJOR_KEY_NAMES[best_key],
+                "key_index": best_key,
+                "scale": best_scale,
+                "confidence": best_corr,
+                "key_display": key_display,
+                "top_results": all_results[:5]
+            }
+            
+        except Exception as e:
+            print(f"❌ [DÒ TONE] Lỗi phân tích: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return None
+    
+    @staticmethod
+    def detect_key_from_system_audio(duration=10, sample_rate=44100, on_progress=None):
+        """
+        Thu âm loopback từ hệ thống (bắt âm thanh đang phát trên loa)
+        và phát hiện tone bài hát. Không cần tải từ YouTube.
+        
+        Sử dụng WASAPI Loopback (Windows) qua thư viện soundcard.
+        """
+        import numpy as np
+        
+        # Kiểm tra soundcard
+        if not _SOUNDCARD_AVAILABLE:
+            print("❌ [DÒ TONE] Thư viện 'soundcard' chưa được cài đặt.")
+            print("   Chạy: pip install soundcard")
+            return None
+        
+        # Khởi tạo COM cho background thread (WASAPI yêu cầu COM per-thread)
+        com_initialized = False
+        try:
+            hr = ctypes.windll.ole32.CoInitializeEx(None, 0)  # COINIT_MULTITHREADED
+            com_initialized = (hr == 0)  # Chỉ tính khi S_OK
+        except:
+            pass
+        
+        try:
+            print("=" * 60)
+            print(f"🎤 [DÒ TONE] Thu âm loopback từ hệ thống ({duration}s)...")
+            
+            # Tìm loopback microphone
+            all_mics = sc.all_microphones(include_loopback=True)
+            
+            loopback_mic = None
+            default_speaker = sc.default_speaker()
+            speaker_name = default_speaker.name if default_speaker else ""
+            
+            print(f"🔊 [DÒ TONE] Default speaker: {speaker_name}")
+            print(f"🎙️ [DÒ TONE] Tìm thấy {len(all_mics)} microphone(s):")
+            
+            for mic in all_mics:
+                is_loopback = hasattr(mic, 'isloopback') and mic.isloopback
+                print(f"   {'🔄' if is_loopback else '🎙️'} {mic.name} (loopback={is_loopback})")
+                
+                if is_loopback:
+                    if loopback_mic is None:
+                        loopback_mic = mic
+                    if speaker_name and speaker_name.lower() in mic.name.lower():
+                        loopback_mic = mic
+            
+            if not loopback_mic:
+                try:
+                    loopback_mic = sc.get_microphone(id=str(default_speaker.name), include_loopback=True)
+                except:
+                    pass
+            
+            if not loopback_mic:
+                print("❌ [DÒ TONE] Không tìm thấy thiết bị loopback!")
+                return None
+            
+            print(f"✅ [DÒ TONE] Sử dụng loopback: {loopback_mic.name}")
+            print(f"⏺️  [DÒ TONE] Đang thu âm {duration} giây...")
+            
+            # Thu âm theo từng giây để cập nhật progress
+            audio_chunks = []
+            with loopback_mic.recorder(samplerate=sample_rate, channels=1) as recorder:
+                for i in range(duration):
+                    chunk = recorder.record(numframes=sample_rate)
+                    audio_chunks.append(chunk)
+                    
+                    remaining = duration - i - 1
+                    if on_progress:
+                        try:
+                            on_progress(remaining)
+                        except:
+                            pass
+                    
+                    print(f"   ⏱️  Còn {remaining}s...")
+            
+            # Ghép các chunks
+            audio_data = np.concatenate(audio_chunks, axis=0)
+            if audio_data.ndim > 1:
+                audio_data = audio_data[:, 0]
+            audio_data = audio_data.astype(np.float32)
+            
+            actual_duration = len(audio_data) / sample_rate
+            print(f"✅ [DÒ TONE] Đã thu: {actual_duration:.1f}s, {len(audio_data)} samples")
+            
+            # Kiểm tra âm thanh
+            rms = np.sqrt(np.mean(audio_data ** 2))
+            print(f"📊 [DÒ TONE] RMS level: {rms:.6f}")
+            
+            if rms < 0.001:
+                print("⚠️ [DÒ TONE] Không phát hiện âm thanh! Hãy đảm bảo đang phát nhạc.")
+                return None
+            
+            # Phân tích key
+            result = ToneDetector.detect_key_from_audio(audio_data, sample_rate)
+            return result
+            
+        except Exception as e:
+            print(f"❌ [DÒ TONE] Lỗi thu âm: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return None
+        finally:
+            if com_initialized:
+                try:
+                    ctypes.windll.ole32.CoUninitialize()
+                except:
+                    pass
+    
+    @staticmethod
+    def detect_key_from_youtube(youtube_url, duration_limit=60):
+        """
+        Tải audio từ YouTube và phát hiện tone
+        Chỉ phân tích tối đa duration_limit giây đầu tiên
+        """
+        try:
+            import librosa
+            
+            print("=" * 60)
+            print(f"🎵 [DÒ TONE] Bắt đầu dò tone từ YouTube...")
+            print(f"🔗 URL: {youtube_url}")
+            
+            # Download audio
+            scoring_engine = ScoringEngine()
+            audio_path = scoring_engine.download_youtube_audio(youtube_url)
+            
+            if not audio_path:
+                print("❌ [DÒ TONE] Không thể tải audio")
+                return None
+            
+            try:
+                # Load audio (giới hạn thời gian để tăng tốc)
+                print(f"📂 [DÒ TONE] Loading audio (max {duration_limit}s)...")
+                audio_data, sr = librosa.load(
+                    audio_path,
+                    sr=22050,
+                    mono=True,
+                    duration=duration_limit
+                )
+                
+                actual_duration = len(audio_data) / sr
+                print(f"✅ [DÒ TONE] Loaded: {actual_duration:.1f}s, sr={sr}")
+                
+                # Detect key
+                result = ToneDetector.detect_key_from_audio(audio_data, sr)
+                return result
+                
+            finally:
+                scoring_engine.cleanup_temp_file()
+                
+        except Exception as e:
+            print(f"❌ [DÒ TONE] Lỗi: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return None
+    
+    @staticmethod
+    def key_index_to_midi(key_index):
+        """Chuyển key index (0-11) sang MIDI CC value (0-127)"""
+        return min(127, max(0, int(key_index * 127 / 11)))
+    
+    @staticmethod
+    def scale_to_midi(scale):
+        """Chuyển scale type sang MIDI CC value (0=Major, 127=Minor)"""
+        return 127 if scale == "Minor" else 0
 
 class ActivationManager:
     """Quản lý activation code và thời hạn sử dụng"""
