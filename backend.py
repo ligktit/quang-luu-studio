@@ -1497,27 +1497,38 @@ class ToneDetector:
             from collections import Counter
             
             audio_data = np.nan_to_num(audio_data, nan=0.0, posinf=0.0, neginf=0.0)
-            print("🎵 [DÒ TONE] Pipeline: HPSS → Tuning → Triple Chroma → Voting...")
+            print("🎵 [DÒ TONE] Pipeline: HPSS → HPCP + CQT + CENS → Voting...")
             
             # === BƯỚC 1: HPSS ===
             harmonic, _ = librosa.effects.hpss(audio_data)
             print("   ✅ HPSS")
             
-            # === BƯỚC 1b: Tuning estimation ===
-            tuning = librosa.estimate_tuning(y=harmonic, sr=sample_rate)
-            print(f"   ✅ Tuning: {tuning:+.3f} semitones")
+            # === BƯỚC 2: Chroma extraction (NO tuning correction) ===
+            # Tuning correction gây hại: notes giữa 2 bins (Ab giữa G/G#) bị dồn sai bin
             
-            # === BƯỚC 2: Triple Chroma extraction ===
-            # --- CQT (energy-weighted + tuning corrected) ---
-            chroma_cqt_raw = librosa.feature.chroma_cqt(
-                y=harmonic, sr=sample_rate, tuning=tuning
+            # --- HPCP-style: 36-bin CQT → max-pool to 12 ---
+            # Giải quyết vấn đề bin-splitting: nốt nằm giữa 2 bins sẽ rõ hơn
+            chroma_36 = librosa.feature.chroma_cqt(
+                y=harmonic, sr=sample_rate, n_chroma=36, bins_per_octave=36
             )
+            # Max-pool: lấy MAX của 3 sub-bins → nốt giữa bins vẫn được capture
+            hpcp_frames = np.array([
+                chroma_36[i*3:(i+1)*3].max(axis=0) for i in range(12)
+            ])
             rms = librosa.feature.rms(y=harmonic)[0]
-            mf = min(len(rms), chroma_cqt_raw.shape[1])
+            mf = min(len(rms), hpcp_frames.shape[1])
             rms_t = rms[:mf]
             rs = np.sum(rms_t)
             if rs > 0:
-                cqt_avg = np.average(chroma_cqt_raw[:, :mf], axis=1, weights=rms_t / rs)
+                hpcp_avg = np.average(hpcp_frames[:, :mf], axis=1, weights=rms_t / rs)
+            else:
+                hpcp_avg = np.mean(hpcp_frames, axis=1)
+            
+            # --- CQT 12-bin (energy-weighted, NO tuning) ---
+            chroma_cqt_raw = librosa.feature.chroma_cqt(y=harmonic, sr=sample_rate)
+            mf2 = min(len(rms), chroma_cqt_raw.shape[1])
+            if rs > 0:
+                cqt_avg = np.average(chroma_cqt_raw[:, :mf2], axis=1, weights=rms[:mf2] / np.sum(rms[:mf2]))
             else:
                 cqt_avg = np.mean(chroma_cqt_raw, axis=1)
             
@@ -1525,25 +1536,19 @@ class ToneDetector:
             chroma_cens_raw = librosa.feature.chroma_cens(y=harmonic, sr=sample_rate)
             cens_avg = np.mean(chroma_cens_raw, axis=1)
             
-            # --- STFT (tuning corrected) ---
-            chroma_stft_raw = librosa.feature.chroma_stft(
-                y=harmonic, sr=sample_rate, tuning=tuning
-            )
-            stft_avg = np.mean(chroma_stft_raw, axis=1)
-            
             # Normalize each separately
             def _norm(v):
                 s = np.sum(v)
                 return v / s if s > 0 else v
             
+            hpcp_norm = _norm(hpcp_avg)
             cqt_norm = _norm(cqt_avg)
             cens_norm = _norm(cens_avg)
-            stft_norm = _norm(stft_avg)
             
-            print("   ✅ Triple Chroma: CQT(energy+tuning) + CENS + STFT(tuning)")
+            print("   ✅ Triple Chroma: HPCP(36→12 max-pool) + CQT(energy) + CENS")
             
-            # Blended chroma (for profile matching & EMA)
-            chroma_avg = _norm(0.5 * cqt_avg + 0.3 * cens_avg + 0.2 * stft_avg)
+            # Blended chroma: HPCP chính (giải quyết bin-splitting)
+            chroma_avg = _norm(0.5 * hpcp_avg + 0.3 * cqt_avg + 0.2 * cens_avg)
             
             # === BƯỚC 2b: EMA (AutoKey mode) ===
             if accumulated_chroma is not None:
@@ -1593,31 +1598,29 @@ class ToneDetector:
                 return results
             
             # Detect independently on each chroma type
+            hpcp_results = _detect_key_single(hpcp_norm, "HPCP")
             cqt_results = _detect_key_single(cqt_norm, "CQT")
             cens_results = _detect_key_single(cens_norm, "CENS")
-            stft_results = _detect_key_single(stft_norm, "STFT")
             blend_results = _detect_key_single(chroma_for_analysis, "BLEND")
             
+            hpcp_best = hpcp_results[0]['key']
             cqt_best = cqt_results[0]['key']
             cens_best = cens_results[0]['key']
-            stft_best = stft_results[0]['key']
             blend_best = blend_results[0]['key']
             
-            print(f"   🗳️ Votes: CQT={cqt_best}  CENS={cens_best}  STFT={stft_best}  BLEND={blend_best}")
+            print(f"   🗳️ Votes: HPCP={hpcp_best}  CQT={cqt_best}  CENS={cens_best}  BLEND={blend_best}")
             
             # === BƯỚC 4: Majority Voting ===
-            # Tính vote từ 4 kết quả (3 chroma + blend)
-            votes = [cqt_best, cens_best, stft_best, blend_best]
+            votes = [hpcp_best, cqt_best, cens_best, blend_best]
             vote_counts = Counter(votes)
             winner, win_count = vote_counts.most_common(1)[0]
             
-            # Tìm kết quả chi tiết cho winner
-            # Ưu tiên: blend > CQT > CENS > STFT
+            # Ưu tiên: HPCP > blend > CQT > CENS
             all_result_sets = [
+                (hpcp_results, "HPCP"),
                 (blend_results, "BLEND"),
                 (cqt_results, "CQT"),
-                (cens_results, "CENS"),
-                (stft_results, "STFT")
+                (cens_results, "CENS")
             ]
             
             # Dùng kết quả từ nguồn đã vote cho winner
@@ -1645,21 +1648,21 @@ class ToneDetector:
                         best["key_index"], best["scale"],
                         second["key_index"], second["scale"]
                     ):
-                        # Dùng CQT chroma (giữ tonal center rõ nhất) để phân biệt
-                        tonic1 = cqt_norm[best["key_index"]]
-                        tonic2 = cqt_norm[second["key_index"]]
-                        fifth1 = cqt_norm[(best["key_index"] + 7) % 12]
-                        fifth2 = cqt_norm[(second["key_index"] + 7) % 12]
+                        # Dùng HPCP chroma (giải quyết bin-splitting tốt nhất)
+                        tonic1 = hpcp_norm[best["key_index"]]
+                        tonic2 = hpcp_norm[second["key_index"]]
+                        fifth1 = hpcp_norm[(best["key_index"] + 7) % 12]
+                        fifth2 = hpcp_norm[(second["key_index"] + 7) % 12]
                         
-                        # Thêm 3rd degree check (quãng 3 thứ cho minor, quãng 3 trưởng cho major)
+                        # Thêm 3rd degree check
                         if best["scale"] == "Minor":
-                            third1 = cqt_norm[(best["key_index"] + 3) % 12]  # minor 3rd
+                            third1 = hpcp_norm[(best["key_index"] + 3) % 12]
                         else:
-                            third1 = cqt_norm[(best["key_index"] + 4) % 12]  # major 3rd
+                            third1 = hpcp_norm[(best["key_index"] + 4) % 12]
                         if second["scale"] == "Minor":
-                            third2 = cqt_norm[(second["key_index"] + 3) % 12]
+                            third2 = hpcp_norm[(second["key_index"] + 3) % 12]
                         else:
-                            third2 = cqt_norm[(second["key_index"] + 4) % 12]
+                            third2 = hpcp_norm[(second["key_index"] + 4) % 12]
                         
                         strength1 = tonic1 + fifth1 * 0.7 + third1 * 0.5
                         strength2 = tonic2 + fifth2 * 0.7 + third2 * 0.5
