@@ -1496,11 +1496,13 @@ class ToneDetector:
             audio_data = np.nan_to_num(audio_data, nan=0.0, posinf=0.0, neginf=0.0)
             
             # === BƯỚC 0: Preprocessing ===
-            # Normalize amplitude (soundcard có thể trả về giá trị > 1.0)
-            max_val = np.max(np.abs(audio_data))
-            if max_val > 1.0:
-                print(f"   ⚠️ Audio chưa chuẩn hóa (max={max_val:.1f}), normalizing...")
-                audio_data = audio_data / max_val
+            # Robust normalize: dùng percentile thay max (tránh 1 sample lỗi phá hủy signal)
+            # VD: max=1.8e29 khi có corrupted sample → chia max làm mất toàn bộ audio
+            p999 = np.percentile(np.abs(audio_data), 99.9)
+            if p999 > 0 and p999 < 1e10:
+                audio_data = audio_data / p999
+            audio_data = np.clip(audio_data, -1.0, 1.0)
+            print(f"   ✅ Normalize (p99.9={p999:.2f})")
             
             # Notch filter: loại bỏ hum hệ thống (100Hz constant tone)
             # Chỉ loại chính xác tần số hum, KHÔNG ảnh hưởng nốt nhạc khác
