@@ -655,12 +655,9 @@ class SystemEngine:
             
             VOTING_WINDOW = 4
             SAMPLE_RATE = 44100
-            INITIAL_DURATION = 8  # Segment đầu tiên dài hơn để có harmonic content đủ
             current_key = None
             current_confidence = 0
             recent_keys = []
-            accumulated_chroma = None
-            segment_count = 0
             
             # Khởi tạo COM cho thread này
             com_initialized = False
@@ -708,24 +705,29 @@ class SystemEngine:
                 print(f"🎹 [AUTOKEY] Bắt đầu — segment={segment_duration}s, mic={loopback_mic.name}")
                 
                 # Giữ recorder mở suốt session → tránh init lại mỗi segment
+                # ROLLING AUDIO BUFFER: tích lũy audio thật, phân tích toàn bộ
+                RECORD_CHUNK = segment_duration  # Thu 5s mỗi lần
+                MAX_BUFFER_SEC = 20  # Giữ tối đa 20s audio
+                MAX_BUFFER_FRAMES = MAX_BUFFER_SEC * SAMPLE_RATE
+                audio_buffer = np.array([], dtype=np.float32)
+                
+                print(f"🎹 [AUTOKEY] Rolling buffer: chunk={RECORD_CHUNK}s, max={MAX_BUFFER_SEC}s")
+                
                 with loopback_mic.recorder(samplerate=SAMPLE_RATE, channels=1) as recorder:
                     while self.autokey_active:
                         try:
-                            # Segment đầu tiên dài hơn (8s), sau đó dùng segment_duration (5s)
-                            seg_dur = INITIAL_DURATION if segment_count == 0 else segment_duration
-                            frames = seg_dur * SAMPLE_RATE
-                            audio_data = recorder.record(numframes=frames)
-                            segment_count += 1
+                            # Thu âm chunk mới
+                            frames = RECORD_CHUNK * SAMPLE_RATE
+                            chunk = recorder.record(numframes=frames)
                             
-                            if audio_data.ndim > 1:
-                                audio_data = audio_data[:, 0]
-                            audio_data = audio_data.astype(np.float32)
-                            audio_data = np.nan_to_num(audio_data, nan=0.0, posinf=0.0, neginf=0.0)
+                            if chunk.ndim > 1:
+                                chunk = chunk[:, 0]
+                            chunk = chunk.astype(np.float32)
+                            chunk = np.nan_to_num(chunk, nan=0.0, posinf=0.0, neginf=0.0)
                             
-                            # Kiểm tra có âm thanh không
-                            rms = np.sqrt(np.mean(audio_data ** 2))
+                            # Kiểm tra im lặng
+                            rms = np.sqrt(np.mean(chunk ** 2))
                             if rms < 0.001:
-                                # Im lặng → gửi trạng thái "listening"
                                 if on_key_update:
                                     try:
                                         on_key_update({
@@ -738,23 +740,21 @@ class SystemEngine:
                                         pass
                                 continue
                             
-                            # Phân tích key (truyền accumulated_chroma để EMA blending)
-                            result = ToneDetector.detect_key_from_audio(
-                                audio_data, SAMPLE_RATE,
-                                accumulated_chroma=accumulated_chroma
-                            )
+                            # Thêm vào rolling buffer
+                            audio_buffer = np.concatenate([audio_buffer, chunk])
+                            
+                            # Cắt giữ tối đa MAX_BUFFER_SEC
+                            if len(audio_buffer) > MAX_BUFFER_FRAMES:
+                                audio_buffer = audio_buffer[-MAX_BUFFER_FRAMES:]
+                            
+                            buffer_sec = len(audio_buffer) / SAMPLE_RATE
+                            print(f"📦 [AUTOKEY] Buffer: {buffer_sec:.1f}s")
+                            
+                            # Phân tích TOÀN BỘ buffer (giống test_tone_youtube phân tích 30s)
+                            result = ToneDetector.detect_key_from_audio(audio_buffer, SAMPLE_RATE)
                             
                             if not result:
                                 continue
-                            
-                            # Cập nhật accumulated chroma (EMA)
-                            chroma_vec = result.get('chroma_vector')
-                            if chroma_vec is not None:
-                                if accumulated_chroma is None:
-                                    accumulated_chroma = chroma_vec
-                                else:
-                                    alpha = 0.3
-                                    accumulated_chroma = alpha * chroma_vec + (1 - alpha) * accumulated_chroma
                             
                             new_key = result['key_display']
                             confidence = result.get('confidence', 0)
