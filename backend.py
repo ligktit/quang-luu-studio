@@ -1487,151 +1487,190 @@ class ToneDetector:
     def detect_key_from_audio(audio_data, sample_rate, accumulated_chroma=None):
         """
         Phát hiện tone/key của bài hát từ audio data.
-        Pipeline: HPSS → Dual Chroma (CQT + CENS blend) → Weighted Multi-profile 
+        Pipeline: HPSS → Tuning Correction → Triple Chroma (CQT + CENS + STFT)
+                  → Independent Key Detection per Chroma → Majority Voting
                   → Closely-Related Key Disambiguation
-        
-        Args:
-            audio_data: numpy array audio
-            sample_rate: sample rate
-            accumulated_chroma: numpy array 12-dim tích lũy từ các segment trước (AutoKey mode)
-        
-        Returns:
-            dict với key, scale, confidence, ...
-            Thêm 'chroma_vector' để caller tích lũy
         """
         try:
             import librosa
             import numpy as np
+            from collections import Counter
             
             audio_data = np.nan_to_num(audio_data, nan=0.0, posinf=0.0, neginf=0.0)
-            print("🎵 [DÒ TONE] Pipeline: HPSS → Dual Chroma → Weighted Multi-profile...")
+            print("🎵 [DÒ TONE] Pipeline: HPSS → Tuning → Triple Chroma → Voting...")
             
-            # === BƯỚC 1: HPSS - Tách harmonic khỏi percussive ===
+            # === BƯỚC 1: HPSS ===
             harmonic, _ = librosa.effects.hpss(audio_data)
-            print("   ✅ HPSS: Đã tách harmonic/percussive")
+            print("   ✅ HPSS")
             
-            # === BƯỚC 2: DUAL CHROMA (CQT + CENS blend) ===
-            # CQT + energy-weighting → giữ tonal center chính xác
-            chroma_cqt = librosa.feature.chroma_cqt(y=harmonic, sr=sample_rate)
+            # === BƯỚC 1b: Tuning estimation ===
+            tuning = librosa.estimate_tuning(y=harmonic, sr=sample_rate)
+            print(f"   ✅ Tuning: {tuning:+.3f} semitones")
+            
+            # === BƯỚC 2: Triple Chroma extraction ===
+            # --- CQT (energy-weighted + tuning corrected) ---
+            chroma_cqt_raw = librosa.feature.chroma_cqt(
+                y=harmonic, sr=sample_rate, tuning=tuning
+            )
             rms = librosa.feature.rms(y=harmonic)[0]
-            min_frames = min(len(rms), chroma_cqt.shape[1])
-            rms = rms[:min_frames]
-            chroma_cqt = chroma_cqt[:, :min_frames]
-            rms_sum = np.sum(rms)
-            if rms_sum > 0:
-                weights = rms / rms_sum
-                cqt_avg = np.average(chroma_cqt, axis=1, weights=weights)
+            mf = min(len(rms), chroma_cqt_raw.shape[1])
+            rms_t = rms[:mf]
+            rs = np.sum(rms_t)
+            if rs > 0:
+                cqt_avg = np.average(chroma_cqt_raw[:, :mf], axis=1, weights=rms_t / rs)
             else:
-                cqt_avg = np.mean(chroma_cqt, axis=1)
+                cqt_avg = np.mean(chroma_cqt_raw, axis=1)
             
-            # CENS → robust với timbre/dynamics
-            chroma_cens = librosa.feature.chroma_cens(y=harmonic, sr=sample_rate)
-            cens_avg = np.mean(chroma_cens, axis=1)
+            # --- CENS ---
+            chroma_cens_raw = librosa.feature.chroma_cens(y=harmonic, sr=sample_rate)
+            cens_avg = np.mean(chroma_cens_raw, axis=1)
             
-            # Blend: 60% CQT (tonal center) + 40% CENS (stability)
-            chroma_avg = 0.6 * cqt_avg + 0.4 * cens_avg
-            print("   ✅ Dual Chroma: 60% CQT(energy) + 40% CENS")
+            # --- STFT (tuning corrected) ---
+            chroma_stft_raw = librosa.feature.chroma_stft(
+                y=harmonic, sr=sample_rate, tuning=tuning
+            )
+            stft_avg = np.mean(chroma_stft_raw, axis=1)
             
-            # Normalize to sum=1
-            chroma_sum = np.sum(chroma_avg)
-            if chroma_sum > 0:
-                chroma_avg = chroma_avg / chroma_sum
+            # Normalize each separately
+            def _norm(v):
+                s = np.sum(v)
+                return v / s if s > 0 else v
             
-            # Lưu CQT chroma riêng (dùng cho disambiguation)
-            cqt_sum = np.sum(cqt_avg)
-            cqt_normalized = cqt_avg / cqt_sum if cqt_sum > 0 else cqt_avg
+            cqt_norm = _norm(cqt_avg)
+            cens_norm = _norm(cens_avg)
+            stft_norm = _norm(stft_avg)
             
-            # === BƯỚC 2b: Tích lũy chroma (AutoKey mode) ===
+            print("   ✅ Triple Chroma: CQT(energy+tuning) + CENS + STFT(tuning)")
+            
+            # Blended chroma (for profile matching & EMA)
+            chroma_avg = _norm(0.5 * cqt_avg + 0.3 * cens_avg + 0.2 * stft_avg)
+            
+            # === BƯỚC 2b: EMA (AutoKey mode) ===
             if accumulated_chroma is not None:
                 alpha = 0.3
-                chroma_for_analysis = alpha * chroma_avg + (1 - alpha) * accumulated_chroma
-                cs = np.sum(chroma_for_analysis)
-                if cs > 0:
-                    chroma_for_analysis = chroma_for_analysis / cs
-                print(f"   ✅ EMA blending (α={alpha}): segment + history")
+                chroma_for_analysis = _norm(
+                    alpha * chroma_avg + (1 - alpha) * accumulated_chroma
+                )
+                print(f"   ✅ EMA blending (α={alpha})")
             else:
                 chroma_for_analysis = chroma_avg
             
-            print(f"📊 [DÒ TONE] Chroma: {[f'{x:.3f}' for x in chroma_for_analysis]}")
-            
-            # === BƯỚC 3: Weighted Multi-profile correlation ===
+            # === BƯỚC 3: Independent key detection per chroma type ===
             W = ToneDetector.PROFILE_WEIGHTS
+            MINOR_BOOST = 1.02
             
-            ks_results = ToneDetector._correlate_profiles(
-                chroma_for_analysis, ToneDetector.KS_MAJOR, ToneDetector.KS_MINOR
-            )
-            temp_results = ToneDetector._correlate_profiles(
-                chroma_for_analysis, ToneDetector.TEMP_MAJOR, ToneDetector.TEMP_MINOR
-            )
-            aarden_results = ToneDetector._correlate_profiles(
-                chroma_for_analysis, ToneDetector.AARDEN_MAJOR, ToneDetector.AARDEN_MINOR
-            )
-            
-            # Weighted average correlation + minor boost (chống major bias)
-            MINOR_BOOST = 1.02  # +2% cho minor keys (Aarden profiles thiên major)
-            all_uids = set(ks_results.keys()) | set(temp_results.keys()) | set(aarden_results.keys())
-            all_results = []
-            for uid in all_uids:
-                ks_c = ks_results.get(uid, {}).get('correlation', 0)
-                temp_c = temp_results.get(uid, {}).get('correlation', 0)
-                aarden_c = aarden_results.get(uid, {}).get('correlation', 0)
-                
-                weighted_corr = (
-                    W['ks'] * ks_c +
-                    W['temperley'] * temp_c +
-                    W['aarden'] * aarden_c
+            def _detect_key_single(chroma_vec, label=""):
+                """Detect key from a single chroma vector using weighted multi-profile."""
+                ks_r = ToneDetector._correlate_profiles(
+                    chroma_vec, ToneDetector.KS_MAJOR, ToneDetector.KS_MINOR
+                )
+                temp_r = ToneDetector._correlate_profiles(
+                    chroma_vec, ToneDetector.TEMP_MAJOR, ToneDetector.TEMP_MINOR
+                )
+                aarden_r = ToneDetector._correlate_profiles(
+                    chroma_vec, ToneDetector.AARDEN_MAJOR, ToneDetector.AARDEN_MINOR
                 )
                 
-                ref = ks_results.get(uid) or temp_results.get(uid) or aarden_results.get(uid)
+                all_uids = set(ks_r.keys()) | set(temp_r.keys()) | set(aarden_r.keys())
+                results = []
+                for uid in all_uids:
+                    kc = ks_r.get(uid, {}).get('correlation', 0)
+                    tc = temp_r.get(uid, {}).get('correlation', 0)
+                    ac = aarden_r.get(uid, {}).get('correlation', 0)
+                    wc = W['ks'] * kc + W['temperley'] * tc + W['aarden'] * ac
+                    
+                    ref = ks_r.get(uid) or temp_r.get(uid) or aarden_r.get(uid)
+                    if ref["scale"] == "Minor":
+                        wc *= MINOR_BOOST
+                    
+                    results.append({
+                        "key": ref["key"], "scale": ref["scale"],
+                        "correlation": wc, "key_index": ref["key_index"],
+                        "ks_corr": kc, "temp_corr": tc, "aarden_corr": ac
+                    })
                 
-                # Minor boost: bù trừ major bias trong profiles
-                if ref["scale"] == "Minor":
-                    weighted_corr *= MINOR_BOOST
-                
-                all_results.append({
-                    "key": ref["key"],
-                    "scale": ref["scale"],
-                    "correlation": weighted_corr,
-                    "key_index": ref["key_index"],
-                    "ks_corr": ks_c,
-                    "temp_corr": temp_c,
-                    "aarden_corr": aarden_c
-                })
+                results.sort(key=lambda x: x["correlation"], reverse=True)
+                return results
             
-            all_results.sort(key=lambda x: x["correlation"], reverse=True)
+            # Detect independently on each chroma type
+            cqt_results = _detect_key_single(cqt_norm, "CQT")
+            cens_results = _detect_key_single(cens_norm, "CENS")
+            stft_results = _detect_key_single(stft_norm, "STFT")
+            blend_results = _detect_key_single(chroma_for_analysis, "BLEND")
             
-            # === BƯỚC 4: Closely-Related Key Disambiguation ===
-            # (mở rộng: không chỉ relative pairs mà tất cả key chia sẻ ≥6 nốt)
-            best = all_results[0]
-            second = all_results[1] if len(all_results) > 1 else None
+            cqt_best = cqt_results[0]['key']
+            cens_best = cens_results[0]['key']
+            stft_best = stft_results[0]['key']
+            blend_best = blend_results[0]['key']
             
-            if second and ToneDetector._are_closely_related(
-                best["key_index"], best["scale"],
-                second["key_index"], second["scale"]
-            ):
-                diff = best["correlation"] - second["correlation"]
-                if diff < 0.05:  # Chênh lệch < 5% → mơ hồ (mở rộng từ 3%)
-                    # Dùng CQT chroma (giữ tonal center rõ hơn) để phân biệt
-                    tonic1 = cqt_normalized[best["key_index"]]
-                    tonic2 = cqt_normalized[second["key_index"]]
+            print(f"   🗳️ Votes: CQT={cqt_best}  CENS={cens_best}  STFT={stft_best}  BLEND={blend_best}")
+            
+            # === BƯỚC 4: Majority Voting ===
+            # Tính vote từ 4 kết quả (3 chroma + blend)
+            votes = [cqt_best, cens_best, stft_best, blend_best]
+            vote_counts = Counter(votes)
+            winner, win_count = vote_counts.most_common(1)[0]
+            
+            # Tìm kết quả chi tiết cho winner
+            # Ưu tiên: blend > CQT > CENS > STFT
+            all_result_sets = [
+                (blend_results, "BLEND"),
+                (cqt_results, "CQT"),
+                (cens_results, "CENS"),
+                (stft_results, "STFT")
+            ]
+            
+            # Dùng kết quả từ nguồn đã vote cho winner
+            final_results = blend_results  # default
+            for results, label in all_result_sets:
+                if results[0]['key'] == winner:
+                    final_results = results
+                    break
+            
+            best = final_results[0]
+            
+            # Nếu vote không unanimous, kiểm tra closely-related disambiguation
+            if win_count < 3:
+                # Tìm runner-up
+                second_key = vote_counts.most_common(2)[-1][0] if len(vote_counts) > 1 else None
+                if second_key:
+                    # Tìm second trong final_results
+                    second = None
+                    for r in final_results[1:6]:
+                        if r['key'] == second_key:
+                            second = r
+                            break
                     
-                    # Kiểm tra thêm quãng 5 (5th degree) → đặc trưng mạnh của tonal center
-                    fifth1 = cqt_normalized[(best["key_index"] + 7) % 12]
-                    fifth2 = cqt_normalized[(second["key_index"] + 7) % 12]
-                    
-                    # Tổng sức mạnh tonic + 5th
-                    strength1 = tonic1 + fifth1 * 0.8
-                    strength2 = tonic2 + fifth2 * 0.8
-                    
-                    print(f"   🔍 Closely-related: {best['key']} vs {second['key']}")
-                    print(f"      {best['key']}: tonic={tonic1:.3f} 5th={fifth1:.3f} → {strength1:.3f}")
-                    print(f"      {second['key']}: tonic={tonic2:.3f} 5th={fifth2:.3f} → {strength2:.3f}")
-                    
-                    if strength2 > strength1 * 1.05:  # Second mạnh hơn 5%
-                        print(f"   🔄 Key swap: {best['key']} → {second['key']}")
-                        best, second = second, best
-                    else:
-                        print(f"   ✅ Giữ {best['key']}")
+                    if second and ToneDetector._are_closely_related(
+                        best["key_index"], best["scale"],
+                        second["key_index"], second["scale"]
+                    ):
+                        # Dùng CQT chroma (giữ tonal center rõ nhất) để phân biệt
+                        tonic1 = cqt_norm[best["key_index"]]
+                        tonic2 = cqt_norm[second["key_index"]]
+                        fifth1 = cqt_norm[(best["key_index"] + 7) % 12]
+                        fifth2 = cqt_norm[(second["key_index"] + 7) % 12]
+                        
+                        # Thêm 3rd degree check (quãng 3 thứ cho minor, quãng 3 trưởng cho major)
+                        if best["scale"] == "Minor":
+                            third1 = cqt_norm[(best["key_index"] + 3) % 12]  # minor 3rd
+                        else:
+                            third1 = cqt_norm[(best["key_index"] + 4) % 12]  # major 3rd
+                        if second["scale"] == "Minor":
+                            third2 = cqt_norm[(second["key_index"] + 3) % 12]
+                        else:
+                            third2 = cqt_norm[(second["key_index"] + 4) % 12]
+                        
+                        strength1 = tonic1 + fifth1 * 0.7 + third1 * 0.5
+                        strength2 = tonic2 + fifth2 * 0.7 + third2 * 0.5
+                        
+                        print(f"   🔍 Disambiguate: {best['key']} vs {second['key']}")
+                        print(f"      {best['key']}: T={tonic1:.3f} 5={fifth1:.3f} 3={third1:.3f} → {strength1:.3f}")
+                        print(f"      {second['key']}: T={tonic2:.3f} 5={fifth2:.3f} 3={third2:.3f} → {strength2:.3f}")
+                        
+                        if strength2 > strength1 * 1.05:
+                            print(f"   🔄 Key swap: {best['key']} → {second['key']}")
+                            best = second
             
             best_key = best["key_index"]
             best_scale = best["scale"]
@@ -1642,10 +1681,9 @@ class ToneDetector:
             else:
                 key_display = ToneDetector.MINOR_KEY_NAMES[best_key]
             
-            print(f"🎯 [DÒ TONE] Kết quả: {key_display} (confidence: {best_corr:.4f})")
-            print(f"   📊 KS={best.get('ks_corr',0):.4f}  T={best.get('temp_corr',0):.4f}  A={best.get('aarden_corr',0):.4f}")
+            print(f"🎯 [DÒ TONE] Kết quả: {key_display} (conf={best_corr:.4f}, votes={win_count}/4)")
             print(f"🎯 [DÒ TONE] Top 5:")
-            for r in all_results[:5]:
+            for r in final_results[:5]:
                 print(f"   {r['key']}: {r['correlation']:.4f}")
             
             return {
@@ -1654,8 +1692,8 @@ class ToneDetector:
                 "scale": best_scale,
                 "confidence": best_corr,
                 "key_display": key_display,
-                "top_results": all_results[:5],
-                "chroma_vector": chroma_avg  # Trả về để caller tích lũy
+                "top_results": final_results[:5],
+                "chroma_vector": chroma_avg
             }
             
         except Exception as e:

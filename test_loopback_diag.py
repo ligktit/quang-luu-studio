@@ -7,11 +7,15 @@ sys.path.insert(0, '.')
 import numpy as np
 import ctypes
 
+# Patch numpy.fromstring for Python 3.14 + soundcard compatibility
+_orig = np.fromstring
+def _patched(string, dtype=float, count=-1, *, sep='', like=None):
+    if not sep:
+        return np.frombuffer(string, dtype=dtype, count=count)
+    return _orig(string, dtype=dtype, count=count, sep=sep)
+np.fromstring = _patched
+
 def main():
-    try:
-        ctypes.windll.ole32.CoInitializeEx(None, 0)
-    except:
-        pass
     
     try:
         import soundcard as sc
