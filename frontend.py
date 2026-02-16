@@ -697,6 +697,14 @@ class MainDashboard(ctk.CTk):
         )
         self.autokey_dot.pack(side="left", padx=(8, 2))
         
+        # Label "Key:"
+        ctk.CTkLabel(
+            self.autokey_indicator_frame,
+            text="Key:",
+            font=("Inter", 11),
+            text_color="#94A3B8"
+        ).pack(side="left", padx=(2, 2))
+        
         # Key hiện tại (lớn, nổi bật)
         self.autokey_key_label = ctk.CTkLabel(
             self.autokey_indicator_frame,
@@ -704,7 +712,16 @@ class MainDashboard(ctk.CTk):
             font=("Inter", 18, "bold"),
             text_color="#F8FAFC"
         )
-        self.autokey_key_label.pack(side="left", padx=4)
+        self.autokey_key_label.pack(side="left", padx=2)
+        
+        # Scale (Trưởng/Thứ)
+        self.autokey_scale_label = ctk.CTkLabel(
+            self.autokey_indicator_frame,
+            text="",
+            font=("Inter", 11),
+            text_color="#FACC15"
+        )
+        self.autokey_scale_label.pack(side="left", padx=(0, 4))
         
         # Confidence nhỏ
         self.autokey_conf_label = ctk.CTkLabel(
@@ -904,6 +921,7 @@ class MainDashboard(ctk.CTk):
             # Hiện indicator live
             self.autokey_indicator_frame.pack(side="left", padx=(10, 0))
             self.autokey_key_label.configure(text="...")
+            self.autokey_scale_label.configure(text="")
             self.autokey_conf_label.configure(text="")
             self._animate_autokey_dot()
             
@@ -951,11 +969,13 @@ class MainDashboard(ctk.CTk):
                 text=result.get('key_display', '...'),
                 text_color="#64748B"
             )
+            self.autokey_scale_label.configure(text="")
             self.autokey_conf_label.configure(text="🎙️")
             return
         
         if status == 'detected':
             key_display = result.get('key_display', '?')
+            scale = result.get('scale', '')
             confidence = result.get('confidence', 0)
             conf_pct = max(0, min(100, confidence * 100))
             key_changed = result.get('key_changed', False)
@@ -963,6 +983,11 @@ class MainDashboard(ctk.CTk):
             # Cập nhật indicator
             text_color = "#22C55E" if key_changed else "#F8FAFC"
             self.autokey_key_label.configure(text=key_display, text_color=text_color)
+            
+            # Scale (Trưởng/Thứ)
+            scale_text = "Trưởng" if scale == "Major" else "Thứ" if scale == "Minor" else ""
+            self.autokey_scale_label.configure(text=scale_text)
+            
             self.autokey_conf_label.configure(text=f"{conf_pct:.0f}%")
             
             # Cập nhật tone selector
