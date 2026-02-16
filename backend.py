@@ -1494,6 +1494,22 @@ class ToneDetector:
             import numpy as np
             
             audio_data = np.nan_to_num(audio_data, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            # === BƯỚC 0: Preprocessing ===
+            # Normalize amplitude (soundcard có thể trả về giá trị > 1.0)
+            max_val = np.max(np.abs(audio_data))
+            if max_val > 1.0:
+                print(f"   ⚠️ Audio chưa chuẩn hóa (max={max_val:.1f}), normalizing...")
+                audio_data = audio_data / max_val
+            
+            # High-pass filter: loại bỏ hum/nhiễu dưới 130Hz
+            # (PYIN diagnostic phát hiện 100.3Hz constant tone gây lệch chroma)
+            S = librosa.stft(audio_data)
+            freqs = librosa.fft_frequencies(sr=sample_rate)
+            S[freqs < 130] = 0
+            audio_data = librosa.istft(S, length=len(audio_data))
+            print("   ✅ Preprocessing: normalize + high-pass 130Hz")
+            
             print("🎵 [DÒ TONE] Pipeline: HPSS → CQT → Weighted Multi-profile...")
             
             # === BƯỚC 1: HPSS ===
