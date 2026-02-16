@@ -888,7 +888,7 @@ class MainDashboard(ctk.CTk):
     # --- DÒ TONE - THU ÂM TRỰC TIẾP TỪ HỆ THỐNG ---
     def _start_tone_detection(self):
         """Bắt đầu dò tone bằng cách thu âm loopback từ hệ thống"""
-        RECORD_DURATION = 10  # Thu âm 10 giây
+        RECORD_DURATION = 5  # Thu âm 5 giây (HPSS + energy-weighted → đủ chính xác)
         
         # Dialog hiển thị countdown
         self._tone_dialog = ctk.CTkToplevel(self)

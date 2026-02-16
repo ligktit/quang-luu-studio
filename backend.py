@@ -624,18 +624,26 @@ class SystemEngine:
             print("⏹️ [TONE] Dừng dò tone liên tục")
         self.tone_detection_active = False
     
-    def detect_tone_continuous(self, url=None, segment_duration=10):
+    def detect_tone_continuous(self, url=None, segment_duration=5):
         """
         Dò tone liên tục suốt bài hát, phát hiện chuyển tone.
         Chạy trên thread hiện tại, dừng khi youtube_monitoring_active = False.
+        
+        Cải tiến:
+        - Segment 5s (thay vì 10s) → phản hồi nhanh hơn
+        - Voting window (3 segments) → tránh nhảy tone lung tung  
+        - Confidence threshold (5%) → chỉ chuyển khi chắc chắn
         """
         self.tone_detection_active = True
         current_key = None
+        current_confidence = 0
         key_timeline = []
+        recent_keys = []  # Voting window: 3 segments gần nhất
         elapsed = 0
+        VOTING_WINDOW = 3
         
         print("=" * 60)
-        print(f"🎵 [TONE CONTINUOUS] Bắt đầu dò tone liên tục (segment={segment_duration}s)")
+        print(f"🎵 [TONE CONTINUOUS] Bắt đầu dò tone liên tục (segment={segment_duration}s, voting={VOTING_WINDOW})")
         
         while self.tone_detection_active and self.youtube_monitoring_active:
             try:
@@ -647,24 +655,49 @@ class SystemEngine:
                     new_key = result['key_display']
                     confidence = result.get('confidence', 0)
                     
-                    # Ghi vào timeline
+                    # Thêm vào voting window
+                    recent_keys.append(new_key)
+                    if len(recent_keys) > VOTING_WINDOW:
+                        recent_keys.pop(0)
+                    
+                    # Voting: key xuất hiện nhiều nhất trong window
+                    from collections import Counter
+                    vote_counts = Counter(recent_keys)
+                    voted_key = vote_counts.most_common(1)[0][0]
+                    vote_ratio = vote_counts[voted_key] / len(recent_keys)
+                    
+                    # Ghi vào timeline (luôn ghi raw detection)
                     entry = {
                         'time': elapsed,
-                        'key_display': new_key,
+                        'key_display': voted_key,
                         'key_index': result['key_index'],
                         'scale': result['scale'],
                         'confidence': round(confidence, 3)
                     }
                     key_timeline.append(entry)
                     
-                    # Phát hiện chuyển tone
-                    if new_key != current_key:
-                        if current_key:
-                            print(f"🔄 [TONE] CHUYỂN TONE: {current_key} → {new_key} (t={elapsed}s, conf={confidence:.2f})")
+                    # Phát hiện chuyển tone với temporal smoothing + confidence threshold
+                    should_change = False
+                    if current_key is None:
+                        # Key đầu tiên: luôn chấp nhận
+                        should_change = True
+                    elif voted_key != current_key:
+                        # Chuyển tone: cần voting đa số VÀ confidence chênh lệch > threshold
+                        confidence_diff = confidence - current_confidence
+                        if vote_ratio >= 0.67 and confidence_diff > -ToneDetector.KEY_CHANGE_THRESHOLD:
+                            should_change = True
+                            print(f"🔄 [TONE] CHUYỂN TONE: {current_key} → {voted_key} "
+                                  f"(t={elapsed}s, vote={vote_ratio:.0%}, conf={confidence:.2f}, Δ={confidence_diff:+.3f})")
                         else:
-                            print(f"🎵 [TONE] Key ban đầu: {new_key} (conf={confidence:.2f})")
+                            print(f"   ⏸️ [TONE] t={elapsed}s: raw={new_key} nhưng giữ {current_key} "
+                                  f"(vote={vote_ratio:.0%}, Δconf={confidence_diff:+.3f})")
+                    
+                    if should_change:
+                        if current_key is None:
+                            print(f"🎵 [TONE] Key ban đầu: {voted_key} (conf={confidence:.2f})")
                         
-                        current_key = new_key
+                        current_key = voted_key
+                        current_confidence = confidence
                         
                         # Gửi MIDI mới
                         self._send_tone_midi(result)
@@ -675,8 +708,8 @@ class SystemEngine:
                                 self.on_tone_detected_callback(result)
                             except:
                                 pass
-                    else:
-                        print(f"   🎵 [TONE] t={elapsed}s: {new_key} (stable, conf={confidence:.2f})")
+                    elif voted_key == current_key:
+                        print(f"   🎵 [TONE] t={elapsed}s: {voted_key} (stable, conf={confidence:.2f})")
                     
                     elapsed += segment_duration
                 else:
@@ -1137,22 +1170,59 @@ class ScoringEngine:
 class ToneDetector:
     """
     Dò Tone bài hát - Phát hiện key/tonality từ audio
-    Sử dụng thuật toán Krumhansl-Schmuckler với CQT Chroma features
+    Sử dụng HPSS + Multi-profile (Krumhansl + Temperley) + Energy-weighted Chroma
     """
     
-    # Krumhansl-Schmuckler key profiles
-    MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
-    MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+    # Krumhansl-Schmuckler key profiles (1990)
+    KS_MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+    KS_MINOR = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+    
+    # Temperley key profiles (CBMS, 2001) - chính xác hơn cho nhạc pop/karaoke
+    TEMP_MAJOR = [5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0]
+    TEMP_MINOR = [5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 1.5, 4.0]
+    
+    # Backward compatibility aliases
+    MAJOR_PROFILE = KS_MAJOR
+    MINOR_PROFILE = KS_MINOR
     
     # Key names - khớp với UI tone selector
     MAJOR_KEY_NAMES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
     MINOR_KEY_NAMES = ["Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"]
     
+    # Confidence threshold: chỉ chuyển tone khi chênh lệch > 5%
+    KEY_CHANGE_THRESHOLD = 0.05
+    
+    @staticmethod
+    def _correlate_profiles(chroma_avg, major_profile, minor_profile):
+        """
+        Tính correlation cho 1 bộ profile (Major + Minor) với chroma vector.
+        Trả về list 24 kết quả (12 major + 12 minor).
+        """
+        import numpy as np
+        results = []
+        for i in range(12):
+            rotated = np.roll(chroma_avg, -i)
+            major_corr = float(np.corrcoef(rotated, major_profile)[0, 1])
+            results.append({
+                "key": ToneDetector.MAJOR_KEY_NAMES[i],
+                "scale": "Major",
+                "correlation": major_corr,
+                "key_index": i
+            })
+            minor_corr = float(np.corrcoef(rotated, minor_profile)[0, 1])
+            results.append({
+                "key": ToneDetector.MINOR_KEY_NAMES[i],
+                "scale": "Minor",
+                "correlation": minor_corr,
+                "key_index": i
+            })
+        return results
+
     @staticmethod
     def detect_key_from_audio(audio_data, sample_rate):
         """
-        Phát hiện tone/key của bài hát từ audio data
-        Sử dụng CQT Chroma + Krumhansl-Schmuckler correlation
+        Phát hiện tone/key của bài hát từ audio data.
+        Pipeline: HPSS → Energy-weighted CQT Chroma → Multi-profile correlation
         """
         try:
             import librosa
@@ -1160,13 +1230,31 @@ class ToneDetector:
             
             # Clean audio data: thay NaN/Inf bằng 0 (loopback có thể tạo giá trị không hợp lệ)
             audio_data = np.nan_to_num(audio_data, nan=0.0, posinf=0.0, neginf=0.0)
-            print("🎵 [DÒ TONE] Đang phân tích chroma features...")
+            print("🎵 [DÒ TONE] Pipeline: HPSS → Energy-weighted Chroma → Multi-profile...")
             
-            # Compute CQT chroma (chính xác hơn STFT cho phát hiện key)
-            chroma = librosa.feature.chroma_cqt(y=audio_data, sr=sample_rate)
+            # === BƯỚC 1: HPSS - Tách harmonic khỏi percussive ===
+            harmonic, _ = librosa.effects.hpss(audio_data)
+            print("   ✅ HPSS: Đã tách harmonic/percussive")
             
-            # Average chroma across time frames
-            chroma_avg = np.mean(chroma, axis=1)
+            # === BƯỚC 2: CQT Chroma trên harmonic signal ===
+            chroma = librosa.feature.chroma_cqt(y=harmonic, sr=sample_rate)
+            
+            # === BƯỚC 3: Energy-weighted averaging ===
+            # Tính RMS energy mỗi frame → frame có nhạc mạnh được ưu tiên
+            rms = librosa.feature.rms(y=harmonic)[0]
+            
+            # Align lengths (RMS và chroma có thể khác nhau vài frame)
+            min_frames = min(len(rms), chroma.shape[1])
+            rms = rms[:min_frames]
+            chroma = chroma[:, :min_frames]
+            
+            rms_sum = np.sum(rms)
+            if rms_sum > 0:
+                weights = rms / rms_sum
+                chroma_avg = np.average(chroma, axis=1, weights=weights)
+            else:
+                chroma_avg = np.mean(chroma, axis=1)
+            print("   ✅ Energy-weighted chroma averaging")
             
             # Normalize
             chroma_sum = np.sum(chroma_avg)
@@ -1175,43 +1263,49 @@ class ToneDetector:
             
             print(f"📊 [DÒ TONE] Chroma: {[f'{x:.3f}' for x in chroma_avg]}")
             
-            best_key = 0
-            best_corr = -2
-            best_scale = "Major"
+            # === BƯỚC 4: Multi-profile correlation (Krumhansl + Temperley) ===
+            ks_results = ToneDetector._correlate_profiles(
+                chroma_avg, ToneDetector.KS_MAJOR, ToneDetector.KS_MINOR
+            )
+            temp_results = ToneDetector._correlate_profiles(
+                chroma_avg, ToneDetector.TEMP_MAJOR, ToneDetector.TEMP_MINOR
+            )
+            
+            # Trung bình correlation của 2 bộ profile → giảm false positive
+            merged = {}
+            for r in ks_results:
+                uid = f"{r['key']}_{r['scale']}"
+                merged[uid] = {
+                    "key": r["key"],
+                    "scale": r["scale"],
+                    "key_index": r["key_index"],
+                    "ks_corr": r["correlation"],
+                    "temp_corr": 0.0
+                }
+            for r in temp_results:
+                uid = f"{r['key']}_{r['scale']}"
+                if uid in merged:
+                    merged[uid]["temp_corr"] = r["correlation"]
+            
             all_results = []
-            
-            for i in range(12):
-                # Rotate chroma vector để test từng key
-                rotated = np.roll(chroma_avg, -i)
-                
-                # Correlation với major profile
-                major_corr = float(np.corrcoef(rotated, ToneDetector.MAJOR_PROFILE)[0, 1])
+            for uid, data in merged.items():
+                avg_corr = (data["ks_corr"] + data["temp_corr"]) / 2.0
                 all_results.append({
-                    "key": ToneDetector.MAJOR_KEY_NAMES[i],
-                    "scale": "Major",
-                    "correlation": major_corr,
-                    "key_index": i
+                    "key": data["key"],
+                    "scale": data["scale"],
+                    "correlation": avg_corr,
+                    "key_index": data["key_index"],
+                    "ks_corr": data["ks_corr"],
+                    "temp_corr": data["temp_corr"]
                 })
-                if major_corr > best_corr:
-                    best_corr = major_corr
-                    best_key = i
-                    best_scale = "Major"
-                
-                # Correlation với minor profile
-                minor_corr = float(np.corrcoef(rotated, ToneDetector.MINOR_PROFILE)[0, 1])
-                all_results.append({
-                    "key": ToneDetector.MINOR_KEY_NAMES[i],
-                    "scale": "Minor",
-                    "correlation": minor_corr,
-                    "key_index": i
-                })
-                if minor_corr > best_corr:
-                    best_corr = minor_corr
-                    best_key = i
-                    best_scale = "Minor"
             
-            # Sort by correlation
+            # Sort by averaged correlation
             all_results.sort(key=lambda x: x["correlation"], reverse=True)
+            
+            best = all_results[0]
+            best_key = best["key_index"]
+            best_scale = best["scale"]
+            best_corr = best["correlation"]
             
             # Build display name
             if best_scale == "Major":
@@ -1220,9 +1314,10 @@ class ToneDetector:
                 key_display = ToneDetector.MINOR_KEY_NAMES[best_key]
             
             print(f"🎯 [DÒ TONE] Kết quả: {key_display} (confidence: {best_corr:.4f})")
+            print(f"   📊 KS={best.get('ks_corr',0):.4f}  Temperley={best.get('temp_corr',0):.4f}")
             print(f"🎯 [DÒ TONE] Top 5:")
             for r in all_results[:5]:
-                print(f"   {r['key']}: {r['correlation']:.4f}")
+                print(f"   {r['key']}: {r['correlation']:.4f} (KS={r.get('ks_corr',0):.4f} T={r.get('temp_corr',0):.4f})")
             
             return {
                 "key": ToneDetector.MAJOR_KEY_NAMES[best_key],
