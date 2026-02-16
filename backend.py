@@ -654,7 +654,7 @@ class SystemEngine:
             from collections import Counter
             
             VOTING_WINDOW = 4
-            SAMPLE_RATE = 44100
+            SAMPLE_RATE = 48000  # Windows WASAPI loopback = device output rate (thường 48kHz)
             current_key = None
             current_confidence = 0
             recent_keys = []

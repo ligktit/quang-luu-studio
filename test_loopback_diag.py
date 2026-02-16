@@ -25,7 +25,7 @@ def main():
     
     import librosa
     
-    SAMPLE_RATE = 44100
+    SAMPLE_RATE = 48000  # Windows WASAPI loopback = device output rate
     DURATION = 15
     
     all_mics = sc.all_microphones(include_loopback=True)
