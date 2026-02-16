@@ -658,6 +658,7 @@ class SystemEngine:
             current_key = None
             current_confidence = 0
             recent_keys = []
+            accumulated_chroma = None  # Tích lũy chroma qua các segment (EMA)
             
             # Khởi tạo COM cho thread này
             com_initialized = False
@@ -733,11 +734,23 @@ class SystemEngine:
                                         pass
                                 continue
                             
-                            # Phân tích key
-                            result = ToneDetector.detect_key_from_audio(audio_data, SAMPLE_RATE)
+                            # Phân tích key (truyền accumulated_chroma để EMA blending)
+                            result = ToneDetector.detect_key_from_audio(
+                                audio_data, SAMPLE_RATE,
+                                accumulated_chroma=accumulated_chroma
+                            )
                             
                             if not result:
                                 continue
+                            
+                            # Cập nhật accumulated chroma (EMA)
+                            chroma_vec = result.get('chroma_vector')
+                            if chroma_vec is not None:
+                                if accumulated_chroma is None:
+                                    accumulated_chroma = chroma_vec
+                                else:
+                                    alpha = 0.3
+                                    accumulated_chroma = alpha * chroma_vec + (1 - alpha) * accumulated_chroma
                             
                             new_key = result['key_display']
                             confidence = result.get('confidence', 0)
@@ -1366,16 +1379,29 @@ class ScoringEngine:
 class ToneDetector:
     """
     Dò Tone bài hát - Phát hiện key/tonality từ audio
-    Sử dụng HPSS + Multi-profile (Krumhansl + Temperley) + Energy-weighted Chroma
+    Pipeline: HPSS → Chroma CENS → Weighted Multi-profile (Aarden/Temperley/KS)
     """
     
-    # Krumhansl-Schmuckler key profiles (1990)
+    # Krumhansl-Schmuckler key profiles (1990) - weight 20%
     KS_MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
     KS_MINOR = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
     
-    # Temperley key profiles (CBMS, 2001) - chính xác hơn cho nhạc pop/karaoke
+    # Temperley key profiles (CBMS, 2001) - weight 30%
     TEMP_MAJOR = [5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0]
     TEMP_MINOR = [5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 1.5, 4.0]
+    
+    # Aarden-Essen key profiles (corpus-based) - weight 50% (tối ưu cho pop)
+    AARDEN_MAJOR = [17.7661, 0.145624, 14.9265, 0.160186, 19.8049, 11.3587,
+                    0.291248, 22.062, 0.145624, 8.15494, 0.232998, 4.95122]
+    AARDEN_MINOR = [18.2648, 0.737619, 14.0499, 16.8599, 0.702494, 14.4362,
+                    0.702494, 18.6161, 4.56621, 1.93186, 7.37619, 1.75623]
+    
+    # Trọng số từng bộ profile
+    PROFILE_WEIGHTS = {
+        'aarden': 0.50,
+        'temperley': 0.30,
+        'ks': 0.20
+    }
     
     # Backward compatibility aliases
     MAJOR_PROFILE = KS_MAJOR
@@ -1385,6 +1411,10 @@ class ToneDetector:
     MAJOR_KEY_NAMES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
     MINOR_KEY_NAMES = ["Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"]
     
+    # Relative key pairs: Major index → Minor index (cách 9 semitone)
+    # C Major (0) ↔ Am (9), D Major (2) ↔ Bm (11), ...
+    RELATIVE_MINOR_OFFSET = 9  # Major + 9 semitone = relative Minor
+    
     # Confidence threshold: chỉ chuyển tone khi chênh lệch > 5%
     KEY_CHANGE_THRESHOLD = 0.05
     
@@ -1392,128 +1422,167 @@ class ToneDetector:
     def _correlate_profiles(chroma_avg, major_profile, minor_profile):
         """
         Tính correlation cho 1 bộ profile (Major + Minor) với chroma vector.
-        Trả về list 24 kết quả (12 major + 12 minor).
+        Trả về dict {uid: correlation} cho 24 keys.
         """
         import numpy as np
-        results = []
+        results = {}
         for i in range(12):
             rotated = np.roll(chroma_avg, -i)
             major_corr = float(np.corrcoef(rotated, major_profile)[0, 1])
-            results.append({
+            uid_major = f"{ToneDetector.MAJOR_KEY_NAMES[i]}_Major"
+            results[uid_major] = {
                 "key": ToneDetector.MAJOR_KEY_NAMES[i],
                 "scale": "Major",
                 "correlation": major_corr,
                 "key_index": i
-            })
+            }
             minor_corr = float(np.corrcoef(rotated, minor_profile)[0, 1])
-            results.append({
+            uid_minor = f"{ToneDetector.MINOR_KEY_NAMES[i]}_Minor"
+            results[uid_minor] = {
                 "key": ToneDetector.MINOR_KEY_NAMES[i],
                 "scale": "Minor",
                 "correlation": minor_corr,
                 "key_index": i
-            })
+            }
         return results
+    
+    @staticmethod
+    def _is_relative_pair(key1_idx, scale1, key2_idx, scale2):
+        """Kiểm tra 2 key có phải relative pair không (C Major ↔ Am)"""
+        if scale1 == "Major" and scale2 == "Minor":
+            return (key1_idx + ToneDetector.RELATIVE_MINOR_OFFSET) % 12 == key2_idx
+        if scale1 == "Minor" and scale2 == "Major":
+            return (key2_idx + ToneDetector.RELATIVE_MINOR_OFFSET) % 12 == key1_idx
+        return False
 
     @staticmethod
-    def detect_key_from_audio(audio_data, sample_rate):
+    def detect_key_from_audio(audio_data, sample_rate, accumulated_chroma=None):
         """
         Phát hiện tone/key của bài hát từ audio data.
-        Pipeline: HPSS → Energy-weighted CQT Chroma → Multi-profile correlation
+        Pipeline: HPSS → Chroma CENS → Weighted Multi-profile → Relative Key Disambiguation
+        
+        Args:
+            audio_data: numpy array audio
+            sample_rate: sample rate
+            accumulated_chroma: numpy array 12-dim tích lũy từ các segment trước (AutoKey mode)
+        
+        Returns:
+            dict với key, scale, confidence, ...
+            Thêm 'chroma_vector' để caller tích lũy
         """
         try:
             import librosa
             import numpy as np
             
-            # Clean audio data: thay NaN/Inf bằng 0 (loopback có thể tạo giá trị không hợp lệ)
             audio_data = np.nan_to_num(audio_data, nan=0.0, posinf=0.0, neginf=0.0)
-            print("🎵 [DÒ TONE] Pipeline: HPSS → Energy-weighted Chroma → Multi-profile...")
+            print("🎵 [DÒ TONE] Pipeline: HPSS → CENS → Weighted Multi-profile...")
             
             # === BƯỚC 1: HPSS - Tách harmonic khỏi percussive ===
             harmonic, _ = librosa.effects.hpss(audio_data)
             print("   ✅ HPSS: Đã tách harmonic/percussive")
             
-            # === BƯỚC 2: CQT Chroma trên harmonic signal ===
-            chroma = librosa.feature.chroma_cqt(y=harmonic, sr=sample_rate)
+            # === BƯỚC 2: Chroma CENS (Energy Normalized Statistics) ===
+            # Bất biến với dynamics + timbre, có built-in smoothing + quantization
+            chroma = librosa.feature.chroma_cens(y=harmonic, sr=sample_rate)
+            chroma_avg = np.mean(chroma, axis=1)
+            print("   ✅ Chroma CENS (timbre/dynamics invariant)")
             
-            # === BƯỚC 3: Energy-weighted averaging ===
-            # Tính RMS energy mỗi frame → frame có nhạc mạnh được ưu tiên
-            rms = librosa.feature.rms(y=harmonic)[0]
-            
-            # Align lengths (RMS và chroma có thể khác nhau vài frame)
-            min_frames = min(len(rms), chroma.shape[1])
-            rms = rms[:min_frames]
-            chroma = chroma[:, :min_frames]
-            
-            rms_sum = np.sum(rms)
-            if rms_sum > 0:
-                weights = rms / rms_sum
-                chroma_avg = np.average(chroma, axis=1, weights=weights)
-            else:
-                chroma_avg = np.mean(chroma, axis=1)
-            print("   ✅ Energy-weighted chroma averaging")
-            
-            # Normalize
+            # Normalize to sum=1
             chroma_sum = np.sum(chroma_avg)
             if chroma_sum > 0:
                 chroma_avg = chroma_avg / chroma_sum
             
-            print(f"📊 [DÒ TONE] Chroma: {[f'{x:.3f}' for x in chroma_avg]}")
+            # === BƯỚC 2b: Tích lũy chroma (AutoKey mode) ===
+            if accumulated_chroma is not None:
+                # EMA: 30% segment mới + 70% lịch sử
+                alpha = 0.3
+                chroma_for_analysis = alpha * chroma_avg + (1 - alpha) * accumulated_chroma
+                # Re-normalize
+                cs = np.sum(chroma_for_analysis)
+                if cs > 0:
+                    chroma_for_analysis = chroma_for_analysis / cs
+                print(f"   ✅ EMA blending (α={alpha}): segment + history")
+            else:
+                chroma_for_analysis = chroma_avg
             
-            # === BƯỚC 4: Multi-profile correlation (Krumhansl + Temperley) ===
+            print(f"📊 [DÒ TONE] Chroma: {[f'{x:.3f}' for x in chroma_for_analysis]}")
+            
+            # === BƯỚC 3: Weighted Multi-profile correlation ===
+            W = ToneDetector.PROFILE_WEIGHTS
+            
             ks_results = ToneDetector._correlate_profiles(
-                chroma_avg, ToneDetector.KS_MAJOR, ToneDetector.KS_MINOR
+                chroma_for_analysis, ToneDetector.KS_MAJOR, ToneDetector.KS_MINOR
             )
             temp_results = ToneDetector._correlate_profiles(
-                chroma_avg, ToneDetector.TEMP_MAJOR, ToneDetector.TEMP_MINOR
+                chroma_for_analysis, ToneDetector.TEMP_MAJOR, ToneDetector.TEMP_MINOR
+            )
+            aarden_results = ToneDetector._correlate_profiles(
+                chroma_for_analysis, ToneDetector.AARDEN_MAJOR, ToneDetector.AARDEN_MINOR
             )
             
-            # Trung bình correlation của 2 bộ profile → giảm false positive
-            merged = {}
-            for r in ks_results:
-                uid = f"{r['key']}_{r['scale']}"
-                merged[uid] = {
-                    "key": r["key"],
-                    "scale": r["scale"],
-                    "key_index": r["key_index"],
-                    "ks_corr": r["correlation"],
-                    "temp_corr": 0.0
-                }
-            for r in temp_results:
-                uid = f"{r['key']}_{r['scale']}"
-                if uid in merged:
-                    merged[uid]["temp_corr"] = r["correlation"]
-            
+            # Weighted average correlation
+            all_uids = set(ks_results.keys()) | set(temp_results.keys()) | set(aarden_results.keys())
             all_results = []
-            for uid, data in merged.items():
-                avg_corr = (data["ks_corr"] + data["temp_corr"]) / 2.0
+            for uid in all_uids:
+                ks_c = ks_results.get(uid, {}).get('correlation', 0)
+                temp_c = temp_results.get(uid, {}).get('correlation', 0)
+                aarden_c = aarden_results.get(uid, {}).get('correlation', 0)
+                
+                weighted_corr = (
+                    W['ks'] * ks_c +
+                    W['temperley'] * temp_c +
+                    W['aarden'] * aarden_c
+                )
+                
+                ref = ks_results.get(uid) or temp_results.get(uid) or aarden_results.get(uid)
                 all_results.append({
-                    "key": data["key"],
-                    "scale": data["scale"],
-                    "correlation": avg_corr,
-                    "key_index": data["key_index"],
-                    "ks_corr": data["ks_corr"],
-                    "temp_corr": data["temp_corr"]
+                    "key": ref["key"],
+                    "scale": ref["scale"],
+                    "correlation": weighted_corr,
+                    "key_index": ref["key_index"],
+                    "ks_corr": ks_c,
+                    "temp_corr": temp_c,
+                    "aarden_corr": aarden_c
                 })
             
-            # Sort by averaged correlation
             all_results.sort(key=lambda x: x["correlation"], reverse=True)
             
+            # === BƯỚC 4: Relative Key Disambiguation ===
             best = all_results[0]
+            second = all_results[1] if len(all_results) > 1 else None
+            
+            if second and ToneDetector._is_relative_pair(
+                best["key_index"], best["scale"],
+                second["key_index"], second["scale"]
+            ):
+                diff = best["correlation"] - second["correlation"]
+                if diff < 0.03:  # Chênh lệch < 3% → mơ hồ
+                    # Kiểm tra tonic prominence: nốt gốc nào mạnh hơn?
+                    tonic1 = chroma_for_analysis[best["key_index"]]
+                    tonic2 = chroma_for_analysis[second["key_index"]]
+                    
+                    if tonic2 > tonic1 * 1.1:  # Nốt gốc của second mạnh hơn 10%
+                        print(f"   🔄 Relative key swap: {best['key']} → {second['key']} "
+                              f"(tonic: {tonic1:.3f} vs {tonic2:.3f})")
+                        best, second = second, best
+                    else:
+                        print(f"   ℹ️ Relative pair {best['key']}/{second['key']}: "
+                              f"keeping {best['key']} (tonic: {tonic1:.3f} vs {tonic2:.3f})")
+            
             best_key = best["key_index"]
             best_scale = best["scale"]
             best_corr = best["correlation"]
             
-            # Build display name
             if best_scale == "Major":
                 key_display = ToneDetector.MAJOR_KEY_NAMES[best_key]
             else:
                 key_display = ToneDetector.MINOR_KEY_NAMES[best_key]
             
             print(f"🎯 [DÒ TONE] Kết quả: {key_display} (confidence: {best_corr:.4f})")
-            print(f"   📊 KS={best.get('ks_corr',0):.4f}  Temperley={best.get('temp_corr',0):.4f}")
+            print(f"   📊 KS={best.get('ks_corr',0):.4f}  T={best.get('temp_corr',0):.4f}  A={best.get('aarden_corr',0):.4f}")
             print(f"🎯 [DÒ TONE] Top 5:")
             for r in all_results[:5]:
-                print(f"   {r['key']}: {r['correlation']:.4f} (KS={r.get('ks_corr',0):.4f} T={r.get('temp_corr',0):.4f})")
+                print(f"   {r['key']}: {r['correlation']:.4f}")
             
             return {
                 "key": ToneDetector.MAJOR_KEY_NAMES[best_key],
@@ -1521,7 +1590,8 @@ class ToneDetector:
                 "scale": best_scale,
                 "confidence": best_corr,
                 "key_display": key_display,
-                "top_results": all_results[:5]
+                "top_results": all_results[:5],
+                "chroma_vector": chroma_avg  # Trả về để caller tích lũy
             }
             
         except Exception as e:
