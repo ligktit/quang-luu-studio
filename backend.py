@@ -175,6 +175,10 @@ class SystemEngine:
         # Trạng thái dò tone liên tục
         self.tone_detection_active = False
         self.on_tone_detected_callback = None
+        
+        # Trạng thái AutoKey (dò tone liên tục toàn bài)
+        self.autokey_active = False
+        self._autokey_thread = None
     
 
     # --- MIDI WRAPPER METHODS (tương thích với code cũ) ---
@@ -623,6 +627,198 @@ class SystemEngine:
         if self.tone_detection_active:
             print("⏹️ [TONE] Dừng dò tone liên tục")
         self.tone_detection_active = False
+    
+    # ============================================================
+    # AutoKey: Dò tone liên tục toàn bài hát (tương tự Auto-Key)
+    # ============================================================
+    
+    def start_autokey(self, on_key_update=None, segment_duration=3):
+        """
+        Bắt đầu dò tone liên tục (AutoKey mode).
+        Thu âm loopback liên tục, phân tích mỗi segment_duration giây,
+        gửi MIDI khi phát hiện chuyển tone.
+        
+        Args:
+            on_key_update: Callback(result_dict) gọi mỗi khi có kết quả mới
+            segment_duration: Thời lượng mỗi segment phân tích (giây)
+        """
+        if self.autokey_active:
+            print("⚠️ [AUTOKEY] Đã đang chạy, bỏ qua.")
+            return
+        
+        self.autokey_active = True
+        self.on_tone_detected_callback = on_key_update
+        
+        def _autokey_loop():
+            import numpy as np
+            from collections import Counter
+            
+            VOTING_WINDOW = 3
+            SAMPLE_RATE = 44100
+            current_key = None
+            current_confidence = 0
+            recent_keys = []
+            
+            # Khởi tạo COM cho thread này
+            com_initialized = False
+            try:
+                hr = ctypes.windll.ole32.CoInitializeEx(None, 0)
+                com_initialized = (hr == 0)
+            except:
+                pass
+            
+            try:
+                # Kiểm tra soundcard
+                if not _SOUNDCARD_AVAILABLE:
+                    print("❌ [AUTOKEY] soundcard không khả dụng")
+                    self.autokey_active = False
+                    return
+                
+                # Tìm loopback mic một lần duy nhất
+                all_mics = sc.all_microphones(include_loopback=True)
+                loopback_mic = None
+                default_speaker = sc.default_speaker()
+                speaker_name = default_speaker.name if default_speaker else ""
+                
+                for mic in all_mics:
+                    is_loopback = hasattr(mic, 'isloopback') and mic.isloopback
+                    if is_loopback:
+                        if loopback_mic is None:
+                            loopback_mic = mic
+                        if speaker_name and speaker_name.lower() in mic.name.lower():
+                            loopback_mic = mic
+                
+                if not loopback_mic:
+                    try:
+                        loopback_mic = sc.get_microphone(
+                            id=str(default_speaker.name), include_loopback=True
+                        )
+                    except:
+                        pass
+                
+                if not loopback_mic:
+                    print("❌ [AUTOKEY] Không tìm thấy thiết bị loopback!")
+                    self.autokey_active = False
+                    return
+                
+                print("=" * 60)
+                print(f"🎹 [AUTOKEY] Bắt đầu — segment={segment_duration}s, mic={loopback_mic.name}")
+                
+                # Giữ recorder mở suốt session → tránh init lại mỗi segment
+                with loopback_mic.recorder(samplerate=SAMPLE_RATE, channels=1) as recorder:
+                    while self.autokey_active:
+                        try:
+                            # Thu âm 1 segment
+                            frames = segment_duration * SAMPLE_RATE
+                            audio_data = recorder.record(numframes=frames)
+                            
+                            if audio_data.ndim > 1:
+                                audio_data = audio_data[:, 0]
+                            audio_data = audio_data.astype(np.float32)
+                            audio_data = np.nan_to_num(audio_data, nan=0.0, posinf=0.0, neginf=0.0)
+                            
+                            # Kiểm tra có âm thanh không
+                            rms = np.sqrt(np.mean(audio_data ** 2))
+                            if rms < 0.001:
+                                # Im lặng → gửi trạng thái "listening"
+                                if on_key_update:
+                                    try:
+                                        on_key_update({
+                                            'status': 'listening',
+                                            'key_display': current_key or '...',
+                                            'confidence': 0,
+                                            'message': 'Đang lắng nghe...'
+                                        })
+                                    except:
+                                        pass
+                                continue
+                            
+                            # Phân tích key
+                            result = ToneDetector.detect_key_from_audio(audio_data, SAMPLE_RATE)
+                            
+                            if not result:
+                                continue
+                            
+                            new_key = result['key_display']
+                            confidence = result.get('confidence', 0)
+                            
+                            # Voting window
+                            recent_keys.append(new_key)
+                            if len(recent_keys) > VOTING_WINDOW:
+                                recent_keys.pop(0)
+                            
+                            vote_counts = Counter(recent_keys)
+                            voted_key = vote_counts.most_common(1)[0][0]
+                            vote_ratio = vote_counts[voted_key] / len(recent_keys)
+                            
+                            # Quyết định chuyển tone
+                            key_changed = False
+                            if current_key is None:
+                                current_key = voted_key
+                                current_confidence = confidence
+                                key_changed = True
+                                print(f"🎹 [AUTOKEY] Key ban đầu: {voted_key} (conf={confidence:.2f})")
+                            elif voted_key != current_key:
+                                confidence_diff = confidence - current_confidence
+                                if vote_ratio >= 0.67 and confidence_diff > -ToneDetector.KEY_CHANGE_THRESHOLD:
+                                    print(f"🔄 [AUTOKEY] {current_key} → {voted_key} "
+                                          f"(vote={vote_ratio:.0%}, conf={confidence:.2f})")
+                                    current_key = voted_key
+                                    current_confidence = confidence
+                                    key_changed = True
+                            
+                            # Gửi MIDI khi chuyển tone
+                            if key_changed:
+                                self._send_tone_midi(result)
+                            
+                            # Callback UI luôn (để cập nhật live indicator)
+                            if on_key_update:
+                                try:
+                                    on_key_update({
+                                        'status': 'detected',
+                                        'key_display': current_key,
+                                        'key_index': result['key_index'],
+                                        'scale': result['scale'],
+                                        'confidence': confidence,
+                                        'raw_key': new_key,
+                                        'voted_key': voted_key,
+                                        'key_changed': key_changed
+                                    })
+                                except:
+                                    pass
+                            
+                        except Exception as e:
+                            print(f"❌ [AUTOKEY] Lỗi segment: {e}")
+                            time.sleep(1)
+                
+            except Exception as e:
+                print(f"❌ [AUTOKEY] Lỗi khởi tạo: {e}")
+                import traceback
+                print(traceback.format_exc())
+            finally:
+                if com_initialized:
+                    try:
+                        ctypes.windll.ole32.CoUninitialize()
+                    except:
+                        pass
+                self.autokey_active = False
+                print("🏁 [AUTOKEY] Đã dừng")
+                
+                # Gửi callback cuối cùng để UI biết đã dừng
+                if on_key_update:
+                    try:
+                        on_key_update({'status': 'stopped'})
+                    except:
+                        pass
+        
+        self._autokey_thread = threading.Thread(target=_autokey_loop, daemon=True)
+        self._autokey_thread.start()
+    
+    def stop_autokey(self):
+        """Dừng AutoKey mode"""
+        if self.autokey_active:
+            print("⏹️ [AUTOKEY] Đang dừng...")
+        self.autokey_active = False
     
     def detect_tone_continuous(self, url=None, segment_duration=5):
         """

@@ -592,6 +592,9 @@ class MainDashboard(ctk.CTk):
         self.be_state = False  # Bè button state
         self.vang_state = False  # Vang button state
         
+        # Trạng thái AutoKey
+        self.autokey_active = False
+        
         # 1. Cấu hình cửa sổ
         self.title("Quang Lưu Studio")
         self.geometry("1200x420")
@@ -679,6 +682,40 @@ class MainDashboard(ctk.CTk):
             command=self.on_tone_selected
         )
         self.tone_option.pack(side="left")
+        
+        # --- 1b. AUTOKEY LIVE INDICATOR (bên phải tone selector) ---
+        self.autokey_indicator_frame = ctk.CTkFrame(self.tone_frame, fg_color="#1e293b", corner_radius=8)
+        # Ẩn khi chưa bật AutoKey
+        
+        # Đèn nhấp nháy (bật/tắt xanh lá)
+        self.autokey_dot = ctk.CTkLabel(
+            self.autokey_indicator_frame,
+            text="●",
+            font=("Inter", 14),
+            text_color="#22C55E",
+            width=16
+        )
+        self.autokey_dot.pack(side="left", padx=(8, 2))
+        
+        # Key hiện tại (lớn, nổi bật)
+        self.autokey_key_label = ctk.CTkLabel(
+            self.autokey_indicator_frame,
+            text="...",
+            font=("Inter", 18, "bold"),
+            text_color="#F8FAFC"
+        )
+        self.autokey_key_label.pack(side="left", padx=4)
+        
+        # Confidence nhỏ
+        self.autokey_conf_label = ctk.CTkLabel(
+            self.autokey_indicator_frame,
+            text="",
+            font=("Inter", 10),
+            text_color="#94A3B8"
+        )
+        self.autokey_conf_label.pack(side="left", padx=(0, 8))
+        
+        self._autokey_dot_visible = True  # Trạng thái nhấp nháy
 
         # --- 2. KHU VỰC CHỮ CHẠY (GIỮA) ---
         self.marquee_container = ctk.CTkFrame(self.header_frame, fg_color="#0f172a", corner_radius=0, height=35)
@@ -810,11 +847,13 @@ class MainDashboard(ctk.CTk):
             )
             btn.pack(side="left", padx=(0, 5))
             
-            # Lưu reference cho buttons Bè và Vang để có thể cập nhật màu
+            # Lưu reference cho buttons Bè, Vang, Dò Tone
             if btn_text == "Bè":
                 self.be_button = btn
             elif btn_text == "Vang":
                 self.vang_button = btn
+            elif btn_text == "Dò Tone":
+                self.do_tone_button = btn
 
         # Danh sách nút Icon với callback và màu sắc riêng
         icon_btns = [
@@ -840,8 +879,99 @@ class MainDashboard(ctk.CTk):
     
     # --- CALLBACKS CHO MENU BUTTONS ---
     def on_do_tone(self):
-        """Dò Tone bài hát đang phát - thu âm trực tiếp từ hệ thống"""
-        self._start_tone_detection()
+        """Toggle AutoKey: dò tone liên tục toàn bài hát"""
+        if self.autokey_active:
+            # Đang chạy → dừng
+            self.autokey_active = False
+            self.engine.stop_autokey()
+            
+            # Đổi nút về trạng thái ban đầu
+            if hasattr(self, 'do_tone_button'):
+                self.do_tone_button.configure(fg_color="#3B82F6")  # Blue
+                self.do_tone_button.configure(text="Dò Tone")
+            
+            # Ẩn indicator
+            self.autokey_indicator_frame.pack_forget()
+        else:
+            # Chưa chạy → bật
+            self.autokey_active = True
+            
+            # Đổi nút thành trạng thái đang chạy
+            if hasattr(self, 'do_tone_button'):
+                self.do_tone_button.configure(fg_color="#EF4444")  # Red
+                self.do_tone_button.configure(text="⏹ Dừng")
+            
+            # Hiện indicator live
+            self.autokey_indicator_frame.pack(side="left", padx=(10, 0))
+            self.autokey_key_label.configure(text="...")
+            self.autokey_conf_label.configure(text="")
+            self._animate_autokey_dot()
+            
+            # Bắt đầu AutoKey
+            self.engine.start_autokey(on_key_update=self._on_autokey_update)
+    
+    def _animate_autokey_dot(self):
+        """Nhấp nháy đèn xanh khi AutoKey đang chạy"""
+        if not self.autokey_active:
+            return
+        self._autokey_dot_visible = not self._autokey_dot_visible
+        color = "#22C55E" if self._autokey_dot_visible else "#0f172a"
+        try:
+            self.autokey_dot.configure(text_color=color)
+        except:
+            return
+        self.after(500, self._animate_autokey_dot)
+    
+    def _on_autokey_update(self, result):
+        """Callback từ AutoKey thread → cập nhật UI qua after()"""
+        # Thread-safe: dùng after() để cập nhật trên main thread
+        try:
+            self.after(0, lambda r=result: self._update_autokey_ui(r))
+        except:
+            pass
+    
+    def _update_autokey_ui(self, result):
+        """Cập nhật UI từ kết quả AutoKey (chạy trên main thread)"""
+        status = result.get('status', '')
+        
+        if status == 'stopped':
+            # AutoKey đã dừng từ backend
+            self.autokey_active = False
+            if hasattr(self, 'do_tone_button'):
+                self.do_tone_button.configure(fg_color="#3B82F6", text="Dò Tone")
+            try:
+                self.autokey_indicator_frame.pack_forget()
+            except:
+                pass
+            return
+        
+        if status == 'listening':
+            # Im lặng, đang lắng nghe
+            self.autokey_key_label.configure(
+                text=result.get('key_display', '...'),
+                text_color="#64748B"
+            )
+            self.autokey_conf_label.configure(text="🎙️")
+            return
+        
+        if status == 'detected':
+            key_display = result.get('key_display', '?')
+            confidence = result.get('confidence', 0)
+            conf_pct = max(0, min(100, confidence * 100))
+            key_changed = result.get('key_changed', False)
+            
+            # Cập nhật indicator
+            text_color = "#22C55E" if key_changed else "#F8FAFC"
+            self.autokey_key_label.configure(text=key_display, text_color=text_color)
+            self.autokey_conf_label.configure(text=f"{conf_pct:.0f}%")
+            
+            # Cập nhật tone selector
+            if hasattr(self, 'tone_option'):
+                try:
+                    self.tone_option.set(key_display)
+                    self.current_tone = key_display
+                except:
+                    pass
     
     def on_lay_tone(self):
         # Chỉ gửi MIDI CC
