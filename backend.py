@@ -707,7 +707,7 @@ class SystemEngine:
                 # Giữ recorder mở suốt session → tránh init lại mỗi segment
                 # ROLLING AUDIO BUFFER: tích lũy audio thật, phân tích toàn bộ
                 RECORD_CHUNK = segment_duration  # Thu 5s mỗi lần
-                MAX_BUFFER_SEC = 20  # Giữ tối đa 20s audio
+                MAX_BUFFER_SEC = 10  # Giữ tối đa 10s audio (đủ cho key detection)
                 MAX_BUFFER_FRAMES = MAX_BUFFER_SEC * SAMPLE_RATE
                 audio_buffer = np.array([], dtype=np.float32)
                 
@@ -1383,7 +1383,7 @@ class ScoringEngine:
 class ToneDetector:
     """
     Dò Tone bài hát - Phát hiện key/tonality từ audio
-    Pipeline: HPSS → Chroma CENS → Weighted Multi-profile (Aarden/Temperley/KS)
+    Pipeline: HPSS → Chroma CQT (energy-weighted) → Weighted Multi-profile (Aarden/Temperley/KS) → Disambiguation
     """
     
     # Krumhansl-Schmuckler key profiles (1990) - weight 20%
@@ -1487,193 +1487,124 @@ class ToneDetector:
     def detect_key_from_audio(audio_data, sample_rate, accumulated_chroma=None):
         """
         Phát hiện tone/key của bài hát từ audio data.
-        Pipeline: HPSS → Tuning Correction → Triple Chroma (CQT + CENS + STFT)
-                  → Independent Key Detection per Chroma → Majority Voting
-                  → Closely-Related Key Disambiguation
+        Pipeline: HPSS → chroma_cqt (energy-weighted) → Weighted Multi-profile → Disambiguation
         """
         try:
             import librosa
             import numpy as np
-            from collections import Counter
             
             audio_data = np.nan_to_num(audio_data, nan=0.0, posinf=0.0, neginf=0.0)
-            print("🎵 [DÒ TONE] Pipeline: HPSS → HPCP + CQT + CENS → Voting...")
+            print("🎵 [DÒ TONE] Pipeline: HPSS → CQT → Weighted Multi-profile...")
             
             # === BƯỚC 1: HPSS ===
             harmonic, _ = librosa.effects.hpss(audio_data)
             print("   ✅ HPSS")
             
-            # === BƯỚC 2: Chroma extraction (NO tuning correction) ===
-            # Tuning correction gây hại: notes giữa 2 bins (Ab giữa G/G#) bị dồn sai bin
-            
-            # --- HPCP-style: 36-bin CQT → max-pool to 12 ---
-            # Giải quyết vấn đề bin-splitting: nốt nằm giữa 2 bins sẽ rõ hơn
-            chroma_36 = librosa.feature.chroma_cqt(
-                y=harmonic, sr=sample_rate, n_chroma=36, bins_per_octave=36
-            )
-            # Max-pool: lấy MAX của 3 sub-bins → nốt giữa bins vẫn được capture
-            hpcp_frames = np.array([
-                chroma_36[i*3:(i+1)*3].max(axis=0) for i in range(12)
-            ])
+            # === BƯỚC 2: Chroma CQT (energy-weighted) ===
+            chroma_cqt = librosa.feature.chroma_cqt(y=harmonic, sr=sample_rate)
             rms = librosa.feature.rms(y=harmonic)[0]
-            mf = min(len(rms), hpcp_frames.shape[1])
-            rms_t = rms[:mf]
-            rs = np.sum(rms_t)
-            if rs > 0:
-                hpcp_avg = np.average(hpcp_frames[:, :mf], axis=1, weights=rms_t / rs)
+            min_frames = min(len(rms), chroma_cqt.shape[1])
+            rms = rms[:min_frames]
+            rms_sum = np.sum(rms)
+            if rms_sum > 0:
+                chroma_avg = np.average(chroma_cqt[:, :min_frames], axis=1, weights=rms / rms_sum)
             else:
-                hpcp_avg = np.mean(hpcp_frames, axis=1)
+                chroma_avg = np.mean(chroma_cqt, axis=1)
             
-            # --- CQT 12-bin (energy-weighted, NO tuning) ---
-            chroma_cqt_raw = librosa.feature.chroma_cqt(y=harmonic, sr=sample_rate)
-            mf2 = min(len(rms), chroma_cqt_raw.shape[1])
-            if rs > 0:
-                cqt_avg = np.average(chroma_cqt_raw[:, :mf2], axis=1, weights=rms[:mf2] / np.sum(rms[:mf2]))
-            else:
-                cqt_avg = np.mean(chroma_cqt_raw, axis=1)
+            # Normalize
+            cs = np.sum(chroma_avg)
+            if cs > 0:
+                chroma_avg = chroma_avg / cs
             
-            # --- CENS ---
-            chroma_cens_raw = librosa.feature.chroma_cens(y=harmonic, sr=sample_rate)
-            cens_avg = np.mean(chroma_cens_raw, axis=1)
+            # Lưu CQT normalized riêng (cho disambiguation)
+            cqt_normalized = chroma_avg.copy()
             
-            # Normalize each separately
-            def _norm(v):
-                s = np.sum(v)
-                return v / s if s > 0 else v
-            
-            hpcp_norm = _norm(hpcp_avg)
-            cqt_norm = _norm(cqt_avg)
-            cens_norm = _norm(cens_avg)
-            
-            print("   ✅ Triple Chroma: HPCP(36→12 max-pool) + CQT(energy) + CENS")
-            
-            # Blended chroma: HPCP chính (giải quyết bin-splitting)
-            chroma_avg = _norm(0.5 * hpcp_avg + 0.3 * cqt_avg + 0.2 * cens_avg)
+            print(f"   ✅ Chroma CQT (energy-weighted)")
+            print(f"📊 [DÒ TONE] Chroma: {[f'{x:.3f}' for x in chroma_avg]}")
             
             # === BƯỚC 2b: EMA (AutoKey mode) ===
             if accumulated_chroma is not None:
                 alpha = 0.3
-                chroma_for_analysis = _norm(
-                    alpha * chroma_avg + (1 - alpha) * accumulated_chroma
-                )
+                chroma_for_analysis = alpha * chroma_avg + (1 - alpha) * accumulated_chroma
+                cs2 = np.sum(chroma_for_analysis)
+                if cs2 > 0:
+                    chroma_for_analysis = chroma_for_analysis / cs2
                 print(f"   ✅ EMA blending (α={alpha})")
             else:
                 chroma_for_analysis = chroma_avg
             
-            # === BƯỚC 3: Independent key detection per chroma type ===
+            # === BƯỚC 3: Weighted Multi-profile correlation ===
             W = ToneDetector.PROFILE_WEIGHTS
+            
+            ks_results = ToneDetector._correlate_profiles(
+                chroma_for_analysis, ToneDetector.KS_MAJOR, ToneDetector.KS_MINOR
+            )
+            temp_results = ToneDetector._correlate_profiles(
+                chroma_for_analysis, ToneDetector.TEMP_MAJOR, ToneDetector.TEMP_MINOR
+            )
+            aarden_results = ToneDetector._correlate_profiles(
+                chroma_for_analysis, ToneDetector.AARDEN_MAJOR, ToneDetector.AARDEN_MINOR
+            )
+            
             MINOR_BOOST = 1.02
-            
-            def _detect_key_single(chroma_vec, label=""):
-                """Detect key from a single chroma vector using weighted multi-profile."""
-                ks_r = ToneDetector._correlate_profiles(
-                    chroma_vec, ToneDetector.KS_MAJOR, ToneDetector.KS_MINOR
-                )
-                temp_r = ToneDetector._correlate_profiles(
-                    chroma_vec, ToneDetector.TEMP_MAJOR, ToneDetector.TEMP_MINOR
-                )
-                aarden_r = ToneDetector._correlate_profiles(
-                    chroma_vec, ToneDetector.AARDEN_MAJOR, ToneDetector.AARDEN_MINOR
-                )
+            all_uids = set(ks_results.keys()) | set(temp_results.keys()) | set(aarden_results.keys())
+            all_results = []
+            for uid in all_uids:
+                ks_c = ks_results.get(uid, {}).get('correlation', 0)
+                temp_c = temp_results.get(uid, {}).get('correlation', 0)
+                aarden_c = aarden_results.get(uid, {}).get('correlation', 0)
                 
-                all_uids = set(ks_r.keys()) | set(temp_r.keys()) | set(aarden_r.keys())
-                results = []
-                for uid in all_uids:
-                    kc = ks_r.get(uid, {}).get('correlation', 0)
-                    tc = temp_r.get(uid, {}).get('correlation', 0)
-                    ac = aarden_r.get(uid, {}).get('correlation', 0)
-                    wc = W['ks'] * kc + W['temperley'] * tc + W['aarden'] * ac
-                    
-                    ref = ks_r.get(uid) or temp_r.get(uid) or aarden_r.get(uid)
-                    if ref["scale"] == "Minor":
-                        wc *= MINOR_BOOST
-                    
-                    results.append({
-                        "key": ref["key"], "scale": ref["scale"],
-                        "correlation": wc, "key_index": ref["key_index"],
-                        "ks_corr": kc, "temp_corr": tc, "aarden_corr": ac
-                    })
+                weighted_corr = W['ks'] * ks_c + W['temperley'] * temp_c + W['aarden'] * aarden_c
                 
-                results.sort(key=lambda x: x["correlation"], reverse=True)
-                return results
+                ref = ks_results.get(uid) or temp_results.get(uid) or aarden_results.get(uid)
+                if ref["scale"] == "Minor":
+                    weighted_corr *= MINOR_BOOST
+                
+                all_results.append({
+                    "key": ref["key"], "scale": ref["scale"],
+                    "correlation": weighted_corr, "key_index": ref["key_index"],
+                    "ks_corr": ks_c, "temp_corr": temp_c, "aarden_corr": aarden_c
+                })
             
-            # Detect independently on each chroma type
-            hpcp_results = _detect_key_single(hpcp_norm, "HPCP")
-            cqt_results = _detect_key_single(cqt_norm, "CQT")
-            cens_results = _detect_key_single(cens_norm, "CENS")
-            blend_results = _detect_key_single(chroma_for_analysis, "BLEND")
+            all_results.sort(key=lambda x: x["correlation"], reverse=True)
             
-            hpcp_best = hpcp_results[0]['key']
-            cqt_best = cqt_results[0]['key']
-            cens_best = cens_results[0]['key']
-            blend_best = blend_results[0]['key']
+            # === BƯỚC 4: Closely-Related Key Disambiguation ===
+            best = all_results[0]
+            second = all_results[1] if len(all_results) > 1 else None
             
-            print(f"   🗳️ Votes: HPCP={hpcp_best}  CQT={cqt_best}  CENS={cens_best}  BLEND={blend_best}")
-            
-            # === BƯỚC 4: Majority Voting ===
-            votes = [hpcp_best, cqt_best, cens_best, blend_best]
-            vote_counts = Counter(votes)
-            winner, win_count = vote_counts.most_common(1)[0]
-            
-            # Ưu tiên: HPCP > blend > CQT > CENS
-            all_result_sets = [
-                (hpcp_results, "HPCP"),
-                (blend_results, "BLEND"),
-                (cqt_results, "CQT"),
-                (cens_results, "CENS")
-            ]
-            
-            # Dùng kết quả từ nguồn đã vote cho winner
-            final_results = blend_results  # default
-            for results, label in all_result_sets:
-                if results[0]['key'] == winner:
-                    final_results = results
-                    break
-            
-            best = final_results[0]
-            
-            # Nếu vote không unanimous, kiểm tra closely-related disambiguation
-            if win_count < 3:
-                # Tìm runner-up
-                second_key = vote_counts.most_common(2)[-1][0] if len(vote_counts) > 1 else None
-                if second_key:
-                    # Tìm second trong final_results
-                    second = None
-                    for r in final_results[1:6]:
-                        if r['key'] == second_key:
-                            second = r
-                            break
+            if second and ToneDetector._are_closely_related(
+                best["key_index"], best["scale"],
+                second["key_index"], second["scale"]
+            ):
+                diff = best["correlation"] - second["correlation"]
+                if diff < 0.05:
+                    # Tonic + 5th + 3rd check
+                    tonic1 = cqt_normalized[best["key_index"]]
+                    tonic2 = cqt_normalized[second["key_index"]]
+                    fifth1 = cqt_normalized[(best["key_index"] + 7) % 12]
+                    fifth2 = cqt_normalized[(second["key_index"] + 7) % 12]
                     
-                    if second and ToneDetector._are_closely_related(
-                        best["key_index"], best["scale"],
-                        second["key_index"], second["scale"]
-                    ):
-                        # Dùng HPCP chroma (giải quyết bin-splitting tốt nhất)
-                        tonic1 = hpcp_norm[best["key_index"]]
-                        tonic2 = hpcp_norm[second["key_index"]]
-                        fifth1 = hpcp_norm[(best["key_index"] + 7) % 12]
-                        fifth2 = hpcp_norm[(second["key_index"] + 7) % 12]
-                        
-                        # Thêm 3rd degree check
-                        if best["scale"] == "Minor":
-                            third1 = hpcp_norm[(best["key_index"] + 3) % 12]
-                        else:
-                            third1 = hpcp_norm[(best["key_index"] + 4) % 12]
-                        if second["scale"] == "Minor":
-                            third2 = hpcp_norm[(second["key_index"] + 3) % 12]
-                        else:
-                            third2 = hpcp_norm[(second["key_index"] + 4) % 12]
-                        
-                        strength1 = tonic1 + fifth1 * 0.7 + third1 * 0.5
-                        strength2 = tonic2 + fifth2 * 0.7 + third2 * 0.5
-                        
-                        print(f"   🔍 Disambiguate: {best['key']} vs {second['key']}")
-                        print(f"      {best['key']}: T={tonic1:.3f} 5={fifth1:.3f} 3={third1:.3f} → {strength1:.3f}")
-                        print(f"      {second['key']}: T={tonic2:.3f} 5={fifth2:.3f} 3={third2:.3f} → {strength2:.3f}")
-                        
-                        if strength2 > strength1 * 1.05:
-                            print(f"   🔄 Key swap: {best['key']} → {second['key']}")
-                            best = second
+                    if best["scale"] == "Minor":
+                        third1 = cqt_normalized[(best["key_index"] + 3) % 12]
+                    else:
+                        third1 = cqt_normalized[(best["key_index"] + 4) % 12]
+                    if second["scale"] == "Minor":
+                        third2 = cqt_normalized[(second["key_index"] + 3) % 12]
+                    else:
+                        third2 = cqt_normalized[(second["key_index"] + 4) % 12]
+                    
+                    strength1 = tonic1 + fifth1 * 0.7 + third1 * 0.5
+                    strength2 = tonic2 + fifth2 * 0.7 + third2 * 0.5
+                    
+                    print(f"   🔍 Disambiguate: {best['key']} vs {second['key']}")
+                    print(f"      {best['key']}: T={tonic1:.3f} 5={fifth1:.3f} 3={third1:.3f} → {strength1:.3f}")
+                    print(f"      {second['key']}: T={tonic2:.3f} 5={fifth2:.3f} 3={third2:.3f} → {strength2:.3f}")
+                    
+                    if strength2 > strength1 * 1.05:
+                        print(f"   🔄 Key swap: {best['key']} → {second['key']}")
+                        best, second = second, best
+                    else:
+                        print(f"   ✅ Giữ {best['key']}")
             
             best_key = best["key_index"]
             best_scale = best["scale"]
@@ -1684,9 +1615,10 @@ class ToneDetector:
             else:
                 key_display = ToneDetector.MINOR_KEY_NAMES[best_key]
             
-            print(f"🎯 [DÒ TONE] Kết quả: {key_display} (conf={best_corr:.4f}, votes={win_count}/4)")
+            print(f"🎯 [DÒ TONE] Kết quả: {key_display} (confidence: {best_corr:.4f})")
+            print(f"   📊 KS={best.get('ks_corr',0):.4f}  T={best.get('temp_corr',0):.4f}  A={best.get('aarden_corr',0):.4f}")
             print(f"🎯 [DÒ TONE] Top 5:")
-            for r in final_results[:5]:
+            for r in all_results[:5]:
                 print(f"   {r['key']}: {r['correlation']:.4f}")
             
             return {
@@ -1695,7 +1627,7 @@ class ToneDetector:
                 "scale": best_scale,
                 "confidence": best_corr,
                 "key_display": key_display,
-                "top_results": final_results[:5],
+                "top_results": all_results[:5],
                 "chroma_vector": chroma_avg
             }
             
@@ -1706,7 +1638,7 @@ class ToneDetector:
             return None
     
     @staticmethod
-    def detect_key_from_system_audio(duration=10, sample_rate=44100, on_progress=None):
+    def detect_key_from_system_audio(duration=10, sample_rate=48000, on_progress=None):
         """
         Thu âm loopback từ hệ thống (bắt âm thanh đang phát trên loa)
         và phát hiện tone bài hát. Không cần tải từ YouTube.
