@@ -1,6 +1,6 @@
 """
 Diagnostic v3: PYIN pitch tracking + chroma comparison + raw spectral analysis
-Xac dinh chinh xac tai sao G chiem 39% thay vi Ab/F cho bai Fm.
+Xac dinh chinh xac tai sao G chiem 39% thay vi Ab/F cho bai Fm. New
 """
 import sys
 sys.path.insert(0, '.')
