@@ -1380,7 +1380,6 @@ class ToneDetector:
     """
     Dò Tone bài hát - Phát hiện key/tonality từ audio
     Pipeline: HPSS → Chroma CENS → Weighted Multi-profile (Aarden/Temperley/KS)
-    + Harmonic minor blending + Minor boost + Extended disambiguation
     """
     
     # Krumhansl-Schmuckler key profiles (1990) - weight 20%
@@ -1397,24 +1396,12 @@ class ToneDetector:
     AARDEN_MINOR = [18.2648, 0.737619, 14.0499, 16.8599, 0.702494, 14.4362,
                     0.702494, 18.6161, 4.56621, 1.93186, 7.37619, 1.75623]
     
-    # Harmonic minor profiles — nốt 7 nâng lên (leading tone)
-    # Quan trọng cho nhạc pop/karaoke dùng harmonic minor nhiều
-    # Index: 0=tonic, ..., 10=♭7(natural), 11=7(harmonic)
-    KS_HARMONIC_MINOR = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 2.29, 4.50]
-    TEMP_HARMONIC_MINOR = [5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 1.0, 4.5]
-    AARDEN_HARMONIC_MINOR = [18.2648, 0.737619, 14.0499, 16.8599, 0.702494, 14.4362,
-                             0.702494, 18.6161, 4.56621, 1.93186, 1.75623, 7.37619]
-    
     # Trọng số từng bộ profile
     PROFILE_WEIGHTS = {
         'aarden': 0.50,
         'temperley': 0.30,
         'ks': 0.20
     }
-    
-    # Minor boost — bù đắp bias thiên major của tất cả profile sets
-    # Nghiên cứu cho thấy profile-based methods thiên major ~5-10%
-    MINOR_BOOST = 1.05  # +5% cho tất cả minor key correlations
     
     # Backward compatibility aliases
     MAJOR_PROFILE = KS_MAJOR
@@ -1425,16 +1412,16 @@ class ToneDetector:
     MINOR_KEY_NAMES = ["Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"]
     
     # Relative key pairs: Major index → Minor index (cách 9 semitone)
-    RELATIVE_MINOR_OFFSET = 9
+    # C Major (0) ↔ Am (9), D Major (2) ↔ Bm (11), ...
+    RELATIVE_MINOR_OFFSET = 9  # Major + 9 semitone = relative Minor
     
     # Confidence threshold: chỉ chuyển tone khi chênh lệch > 5%
     KEY_CHANGE_THRESHOLD = 0.05
     
     @staticmethod
-    def _correlate_profiles(chroma_avg, major_profile, minor_profile, harmonic_minor_profile=None):
+    def _correlate_profiles(chroma_avg, major_profile, minor_profile):
         """
         Tính correlation cho 1 bộ profile (Major + Minor) với chroma vector.
-        Nếu có harmonic_minor_profile → blend 50/50 với natural minor.
         Trả về dict {uid: correlation} cho 24 keys.
         """
         import numpy as np
@@ -1449,15 +1436,7 @@ class ToneDetector:
                 "correlation": major_corr,
                 "key_index": i
             }
-            
-            # Minor: blend natural + harmonic (nếu có)
-            natural_corr = float(np.corrcoef(rotated, minor_profile)[0, 1])
-            if harmonic_minor_profile is not None:
-                harmonic_corr = float(np.corrcoef(rotated, harmonic_minor_profile)[0, 1])
-                minor_corr = 0.5 * natural_corr + 0.5 * harmonic_corr  # Blend 50/50
-            else:
-                minor_corr = natural_corr
-            
+            minor_corr = float(np.corrcoef(rotated, minor_profile)[0, 1])
             uid_minor = f"{ToneDetector.MINOR_KEY_NAMES[i]}_Minor"
             results[uid_minor] = {
                 "key": ToneDetector.MINOR_KEY_NAMES[i],
@@ -1475,12 +1454,37 @@ class ToneDetector:
         if scale1 == "Minor" and scale2 == "Major":
             return (key2_idx + ToneDetector.RELATIVE_MINOR_OFFSET) % 12 == key1_idx
         return False
+    
+    @staticmethod
+    def _are_closely_related(key1_idx, scale1, key2_idx, scale2):
+        """
+        Kiểm tra 2 key có closely related không (chia sẻ >= 6/7 nốt).
+        Bao gồm: relative keys, parallel keys, và các key lân cận trên circle of fifths.
+        VD: Eb Major ↔ Fm, C Major ↔ Am, C Major ↔ Dm, G Major ↔ Em, ...
+        """
+        # Tạo scale degrees cho mỗi key
+        major_intervals = [0, 2, 4, 5, 7, 9, 11]  # W W H W W W H
+        minor_intervals = [0, 2, 3, 5, 7, 8, 10]  # Natural minor
+        
+        if scale1 == "Major":
+            notes1 = set((key1_idx + i) % 12 for i in major_intervals)
+        else:
+            notes1 = set((key1_idx + i) % 12 for i in minor_intervals)
+        
+        if scale2 == "Major":
+            notes2 = set((key2_idx + i) % 12 for i in major_intervals)
+        else:
+            notes2 = set((key2_idx + i) % 12 for i in minor_intervals)
+        
+        overlap = len(notes1 & notes2)
+        return overlap >= 6  # Chia sẻ ít nhất 6 nốt
 
     @staticmethod
     def detect_key_from_audio(audio_data, sample_rate, accumulated_chroma=None):
         """
         Phát hiện tone/key của bài hát từ audio data.
-        Pipeline: HPSS → Chroma CENS → Weighted Multi-profile → Relative Key Disambiguation
+        Pipeline: HPSS → Dual Chroma (CQT + CENS blend) → Weighted Multi-profile 
+                  → Closely-Related Key Disambiguation
         
         Args:
             audio_data: numpy array audio
@@ -1496,29 +1500,47 @@ class ToneDetector:
             import numpy as np
             
             audio_data = np.nan_to_num(audio_data, nan=0.0, posinf=0.0, neginf=0.0)
-            print("🎵 [DÒ TONE] Pipeline: HPSS → CENS → Weighted Multi-profile...")
+            print("🎵 [DÒ TONE] Pipeline: HPSS → Dual Chroma → Weighted Multi-profile...")
             
             # === BƯỚC 1: HPSS - Tách harmonic khỏi percussive ===
             harmonic, _ = librosa.effects.hpss(audio_data)
             print("   ✅ HPSS: Đã tách harmonic/percussive")
             
-            # === BƯỚC 2: Chroma CENS (Energy Normalized Statistics) ===
-            # Bất biến với dynamics + timbre, có built-in smoothing + quantization
-            chroma = librosa.feature.chroma_cens(y=harmonic, sr=sample_rate)
-            chroma_avg = np.mean(chroma, axis=1)
-            print("   ✅ Chroma CENS (timbre/dynamics invariant)")
+            # === BƯỚC 2: DUAL CHROMA (CQT + CENS blend) ===
+            # CQT + energy-weighting → giữ tonal center chính xác
+            chroma_cqt = librosa.feature.chroma_cqt(y=harmonic, sr=sample_rate)
+            rms = librosa.feature.rms(y=harmonic)[0]
+            min_frames = min(len(rms), chroma_cqt.shape[1])
+            rms = rms[:min_frames]
+            chroma_cqt = chroma_cqt[:, :min_frames]
+            rms_sum = np.sum(rms)
+            if rms_sum > 0:
+                weights = rms / rms_sum
+                cqt_avg = np.average(chroma_cqt, axis=1, weights=weights)
+            else:
+                cqt_avg = np.mean(chroma_cqt, axis=1)
+            
+            # CENS → robust với timbre/dynamics
+            chroma_cens = librosa.feature.chroma_cens(y=harmonic, sr=sample_rate)
+            cens_avg = np.mean(chroma_cens, axis=1)
+            
+            # Blend: 60% CQT (tonal center) + 40% CENS (stability)
+            chroma_avg = 0.6 * cqt_avg + 0.4 * cens_avg
+            print("   ✅ Dual Chroma: 60% CQT(energy) + 40% CENS")
             
             # Normalize to sum=1
             chroma_sum = np.sum(chroma_avg)
             if chroma_sum > 0:
                 chroma_avg = chroma_avg / chroma_sum
             
+            # Lưu CQT chroma riêng (dùng cho disambiguation)
+            cqt_sum = np.sum(cqt_avg)
+            cqt_normalized = cqt_avg / cqt_sum if cqt_sum > 0 else cqt_avg
+            
             # === BƯỚC 2b: Tích lũy chroma (AutoKey mode) ===
             if accumulated_chroma is not None:
-                # EMA: 30% segment mới + 70% lịch sử
                 alpha = 0.3
                 chroma_for_analysis = alpha * chroma_avg + (1 - alpha) * accumulated_chroma
-                # Re-normalize
                 cs = np.sum(chroma_for_analysis)
                 if cs > 0:
                     chroma_for_analysis = chroma_for_analysis / cs
@@ -1528,23 +1550,21 @@ class ToneDetector:
             
             print(f"📊 [DÒ TONE] Chroma: {[f'{x:.3f}' for x in chroma_for_analysis]}")
             
-            # === BƯỚC 3: Weighted Multi-profile correlation (có harmonic minor) ===
+            # === BƯỚC 3: Weighted Multi-profile correlation ===
             W = ToneDetector.PROFILE_WEIGHTS
             
             ks_results = ToneDetector._correlate_profiles(
-                chroma_for_analysis, ToneDetector.KS_MAJOR, ToneDetector.KS_MINOR,
-                harmonic_minor_profile=ToneDetector.KS_HARMONIC_MINOR
+                chroma_for_analysis, ToneDetector.KS_MAJOR, ToneDetector.KS_MINOR
             )
             temp_results = ToneDetector._correlate_profiles(
-                chroma_for_analysis, ToneDetector.TEMP_MAJOR, ToneDetector.TEMP_MINOR,
-                harmonic_minor_profile=ToneDetector.TEMP_HARMONIC_MINOR
+                chroma_for_analysis, ToneDetector.TEMP_MAJOR, ToneDetector.TEMP_MINOR
             )
             aarden_results = ToneDetector._correlate_profiles(
-                chroma_for_analysis, ToneDetector.AARDEN_MAJOR, ToneDetector.AARDEN_MINOR,
-                harmonic_minor_profile=ToneDetector.AARDEN_HARMONIC_MINOR
+                chroma_for_analysis, ToneDetector.AARDEN_MAJOR, ToneDetector.AARDEN_MINOR
             )
             
-            # Weighted average correlation + minor boost
+            # Weighted average correlation + minor boost (chống major bias)
+            MINOR_BOOST = 1.02  # +2% cho minor keys (Aarden profiles thiên major)
             all_uids = set(ks_results.keys()) | set(temp_results.keys()) | set(aarden_results.keys())
             all_results = []
             for uid in all_uids:
@@ -1560,9 +1580,9 @@ class ToneDetector:
                 
                 ref = ks_results.get(uid) or temp_results.get(uid) or aarden_results.get(uid)
                 
-                # Áp dụng minor boost để bù bias thiên major
+                # Minor boost: bù trừ major bias trong profiles
                 if ref["scale"] == "Minor":
-                    weighted_corr *= ToneDetector.MINOR_BOOST
+                    weighted_corr *= MINOR_BOOST
                 
                 all_results.append({
                     "key": ref["key"],
@@ -1575,44 +1595,39 @@ class ToneDetector:
                 })
             
             all_results.sort(key=lambda x: x["correlation"], reverse=True)
-            print(f"   ✅ Weighted 3-profile + harmonic minor blend + {ToneDetector.MINOR_BOOST:.0%} minor boost")
             
-            # === BƯỚC 4: Extended Key Disambiguation ===
-            # Kiểm tra top-5: nếu best là Major và có Minor gần đó → xem tonic
+            # === BƯỚC 4: Closely-Related Key Disambiguation ===
+            # (mở rộng: không chỉ relative pairs mà tất cả key chia sẻ ≥6 nốt)
             best = all_results[0]
+            second = all_results[1] if len(all_results) > 1 else None
             
-            if best["scale"] == "Major":
-                # Tìm minor key mạnh nhất trong top-5
-                for candidate in all_results[1:5]:
-                    if candidate["scale"] != "Minor":
-                        continue
-                    diff = best["correlation"] - candidate["correlation"]
-                    if diff > 0.05:  # Quá xa → không xét
-                        break
+            if second and ToneDetector._are_closely_related(
+                best["key_index"], best["scale"],
+                second["key_index"], second["scale"]
+            ):
+                diff = best["correlation"] - second["correlation"]
+                if diff < 0.05:  # Chênh lệch < 5% → mơ hồ (mở rộng từ 3%)
+                    # Dùng CQT chroma (giữ tonal center rõ hơn) để phân biệt
+                    tonic1 = cqt_normalized[best["key_index"]]
+                    tonic2 = cqt_normalized[second["key_index"]]
                     
-                    # Kiểm tra tonic prominence
-                    tonic_major = chroma_for_analysis[best["key_index"]]
-                    tonic_minor = chroma_for_analysis[candidate["key_index"]]
+                    # Kiểm tra thêm quãng 5 (5th degree) → đặc trưng mạnh của tonal center
+                    fifth1 = cqt_normalized[(best["key_index"] + 7) % 12]
+                    fifth2 = cqt_normalized[(second["key_index"] + 7) % 12]
                     
-                    # Nếu tonic minor mạnh hơn → swap
-                    if tonic_minor > tonic_major * 1.05:
-                        print(f"   🔄 Minor swap: {best['key']} → {candidate['key']} "
-                              f"(tonic: {tonic_major:.3f} vs {tonic_minor:.3f}, diff={diff:.4f})")
-                        best = candidate
-                        break
-                    # Nếu là relative pair và tonic gần bằng → vẫn chọn minor
-                    elif ToneDetector._is_relative_pair(
-                        best["key_index"], best["scale"],
-                        candidate["key_index"], candidate["scale"]
-                    ) and diff < 0.02:
-                        print(f"   🔄 Relative minor preference: {best['key']} → {candidate['key']} "
-                              f"(diff={diff:.4f}, both equal)")
-                        best = candidate
-                        break
+                    # Tổng sức mạnh tonic + 5th
+                    strength1 = tonic1 + fifth1 * 0.8
+                    strength2 = tonic2 + fifth2 * 0.8
+                    
+                    print(f"   🔍 Closely-related: {best['key']} vs {second['key']}")
+                    print(f"      {best['key']}: tonic={tonic1:.3f} 5th={fifth1:.3f} → {strength1:.3f}")
+                    print(f"      {second['key']}: tonic={tonic2:.3f} 5th={fifth2:.3f} → {strength2:.3f}")
+                    
+                    if strength2 > strength1 * 1.05:  # Second mạnh hơn 5%
+                        print(f"   🔄 Key swap: {best['key']} → {second['key']}")
+                        best, second = second, best
                     else:
-                        print(f"   ℹ️ Keeping {best['key']} over {candidate['key']} "
-                              f"(tonic: {tonic_major:.3f} vs {tonic_minor:.3f})")
-                        break  # Chỉ xét candidate minor gần nhất
+                        print(f"   ✅ Giữ {best['key']}")
             
             best_key = best["key_index"]
             best_scale = best["scale"]
