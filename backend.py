@@ -632,7 +632,7 @@ class SystemEngine:
     # AutoKey: Dò tone liên tục toàn bài hát (tương tự Auto-Key)
     # ============================================================
     
-    def start_autokey(self, on_key_update=None, segment_duration=3):
+    def start_autokey(self, on_key_update=None, segment_duration=5):
         """
         Bắt đầu dò tone liên tục (AutoKey mode).
         Thu âm loopback liên tục, phân tích mỗi segment_duration giây,
@@ -653,12 +653,14 @@ class SystemEngine:
             import numpy as np
             from collections import Counter
             
-            VOTING_WINDOW = 3
+            VOTING_WINDOW = 4
             SAMPLE_RATE = 44100
+            INITIAL_DURATION = 8  # Segment đầu tiên dài hơn để có harmonic content đủ
             current_key = None
             current_confidence = 0
             recent_keys = []
-            accumulated_chroma = None  # Tích lũy chroma qua các segment (EMA)
+            accumulated_chroma = None
+            segment_count = 0
             
             # Khởi tạo COM cho thread này
             com_initialized = False
@@ -709,9 +711,11 @@ class SystemEngine:
                 with loopback_mic.recorder(samplerate=SAMPLE_RATE, channels=1) as recorder:
                     while self.autokey_active:
                         try:
-                            # Thu âm 1 segment
-                            frames = segment_duration * SAMPLE_RATE
+                            # Segment đầu tiên dài hơn (8s), sau đó dùng segment_duration (5s)
+                            seg_dur = INITIAL_DURATION if segment_count == 0 else segment_duration
+                            frames = seg_dur * SAMPLE_RATE
                             audio_data = recorder.record(numframes=frames)
+                            segment_count += 1
                             
                             if audio_data.ndim > 1:
                                 audio_data = audio_data[:, 0]
