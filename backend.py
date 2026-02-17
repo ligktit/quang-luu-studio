@@ -579,10 +579,26 @@ class SystemEngine:
                                 on_complete(result)
                             return
                 
-                result = ToneDetector.detect_key_from_system_audio(
-                    duration=duration,
-                    on_progress=on_progress
-                )
+                # Dò tone: ưu tiên YouTube download (audio sạch) > loopback
+                result = None
+                if self.current_youtube_url:
+                    # YouTube download cho kết quả chính xác hơn loopback
+                    # (loopback bị mất bass → F/C yếu, gây sai key)
+                    print(f"🎵 [DÒ TONE] Dùng YouTube audio (chất lượng tốt hơn loopback)...")
+                    try:
+                        result = ToneDetector.detect_key_from_youtube(
+                            self.current_youtube_url, duration_limit=30
+                        )
+                    except Exception as e:
+                        print(f"⚠️ [DÒ TONE] YouTube download thất bại: {e}")
+                        print(f"🔄 [DÒ TONE] Fallback sang loopback...")
+                
+                # Fallback: loopback nếu không có URL hoặc YouTube download thất bại
+                if not result:
+                    result = ToneDetector.detect_key_from_system_audio(
+                        duration=duration,
+                        on_progress=on_progress
+                    )
                 
                 if result:
                     self._send_tone_midi(result)
