@@ -1608,43 +1608,66 @@ class ToneDetector:
             
             all_results.sort(key=lambda x: x["correlation"], reverse=True)
             
-            # === BƯỚC 4: Closely-Related Key Disambiguation ===
+            # === BƯỚC 4: Key Family Disambiguation ===
+            # Tìm TẤT CẢ keys closely-related trong top 7 → chọn key tốt nhất
             best = all_results[0]
-            second = all_results[1] if len(all_results) > 1 else None
             
-            if second and ToneDetector._are_closely_related(
-                best["key_index"], best["scale"],
-                second["key_index"], second["scale"]
-            ):
-                diff = best["correlation"] - second["correlation"]
-                if diff < 0.05:
-                    # Tonic + 5th + 3rd check
-                    tonic1 = cqt_normalized[best["key_index"]]
-                    tonic2 = cqt_normalized[second["key_index"]]
-                    fifth1 = cqt_normalized[(best["key_index"] + 7) % 12]
-                    fifth2 = cqt_normalized[(second["key_index"] + 7) % 12]
-                    
-                    if best["scale"] == "Minor":
-                        third1 = cqt_normalized[(best["key_index"] + 3) % 12]
+            # Key commonality: keys phổ biến trong pop/Vietnamese music
+            # Score 1.0 = rất phổ biến, 0.0 = rất hiếm
+            KEY_COMMON = {
+                # Major
+                'C': 1.0, 'G': 0.9, 'D': 0.9, 'A': 0.8, 'E': 0.7,
+                'F': 0.9, 'Bb': 0.8, 'Eb': 0.8, 'Ab': 0.7,
+                'Db': 0.5, 'Gb': 0.3, 'B': 0.5,
+                # Minor
+                'Am': 1.0, 'Em': 0.9, 'Dm': 0.9, 'Bm': 0.7,
+                'Gm': 0.8, 'Cm': 0.8, 'Fm': 0.8, 'Bbm': 0.5,
+                'F#m': 0.6, 'C#m': 0.6, 'G#m': 0.3, 'D#m': 0.3,
+            }
+            
+            # Thu thập candidates closely-related với best
+            family = [best]
+            for r in all_results[1:7]:
+                if ToneDetector._are_closely_related(
+                    best["key_index"], best["scale"],
+                    r["key_index"], r["scale"]
+                ):
+                    family.append(r)
+            
+            if len(family) >= 2:
+                print(f"   🔍 Key family ({len(family)} candidates):")
+                
+                best_candidate = None
+                best_score = -1
+                
+                for r in family:
+                    # Tonic + 5th + 3rd strength
+                    tonic = cqt_normalized[r["key_index"]]
+                    fifth = cqt_normalized[(r["key_index"] + 7) % 12]
+                    if r["scale"] == "Minor":
+                        third = cqt_normalized[(r["key_index"] + 3) % 12]
                     else:
-                        third1 = cqt_normalized[(best["key_index"] + 4) % 12]
-                    if second["scale"] == "Minor":
-                        third2 = cqt_normalized[(second["key_index"] + 3) % 12]
-                    else:
-                        third2 = cqt_normalized[(second["key_index"] + 4) % 12]
+                        third = cqt_normalized[(r["key_index"] + 4) % 12]
                     
-                    strength1 = tonic1 + fifth1 * 0.7 + third1 * 0.5
-                    strength2 = tonic2 + fifth2 * 0.7 + third2 * 0.5
+                    tonal_strength = tonic + fifth * 0.7 + third * 0.5
                     
-                    print(f"   🔍 Disambiguate: {best['key']} vs {second['key']}")
-                    print(f"      {best['key']}: T={tonic1:.3f} 5={fifth1:.3f} 3={third1:.3f} → {strength1:.3f}")
-                    print(f"      {second['key']}: T={tonic2:.3f} 5={fifth2:.3f} 3={third2:.3f} → {strength2:.3f}")
+                    # Commonality bonus (0-0.05)
+                    common = KEY_COMMON.get(r["key"], 0.5)
                     
-                    if strength2 > strength1 * 1.05:
-                        print(f"   🔄 Key swap: {best['key']} → {second['key']}")
-                        best, second = second, best
-                    else:
-                        print(f"   ✅ Giữ {best['key']}")
+                    # Combined: profile correlation + tonal + commonality
+                    combined = r["correlation"] * 0.5 + tonal_strength * 0.35 + common * 0.05
+                    
+                    print(f"      {r['key']:4s}: corr={r['correlation']:.3f} T={tonic:.3f} 5={fifth:.3f} 3={third:.3f} common={common:.1f} → {combined:.4f}")
+                    
+                    if combined > best_score:
+                        best_score = combined
+                        best_candidate = r
+                
+                if best_candidate and best_candidate["key"] != best["key"]:
+                    print(f"   🔄 Family winner: {best['key']} → {best_candidate['key']}")
+                else:
+                    print(f"   ✅ Giữ {best['key']}")
+                best = best_candidate or best
             
             best_key = best["key_index"]
             best_scale = best["scale"]
