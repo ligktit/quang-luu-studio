@@ -1,6 +1,6 @@
 """
-Diagnostic v3: PYIN pitch tracking + chroma comparison + raw spectral analysis
-Xac dinh chinh xac tai sao G chiem 39% thay vi Ab/F cho bai Fm. New
+Diagnostic v4: Test robust preprocessing pipeline
+Verify rằng CQT chroma (no HPSS) + notch filter cho kết quả đúng
 """
 import sys
 sys.path.insert(0, '.')
@@ -23,7 +23,7 @@ def main():
     
     import librosa
     
-    SAMPLE_RATE = 44100  # Keep simple
+    SAMPLE_RATE = 44100
     DURATION = 15
     NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
     
@@ -53,121 +53,76 @@ def main():
     if audio.ndim > 1:
         audio = audio[:, 0]
     audio = audio.astype(np.float32)
-    audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
     
-    rms_val = np.sqrt(np.mean(audio ** 2))
-    print(f"RMS: {rms_val:.6f}, Max: {np.max(np.abs(audio)):.6f}")
-    if rms_val < 0.001:
-        print("Im lang!")
-        return
+    raw_max = np.max(np.abs(audio))
+    print(f"Raw max: {raw_max:.6f}")
     
-    # === 1. PYIN PITCH TRACKING (exact frequencies, no binning) ===
+    # === 1. Raw chroma (baseline - no preprocessing) ===
     print("\n" + "=" * 60)
-    print("1. PYIN PITCH TRACKING")
+    print("1. RAW CHROMA (no preprocessing, no HPSS)")
     print("=" * 60)
-    try:
-        f0, voiced_flag, voiced_probs = librosa.pyin(
-            audio, fmin=librosa.note_to_hz('C2'), 
-            fmax=librosa.note_to_hz('C7'), sr=SAMPLE_RATE
-        )
-        valid = ~np.isnan(f0) & voiced_flag
-        if np.sum(valid) > 0:
-            midi_notes = librosa.hz_to_midi(f0[valid])
-            pitch_classes = np.round(midi_notes % 12).astype(int) % 12
-            
-            # Histogram
-            pyin_hist = np.bincount(pitch_classes, minlength=12).astype(float)
-            pyin_hist /= pyin_hist.sum() if pyin_hist.sum() > 0 else 1
-            
-            print(f"   Voiced frames: {np.sum(valid)}/{len(f0)} ({100*np.sum(valid)/len(f0):.0f}%)")
-            print(f"   Pitch class histogram (PYIN):")
-            for i in range(12):
-                bar = "#" * int(pyin_hist[i] * 100)
-                print(f"    {NOTE_NAMES[i]:3s}: {pyin_hist[i]:.4f} {bar}")
-            
-            # Top 3 frequencies
-            freqs = f0[valid]
-            print(f"\n   Top frequencies: min={np.min(freqs):.1f}Hz, max={np.max(freqs):.1f}Hz, median={np.median(freqs):.1f}Hz")
-            
-            # Most common MIDI notes
-            from collections import Counter
-            midi_rounded = np.round(midi_notes).astype(int)
-            note_counts = Counter(midi_rounded)
-            print(f"   Most common notes:")
-            for midi_val, count in note_counts.most_common(8):
-                note_name = librosa.midi_to_note(midi_val)
-                print(f"     {note_name}: {count} frames ({100*count/len(midi_rounded):.1f}%)")
-        else:
-            print("   No voiced frames detected!")
-            pyin_hist = None
-    except Exception as e:
-        print(f"   PYIN error: {e}")
-        pyin_hist = None
+    audio_clean = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
+    audio_clean = np.clip(audio_clean, -1e6, 1e6)
+    p999 = np.percentile(np.abs(audio_clean), 99.9)
+    if p999 > 0:
+        audio_clean = audio_clean / p999
+    audio_clean = np.clip(audio_clean, -1.0, 1.0)
     
-    # === 2. CHROMA WITHOUT HPSS ===
-    print("\n" + "=" * 60)
-    print("2. CHROMA CQT (WITHOUT HPSS)")
-    print("=" * 60)
-    c_raw = librosa.feature.chroma_cqt(y=audio, sr=SAMPLE_RATE)
+    c_raw = librosa.feature.chroma_cqt(y=audio_clean, sr=SAMPLE_RATE)
     raw_avg = np.mean(c_raw, axis=1)
     raw_norm = raw_avg / np.sum(raw_avg) if np.sum(raw_avg) > 0 else raw_avg
     for i in range(12):
         bar = "#" * int(raw_norm[i] * 100)
         print(f"  {NOTE_NAMES[i]:3s}: {raw_norm[i]:.4f} {bar}")
     
-    # === 3. CHROMA WITH HPSS ===
+    # === 2. With notch filter ===
     print("\n" + "=" * 60)
-    print("3. CHROMA CQT (WITH HPSS)")
+    print("2. CHROMA AFTER NOTCH FILTER (no HPSS)")
     print("=" * 60)
-    harmonic, _ = librosa.effects.hpss(audio)
-    c_hpss = librosa.feature.chroma_cqt(y=harmonic, sr=SAMPLE_RATE)
-    rms_h = librosa.feature.rms(y=harmonic)[0]
-    mf = min(len(rms_h), c_hpss.shape[1])
-    w = rms_h[:mf] / np.sum(rms_h[:mf]) if np.sum(rms_h[:mf]) > 0 else None
-    hpss_avg = np.average(c_hpss[:, :mf], axis=1, weights=w) if w is not None else np.mean(c_hpss, axis=1)
-    hpss_norm = hpss_avg / np.sum(hpss_avg) if np.sum(hpss_avg) > 0 else hpss_avg
-    for i in range(12):
-        bar = "#" * int(hpss_norm[i] * 100)
-        print(f"  {NOTE_NAMES[i]:3s}: {hpss_norm[i]:.4f} {bar}")
+    audio_notch = audio_clean.copy()
+    audio_notch = audio_notch - np.mean(audio_notch)  # DC removal
+    try:
+        f0_detect, voiced, _ = librosa.pyin(
+            audio_notch, fmin=50, fmax=150, sr=SAMPLE_RATE, frame_length=4096
+        )
+        valid_f0 = f0_detect[~np.isnan(f0_detect) & voiced]
+        if len(valid_f0) > 100:
+            hum_freq = np.median(valid_f0)
+            hum_ratio = np.sum(np.abs(valid_f0 - hum_freq) < 2) / len(valid_f0)
+            print(f"  Hum detected: {hum_freq:.1f}Hz ({hum_ratio*100:.0f}% consistency)")
+            if hum_ratio > 0.8:
+                S = librosa.stft(audio_notch)
+                freqs = librosa.fft_frequencies(sr=SAMPLE_RATE)
+                for n in range(1, 4):
+                    target = hum_freq * n
+                    S[np.abs(freqs - target) < 5] = 0
+                audio_notch = librosa.istft(S, length=len(audio_notch))
+                print(f"  Applied notch at {hum_freq:.0f}Hz + harmonics")
+        else:
+            print("  No hum detected")
+    except Exception as e:
+        print(f"  Hum detection error: {e}")
     
-    # === 4. KEY DETECTION (current algorithm) ===
+    c_notch = librosa.feature.chroma_cqt(y=audio_notch, sr=SAMPLE_RATE)
+    notch_avg = np.mean(c_notch, axis=1)
+    notch_norm = notch_avg / np.sum(notch_avg) if np.sum(notch_avg) > 0 else notch_avg
+    for i in range(12):
+        bar = "#" * int(notch_norm[i] * 100)
+        print(f"  {NOTE_NAMES[i]:3s}: {notch_norm[i]:.4f} {bar}")
+    
+    # === 3. Full pipeline (backend algorithm) ===
     print("\n" + "=" * 60)
-    print("4. KEY DETECTION (algorithm hien tai)")
+    print("3. FULL PIPELINE (backend detect_key_from_audio)")
     print("=" * 60)
     from backend import ToneDetector
     result = ToneDetector.detect_key_from_audio(audio, SAMPLE_RATE)
     if result:
-        print(f"\n>>> Detected: {result['key_display']} ({result['scale']})")
+        print(f"\n>>> KẾT QUẢ: {result['key_display']} ({result['scale']})")
+        print(f">>> Confidence: {result['confidence']:.4f}")
         for r in result.get('top_results', []):
             print(f"    {r['key']:4s}: {r['correlation']:.4f}")
-    
-    # === 5. KEY DETECTION WITH PYIN CHROMA ===
-    if pyin_hist is not None:
-        print("\n" + "=" * 60)
-        print("5. KEY DETECTION (PYIN histogram)")
-        print("=" * 60)
-        result2 = ToneDetector.detect_key_from_audio(audio, SAMPLE_RATE)
-        # Manual detection using pyin_hist
-        W = ToneDetector.PROFILE_WEIGHTS
-        ks_r = ToneDetector._correlate_profiles(pyin_hist, ToneDetector.KS_MAJOR, ToneDetector.KS_MINOR)
-        temp_r = ToneDetector._correlate_profiles(pyin_hist, ToneDetector.TEMP_MAJOR, ToneDetector.TEMP_MINOR)
-        aarden_r = ToneDetector._correlate_profiles(pyin_hist, ToneDetector.AARDEN_MAJOR, ToneDetector.AARDEN_MINOR)
-        
-        results = []
-        for uid in set(ks_r.keys()) | set(temp_r.keys()) | set(aarden_r.keys()):
-            kc = ks_r.get(uid, {}).get('correlation', 0)
-            tc = temp_r.get(uid, {}).get('correlation', 0)
-            ac = aarden_r.get(uid, {}).get('correlation', 0)
-            wc = W['ks'] * kc + W['temperley'] * tc + W['aarden'] * ac
-            ref = ks_r.get(uid) or temp_r.get(uid) or aarden_r.get(uid)
-            if ref["scale"] == "Minor":
-                wc *= 1.02
-            results.append({"key": ref["key"], "scale": ref["scale"], "correlation": wc})
-        
-        results.sort(key=lambda x: x["correlation"], reverse=True)
-        print(f">>> PYIN-based key: {results[0]['key']} ({results[0]['scale']})")
-        for r in results[:5]:
-            print(f"    {r['key']:4s}: {r['correlation']:.4f}")
+    else:
+        print(">>> No result!")
 
 if __name__ == "__main__":
     main()

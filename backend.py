@@ -707,7 +707,7 @@ class SystemEngine:
                 # Giữ recorder mở suốt session → tránh init lại mỗi segment
                 # ROLLING AUDIO BUFFER: tích lũy audio thật, phân tích toàn bộ
                 RECORD_CHUNK = segment_duration  # Thu 5s mỗi lần
-                MAX_BUFFER_SEC = 10  # Giữ tối đa 10s audio (đủ cho key detection)
+                MAX_BUFFER_SEC = 20  # Giữ tối đa 20s audio (bao phủ nhiều chord hơn)
                 MAX_BUFFER_FRAMES = MAX_BUFFER_SEC * SAMPLE_RATE
                 audio_buffer = np.array([], dtype=np.float32)
                 
@@ -1487,7 +1487,7 @@ class ToneDetector:
     def detect_key_from_audio(audio_data, sample_rate, accumulated_chroma=None):
         """
         Phát hiện tone/key của bài hát từ audio data.
-        Pipeline: HPSS → chroma_cqt (energy-weighted) → Weighted Multi-profile → Disambiguation
+        Pipeline: Robust Preprocessing → CQT chroma (energy-weighted) → Weighted Multi-profile → Disambiguation
         """
         try:
             import librosa
@@ -1495,49 +1495,52 @@ class ToneDetector:
             
             audio_data = np.nan_to_num(audio_data, nan=0.0, posinf=0.0, neginf=0.0)
             
-            # === BƯỚC 0: Preprocessing ===
-            # Robust normalize: dùng percentile thay max (tránh 1 sample lỗi phá hủy signal)
-            # VD: max=1.8e29 khi có corrupted sample → chia max làm mất toàn bộ audio
+            # === BƯỚC 0: Robust Preprocessing ===
+            
+            # Stage 1: Clip extreme outliers (corrupted samples, VD: max=1.8e29)
+            audio_data = np.clip(audio_data, -1e6, 1e6)
+            
+            # Stage 2: Percentile-based normalize (tránh 1 sample lỗi phá hủy signal)
             p999 = np.percentile(np.abs(audio_data), 99.9)
-            if p999 > 0 and p999 < 1e10:
+            if p999 > 0:
                 audio_data = audio_data / p999
             audio_data = np.clip(audio_data, -1.0, 1.0)
-            print(f"   ✅ Normalize (p99.9={p999:.2f})")
             
-            # Notch filter: loại bỏ hum hệ thống (100Hz constant tone)
-            # Chỉ loại chính xác tần số hum, KHÔNG ảnh hưởng nốt nhạc khác
+            # Stage 3: DC offset removal
+            audio_data = audio_data - np.mean(audio_data)
+            
+            # Stage 4: Quality validation
+            rms_check = np.sqrt(np.mean(audio_data ** 2))
+            if rms_check < 0.001:
+                print("   ⚠️ Audio quá nhỏ hoặc im lặng, bỏ qua")
+                return None
+            
+            # Stage 5: Adaptive hum removal (PYIN detect → notch filter)
             try:
                 f0_detect, voiced, _ = librosa.pyin(
                     audio_data, fmin=50, fmax=150, sr=sample_rate,
                     frame_length=4096
                 )
                 valid_f0 = f0_detect[~np.isnan(f0_detect) & voiced]
-                if len(valid_f0) > 0:
+                if len(valid_f0) > 100:
                     hum_freq = np.median(valid_f0)
-                    # Chỉ loại nếu >90% frames cùng tần số (= hum, không phải nhạc)
                     hum_ratio = np.sum(np.abs(valid_f0 - hum_freq) < 2) / len(valid_f0)
                     if hum_ratio > 0.8:
                         S = librosa.stft(audio_data)
                         freqs = librosa.fft_frequencies(sr=sample_rate)
-                        # Notch: chỉ zero tần số hum ±5Hz và harmonics
-                        for harmonic_n in range(1, 4):  # fundamental + 2 harmonics
+                        for harmonic_n in range(1, 4):
                             target = hum_freq * harmonic_n
-                            mask = np.abs(freqs - target) < 5
-                            S[mask] = 0
+                            S[np.abs(freqs - target) < 5] = 0
                         audio_data = librosa.istft(S, length=len(audio_data))
-                        print(f"   ✅ Notch filter: loại hum {hum_freq:.0f}Hz ({hum_ratio*100:.0f}% frames)")
-                    else:
-                        print(f"   ✅ Không phát hiện hum (ratio={hum_ratio:.0%})")
-                else:
-                    print("   ✅ Không phát hiện hum")
-            except Exception as e:
-                print(f"   ⚠️ Notch filter skip: {e}")
+                        print(f"   ✅ Notch: loại hum {hum_freq:.0f}Hz ({hum_ratio*100:.0f}%)")
+            except Exception:
+                pass
             
+            print(f"   ✅ Preprocessing OK (p99.9={p999:.4f}, rms={rms_check:.4f})")
             print("🎵 [DÒ TONE] Pipeline: CQT → Weighted Multi-profile...")
             
             # === BƯỚC 1: Chroma CQT (energy-weighted, NO HPSS) ===
-            # HPSS bị loại vì nó phân loại nhầm Ab/G# notes là "percussive"
-            # → giảm 53% năng lượng Ab, khiến Fm không thể được phát hiện
+            # HPSS bị loại: nó phân loại nhầm Ab/G# là "percussive" → giảm 53% Ab
             chroma_cqt = librosa.feature.chroma_cqt(y=audio_data, sr=sample_rate)
             rms = librosa.feature.rms(y=audio_data)[0]
             min_frames = min(len(rms), chroma_cqt.shape[1])
@@ -1553,10 +1556,10 @@ class ToneDetector:
             if cs > 0:
                 chroma_avg = chroma_avg / cs
             
-            # Lưu CQT normalized riêng (cho disambiguation)
+            # Lưu CQT normalized (cho disambiguation)
             cqt_normalized = chroma_avg.copy()
             
-            print(f"   ✅ Chroma CQT (energy-weighted)")
+            print(f"   ✅ Chroma CQT (energy-weighted, no HPSS)")
             print(f"📊 [DÒ TONE] Chroma: {[f'{x:.3f}' for x in chroma_avg]}")
             
             # === BƯỚC 2b: EMA (AutoKey mode) ===
