@@ -757,7 +757,7 @@ class SystemEngine:
                 # Giữ recorder mở suốt session → tránh init lại mỗi segment
                 # ROLLING AUDIO BUFFER: tích lũy audio thật, phân tích toàn bộ
                 RECORD_CHUNK = segment_duration  # Thu 5s mỗi lần
-                MAX_BUFFER_SEC = 20  # Giữ tối đa 20s audio (bao phủ nhiều chord hơn)
+                MAX_BUFFER_SEC = 30  # Giữ tối đa 30s audio (bao phủ nhiều chord hơn)
                 MAX_BUFFER_FRAMES = MAX_BUFFER_SEC * SAMPLE_RATE
                 audio_buffer = np.array([], dtype=np.float32)
                 
@@ -1592,43 +1592,35 @@ class ToneDetector:
             print(f"   ✅ Preprocessing OK (p99.9={p999:.4f}, rms={rms_check:.4f})")
             print("🎵 [DÒ TONE] Pipeline: CQT → Weighted Multi-profile...")
             
-            # === BƯỚC 1: Chroma CQT (energy-weighted, NO HPSS) ===
-            # HPSS bị loại: nó phân loại nhầm Ab/G# là "percussive" → giảm 53% Ab
+            # === BƯỚC 1: Chroma CQT + Spectral Debiasing ===
+            # Tính chroma CQT theo frame, sau đó trừ median để loại hardware resonance
+            # Nếu G luôn cao ở *mọi frame* (hardware), median G sẽ cao → bị trừ đi
+            # Nội dung nhạc biến thiên theo thời gian → median thấp → được giữ lại
             chroma_cqt = librosa.feature.chroma_cqt(y=audio_data, sr=sample_rate)
+            
+            # Spectral debiasing: trừ per-bin temporal median
+            median_chroma = np.median(chroma_cqt, axis=1, keepdims=True)
+            chroma_debiased = np.maximum(chroma_cqt - median_chroma, 0)
+            
+            # RMS weighting trên chroma đã debias
             rms = librosa.feature.rms(y=audio_data)[0]
-            min_frames = min(len(rms), chroma_cqt.shape[1])
+            min_frames = min(len(rms), chroma_debiased.shape[1])
             rms = rms[:min_frames]
             rms_sum = np.sum(rms)
             if rms_sum > 0:
-                chroma_avg = np.average(chroma_cqt[:, :min_frames], axis=1, weights=rms / rms_sum)
+                chroma_avg = np.average(chroma_debiased[:, :min_frames], axis=1, weights=rms / rms_sum)
             else:
-                chroma_avg = np.mean(chroma_cqt, axis=1)
+                chroma_avg = np.mean(chroma_debiased, axis=1)
             
-            # Normalize
+            # Normalize to sum=1
             cs = np.sum(chroma_avg)
             if cs > 0:
                 chroma_avg = chroma_avg / cs
             
-            # Lưu CQT normalized (cho disambiguation)
+            # Lưu normalized (cho disambiguation)
             cqt_normalized = chroma_avg.copy()
             
-            # === BƯỚC 2a: Bass Chroma (cho relative key disambiguation) ===
-            # Chỉ lấy chroma vùng bass (C2-B3, ~65-247Hz) để xác định nốt root thật
-            try:
-                bass_chroma = librosa.feature.chroma_cqt(
-                    y=audio_data, sr=sample_rate,
-                    fmin=librosa.note_to_hz('C2'),
-                    n_octaves=2
-                )
-                bass_avg = np.mean(bass_chroma, axis=1)
-                bass_sum = np.sum(bass_avg)
-                if bass_sum > 0:
-                    bass_avg = bass_avg / bass_sum
-                print(f"   ✅ Bass chroma: {[f'{x:.3f}' for x in bass_avg]}")
-            except Exception:
-                bass_avg = None
-            
-            print(f"   ✅ Chroma CQT (energy-weighted, no HPSS)")
+            print(f"   ✅ Chroma CQT + Spectral Debiasing (median-subtracted)")
             print(f"📊 [DÒ TONE] Chroma: {[f'{x:.3f}' for x in chroma_avg]}")
             
             # === BƯỚC 2b: EMA (AutoKey mode) ===
@@ -1719,7 +1711,7 @@ class ToneDetector:
                     tonal_strength = tonic + fifth * 0.7 + third * 0.5
                     
                     # Combined: profile correlation (chính) + tonal strength (phụ)
-                    combined = r["correlation"] * 0.70 + tonal_strength * 0.30
+                    combined = r["correlation"] * 0.85 + tonal_strength * 0.15
                     family_scores.append((r, combined))
                     
                     print(f"      {r['key']:4s}: corr={r['correlation']:.3f} T={tonic:.3f} 5={fifth:.3f} 3={third:.3f} → {combined:.4f}")
@@ -1741,44 +1733,7 @@ class ToneDetector:
                             best_candidate = top2
                             print(f"   🎯 Tiebreaker: {top1['key']} ({top1_common:.1f}) → {top2['key']} ({top2_common:.1f})")
                 
-                # === Bass Chroma: Relative Key Disambiguation ===
-                # Khi best_candidate là Major, kiểm tra relative minor (và ngược lại)
-                # VD: G vs Em — ai có bass note mạnh hơn?
-                if best_candidate and bass_avg is not None:
-                    bc = best_candidate
-                    if bc["scale"] == "Major":
-                        # Relative minor = Major - 3 semitone
-                        rel_minor_idx = (bc["key_index"] + 9) % 12
-                        rel_minor_key = ToneDetector.MINOR_KEY_NAMES[rel_minor_idx]
-                        # Tìm relative minor trong family
-                        rel_candidate = None
-                        for r, _ in family_scores:
-                            if r["key_index"] == rel_minor_idx and r["scale"] == "Minor":
-                                rel_candidate = r
-                                break
-                        if rel_candidate:
-                            bass_major = bass_avg[bc["key_index"]]
-                            bass_minor = bass_avg[rel_minor_idx]
-                            print(f"   🎸 Bass: {bc['key']}={bass_major:.3f} vs {rel_candidate['key']}={bass_minor:.3f}")
-                            if bass_minor > bass_major * 1.2:  # Minor bass > 20% mạnh hơn
-                                best_candidate = rel_candidate
-                                print(f"   🎸 Bass override: {bc['key']} → {rel_candidate['key']} (bass root mạnh hơn)")
-                    elif bc["scale"] == "Minor":
-                        # Relative major = Minor + 3 semitone
-                        rel_major_idx = (bc["key_index"] + 3) % 12
-                        rel_major_key = ToneDetector.MAJOR_KEY_NAMES[rel_major_idx]
-                        rel_candidate = None
-                        for r, _ in family_scores:
-                            if r["key_index"] == rel_major_idx and r["scale"] == "Major":
-                                rel_candidate = r
-                                break
-                        if rel_candidate:
-                            bass_minor = bass_avg[bc["key_index"]]
-                            bass_major = bass_avg[rel_major_idx]
-                            print(f"   🎸 Bass: {bc['key']}={bass_minor:.3f} vs {rel_candidate['key']}={bass_major:.3f}")
-                            if bass_major > bass_minor * 1.2:
-                                best_candidate = rel_candidate
-                                print(f"   🎸 Bass override: {bc['key']} → {rel_candidate['key']} (bass root mạnh hơn)")
+
                 
                 if best_candidate and best_candidate["key"] != best["key"]:
                     print(f"   🔄 Family winner: {best['key']} → {best_candidate['key']}")
