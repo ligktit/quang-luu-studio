@@ -1,0 +1,25 @@
+Traceback (most recent call last):
+  File "D:\Projects\LiveStudio\quang-luu-studio\test_tone_youtube.py", line 33, in setup_ffmpeg
+    print(f"\U0001f4e6 Found FFmpeg at: {src_ffmpeg}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\LIGKT\AppData\Local\Programs\Python\Python313\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f4e6' in position 0: character maps to <undefined>
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\Projects\LiveStudio\quang-luu-studio\test_tone_youtube.py", line 87, in <module>
+    test_youtube_tone()
+    ~~~~~~~~~~~~~~~~~^^
+  File "D:\Projects\LiveStudio\quang-luu-studio\test_tone_youtube.py", line 56, in test_youtube_tone
+    setup_ffmpeg()
+    ~~~~~~~~~~~~^^
+  File "D:\Projects\LiveStudio\quang-luu-studio\test_tone_youtube.py", line 53, in setup_ffmpeg
+    print(f"\u26a0\ufe0f Error setting up ffmpeg: {e}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\LIGKT\AppData\Local\Programs\Python\Python313\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-1: character maps to <undefined>

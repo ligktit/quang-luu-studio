@@ -24,7 +24,7 @@ def main():
     import librosa
     
     SAMPLE_RATE = 44100
-    DURATION = 15
+    DURATION = 30
     NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
     
     # Find loopback

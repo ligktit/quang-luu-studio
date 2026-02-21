@@ -133,18 +133,34 @@ class ToneCacheManager:
         except:
             return False
     
+    # Cache TTL: 30 ngày
+    CACHE_TTL_DAYS = 30
+    # Confidence tối thiểu để lưu cache
+    MIN_CACHE_CONFIDENCE = 0.3
+    
     @staticmethod
     def get_cached_tone(url):
-        """Tra cứu cache theo YouTube URL, trả về dict hoặc None"""
+        """Tra cứu cache theo YouTube URL, trả về dict hoặc None. Kiểm tra TTL."""
         video_id = ToneCacheManager._extract_video_id(url)
         if not video_id:
             return None
         cache = ToneCacheManager.load_cache()
-        return cache.get(video_id)
+        entry = cache.get(video_id)
+        if entry:
+            # Kiểm tra TTL
+            cached_at = entry.get('cached_at', 0)
+            if cached_at > 0:
+                age_days = (time.time() - cached_at) / 86400
+                if age_days > ToneCacheManager.CACHE_TTL_DAYS:
+                    print(f"⏰ [CACHE] Hết hạn ({age_days:.0f} ngày), dò lại...")
+                    return None
+            return entry
+        return None
     
     @staticmethod
     def save_tone(url, result):
-        """Lưu kết quả dò tone vào cache
+        """Lưu kết quả dò tone vào cache.
+        Không lưu nếu confidence trung bình < MIN_CACHE_CONFIDENCE.
         result = {
             'primary_key': 'Dm',
             'key_timeline': [{time, key_display, key_index, scale, confidence}, ...],
@@ -154,8 +170,18 @@ class ToneCacheManager:
         video_id = ToneCacheManager._extract_video_id(url)
         if not video_id:
             return False
+        
+        # Kiểm tra confidence trung bình
+        timeline = result.get('key_timeline', [])
+        if timeline:
+            avg_conf = sum(e.get('confidence', 0) for e in timeline) / len(timeline)
+            if avg_conf < ToneCacheManager.MIN_CACHE_CONFIDENCE:
+                print(f"⚠️ [CACHE] Confidence quá thấp ({avg_conf:.3f} < {ToneCacheManager.MIN_CACHE_CONFIDENCE}), không lưu cache")
+                return False
+        
         cache = ToneCacheManager.load_cache()
         result["detected_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        result["cached_at"] = time.time()
         result["url"] = url
         cache[video_id] = result
         return ToneCacheManager.save_cache(cache)
@@ -603,7 +629,7 @@ class SystemEngine:
                 if result:
                     self._send_tone_midi(result)
                     
-                    # Lưu cache nếu có YouTube URL
+                    # Lưu cache nếu có YouTube URL (confidence check nằm trong save_tone)
                     if self.current_youtube_url:
                         cache_data = {
                             'primary_key': result['key_display'],
@@ -669,7 +695,7 @@ class SystemEngine:
             import numpy as np
             from collections import Counter
             
-            VOTING_WINDOW = 4
+            VOTING_WINDOW = ToneDetector.VOTING_WINDOW
             SAMPLE_RATE = 48000  # Windows WASAPI loopback = device output rate (thường 48kHz)
             current_key = None
             current_confidence = 0
@@ -867,9 +893,9 @@ class SystemEngine:
         current_key = None
         current_confidence = 0
         key_timeline = []
-        recent_keys = []  # Voting window: 3 segments gần nhất
+        recent_keys = []  # Voting window
         elapsed = 0
-        VOTING_WINDOW = 3
+        VOTING_WINDOW = ToneDetector.VOTING_WINDOW
         
         print("=" * 60)
         print(f"🎵 [TONE CONTINUOUS] Bắt đầu dò tone liên tục (segment={segment_duration}s, voting={VOTING_WINDOW})")
@@ -1438,6 +1464,9 @@ class ToneDetector:
     # Confidence threshold: chỉ chuyển tone khi chênh lệch > 5%
     KEY_CHANGE_THRESHOLD = 0.05
     
+    # Voting window: số segments cần đồng thuận trước khi chuyển tone
+    VOTING_WINDOW = 3
+    
     @staticmethod
     def _correlate_profiles(chroma_avg, major_profile, minor_profile):
         """
@@ -1534,14 +1563,14 @@ class ToneDetector:
             # Stage 5: Adaptive hum removal (PYIN detect → notch filter)
             try:
                 f0_detect, voiced, _ = librosa.pyin(
-                    audio_data, fmin=50, fmax=150, sr=sample_rate,
+                    audio_data, fmin=50, fmax=80, sr=sample_rate,
                     frame_length=4096
                 )
                 valid_f0 = f0_detect[~np.isnan(f0_detect) & voiced]
                 if len(valid_f0) > 100:
                     hum_freq = np.median(valid_f0)
                     hum_ratio = np.sum(np.abs(valid_f0 - hum_freq) < 2) / len(valid_f0)
-                    if hum_ratio > 0.8:
+                    if hum_ratio > 0.95:
                         S = librosa.stft(audio_data)
                         freqs = librosa.fft_frequencies(sr=sample_rate)
                         for harmonic_n in range(1, 4):
@@ -1602,7 +1631,6 @@ class ToneDetector:
                 chroma_for_analysis, ToneDetector.AARDEN_MAJOR, ToneDetector.AARDEN_MINOR
             )
             
-            MINOR_BOOST = 1.02
             all_uids = set(ks_results.keys()) | set(temp_results.keys()) | set(aarden_results.keys())
             all_results = []
             for uid in all_uids:
@@ -1613,8 +1641,6 @@ class ToneDetector:
                 weighted_corr = W['ks'] * ks_c + W['temperley'] * temp_c + W['aarden'] * aarden_c
                 
                 ref = ks_results.get(uid) or temp_results.get(uid) or aarden_results.get(uid)
-                if ref["scale"] == "Minor":
-                    weighted_corr *= MINOR_BOOST
                 
                 all_results.append({
                     "key": ref["key"], "scale": ref["scale"],
@@ -1655,6 +1681,7 @@ class ToneDetector:
                 
                 best_candidate = None
                 best_score = -1
+                family_scores = []  # Lưu combined score cho tiebreaker
                 
                 for r in family:
                     # Tonic + 5th + 3rd strength
@@ -1667,17 +1694,28 @@ class ToneDetector:
                     
                     tonal_strength = tonic + fifth * 0.7 + third * 0.5
                     
-                    # Commonality bonus (0-0.05)
-                    common = KEY_COMMON.get(r["key"], 0.5)
+                    # Combined: profile correlation + tonal strength (không dùng commonality trực tiếp)
+                    combined = r["correlation"] * 0.55 + tonal_strength * 0.45
+                    family_scores.append((r, combined))
                     
-                    # Combined: profile correlation + tonal + commonality
-                    combined = r["correlation"] * 0.5 + tonal_strength * 0.35 + common * 0.05
-                    
-                    print(f"      {r['key']:4s}: corr={r['correlation']:.3f} T={tonic:.3f} 5={fifth:.3f} 3={third:.3f} common={common:.1f} → {combined:.4f}")
+                    print(f"      {r['key']:4s}: corr={r['correlation']:.3f} T={tonic:.3f} 5={fifth:.3f} 3={third:.3f} → {combined:.4f}")
                     
                     if combined > best_score:
                         best_score = combined
                         best_candidate = r
+                
+                # Commonality tiebreaker: chỉ khi top-2 chênh nhau < 2%
+                if best_candidate and len(family_scores) >= 2:
+                    family_scores.sort(key=lambda x: x[1], reverse=True)
+                    top1, top1_combined = family_scores[0]
+                    top2, top2_combined = family_scores[1]
+                    if abs(top1_combined - top2_combined) < 0.02:
+                        # Dùng commonality phân giải
+                        top1_common = KEY_COMMON.get(top1["key"], 0.5)
+                        top2_common = KEY_COMMON.get(top2["key"], 0.5)
+                        if top2_common > top1_common:
+                            best_candidate = top2
+                            print(f"   🎯 Tiebreaker: {top1['key']} ({top1_common:.1f}) → {top2['key']} ({top2_common:.1f})")
                 
                 if best_candidate and best_candidate["key"] != best["key"]:
                     print(f"   🔄 Family winner: {best['key']} → {best_candidate['key']}")
@@ -1809,6 +1847,7 @@ class ToneDetector:
             if rms < 0.001:
                 print("⚠️ [DÒ TONE] Không phát hiện âm thanh! Hãy đảm bảo đang phát nhạc.")
                 return None
+            
             
             # Phân tích key
             result = ToneDetector.detect_key_from_audio(audio_data, sample_rate)
