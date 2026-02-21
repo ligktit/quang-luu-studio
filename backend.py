@@ -30,6 +30,10 @@ except Exception:
     sc = None
     _SOUNDCARD_AVAILABLE = False
 
+# Suppress soundcard warnings (data discontinuity spam)
+import warnings
+warnings.filterwarnings('ignore', message='data discontinuity')
+
 # --- CẤU HÌNH CỐT LÕI ---
 SETTINGS_FILE = "settings.json"
 SONGS_FILE = "saved_songs.json"
@@ -63,6 +67,7 @@ class ConfigManager:
 class MidiHandler:
     def __init__(self):
         self.outport = None
+        self._warned = False
         self.connect()
     def connect(self):
         try:
@@ -71,12 +76,17 @@ class MidiHandler:
             if port_name:
                 self.outport = mido.open_output(port_name)
                 print(f"✅ MIDI Connected: {port_name}")
+                self._warned = False
                 return True
             else:
-                print(f"⚠️ Lỗi: Không tìm thấy cổng '{MIDI_PORT_NAME}'. Hãy mở loopMIDI!")
+                if not self._warned:
+                    print(f"⚠️ Lỗi: Không tìm thấy cổng '{MIDI_PORT_NAME}'. Hãy mở loopMIDI!")
+                    self._warned = True
                 return False
         except Exception as e:
-            print(f"⚠️ Lỗi MIDI: {e}")
+            if not self._warned:
+                print(f"⚠️ Lỗi MIDI: {e}")
+                self._warned = True
             return False
     def send_cc(self, cc_number, value, channel=0):
         """
@@ -282,11 +292,9 @@ class SystemEngine:
         # Kiểm tra kết nối
         if not self.midi_handler.outport:
             if auto_reconnect:
-                print("⚠️ MIDI chưa kết nối, đang thử kết nối lại...")
                 if self.midi_handler.connect():
                     print("✅ Đã kết nối lại MIDI")
                 else:
-                    print("❌ Không thể kết nối lại MIDI")
                     return False
             else:
                 return False
@@ -1604,6 +1612,22 @@ class ToneDetector:
             # Lưu CQT normalized (cho disambiguation)
             cqt_normalized = chroma_avg.copy()
             
+            # === BƯỚC 2a: Bass Chroma (cho relative key disambiguation) ===
+            # Chỉ lấy chroma vùng bass (C2-B3, ~65-247Hz) để xác định nốt root thật
+            try:
+                bass_chroma = librosa.feature.chroma_cqt(
+                    y=audio_data, sr=sample_rate,
+                    fmin=librosa.note_to_hz('C2'),
+                    n_octaves=2
+                )
+                bass_avg = np.mean(bass_chroma, axis=1)
+                bass_sum = np.sum(bass_avg)
+                if bass_sum > 0:
+                    bass_avg = bass_avg / bass_sum
+                print(f"   ✅ Bass chroma: {[f'{x:.3f}' for x in bass_avg]}")
+            except Exception:
+                bass_avg = None
+            
             print(f"   ✅ Chroma CQT (energy-weighted, no HPSS)")
             print(f"📊 [DÒ TONE] Chroma: {[f'{x:.3f}' for x in chroma_avg]}")
             
@@ -1694,8 +1718,8 @@ class ToneDetector:
                     
                     tonal_strength = tonic + fifth * 0.7 + third * 0.5
                     
-                    # Combined: profile correlation + tonal strength (không dùng commonality trực tiếp)
-                    combined = r["correlation"] * 0.55 + tonal_strength * 0.45
+                    # Combined: profile correlation (chính) + tonal strength (phụ)
+                    combined = r["correlation"] * 0.70 + tonal_strength * 0.30
                     family_scores.append((r, combined))
                     
                     print(f"      {r['key']:4s}: corr={r['correlation']:.3f} T={tonic:.3f} 5={fifth:.3f} 3={third:.3f} → {combined:.4f}")
@@ -1716,6 +1740,45 @@ class ToneDetector:
                         if top2_common > top1_common:
                             best_candidate = top2
                             print(f"   🎯 Tiebreaker: {top1['key']} ({top1_common:.1f}) → {top2['key']} ({top2_common:.1f})")
+                
+                # === Bass Chroma: Relative Key Disambiguation ===
+                # Khi best_candidate là Major, kiểm tra relative minor (và ngược lại)
+                # VD: G vs Em — ai có bass note mạnh hơn?
+                if best_candidate and bass_avg is not None:
+                    bc = best_candidate
+                    if bc["scale"] == "Major":
+                        # Relative minor = Major - 3 semitone
+                        rel_minor_idx = (bc["key_index"] + 9) % 12
+                        rel_minor_key = ToneDetector.MINOR_KEY_NAMES[rel_minor_idx]
+                        # Tìm relative minor trong family
+                        rel_candidate = None
+                        for r, _ in family_scores:
+                            if r["key_index"] == rel_minor_idx and r["scale"] == "Minor":
+                                rel_candidate = r
+                                break
+                        if rel_candidate:
+                            bass_major = bass_avg[bc["key_index"]]
+                            bass_minor = bass_avg[rel_minor_idx]
+                            print(f"   🎸 Bass: {bc['key']}={bass_major:.3f} vs {rel_candidate['key']}={bass_minor:.3f}")
+                            if bass_minor > bass_major * 1.2:  # Minor bass > 20% mạnh hơn
+                                best_candidate = rel_candidate
+                                print(f"   🎸 Bass override: {bc['key']} → {rel_candidate['key']} (bass root mạnh hơn)")
+                    elif bc["scale"] == "Minor":
+                        # Relative major = Minor + 3 semitone
+                        rel_major_idx = (bc["key_index"] + 3) % 12
+                        rel_major_key = ToneDetector.MAJOR_KEY_NAMES[rel_major_idx]
+                        rel_candidate = None
+                        for r, _ in family_scores:
+                            if r["key_index"] == rel_major_idx and r["scale"] == "Major":
+                                rel_candidate = r
+                                break
+                        if rel_candidate:
+                            bass_minor = bass_avg[bc["key_index"]]
+                            bass_major = bass_avg[rel_major_idx]
+                            print(f"   🎸 Bass: {bc['key']}={bass_minor:.3f} vs {rel_candidate['key']}={bass_major:.3f}")
+                            if bass_major > bass_minor * 1.2:
+                                best_candidate = rel_candidate
+                                print(f"   🎸 Bass override: {bc['key']} → {rel_candidate['key']} (bass root mạnh hơn)")
                 
                 if best_candidate and best_candidate["key"] != best["key"]:
                     print(f"   🔄 Family winner: {best['key']} → {best_candidate['key']}")
