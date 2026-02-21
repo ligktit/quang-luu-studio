@@ -1592,40 +1592,18 @@ class ToneDetector:
             print(f"   ✅ Preprocessing OK (p99.9={p999:.4f}, rms={rms_check:.4f})")
             print("🎵 [DÒ TONE] Pipeline: CQT → Weighted Multi-profile...")
             
-            # === BƯỚC 1: Chroma CQT + Spectral Debiasing ===
-            # Tính chroma CQT theo frame, trừ noise floor (percentile thấp) để loại hardware resonance
-            # Median (50%) quá mạnh — loại luôn nốt tonic nhạc. Dùng 10th percentile = chỉ loại noise floor.
+            # === BƯỚC 1: Chroma CQT (energy-weighted) ===
             chroma_cqt = librosa.feature.chroma_cqt(y=audio_data, sr=sample_rate)
-            
-            # Spectral debiasing: trừ per-bin 10th percentile (noise floor)
-            floor_chroma = np.percentile(chroma_cqt, 10, axis=1, keepdims=True)
-            chroma_debiased = np.maximum(chroma_cqt - floor_chroma, 0)
-            
-            # Log debiasing effect
-            raw_avg = np.mean(chroma_cqt, axis=1)
-            raw_sum = np.sum(raw_avg)
-            if raw_sum > 0:
-                raw_norm = raw_avg / raw_sum
-            else:
-                raw_norm = raw_avg
-            floor_norm = floor_chroma.flatten()
-            floor_sum = np.sum(floor_norm)
-            if floor_sum > 0:
-                floor_norm = floor_norm / floor_sum
-            print(f"   📊 Raw chroma:  {[f'{x:.3f}' for x in raw_norm]}")
-            print(f"   📊 Noise floor: {[f'{x:.3f}' for x in floor_norm]}")
-            
-            # RMS weighting trên chroma đã debias
             rms = librosa.feature.rms(y=audio_data)[0]
-            min_frames = min(len(rms), chroma_debiased.shape[1])
+            min_frames = min(len(rms), chroma_cqt.shape[1])
             rms = rms[:min_frames]
             rms_sum = np.sum(rms)
             if rms_sum > 0:
-                chroma_avg = np.average(chroma_debiased[:, :min_frames], axis=1, weights=rms / rms_sum)
+                chroma_avg = np.average(chroma_cqt[:, :min_frames], axis=1, weights=rms / rms_sum)
             else:
-                chroma_avg = np.mean(chroma_debiased, axis=1)
+                chroma_avg = np.mean(chroma_cqt, axis=1)
             
-            # Normalize to sum=1
+            # Normalize
             cs = np.sum(chroma_avg)
             if cs > 0:
                 chroma_avg = chroma_avg / cs
@@ -1633,7 +1611,7 @@ class ToneDetector:
             # Lưu normalized (cho disambiguation)
             cqt_normalized = chroma_avg.copy()
             
-            print(f"   ✅ Chroma CQT + Spectral Debiasing (p10 floor-subtracted)")
+            print(f"   ✅ Chroma CQT (energy-weighted)")
             print(f"📊 [DÒ TONE] Chroma: {[f'{x:.3f}' for x in chroma_avg]}")
             
             # === BƯỚC 2b: EMA (AutoKey mode) ===
