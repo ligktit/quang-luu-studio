@@ -1,0 +1,561 @@
+{
+    "mrnJjMbkFls": {
+        "url": "https://www.youtube.com/watch?v=mrnJjMbkFls",
+        "title": "KARAOKE TONE NỮ | HÓA GIẢI BẰNG NƯỚC MẮT - CAO THÁI SƠN | BEAT GỐC",
+        "timeline": [
+            {
+                "time": 0.0,
+                "key_display": "Ab",
+                "key_index": 8,
+                "scale": "Major"
+            },
+            {
+                "time": 15.0,
+                "key_display": "Fm",
+                "key_index": 5,
+                "scale": "Minor"
+            },
+            {
+                "time": 45.0,
+                "key_display": "Ab",
+                "key_index": 8,
+                "scale": "Major"
+            },
+            {
+                "time": 60.0,
+                "key_display": "Cm",
+                "key_index": 0,
+                "scale": "Minor"
+            },
+            {
+                "time": 75.0,
+                "key_display": "Fm",
+                "key_index": 5,
+                "scale": "Minor"
+            },
+            {
+                "time": 135.0,
+                "key_display": "Ab",
+                "key_index": 8,
+                "scale": "Major"
+            },
+            {
+                "time": 150.0,
+                "key_display": "Fm",
+                "key_index": 5,
+                "scale": "Minor"
+            },
+            {
+                "time": 165.0,
+                "key_display": "Ab",
+                "key_index": 8,
+                "scale": "Major"
+            },
+            {
+                "time": 180.0,
+                "key_display": "Fm",
+                "key_index": 5,
+                "scale": "Minor"
+            },
+            {
+                "time": 225.0,
+                "key_display": "F#m",
+                "key_index": 6,
+                "scale": "Minor"
+            },
+            {
+                "time": 240.0,
+                "key_display": "A",
+                "key_index": 9,
+                "scale": "Major"
+            },
+            {
+                "time": 255.0,
+                "key_display": "F#m",
+                "key_index": 6,
+                "scale": "Minor"
+            }
+        ],
+        "updated_at": "2026-02-25 01:06:28"
+    },
+    "_b71xMUCZ-Q": {
+        "url": "https://www.youtube.com/watch?v=_b71xMUCZ-Q",
+        "title": "Karaoke Beat Chuẩn Em Sẽ Là Cô Dâu - Minh Vương M4U ft Huy Cung",
+        "timeline": [
+            {
+                "time": 0.0,
+                "key_display": "Dm",
+                "key_index": 2,
+                "scale": "Minor"
+            },
+            {
+                "time": 15.0,
+                "key_display": "Gm",
+                "key_index": 7,
+                "scale": "Minor"
+            },
+            {
+                "time": 120.0,
+                "key_display": "Bb",
+                "key_index": 10,
+                "scale": "Major"
+            },
+            {
+                "time": 135.0,
+                "key_display": "Gm",
+                "key_index": 7,
+                "scale": "Minor"
+            },
+            {
+                "time": 165.0,
+                "key_display": "F",
+                "key_index": 5,
+                "scale": "Major"
+            },
+            {
+                "time": 180.0,
+                "key_display": "Gm",
+                "key_index": 7,
+                "scale": "Minor"
+            },
+            {
+                "time": 195.0,
+                "key_display": "F",
+                "key_index": 5,
+                "scale": "Major"
+            },
+            {
+                "time": 210.0,
+                "key_display": "Gm",
+                "key_index": 7,
+                "scale": "Minor"
+            },
+            {
+                "time": 240.0,
+                "key_display": "G",
+                "key_index": 7,
+                "scale": "Major"
+            },
+            {
+                "time": 255.0,
+                "key_display": "Am",
+                "key_index": 9,
+                "scale": "Minor"
+            },
+            {
+                "time": 285.0,
+                "key_display": "A",
+                "key_index": 9,
+                "scale": "Major"
+            }
+        ],
+        "updated_at": "2026-02-25 01:06:38"
+    },
+    "Z7LYhsjwswU": {
+        "url": "https://www.youtube.com/watch?v=Z7LYhsjwswU",
+        "title": "Karaoke | Đập Vỡ Cây Đàn (Quang Lê)",
+        "timeline": [
+            {
+                "time": 0.0,
+                "key_display": "E",
+                "key_index": 4,
+                "scale": "Major"
+            },
+            {
+                "time": 15.0,
+                "key_display": "F#m",
+                "key_index": 6,
+                "scale": "Minor"
+            },
+            {
+                "time": 30.0,
+                "key_display": "E",
+                "key_index": 4,
+                "scale": "Major"
+            },
+            {
+                "time": 60.0,
+                "key_display": "G#m",
+                "key_index": 8,
+                "scale": "Minor"
+            },
+            {
+                "time": 105.0,
+                "key_display": "E",
+                "key_index": 4,
+                "scale": "Major"
+            },
+            {
+                "time": 150.0,
+                "key_display": "G",
+                "key_index": 7,
+                "scale": "Major"
+            },
+            {
+                "time": 165.0,
+                "key_display": "E",
+                "key_index": 4,
+                "scale": "Major"
+            },
+            {
+                "time": 180.0,
+                "key_display": "G#m",
+                "key_index": 8,
+                "scale": "Minor"
+            },
+            {
+                "time": 195.0,
+                "key_display": "F#m",
+                "key_index": 6,
+                "scale": "Minor"
+            },
+            {
+                "time": 210.0,
+                "key_display": "G#m",
+                "key_index": 8,
+                "scale": "Minor"
+            },
+            {
+                "time": 225.0,
+                "key_display": "E",
+                "key_index": 4,
+                "scale": "Major"
+            },
+            {
+                "time": 255.0,
+                "key_display": "F#m",
+                "key_index": 6,
+                "scale": "Minor"
+            },
+            {
+                "time": 270.0,
+                "key_display": "E",
+                "key_index": 4,
+                "scale": "Major"
+            }
+        ],
+        "updated_at": "2026-02-25 01:06:45"
+    },
+    "U7eRMafKNC8": {
+        "url": "https://www.youtube.com/watch?v=U7eRMafKNC8",
+        "title": "Karaoke Quảng Bình Quê Ta Ơi Tone Nam Nhạc Sống gia huy beat",
+        "timeline": [
+            {
+                "time": 0.0,
+                "key_display": "E",
+                "key_index": 4,
+                "scale": "Major"
+            },
+            {
+                "time": 45.0,
+                "key_display": "F#m",
+                "key_index": 6,
+                "scale": "Minor"
+            },
+            {
+                "time": 60.0,
+                "key_display": "E",
+                "key_index": 4,
+                "scale": "Major"
+            },
+            {
+                "time": 75.0,
+                "key_display": "Em",
+                "key_index": 4,
+                "scale": "Minor"
+            },
+            {
+                "time": 90.0,
+                "key_display": "E",
+                "key_index": 4,
+                "scale": "Major"
+            },
+            {
+                "time": 180.0,
+                "key_display": "Em",
+                "key_index": 4,
+                "scale": "Minor"
+            },
+            {
+                "time": 195.0,
+                "key_display": "E",
+                "key_index": 4,
+                "scale": "Major"
+            },
+            {
+                "time": 300.0,
+                "key_display": "F#m",
+                "key_index": 6,
+                "scale": "Minor"
+            },
+            {
+                "time": 315.0,
+                "key_display": "B",
+                "key_index": 11,
+                "scale": "Major"
+            },
+            {
+                "time": 330.0,
+                "key_display": "Em",
+                "key_index": 4,
+                "scale": "Minor"
+            },
+            {
+                "time": 345.0,
+                "key_display": "E",
+                "key_index": 4,
+                "scale": "Major"
+            }
+        ],
+        "updated_at": "2026-02-25 01:06:55"
+    },
+    "sZTp5X9JKqE": {
+        "url": "https://www.youtube.com/watch?v=sZTp5X9JKqE",
+        "title": "QUANG ĐĂNG TRẦN - ANH ĐÃ KHÔNG BIẾT CÁCH YÊU EM | Karaoke",
+        "timeline": [
+            {
+                "time": 0.0,
+                "key_display": "Eb",
+                "key_index": 3,
+                "scale": "Major"
+            },
+            {
+                "time": 60.0,
+                "key_display": "Fm",
+                "key_index": 5,
+                "scale": "Minor"
+            },
+            {
+                "time": 75.0,
+                "key_display": "Eb",
+                "key_index": 3,
+                "scale": "Major"
+            },
+            {
+                "time": 105.0,
+                "key_display": "Ab",
+                "key_index": 8,
+                "scale": "Major"
+            },
+            {
+                "time": 120.0,
+                "key_display": "Eb",
+                "key_index": 3,
+                "scale": "Major"
+            },
+            {
+                "time": 195.0,
+                "key_display": "E",
+                "key_index": 4,
+                "scale": "Major"
+            }
+        ],
+        "updated_at": "2026-02-25 01:07:01"
+    },
+    "sqsWXJI4iZ0": {
+        "url": "https://youtu.be/sqsWXJI4iZ0",
+        "title": "Karaoke Áo Cũ Tình Mới | Châu Khải Phong | Beat Gốc Tone Nữ",
+        "timeline": [
+            {
+                "time": 0.0,
+                "key_display": "F",
+                "key_index": 5,
+                "scale": "Major"
+            },
+            {
+                "time": 15.0,
+                "key_display": "Dm",
+                "key_index": 2,
+                "scale": "Minor"
+            },
+            {
+                "time": 30.0,
+                "key_display": "F",
+                "key_index": 5,
+                "scale": "Major"
+            },
+            {
+                "time": 45.0,
+                "key_display": "Dm",
+                "key_index": 2,
+                "scale": "Minor"
+            },
+            {
+                "time": 60.0,
+                "key_display": "F",
+                "key_index": 5,
+                "scale": "Major"
+            },
+            {
+                "time": 120.0,
+                "key_display": "Am",
+                "key_index": 9,
+                "scale": "Minor"
+            },
+            {
+                "time": 135.0,
+                "key_display": "F",
+                "key_index": 5,
+                "scale": "Major"
+            },
+            {
+                "time": 180.0,
+                "key_display": "Dm",
+                "key_index": 2,
+                "scale": "Minor"
+            },
+            {
+                "time": 195.0,
+                "key_display": "F",
+                "key_index": 5,
+                "scale": "Major"
+            },
+            {
+                "time": 225.0,
+                "key_display": "Bb",
+                "key_index": 10,
+                "scale": "Major"
+            },
+            {
+                "time": 240.0,
+                "key_display": "Db",
+                "key_index": 1,
+                "scale": "Major"
+            },
+            {
+                "time": 255.0,
+                "key_display": "Gb",
+                "key_index": 6,
+                "scale": "Major"
+            },
+            {
+                "time": 270.0,
+                "key_display": "D#m",
+                "key_index": 3,
+                "scale": "Minor"
+            },
+            {
+                "time": 285.0,
+                "key_display": "Gb",
+                "key_index": 6,
+                "scale": "Major"
+            },
+            {
+                "time": 300.0,
+                "key_display": "D#m",
+                "key_index": 3,
+                "scale": "Minor"
+            }
+        ],
+        "updated_at": "2026-02-25 01:07:09"
+    },
+    "_R8ECYoR1Fw": {
+        "url": "https://youtu.be/_R8ECYoR1Fw",
+        "title": "[KARAOKE] Vô Cùng ( Vì Anh Thương Em ) - Phan Duy Anh | Tone Nữ",
+        "timeline": [
+            {
+                "time": 0.0,
+                "key_display": "D",
+                "key_index": 2,
+                "scale": "Major"
+            },
+            {
+                "time": 30.0,
+                "key_display": "Bm",
+                "key_index": 11,
+                "scale": "Minor"
+            },
+            {
+                "time": 45.0,
+                "key_display": "G",
+                "key_index": 7,
+                "scale": "Major"
+            },
+            {
+                "time": 60.0,
+                "key_display": "Em",
+                "key_index": 4,
+                "scale": "Minor"
+            },
+            {
+                "time": 75.0,
+                "key_display": "D",
+                "key_index": 2,
+                "scale": "Major"
+            },
+            {
+                "time": 105.0,
+                "key_display": "E",
+                "key_index": 4,
+                "scale": "Major"
+            },
+            {
+                "time": 120.0,
+                "key_display": "Bm",
+                "key_index": 11,
+                "scale": "Minor"
+            },
+            {
+                "time": 135.0,
+                "key_display": "D",
+                "key_index": 2,
+                "scale": "Major"
+            },
+            {
+                "time": 150.0,
+                "key_display": "G",
+                "key_index": 7,
+                "scale": "Major"
+            },
+            {
+                "time": 180.0,
+                "key_display": "Em",
+                "key_index": 4,
+                "scale": "Minor"
+            },
+            {
+                "time": 195.0,
+                "key_display": "D",
+                "key_index": 2,
+                "scale": "Major"
+            },
+            {
+                "time": 225.0,
+                "key_display": "E",
+                "key_index": 4,
+                "scale": "Major"
+            },
+            {
+                "time": 240.0,
+                "key_display": "Bm",
+                "key_index": 11,
+                "scale": "Minor"
+            },
+            {
+                "time": 255.0,
+                "key_display": "Eb",
+                "key_index": 3,
+                "scale": "Major"
+            },
+            {
+                "time": 270.0,
+                "key_display": "Fm",
+                "key_index": 5,
+                "scale": "Minor"
+            },
+            {
+                "time": 300.0,
+                "key_display": "Eb",
+                "key_index": 3,
+                "scale": "Major"
+            },
+            {
+                "time": 315.0,
+                "key_display": "Cm",
+                "key_index": 0,
+                "scale": "Minor"
+            }
+        ],
+        "updated_at": "2026-02-25 01:07:17"
+    }
+}

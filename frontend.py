@@ -7,8 +7,25 @@ import backend
 
 # --- CẤU HÌNH GIAO DIỆN ---
 ctk.set_default_color_theme("blue")
-
 ctk.set_appearance_mode("Dark")
+
+# Bảng màu chuẩn (Modern Dark Theme)
+COLORS = {
+    "bg_main": "#0F172A",      # Slate 900
+    "bg_card": "#1E293B",      # Slate 800
+    "bg_card_hover": "#334155",# Slate 700
+    "primary": "#6366F1",      # Indigo 500
+    "primary_hover": "#4F46E5",# Indigo 600
+    "success": "#10B981",      # Emerald 500
+    "success_hover": "#059669",# Emerald 600
+    "danger": "#EF4444",       # Rose 500
+    "danger_hover": "#DC2626", # Rose 600
+    "warning": "#F59E0B",      # Amber 500
+    "warning_hover": "#D97706",# Amber 600
+    "text_main": "#F8FAFC",    # Slate 50
+    "text_muted": "#94A3B8",   # Slate 400
+    "border": "#334155"        # Slate 700
+}
 
 # --- MIDI CC MAPPING ---
 MIDI_CC = {
@@ -62,11 +79,11 @@ def interpolate_color(color1, color2, factor):
 
 class ScoringDialog(ctk.CTkToplevel):
     """Dialog hiển thị kết quả chấm điểm"""
-    def __init__(self, parent, score_result):
+    def __init__(self, parent, score_result, animated=True):
         super().__init__(parent)
         
         self.title("🎤 Kết quả chấm điểm")
-        self.geometry("500x600")
+        self.geometry("500x700")
         self.attributes("-topmost", True)
         self.transient(parent)
         
@@ -79,7 +96,7 @@ class ScoringDialog(ctk.CTkToplevel):
             main_frame,
             text="🎤 KẾT QUẢ CHẤM ĐIỂM",
             font=("Inter", 24, "bold"),
-            text_color="#22C55E"
+            text_color=COLORS["success"]
         ).pack(pady=(10, 20))
         
         # Điểm tổng
@@ -93,29 +110,33 @@ class ScoringDialog(ctk.CTkToplevel):
             score_frame,
             text="ĐIỂM TỔNG",
             font=("Inter", 14),
-            text_color="#94A3B8"
+            text_color=COLORS["text_muted"]
         ).pack()
         
-        ctk.CTkLabel(
+        self.score_label = ctk.CTkLabel(
             score_frame,
-            text=f"{total_score:.1f}",
+            text="0.0" if animated else f"{total_score:.1f}",
             font=("Inter", 48, "bold"),
             text_color=score_color
-        ).pack(pady=5)
+        )
+        self.score_label.pack(pady=5)
         
         # Chi tiết các chỉ số
         details_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
         details_frame.pack(fill="both", expand=True, pady=10)
         
         metrics = [
-            ("Độ chính xác Pitch", "pitch_accuracy", "#3B82F6"),
-            ("Độ ổn định Pitch", "pitch_stability", "#8B5CF6"),
-            ("Độ nhất quán Âm lượng", "volume_consistency", "#10B981"),
-            ("Độ chính xác Nhịp điệu", "timing_accuracy", "#EAB308")
+            ("Độ chính xác Pitch", "pitch_accuracy", COLORS["primary"]),
+            ("Độ ổn định Pitch", "pitch_stability", COLORS["primary_hover"]),
+            ("Độ nhất quán Âm lượng", "volume_consistency", COLORS["success"]),
+            ("Độ chính xác Nhịp điệu", "timing_accuracy", COLORS["warning"])
         ]
         
+        self.metric_bars = []
         for label, key, color in metrics:
-            self._create_metric_row(details_frame, label, score_result.get(key, 0), color)
+            bar = self._create_metric_row(details_frame, label, score_result.get(key, 0), color, animated=animated)
+            if bar:
+                self.metric_bars.append((bar, score_result.get(key, 0)))
         
         # Thông tin bổ sung
         info_frame = ctk.CTkFrame(main_frame)
@@ -134,17 +155,51 @@ Thời lượng: {score_result.get('duration', 0):.2f} giây
             justify="left"
         ).pack(pady=10, padx=10)
         
-        # Feedback
+        # Feedback + Gợi ý cải thiện
         feedback_frame = ctk.CTkFrame(main_frame)
         feedback_frame.pack(fill="x", pady=10)
         
+        # Parse feedback (có thể là dict hoặc string)
+        feedback_data = score_result.get("feedback", "")
+        if isinstance(feedback_data, dict):
+            main_feedback = feedback_data.get("main", "")
+            tips = feedback_data.get("tips", [])
+        else:
+            main_feedback = str(feedback_data)
+            tips = []
+        
+        # Main feedback
         ctk.CTkLabel(
             feedback_frame,
-            text=score_result.get("feedback", ""),
-            font=("Inter", 14, "bold"),
-            text_color="#22C55E",
+            text=main_feedback,
+            font=("Inter", 15, "bold"),
+            text_color=score_color,
             wraplength=450
-        ).pack(pady=15, padx=15)
+        ).pack(pady=(15, 5), padx=15)
+        
+        # Tips - gợi ý cải thiện
+        if tips:
+            ctk.CTkLabel(
+                feedback_frame,
+                text="💡 Gợi ý cải thiện:",
+                font=("Inter", 12, "bold"),
+                text_color=COLORS["text_muted"],
+                anchor="w"
+            ).pack(anchor="w", padx=15, pady=(8, 2))
+            
+            for tip in tips:
+                ctk.CTkLabel(
+                    feedback_frame,
+                    text=tip,
+                    font=("Inter", 11),
+                    text_color=COLORS["text_main"],
+                    wraplength=430,
+                    anchor="w",
+                    justify="left"
+                ).pack(anchor="w", padx=20, pady=2)
+        
+        # Padding bottom
+        ctk.CTkFrame(feedback_frame, fg_color="transparent", height=10).pack()
         
         # Nút đóng
         ctk.CTkButton(
@@ -155,55 +210,524 @@ Thời lượng: {score_result.get('duration', 0):.2f} giây
             height=40,
             font=("Inter", 14, "bold")
         ).pack(pady=20)
-    
-    def _create_metric_row(self, parent, label, value, color):
-        """Tạo một dòng hiển thị metric"""
-        row = ctk.CTkFrame(parent, fg_color="transparent")
-        row.pack(fill="x", pady=5)
         
-        # Label
+        # Bắt đầu animation count-up
+        if animated:
+            self._animate_score(total_score, score_color)
+    
+    def _animate_score(self, target_score, color, step=0):
+        """Animation đếm điểm từ 0 đến target"""
+        total_steps = 30  # 30 frames ~ 1.5s
+        if step <= total_steps:
+            t = step / total_steps
+            eased = 1 - (1 - t) ** 3  # ease-out cubic
+            current = eased * target_score
+            self.score_label.configure(text=f"{current:.1f}")
+            
+            for bar, val in self.metric_bars:
+                bar.set(eased * val / 100)
+            
+            self.after(50, lambda: self._animate_score(target_score, color, step + 1))
+        else:
+            self.score_label.configure(text=f"{target_score:.1f}")
+            for bar, val in self.metric_bars:
+                bar.set(val / 100)
+    
+    def _create_metric_row(self, parent, label, value, color, animated=False):
+        """Tạo hàng hiển thị metric với thanh progress"""
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", pady=4)
+        
+        label_frame = ctk.CTkFrame(row, fg_color="transparent")
+        label_frame.pack(fill="x")
+        
         ctk.CTkLabel(
-            row,
+            label_frame,
             text=label,
             font=("Inter", 12),
-            width=200,
             anchor="w"
-        ).pack(side="left", padx=10)
+        ).pack(side="left")
         
-        # Progress bar
-        progress = ctk.CTkProgressBar(row, width=200, height=20)
-        progress.pack(side="left", padx=10)
-        progress.set(value / 100)
-        progress.configure(progress_color=color)
-        
-        # Value
         ctk.CTkLabel(
-            row,
-            text=f"{value:.1f}",
+            label_frame,
+            text=f"{value:.1f}%",
             font=("Inter", 12, "bold"),
             text_color=color,
-            width=60
-        ).pack(side="left", padx=5)
+            anchor="e"
+        ).pack(side="right")
+        
+        bar = ctk.CTkProgressBar(row, progress_color=color, height=8)
+        bar.pack(fill="x", pady=(2, 0))
+        bar.set(0 if animated else value / 100)
+        
+        return bar
     
     def _get_score_color(self, score):
         """Lấy màu dựa trên điểm số"""
         if score >= 90:
-            return "#22C55E"  # Green
+            return COLORS["success"]
         elif score >= 80:
-            return "#10B981"  # Green
+            return COLORS["success_hover"]
         elif score >= 70:
-            return "#EAB308"  # Yellow
+            return COLORS["warning"]
         elif score >= 60:
-            return "#F59E0B"  # Orange
+            return COLORS["warning_hover"]
         else:
-            return "#EF4444"  # Red
+            return COLORS["danger"]
+
+class ManualToneDialog(ctk.CTkToplevel):
+    """Dialog nhập timeline tone thủ công cho bài hát YouTube"""
+    def __init__(self, parent, engine, on_tone_detected_callback=None, edit_url=None):
+        super().__init__(parent)
+        self.parent_app = parent
+        self.engine = engine
+        self.on_tone_detected_callback = on_tone_detected_callback
+        self.entry_rows = []  # List of (time_entry, tone_option, row_frame)
+        
+        self.title("🎵 Dò Tone Thủ Công")
+        self.geometry("700x650")
+        self.attributes("-topmost", True)
+        self.transient(parent)
+        
+        # Container chính
+        main_frame = ctk.CTkFrame(self)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=15)
+        
+        # Tiêu đề
+        ctk.CTkLabel(
+            main_frame,
+            text="🎵 Dò Tone Thủ Công",
+            font=("Inter", 22, "bold"),
+            text_color=COLORS["primary"]
+        ).pack(pady=(5, 10))
+        
+        ctk.CTkLabel(
+            main_frame,
+            text="Nhập thời gian và tone tương ứng. Khi video YouTube phát đến thời điểm đó,\nchương trình sẽ tự động gửi tone cho Auto-Tune.",
+            font=("Inter", 12),
+            text_color=COLORS["text_muted"],
+            justify="center"
+        ).pack(pady=(0, 10))
+        
+        # --- URL + Tên bài ---
+        info_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        info_frame.pack(fill="x", pady=5)
+        
+        # URL
+        url_row = ctk.CTkFrame(info_frame, fg_color="transparent")
+        url_row.pack(fill="x", pady=3)
+        ctk.CTkLabel(url_row, text="YouTube URL:", font=("Inter", 13, "bold"), width=110, anchor="w").pack(side="left")
+        self.url_entry = ctk.CTkEntry(url_row, placeholder_text="https://www.youtube.com/watch?v=...")
+        self.url_entry.pack(side="left", fill="x", expand=True, padx=(5, 0))
+        
+        # Tên bài hát
+        title_row = ctk.CTkFrame(info_frame, fg_color="transparent")
+        title_row.pack(fill="x", pady=3)
+        ctk.CTkLabel(title_row, text="Tên bài hát:", font=("Inter", 13, "bold"), width=110, anchor="w").pack(side="left")
+        self.title_entry = ctk.CTkEntry(title_row, placeholder_text="Nhập tên bài hát")
+        self.title_entry.pack(side="left", fill="x", expand=True, padx=(5, 0))
+        
+        # --- Header bảng timeline ---
+        table_header = ctk.CTkFrame(main_frame, fg_color=COLORS["bg_card"], corner_radius=8)
+        table_header.pack(fill="x", pady=(10, 0))
+        ctk.CTkLabel(table_header, text="Thời gian (MM:SS)", font=("Inter", 12, "bold"), width=160, anchor="w").pack(side="left", padx=15, pady=8)
+        ctk.CTkLabel(table_header, text="Tone", font=("Inter", 12, "bold"), width=140, anchor="w").pack(side="left", padx=10)
+        ctk.CTkLabel(table_header, text="", width=50).pack(side="left")
+        
+        # --- Scrollable frame cho danh sách entries ---
+        self.entries_frame = ctk.CTkScrollableFrame(main_frame, height=250)
+        self.entries_frame.pack(fill="both", expand=True, pady=(0, 5))
+        
+        # Nút thêm dòng
+        add_btn_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        add_btn_frame.pack(fill="x", pady=5)
+        
+        ctk.CTkButton(
+            add_btn_frame,
+            text="➕ Thêm dòng",
+            width=120,
+            height=30,
+            font=("Inter", 13),
+            fg_color=COLORS["primary"],
+            hover_color=COLORS["primary_hover"],
+            command=self._add_entry_row
+        ).pack(side="left")
+        
+        # --- Nút hành động ---
+        action_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        action_frame.pack(fill="x", pady=(10, 5))
+        
+        ctk.CTkButton(
+            action_frame,
+            text="💾 Lưu Timeline",
+            width=130,
+            height=36,
+            font=("Inter", 13, "bold"),
+            fg_color=COLORS["success"],
+            hover_color=COLORS["success_hover"],
+            command=self._save_timeline
+        ).pack(side="left", padx=3)
+        
+        ctk.CTkButton(
+            action_frame,
+            text="▶️ Phát & Gửi Tone",
+            width=150,
+            height=36,
+            font=("Inter", 13, "bold"),
+            fg_color=COLORS["primary"],
+            hover_color=COLORS["primary_hover"],
+            command=self._play_and_send
+        ).pack(side="left", padx=3)
+        
+        ctk.CTkButton(
+            action_frame,
+            text="📋 Danh sách đã lưu",
+            width=150,
+            height=36,
+            font=("Inter", 13, "bold"),
+            fg_color=COLORS["bg_card_hover"],
+            hover_color=COLORS["border"],
+            command=self._show_saved_list
+        ).pack(side="left", padx=3)
+        
+        ctk.CTkButton(
+            action_frame,
+            text="Đóng",
+            width=80,
+            height=36,
+            font=("Inter", 13),
+            fg_color=COLORS["danger"],
+            hover_color=COLORS["danger_hover"],
+            command=self.destroy
+        ).pack(side="right", padx=3)
+        
+        # Label thông báo
+        self.message_label = ctk.CTkLabel(
+            main_frame,
+            text="",
+            font=("Inter", 12),
+            text_color=COLORS["success"]
+        )
+        self.message_label.pack(pady=3)
+        
+        # Thêm 3 dòng mặc định
+        for _ in range(3):
+            self._add_entry_row()
+        
+        # Load timeline nếu edit_url được truyền vào
+        if edit_url:
+            self._load_existing_timeline(edit_url)
+    
+    def _add_entry_row(self, time_str="", key_display="C"):
+        """Thêm 1 dòng nhập time-tone"""
+        row_frame = ctk.CTkFrame(self.entries_frame, fg_color="transparent")
+        row_frame.pack(fill="x", pady=2)
+        
+        # Time entry
+        time_entry = ctk.CTkEntry(
+            row_frame,
+            placeholder_text="0:00",
+            width=160,
+            height=32,
+            font=("Inter", 13)
+        )
+        time_entry.pack(side="left", padx=(15, 10))
+        if time_str:
+            time_entry.insert(0, time_str)
+        
+        # Tone dropdown
+        music_keys = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B",
+                     "Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"]
+        tone_option = ctk.CTkOptionMenu(
+            row_frame,
+            values=music_keys,
+            width=140,
+            height=32,
+            font=("Inter", 13)
+        )
+        tone_option.pack(side="left", padx=10)
+        tone_option.set(key_display)
+        
+        # Nút xóa
+        def remove_row():
+            row_frame.destroy()
+            self.entry_rows = [(t, k, f) for t, k, f in self.entry_rows if f != row_frame]
+        
+        ctk.CTkButton(
+            row_frame,
+            text="❌",
+            width=40,
+            height=32,
+            font=("Segoe UI Emoji", 14),
+            fg_color=COLORS["danger"],
+            hover_color=COLORS["danger_hover"],
+            command=remove_row
+        ).pack(side="left", padx=5)
+        
+        self.entry_rows.append((time_entry, tone_option, row_frame))
+    
+    def _get_entries(self):
+        """Thu thập tất cả entries hợp lệ"""
+        entries = []
+        for time_entry, tone_option, row_frame in self.entry_rows:
+            if not row_frame.winfo_exists():
+                continue
+            time_str = time_entry.get().strip()
+            if not time_str:
+                continue
+            time_seconds = backend.ManualToneTimeline.parse_time_str(time_str)
+            if time_seconds is None:
+                continue
+            entries.append({
+                "time": time_seconds,
+                "key_display": tone_option.get()
+            })
+        return entries
+    
+    def _show_message(self, text, color="#22C55E"):
+        """Hiện thông báo"""
+        self.message_label.configure(text=text, text_color=color)
+        self.after(4000, lambda: self.message_label.configure(text=""))
+    
+    def _save_timeline(self):
+        """Lưu timeline"""
+        url = self.url_entry.get().strip()
+        title = self.title_entry.get().strip()
+        
+        if not url:
+            self._show_message("⚠️ Vui lòng nhập YouTube URL!", "#EF4444")
+            return
+        if "youtube.com" not in url and "youtu.be" not in url:
+            self._show_message("⚠️ URL không hợp lệ. Vui lòng nhập URL YouTube.", "#EF4444")
+            return
+        if not title:
+            self._show_message("⚠️ Vui lòng nhập tên bài hát!", "#EF4444")
+            return
+        
+        entries = self._get_entries()
+        if not entries:
+            self._show_message("⚠️ Vui lòng nhập ít nhất 1 cặp thời gian-tone hợp lệ!", "#EF4444")
+            return
+        
+        success = backend.ManualToneTimeline.save_timeline(url, title, entries)
+        if success:
+            self._show_message(f"✅ Đã lưu timeline: {title} ({len(entries)} entries)")
+        else:
+            self._show_message("❌ Lỗi khi lưu timeline!", "#EF4444")
+    
+    def _play_and_send(self):
+        """Mở YouTube + bắt đầu replay manual timeline"""
+        url = self.url_entry.get().strip()
+        if not url:
+            self._show_message("⚠️ Vui lòng nhập YouTube URL!", "#EF4444")
+            return
+        
+        entries = self._get_entries()
+        if not entries:
+            self._show_message("⚠️ Vui lòng nhập ít nhất 1 cặp thời gian-tone!", "#EF4444")
+            return
+        
+        # Parse entries thành format đầy đủ cho engine
+        parsed = []
+        for entry in entries:
+            key_info = backend.ManualToneTimeline.parse_key_display(entry["key_display"])
+            if key_info:
+                parsed.append({
+                    "time": entry["time"],
+                    "key_display": key_info["key_display"],
+                    "key_index": key_info["key_index"],
+                    "scale": key_info["scale"]
+                })
+        parsed.sort(key=lambda x: x["time"])
+        
+        if not parsed:
+            self._show_message("⚠️ Không có entry hợp lệ!", "#EF4444")
+            return
+        
+        # Callback cập nhật UI tone selector
+        def on_tone_detected(result):
+            if result and hasattr(self.parent_app, 'tone_option'):
+                try:
+                    key_display = result.get('key_display', 'C')
+                    self.parent_app.after(0, lambda: [
+                        self.parent_app.tone_option.set(key_display),
+                        setattr(self.parent_app, 'current_tone', key_display),
+                        self.parent_app.on_tone_selected(key_display)
+                    ])
+                except:
+                    pass
+        
+        def on_video_end(score_result):
+            if score_result:
+                self.parent_app.current_score = score_result.get("total_score", 0)
+                self.parent_app.update_score_display(self.parent_app.current_score)
+                ScoringDialog(self.parent_app, score_result)
+        
+        # Mở YouTube + replay manual timeline
+        self.engine.open_youtube_url(
+            url,
+            on_video_end_callback=on_video_end,
+            on_tone_detected=on_tone_detected,
+            manual_timeline=parsed
+        )
+        
+        self._show_message(f"▶️ Đang phát... ({len(parsed)} tone changes)")
+    
+    def _load_existing_timeline(self, url):
+        """Load timeline đã lưu vào form"""
+        self.url_entry.delete(0, "end")
+        self.url_entry.insert(0, url)
+        
+        timeline_data = backend.ManualToneTimeline.load_timeline(url)
+        if timeline_data:
+            self.title_entry.delete(0, "end")
+            self.title_entry.insert(0, timeline_data.get("title", ""))
+            
+            # Xóa entries cũ
+            for _, _, row_frame in self.entry_rows:
+                if row_frame.winfo_exists():
+                    row_frame.destroy()
+            self.entry_rows.clear()
+            
+            # Thêm entries từ timeline
+            for entry in timeline_data.get("timeline", []):
+                time_str = backend.ManualToneTimeline.seconds_to_time_str(entry["time"])
+                self._add_entry_row(time_str=time_str, key_display=entry.get("key_display", "C"))
+    
+    def _show_saved_list(self):
+        """Hiển thị danh sách timeline đã lưu"""
+        all_timelines = backend.ManualToneTimeline.load_all()
+        
+        list_dialog = ctk.CTkToplevel(self)
+        list_dialog.title("📋 Danh sách Timeline đã lưu")
+        list_dialog.geometry("650x450")
+        list_dialog.attributes("-topmost", True)
+        list_dialog.transient(self)
+        
+        ctk.CTkLabel(
+            list_dialog,
+            text="📋 Timeline đã lưu",
+            font=("Inter", 20, "bold"),
+            text_color="#6366F1"
+        ).pack(pady=15)
+        
+        scroll_frame = ctk.CTkScrollableFrame(list_dialog)
+        scroll_frame.pack(fill="both", expand=True, padx=20, pady=5)
+        
+        if not all_timelines:
+            ctk.CTkLabel(
+                scroll_frame,
+                text="Chưa có timeline nào được lưu",
+                font=("Inter", 14),
+                text_color="#94A3B8"
+            ).pack(pady=50)
+        else:
+            for video_id, data in all_timelines.items():
+                self._create_timeline_row(scroll_frame, data, list_dialog)
+        
+        ctk.CTkButton(
+            list_dialog,
+            text="Đóng",
+            width=100,
+            command=list_dialog.destroy
+        ).pack(pady=10)
+    
+    def _create_timeline_row(self, parent, data, list_dialog):
+        """Tạo 1 hàng trong danh sách timeline"""
+        row = ctk.CTkFrame(parent)
+        row.pack(fill="x", pady=4)
+        
+        info = ctk.CTkFrame(row, fg_color="transparent")
+        info.pack(side="left", fill="both", expand=True, padx=10, pady=8)
+        
+        # Tên bài
+        ctk.CTkLabel(
+            info,
+            text=data.get("title", "Không tên"),
+            font=("Inter", 14, "bold")
+        ).pack(anchor="w")
+        
+        # Chi tiết timeline
+        timeline = data.get("timeline", [])
+        tones_preview = " → ".join(
+            f"{backend.ManualToneTimeline.seconds_to_time_str(e['time'])}:{e['key_display']}"
+            for e in timeline[:5]
+        )
+        if len(timeline) > 5:
+            tones_preview += f" ... (+{len(timeline)-5})"
+        
+        ctk.CTkLabel(
+            info,
+            text=f"{len(timeline)} entries | {tones_preview}",
+            font=("Inter", 11),
+            text_color="#94A3B8",
+            wraplength=400
+        ).pack(anchor="w", pady=(2, 0))
+        
+        # Buttons
+        btn_frame = ctk.CTkFrame(row, fg_color="transparent")
+        btn_frame.pack(side="right", padx=10, pady=8)
+        
+        url = data.get("url", "")
+        
+        # Nút chỉnh sửa
+        def edit_tl():
+            list_dialog.destroy()
+            self._load_existing_timeline(url)
+        
+        ctk.CTkButton(
+            btn_frame, text="✏️", width=40, height=32,
+            font=("Segoe UI Emoji", 14),
+            fg_color="#3B82F6", hover_color="#2563EB",
+            command=edit_tl
+        ).pack(side="left", padx=2)
+        
+        # Nút phát
+        def play_tl():
+            self.url_entry.delete(0, "end")
+            self.url_entry.insert(0, url)
+            self.title_entry.delete(0, "end")
+            self.title_entry.insert(0, data.get("title", ""))
+            
+            # Xóa + load entries
+            for _, _, rf in self.entry_rows:
+                if rf.winfo_exists():
+                    rf.destroy()
+            self.entry_rows.clear()
+            for entry in timeline:
+                time_str = backend.ManualToneTimeline.seconds_to_time_str(entry["time"])
+                self._add_entry_row(time_str=time_str, key_display=entry.get("key_display", "C"))
+            
+            list_dialog.destroy()
+            self._play_and_send()
+        
+        ctk.CTkButton(
+            btn_frame, text="▶️", width=40, height=32,
+            font=("Segoe UI Emoji", 14),
+            fg_color="#22C55E", hover_color="#16A34A",
+            command=play_tl
+        ).pack(side="left", padx=2)
+        
+        # Nút xóa
+        def delete_tl():
+            backend.ManualToneTimeline.delete_timeline(url)
+            list_dialog.destroy()
+            self._show_saved_list()
+        
+        ctk.CTkButton(
+            btn_frame, text="🗑️", width=40, height=32,
+            font=("Segoe UI Emoji", 14),
+            fg_color="#EF4444", hover_color="#DC2626",
+            command=delete_tl
+        ).pack(side="left", padx=2)
+
 
 class ColorButton(ctk.CTkButton):
     """Button đơn sắc với hiệu ứng hover và press"""
     def __init__(self, master, color=None, **kwargs):
         # Màu mặc định
         if color is None:
-            color = "#22C55E"  # Green
+            color = COLORS["success"]  # Green
         
         self.base_color = color
         
@@ -262,7 +786,7 @@ class ActivationDialog(ctk.CTk):
         
         # Tiêu đề
         title_text = "⏰ License đã hết hạn" if is_expired else "🔐 Kích hoạt ứng dụng"
-        title_color = "#EF4444" if is_expired else "#22C55E"
+        title_color = COLORS["danger"] if is_expired else COLORS["success"]
         
         ctk.CTkLabel(
             main_frame,
@@ -286,7 +810,7 @@ class ActivationDialog(ctk.CTk):
             main_frame,
             text=info_text,
             font=("Inter", 13),
-            text_color="#94A3B8",
+            text_color=COLORS["text_muted"],
             justify="center",
             wraplength=400
         ).pack(pady=(0, 20))
@@ -316,7 +840,7 @@ class ActivationDialog(ctk.CTk):
             code_frame,
             text="",
             font=("Inter", 12),
-            text_color="#EF4444",
+            text_color=COLORS["danger"],
             wraplength=400
         )
         self.message_label.pack(pady=(0, 10))
@@ -332,14 +856,14 @@ class ActivationDialog(ctk.CTk):
                     info_frame,
                     text="📋 Thông tin license cũ:",
                     font=("Inter", 12, "bold"),
-                    text_color="#94A3B8"
+                    text_color=COLORS["text_muted"]
                 ).pack(anchor="w", padx=15, pady=(10, 5))
                 
                 ctk.CTkLabel(
                     info_frame,
                     text=f"Ngày kích hoạt: {activation.get('activation_date', 'N/A')}",
                     font=("Inter", 11),
-                    text_color="#94A3B8"
+                    text_color=COLORS["text_muted"]
                 ).pack(anchor="w", padx=15, pady=2)
         
         # Nút kích hoạt
@@ -351,7 +875,7 @@ class ActivationDialog(ctk.CTk):
             text="✅ Kích hoạt",
             width=150,
             height=40,
-            color="#22C55E",
+            color=COLORS["success"],
             font=("Inter", 14, "bold"),
             command=self.activate
         ).pack(side="left", padx=5)
@@ -362,8 +886,8 @@ class ActivationDialog(ctk.CTk):
             width=150,
             height=40,
             font=("Inter", 14, "bold"),
-            fg_color="#EF4444",
-            hover_color="#DC2626",
+            fg_color=COLORS["danger"],
+            hover_color=COLORS["danger_hover"],
             command=self.quit_app
         ).pack(side="left", padx=5)
         
@@ -378,7 +902,7 @@ class ActivationDialog(ctk.CTk):
         if not code:
             self.message_label.configure(
                 text="⚠️ Vui lòng nhập mã kích hoạt!",
-                text_color="#EF4444"
+                text_color=COLORS["danger"]
             )
             return
         
@@ -388,7 +912,7 @@ class ActivationDialog(ctk.CTk):
         if success:
             self.message_label.configure(
                 text=f"✅ {message}",
-                text_color="#22C55E"
+                text_color=COLORS["success"]
             )
             self.activated = True
             
@@ -397,7 +921,7 @@ class ActivationDialog(ctk.CTk):
         else:
             self.message_label.configure(
                 text=f"❌ {message}",
-                text_color="#EF4444"
+                text_color=COLORS["danger"]
             )
             # Xóa code entry để nhập lại
             self.code_entry.delete(0, "end")
@@ -438,7 +962,7 @@ class SetupView(ctk.CTk):
             main_frame, 
             text="⚙️ Cấu hình ban đầu", 
             font=("Inter", 24, "bold"),
-            text_color="#22C55E"
+            text_color=COLORS["success"]
         ).pack(pady=(0, 30))
         
         # Đường dẫn Studio One
@@ -460,7 +984,7 @@ class SetupView(ctk.CTk):
             s1_path_frame, 
             text="📂", 
             width=50,
-            color="#6366F1",  # Indigo
+            color=COLORS["primary"],  # Indigo
             command=self.browse_studio_one
         ).pack(side="right")
         
@@ -483,7 +1007,7 @@ class SetupView(ctk.CTk):
             web_path_frame, 
             text="📂", 
             width=50,
-            color="#6366F1",  # Indigo
+            color=COLORS["primary"],  # Indigo
             command=self.browse_browser
         ).pack(side="right")
         
@@ -511,7 +1035,7 @@ class SetupView(ctk.CTk):
             text="💾 Lưu và tiếp tục",
             font=("Inter", 16, "bold"),
             height=40,
-            color="#22C55E",  # Green
+            color=COLORS["success"],  # Green
             command=self.save_and_continue
         ).pack(pady=20)
     
@@ -548,7 +1072,7 @@ class SetupView(ctk.CTk):
             error_label = ctk.CTkLabel(
                 self, 
                 text="⚠️ Vui lòng nhập đầy đủ đường dẫn!", 
-                text_color="#EF4444",
+                text_color=COLORS["danger"],
                 font=("Inter", 12)
             )
             error_label.place(relx=0.5, rely=0.9, anchor="center")
@@ -560,7 +1084,7 @@ class SetupView(ctk.CTk):
             error_label = ctk.CTkLabel(
                 self, 
                 text="⚠️ Đường dẫn Studio One không tồn tại!", 
-                text_color="#EF4444",
+                text_color=COLORS["danger"],
                 font=("Inter", 12)
             )
             error_label.place(relx=0.5, rely=0.9, anchor="center")
@@ -597,7 +1121,7 @@ class MainDashboard(ctk.CTk):
         
         # 1. Cấu hình cửa sổ
         self.title("Quang Lưu Studio")
-        self.geometry("1200x420")
+        self.geometry("1050x380")
         self.attributes("-topmost", True)
         
         # Lưới chính: Header(0) - Menu(1) - Body(2)
@@ -626,9 +1150,9 @@ class MainDashboard(ctk.CTk):
         if hasattr(self, 'status_indicator'):
             if connected:
                 status_text = f"Đã kết nối" + (f": {port_name}" if port_name else "")
-                self.status_indicator.configure(text=status_text, text_color="#22C55E")
+                self.status_indicator.configure(text=status_text, text_color=COLORS["success"])
             else:
-                self.status_indicator.configure(text="Chưa kết nối", text_color="#EF4444")
+                self.status_indicator.configure(text="Chưa kết nối", text_color=COLORS["danger"])
 
     def update_midi_status(self):
         """Cập nhật trạng thái MIDI hiện tại"""
@@ -637,10 +1161,10 @@ class MainDashboard(ctk.CTk):
                 port_name = self.engine.get_midi_port_name()
                 self.status_indicator.configure(
                     text=f"Đã kết nối: {port_name}", 
-                    text_color="#22C55E"
+                    text_color=COLORS["success"]
                 )
             else:
-                self.status_indicator.configure(text="Chưa kết nối", text_color="#EF4444")
+                self.status_indicator.configure(text="Chưa kết nối", text_color=COLORS["danger"])
 
     def check_midi_connection(self):
         """Kiểm tra và cập nhật trạng thái MIDI (backup check)"""
@@ -662,16 +1186,16 @@ class MainDashboard(ctk.CTk):
                 print("✅ Tự động mở Studio One...")
 
     def setup_header(self):
-        """Khu vực trên cùng: Tone, Chữ chạy, Điểm số, Trạng thái"""
-        self.header_frame = ctk.CTkFrame(self, height=60, corner_radius=0)
-        self.header_frame.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 10))
+        # Khu vực trên cùng: Tone, Chữ chạy, Điểm số, Trạng thái
+        self.header_frame = ctk.CTkFrame(self, height=50, corner_radius=0)
+        self.header_frame.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 5))
         self.header_frame.grid_columnconfigure(1, weight=1)
 
         # --- 1. KHU VỰC TONE (TRÁI) ---
         self.tone_frame = ctk.CTkFrame(self.header_frame, fg_color="transparent")
-        self.tone_frame.grid(row=0, column=0, padx=20, pady=10, sticky="w")
+        self.tone_frame.grid(row=0, column=0, padx=10, pady=5, sticky="w")
 
-        ctk.CTkLabel(self.tone_frame, text="Tone Bài Hát:", font=("Inter", 14, "bold")).pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(self.tone_frame, text="Tone Bài Hát:", font=("Inter", 14, "bold")).pack(side="left", padx=(0, 5))
         
         music_keys = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B", 
                      "Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"]
@@ -684,7 +1208,7 @@ class MainDashboard(ctk.CTk):
         self.tone_option.pack(side="left")
         
         # --- 1b. AUTOKEY LIVE INDICATOR (bên phải tone selector) ---
-        self.autokey_indicator_frame = ctk.CTkFrame(self.tone_frame, fg_color="#1e293b", corner_radius=8)
+        self.autokey_indicator_frame = ctk.CTkFrame(self.tone_frame, fg_color=COLORS["bg_card"], corner_radius=8)
         # Ẩn khi chưa bật AutoKey
         
         # Đèn nhấp nháy (bật/tắt xanh lá)
@@ -692,7 +1216,7 @@ class MainDashboard(ctk.CTk):
             self.autokey_indicator_frame,
             text="●",
             font=("Inter", 14),
-            text_color="#22C55E",
+            text_color=COLORS["success"],
             width=16
         )
         self.autokey_dot.pack(side="left", padx=(8, 2))
@@ -702,7 +1226,7 @@ class MainDashboard(ctk.CTk):
             self.autokey_indicator_frame,
             text="Key:",
             font=("Inter", 11),
-            text_color="#94A3B8"
+            text_color=COLORS["text_muted"]
         ).pack(side="left", padx=(2, 2))
         
         # Key hiện tại (lớn, nổi bật)
@@ -710,7 +1234,7 @@ class MainDashboard(ctk.CTk):
             self.autokey_indicator_frame,
             text="...",
             font=("Inter", 18, "bold"),
-            text_color="#F8FAFC"
+            text_color=COLORS["text_main"]
         )
         self.autokey_key_label.pack(side="left", padx=2)
         
@@ -719,7 +1243,7 @@ class MainDashboard(ctk.CTk):
             self.autokey_indicator_frame,
             text="",
             font=("Inter", 11),
-            text_color="#FACC15"
+            text_color=COLORS["warning"]
         )
         self.autokey_scale_label.pack(side="left", padx=(0, 4))
         
@@ -728,21 +1252,21 @@ class MainDashboard(ctk.CTk):
             self.autokey_indicator_frame,
             text="",
             font=("Inter", 10),
-            text_color="#94A3B8"
+            text_color=COLORS["text_muted"]
         )
         self.autokey_conf_label.pack(side="left", padx=(0, 8))
         
         self._autokey_dot_visible = True  # Trạng thái nhấp nháy
 
         # --- 2. KHU VỰC CHỮ CHẠY (GIỮA) ---
-        self.marquee_container = ctk.CTkFrame(self.header_frame, fg_color="#0f172a", corner_radius=0, height=35)
-        self.marquee_container.grid(row=0, column=1, padx=20, pady=10, sticky="ew")
+        self.marquee_container = ctk.CTkFrame(self.header_frame, fg_color=COLORS["bg_main"], corner_radius=0, height=30)
+        self.marquee_container.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
         
         self.marquee_text = "✨ Bản quyền thuộc về Quang Lưu - Tuấn Phúc - 0973306273 | 0326405221 🎶🎶 --- Chúc bạn có những bản thu âm tuyệt vời! 🎤"
         self.marquee_label = ctk.CTkLabel(
             self.marquee_container, 
             text=self.marquee_text, 
-            text_color="#FACC15", 
+            text_color=COLORS["warning"], 
             font=("Inter", 16, "bold")
         )
         
@@ -751,8 +1275,8 @@ class MainDashboard(ctk.CTk):
         self.animate_marquee()
 
         # --- 3. KHU VỰC ĐIỂM SỐ (GIỮA-PHẢI) ---
-        self.score_frame = ctk.CTkFrame(self.header_frame, fg_color="#1e293b", corner_radius=8)
-        self.score_frame.grid(row=0, column=2, padx=10, pady=8, sticky="e")
+        self.score_frame = ctk.CTkFrame(self.header_frame, fg_color=COLORS["bg_card"], corner_radius=8)
+        self.score_frame.grid(row=0, column=2, padx=5, pady=4, sticky="e")
         
         # Container cho điểm số
         score_container = ctk.CTkFrame(self.score_frame, fg_color="transparent")
@@ -763,32 +1287,32 @@ class MainDashboard(ctk.CTk):
             score_container,
             text="Điểm số:",
             font=("Inter", 10),
-            text_color="#94A3B8"
+            text_color=COLORS["text_muted"]
         ).pack()
         
         # Khung hiển thị điểm số lớn
-        self.score_display_frame = ctk.CTkFrame(score_container, fg_color="#0f172a", corner_radius=5)
+        self.score_display_frame = ctk.CTkFrame(score_container, fg_color=COLORS["bg_main"], corner_radius=5)
         self.score_display_frame.pack(pady=(3, 0))
         
         self.score_label = ctk.CTkLabel(
             self.score_display_frame,
             text="--",
             font=("Inter", 20, "bold"),
-            text_color="#94A3B8",
+            text_color=COLORS["text_muted"],
             width=60
         )
         self.score_label.pack(padx=8, pady=3)
 
         # --- 4. KHU VỰC TRẠNG THÁI (PHẢI) ---
         self.status_frame = ctk.CTkFrame(self.header_frame, fg_color="transparent")
-        self.status_frame.grid(row=0, column=3, padx=20, pady=10, sticky="e")
+        self.status_frame.grid(row=0, column=3, padx=10, pady=5, sticky="e")
 
         ctk.CTkLabel(self.status_frame, text="Trạng thái:", font=("Inter", 12)).pack(side="left", padx=(0, 5))
         
         self.status_indicator = ctk.CTkLabel(
             self.status_frame, 
             text="Đang kiểm tra...", 
-            text_color="#EAB308", 
+            text_color=COLORS["warning"], 
             font=("Inter", 14, "bold")
         )
         self.status_indicator.pack(side="left")
@@ -810,19 +1334,19 @@ class MainDashboard(ctk.CTk):
             else:
                 self.score_label.configure(
                     text="--",
-                    text_color="#94A3B8"
+                    text_color=COLORS["text_muted"]
                 )
     
     def _get_score_color(self, score):
         """Lấy màu dựa trên điểm số"""
         if score >= 90:
-            return "#22C55E"  # Green
+            return COLORS["success"]  # Green
         elif score >= 85:
-            return "#10B981"  # Light Green
+            return COLORS["success_hover"]  # Light Green
         elif score >= 80:
-            return "#84CC16"  # Lime
+            return COLORS["warning"]  # Lime
         else:
-            return "#EAB308"  # Yellow
+            return COLORS["warning_hover"]  # Yellow
 
     def animate_marquee(self):
         """Logic làm chữ chạy"""
@@ -836,19 +1360,19 @@ class MainDashboard(ctk.CTk):
     
     def setup_menu(self):
         """Khu vực Menu Toolbar"""
-        self.menu_frame = ctk.CTkFrame(self, height=50, corner_radius=0, fg_color="transparent")
-        self.menu_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 10))
+        self.menu_frame = ctk.CTkFrame(self, height=40, corner_radius=0, fg_color="transparent")
+        self.menu_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 5))
         
         # Danh sách nút Text với callback và màu sắc riêng
         text_btns = [
-            ("Dò Tone", self.on_do_tone, "#3B82F6"),  # Blue
-            ("Lấy Tone", self.on_lay_tone, "#8B5CF6"),  # Purple
-            ("Tone Auto", self.on_tone_auto, "#10B981"),  # Green
-            ("Bè", self.on_be, "#A855F7"),  # Purple - sẽ thay đổi màu khi toggle
-            ("Vang", self.on_vang, "#EAB308"),  # Yellow - sẽ thay đổi màu khi toggle
-            ("Nhạc", self.on_nhac, "#3B8ED0"),  # Blue
-            ("Fix Méo", self.on_fix_meo, "#F59E0B"),  # Orange
-            ("Chấm điểm", self.on_score, "#EC4899")  # Pink - Nút chấm điểm mới
+            ("Dò Tone", self.on_do_tone, COLORS["primary"]),  # Blue
+            ("Lấy Tone", self.on_lay_tone, COLORS["primary_hover"]),  # Purple
+            ("Tone Auto", self.on_tone_auto, COLORS["success"]),  # Green
+            ("Bè", self.on_be, COLORS["primary_hover"]),  # Purple
+            ("Vang", self.on_vang, COLORS["warning"]),  # Yellow
+            ("Nhạc", self.on_nhac, COLORS["primary"]),  # Blue
+            ("Fix Méo", self.on_fix_meo, COLORS["warning_hover"]),  # Orange
+            ("Chấm điểm", self.on_score, COLORS["danger"])  # Pink
         ]
         
         # Tạo nhóm nút Text (Bên trái) với màu sắc
@@ -856,8 +1380,8 @@ class MainDashboard(ctk.CTk):
             btn = ColorButton(
                 self.menu_frame, 
                 text=btn_text,
-                width=80, 
-                height=32,
+                width=75, 
+                height=30,
                 color=color,
                 font=("Inter", 13, "bold"),
                 command=callback
@@ -874,11 +1398,11 @@ class MainDashboard(ctk.CTk):
 
         # Danh sách nút Icon với callback và màu sắc riêng
         icon_btns = [
-            {"icon": "🔍", "color": "#06B6D4", "callback": None},  # Cyan - Voice search
-            {"icon": "💾", "color": "#10B981", "callback": self.on_save},  # Green - Save song
-            {"icon": "📋", "color": "#8B5CF6", "callback": self._show_songs_list},  # Purple - Songs list
-            {"icon": "📂", "color": "#6366F1", "callback": self.on_open},  # Indigo - Open file
-            {"icon": "⏺️", "color": "#EF4444", "callback": self.on_record}  # Red - Record
+            {"icon": "🔍", "color": COLORS["primary"], "callback": None},  # Cyan
+            {"icon": "💾", "color": COLORS["success"], "callback": self.on_save},  # Green
+            {"icon": "📋", "color": COLORS["primary_hover"], "callback": self._show_songs_list},  # Purple
+            {"icon": "📂", "color": COLORS["primary"], "callback": self.on_open},  # Indigo
+            {"icon": "⏺️", "color": COLORS["danger"], "callback": self.on_record}  # Red
         ]
 
         # Tạo nhóm nút Icon (Bên phải) với màu sắc
@@ -886,13 +1410,15 @@ class MainDashboard(ctk.CTk):
             btn = ColorButton(
                 self.menu_frame,
                 text=item["icon"],
-                width=40,
-                height=32,
+                width=35,
+                height=30,
                 color=item["color"],
                 font=("Segoe UI Emoji", 18),
                 command=item["callback"]
             )
             btn.pack(side="right", padx=(5, 0))
+            if item["icon"] == "⏺️":
+                self.record_button = btn
     
     # --- CALLBACKS CHO MENU BUTTONS ---
     def on_do_tone(self):
@@ -904,7 +1430,7 @@ class MainDashboard(ctk.CTk):
             
             # Đổi nút về trạng thái ban đầu
             if hasattr(self, 'do_tone_button'):
-                self.do_tone_button.configure(fg_color="#3B82F6")  # Blue
+                self.do_tone_button.configure(fg_color=COLORS["primary"])  # Blue
                 self.do_tone_button.configure(text="Dò Tone")
             
             # Ẩn indicator
@@ -915,7 +1441,7 @@ class MainDashboard(ctk.CTk):
             
             # Đổi nút thành trạng thái đang chạy
             if hasattr(self, 'do_tone_button'):
-                self.do_tone_button.configure(fg_color="#EF4444")  # Red
+                self.do_tone_button.configure(fg_color=COLORS["danger"])  # Red
                 self.do_tone_button.configure(text="⏹ Dừng")
             
             # Hiện indicator live
@@ -933,7 +1459,7 @@ class MainDashboard(ctk.CTk):
         if not self.autokey_active:
             return
         self._autokey_dot_visible = not self._autokey_dot_visible
-        color = "#22C55E" if self._autokey_dot_visible else "#0f172a"
+        color = COLORS["success"] if self._autokey_dot_visible else COLORS["bg_main"]
         try:
             self.autokey_dot.configure(text_color=color)
         except:
@@ -956,7 +1482,7 @@ class MainDashboard(ctk.CTk):
             # AutoKey đã dừng từ backend
             self.autokey_active = False
             if hasattr(self, 'do_tone_button'):
-                self.do_tone_button.configure(fg_color="#3B82F6", text="Dò Tone")
+                self.do_tone_button.configure(fg_color=COLORS["primary"], text="Dò Tone")
             try:
                 self.autokey_indicator_frame.pack_forget()
             except:
@@ -967,7 +1493,7 @@ class MainDashboard(ctk.CTk):
             # Im lặng, đang lắng nghe
             self.autokey_key_label.configure(
                 text=result.get('key_display', '...'),
-                text_color="#64748B"
+                text_color=COLORS["text_muted"]
             )
             self.autokey_scale_label.configure(text="")
             self.autokey_conf_label.configure(text="🎙️")
@@ -981,7 +1507,7 @@ class MainDashboard(ctk.CTk):
             key_changed = result.get('key_changed', False)
             
             # Cập nhật indicator
-            text_color = "#22C55E" if key_changed else "#F8FAFC"
+            text_color = COLORS["success"] if key_changed else COLORS["text_main"]
             self.autokey_key_label.configure(text=key_display, text_color=text_color)
             
             # Scale (Trưởng/Thứ)
@@ -999,8 +1525,26 @@ class MainDashboard(ctk.CTk):
                     pass
     
     def on_lay_tone(self):
-        # Chỉ gửi MIDI CC
-        self.engine.send_midi(MIDI_CC["lay_tone"], 127)
+        """Mở dialog Dò Tone Thủ Công"""
+        # Callback cập nhật UI khi tone thay đổi
+        def on_tone_detected(result):
+            if result:
+                key_display = result.get('key_display', 'C')
+                try:
+                    if hasattr(self, 'tone_option'):
+                        self.after(0, lambda: [
+                            self.tone_option.set(key_display),
+                            setattr(self, 'current_tone', key_display),
+                            self.on_tone_selected(key_display)
+                        ])
+                except:
+                    pass
+        
+        ManualToneDialog(
+            self,
+            engine=self.engine,
+            on_tone_detected_callback=on_tone_detected
+        )
     
     def on_tone_auto(self):
         # Chỉ gửi MIDI CC
@@ -1015,9 +1559,9 @@ class MainDashboard(ctk.CTk):
         # Cập nhật màu button để hiển thị trạng thái
         if hasattr(self, 'be_button'):
             if self.be_state:
-                self.be_button.configure(fg_color="#10B981")  # Green khi ON
+                self.be_button.configure(fg_color=COLORS["success"])  # Green khi ON
             else:
-                self.be_button.configure(fg_color="#A855F7")  # Purple khi OFF
+                self.be_button.configure(fg_color=COLORS["primary_hover"])  # Purple khi OFF
     
     def on_vang(self):
         """Toggle button Vang: bật/tắt"""
@@ -1028,9 +1572,9 @@ class MainDashboard(ctk.CTk):
         # Cập nhật màu button để hiển thị trạng thái
         if hasattr(self, 'vang_button'):
             if self.vang_state:
-                self.vang_button.configure(fg_color="#10B981")  # Green khi ON
+                self.vang_button.configure(fg_color=COLORS["success"])  # Green khi ON
             else:
-                self.vang_button.configure(fg_color="#EAB308")  # Yellow khi OFF
+                self.vang_button.configure(fg_color=COLORS["warning"])  # Yellow khi OFF
     
     def on_nhac(self):
         # Chỉ gửi MIDI CC
@@ -1062,7 +1606,7 @@ class MainDashboard(ctk.CTk):
             main_frame,
             text="🎵 ĐANG DÒ TONE",
             font=("Inter", 20, "bold"),
-            text_color="#3B82F6"
+            text_color=COLORS["primary"]
         ).pack(pady=(10, 5))
         
         # Status label
@@ -1070,7 +1614,7 @@ class MainDashboard(ctk.CTk):
             main_frame,
             text="🔊 Đang lắng nghe bài hát...",
             font=("Inter", 14),
-            text_color="#94A3B8"
+            text_color=COLORS["text_muted"]
         )
         self._tone_status.pack(pady=5)
         
@@ -1079,7 +1623,7 @@ class MainDashboard(ctk.CTk):
             main_frame,
             text=f"{RECORD_DURATION}",
             font=("Inter", 48, "bold"),
-            text_color="#22C55E"
+            text_color=COLORS["success"]
         )
         self._tone_countdown.pack(pady=5)
         
@@ -1088,7 +1632,7 @@ class MainDashboard(ctk.CTk):
             main_frame,
             text="💡 Hãy đảm bảo bài hát đang phát trên loa/headphone",
             font=("Inter", 11),
-            text_color="#64748B",
+            text_color=COLORS["text_muted"],
             wraplength=380
         ).pack(pady=(5, 0))
         
@@ -1096,7 +1640,7 @@ class MainDashboard(ctk.CTk):
         self._tone_progress = ctk.CTkProgressBar(main_frame, width=350, height=8)
         self._tone_progress.pack(pady=10)
         self._tone_progress.set(0)
-        self._tone_progress.configure(progress_color="#3B82F6")
+        self._tone_progress.configure(progress_color=COLORS["primary"])
         
         # Callback cập nhật countdown trên UI (gọi từ background thread)
         def on_progress(seconds_remaining):
@@ -1165,18 +1709,18 @@ class MainDashboard(ctk.CTk):
             main_frame,
             text=header_text,
             font=("Inter", 22, "bold"),
-            text_color="#3B82F6"
+            text_color=COLORS["primary"]
         ).pack(pady=(10, 15))
         
         # Key display lớn
-        key_frame = ctk.CTkFrame(main_frame, fg_color="#1e293b", corner_radius=15)
+        key_frame = ctk.CTkFrame(main_frame, fg_color=COLORS["bg_card"], corner_radius=15)
         key_frame.pack(pady=10, padx=30)
         
         ctk.CTkLabel(
             key_frame,
             text="TONE",
             font=("Inter", 12),
-            text_color="#94A3B8"
+            text_color=COLORS["text_muted"]
         ).pack(pady=(15, 0))
         
         key_display = result.get("key_display", "?")
@@ -1184,7 +1728,7 @@ class MainDashboard(ctk.CTk):
             key_frame,
             text=key_display,
             font=("Inter", 48, "bold"),
-            text_color="#22C55E"
+            text_color=COLORS["success"]
         ).pack(pady=(5, 5))
         
         scale_text = "Trưởng (Major)" if result.get("scale") == "Major" else "Thứ (Minor)"
@@ -1192,7 +1736,7 @@ class MainDashboard(ctk.CTk):
             key_frame,
             text=scale_text,
             font=("Inter", 14),
-            text_color="#94A3B8"
+            text_color=COLORS["text_muted"]
         ).pack(pady=(0, 15))
         
         # Confidence bar
@@ -1206,13 +1750,13 @@ class MainDashboard(ctk.CTk):
             conf_frame,
             text=f"Độ chính xác: {confidence_pct:.1f}%",
             font=("Inter", 13),
-            text_color="#94A3B8"
+            text_color=COLORS["text_muted"]
         ).pack(anchor="w", pady=(0, 5))
         
         conf_bar = ctk.CTkProgressBar(conf_frame, width=350, height=15)
         conf_bar.pack(fill="x")
         conf_bar.set(max(0, min(1, confidence)))
-        conf_color = "#22C55E" if confidence >= 0.7 else ("#EAB308" if confidence >= 0.5 else "#EF4444")
+        conf_color = COLORS["success"] if confidence >= 0.7 else (COLORS["warning"] if confidence >= 0.5 else COLORS["danger"])
         conf_bar.configure(progress_color=conf_color)
         
         # Timeline chuyển tone (nếu có)
@@ -1225,7 +1769,7 @@ class MainDashboard(ctk.CTk):
                 tl_frame,
                 text="⏱️ Chuyển tone:",
                 font=("Inter", 12, "bold"),
-                text_color="#94A3B8"
+                text_color=COLORS["text_muted"]
             ).pack(anchor="w", pady=(0, 3))
             
             prev_key = None
@@ -1240,7 +1784,7 @@ class MainDashboard(ctk.CTk):
                         tl_frame,
                         text=f"  {marker} {time_str}: {entry['key_display']}",
                         font=("Inter", 11),
-                        text_color="#22C55E" if prev_key is None else "#EAB308"
+                        text_color=COLORS["success"] if prev_key is None else COLORS["warning"]
                     ).pack(anchor="w", pady=1)
                     prev_key = entry['key_display']
         
@@ -1254,12 +1798,12 @@ class MainDashboard(ctk.CTk):
                 alt_frame,
                 text="Các tone có thể:",
                 font=("Inter", 12, "bold"),
-                text_color="#94A3B8"
+                text_color=COLORS["text_muted"]
             ).pack(anchor="w", pady=(0, 3))
             
             for r in top_results[:3]:
                 corr_pct = max(0, min(100, r["correlation"] * 100))
-                color = "#22C55E" if r == top_results[0] else "#64748B"
+                color = COLORS["success"] if r == top_results[0] else COLORS["text_muted"]
                 ctk.CTkLabel(
                     alt_frame,
                     text=f"  {r['key']}: {corr_pct:.1f}%",
@@ -1272,7 +1816,7 @@ class MainDashboard(ctk.CTk):
             main_frame,
             text="📤 Đã gửi MIDI đến Auto-Tune trên Studio One",
             font=("Inter", 11),
-            text_color="#10B981"
+            text_color=COLORS["success"]
         ).pack(pady=8)
         
         ctk.CTkButton(
@@ -1294,11 +1838,103 @@ class MainDashboard(ctk.CTk):
             self.engine.launch_app(self.settings["studio_one_path"])
     
     def on_record(self):
-        """Bật/tắt recording"""
+        """Bật/tắt recording + capture loopback audio"""
         self.is_recording = not self.is_recording
-        # Record vẫn dùng hotkey vì chưa có MIDI CC mapping
-        # Có thể thêm MIDI CC cho record nếu cần
         self.engine.send_hotkey(["ctrl", "shift", "r"])
+        
+        if self.is_recording:
+            # Bắt đầu báo hiệu thu âm + capture audio
+            self._start_record_animation()
+            if hasattr(self, 'status_indicator'):
+                self.status_indicator.configure(text="Đang thu âm...", text_color=COLORS["danger"])
+            self._start_audio_capture()
+        else:
+            # Dừng capture + báo hiệu
+            self._stop_audio_capture()
+            self._stop_record_animation()
+            self.update_midi_status()
+            # Hỏi chấm điểm
+            self.after(500, self._ask_scoring_after_record)
+    
+    def _start_audio_capture(self):
+        """Bắt đầu capture audio loopback khi recording"""
+        self._recorded_audio = None
+        self._capture_active = True
+        
+        import threading
+        def capture_loop():
+            try:
+                import soundcard as sc
+                import numpy as np
+                
+                default_speaker = sc.default_speaker()
+                loopback_mic = None
+                
+                all_mics = sc.all_microphones(include_loopback=True)
+                speaker_name = default_speaker.name if default_speaker else ""
+                for mic in all_mics:
+                    if hasattr(mic, 'isloopback') and mic.isloopback:
+                        if speaker_name and speaker_name.lower() in mic.name.lower():
+                            loopback_mic = mic
+                
+                if not loopback_mic:
+                    try:
+                        loopback_mic = sc.get_microphone(id=str(default_speaker.name), include_loopback=True)
+                    except:
+                        pass
+                
+                if not loopback_mic:
+                    print("⚠️ [CAPTURE] Không tìm thấy loopback, bỏ qua capture")
+                    return
+                
+                print(f"🎤 [CAPTURE] Bắt đầu capture: {loopback_mic.name}")
+                sample_rate = 44100
+                chunks = []
+                
+                with loopback_mic.recorder(samplerate=sample_rate, channels=1) as recorder:
+                    while self._capture_active:
+                        chunk = recorder.record(numframes=sample_rate)  # 1 second chunks
+                        chunks.append(chunk)
+                
+                if chunks:
+                    audio = np.concatenate(chunks, axis=0)
+                    if audio.ndim > 1:
+                        audio = audio[:, 0]
+                    self._recorded_audio = audio.astype(np.float32)
+                    self._recorded_sample_rate = sample_rate
+                    duration = len(self._recorded_audio) / sample_rate
+                    print(f"✅ [CAPTURE] Thu được {duration:.1f}s audio")
+            except Exception as e:
+                print(f"⚠️ [CAPTURE] Lỗi capture: {e}")
+        
+        threading.Thread(target=capture_loop, daemon=True).start()
+    
+    def _stop_audio_capture(self):
+        """Dừng capture audio"""
+        self._capture_active = False
+            
+    def _start_record_animation(self):
+        self._record_blink_state = True
+        self._animate_record_button()
+        
+    def _animate_record_button(self):
+        if not getattr(self, "is_recording", False):
+            return
+            
+        if hasattr(self, "record_button"):
+            color = COLORS["danger"] if self._record_blink_state else COLORS["bg_main"]
+            text_icon = "⏸️" if self._record_blink_state else "⏺️"
+            self.record_button.base_color = color
+            self.record_button.configure(fg_color=color, text=text_icon)
+            self._record_blink_state = not self._record_blink_state
+            
+        self.after(600, self._animate_record_button)
+        
+    def _stop_record_animation(self):
+        if hasattr(self, "record_button"):
+            color = COLORS["danger"]
+            self.record_button.base_color = color
+            self.record_button.configure(fg_color=color, text="⏺️")
     
     def on_score(self):
         """Chấm điểm sau khi hát - Hiển thị dialog chọn nguồn"""
@@ -1313,7 +1949,7 @@ class MainDashboard(ctk.CTk):
             source_dialog,
             text="🎤 Chọn nguồn audio để chấm điểm",
             font=("Inter", 18, "bold"),
-            text_color="#22C55E"
+            text_color=COLORS["success"]
         ).pack(pady=20)
         
         button_frame = ctk.CTkFrame(source_dialog, fg_color="transparent")
@@ -1332,7 +1968,7 @@ class MainDashboard(ctk.CTk):
             text="📁 Chọn file audio",
             width=180,
             height=50,
-            color="#3B82F6",
+            color=COLORS["primary"],
             font=("Inter", 14, "bold"),
             command=choose_file
         ).pack(side="left", padx=10)
@@ -1342,7 +1978,7 @@ class MainDashboard(ctk.CTk):
             text="▶️ YouTube URL",
             width=180,
             height=50,
-            color="#EF4444",
+            color=COLORS["danger"],
             font=("Inter", 14, "bold"),
             command=choose_youtube
         ).pack(side="left", padx=10)
@@ -1353,6 +1989,132 @@ class MainDashboard(ctk.CTk):
             command=source_dialog.destroy,
             width=100
         ).pack(pady=20)
+    
+    def _ask_scoring_after_record(self):
+        """Hỏi người dùng có muốn chấm điểm sau thu âm không"""
+        ask_dialog = ctk.CTkToplevel(self)
+        ask_dialog.title("🎤 Chấm điểm")
+        ask_dialog.geometry("420x200")
+        ask_dialog.attributes("-topmost", True)
+        ask_dialog.transient(self)
+        
+        ctk.CTkLabel(
+            ask_dialog,
+            text="✅ Đã hoàn thành thu âm!",
+            font=("Inter", 18, "bold"),
+            text_color=COLORS["success"]
+        ).pack(pady=(25, 5))
+        
+        ctk.CTkLabel(
+            ask_dialog,
+            text="Bạn có muốn chấm điểm không?",
+            font=("Inter", 14),
+            text_color=COLORS["text_muted"]
+        ).pack(pady=5)
+        
+        btn_frame = ctk.CTkFrame(ask_dialog, fg_color="transparent")
+        btn_frame.pack(pady=20)
+        
+        def do_score():
+            ask_dialog.destroy()
+            self._score_recorded_audio()
+        
+        ColorButton(
+            btn_frame,
+            text="🎤 Chấm điểm",
+            width=150,
+            height=45,
+            color=COLORS["success"],
+            font=("Inter", 14, "bold"),
+            command=do_score
+        ).pack(side="left", padx=10)
+        
+        ctk.CTkButton(
+            btn_frame,
+            text="Bỏ qua",
+            width=100,
+            height=45,
+            font=("Inter", 14),
+            command=ask_dialog.destroy
+        ).pack(side="left", padx=10)
+    
+    def _score_recorded_audio(self):
+        """Chấm điểm trực tiếp audio vừa thu âm (loopback capture)"""
+        recorded = getattr(self, '_recorded_audio', None)
+        
+        if recorded is None or len(recorded) == 0:
+            self._show_error("Không capture được audio. Vui lòng chọn file thủ công.")
+            self._score_from_file()
+            return
+        
+        # Animated loading dialog
+        processing_dialog = ctk.CTkToplevel(self)
+        processing_dialog.title("")
+        processing_dialog.geometry("380x250")
+        processing_dialog.attributes("-topmost", True)
+        processing_dialog.transient(self)
+        processing_dialog.overrideredirect(True)
+        
+        processing_dialog.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - 380) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - 250) // 2
+        processing_dialog.geometry(f"380x250+{x}+{y}")
+        
+        main_frame = ctk.CTkFrame(processing_dialog, corner_radius=15)
+        main_frame.pack(fill="both", expand=True, padx=2, pady=2)
+        
+        self._spinner_idx = 0
+        spinner_label = ctk.CTkLabel(main_frame, text="🎵", font=("Segoe UI Emoji", 40))
+        spinner_label.pack(pady=(25, 10))
+        
+        status_label = ctk.CTkLabel(
+            main_frame, text="Đang chấm điểm...",
+            font=("Inter", 16, "bold"), text_color=COLORS["primary"]
+        )
+        status_label.pack(pady=5)
+        
+        progress = ctk.CTkProgressBar(main_frame, width=280, mode="indeterminate")
+        progress.pack(pady=10)
+        progress.start()
+        
+        ctk.CTkLabel(
+            main_frame, text="Phân tích bản thu âm vừa ghi",
+            font=("Inter", 11), text_color=COLORS["text_muted"]
+        ).pack(pady=5)
+        
+        def animate_spinner():
+            if not processing_dialog.winfo_exists():
+                return
+            notes = ["🎵", "🎶", "🎤", "🎧", "🎵"]
+            self._spinner_idx = (self._spinner_idx + 1) % len(notes)
+            spinner_label.configure(text=notes[self._spinner_idx])
+            processing_dialog.after(400, animate_spinner)
+        
+        processing_dialog.after(400, animate_spinner)
+        
+        import threading
+        def score_thread():
+            try:
+                scoring_engine = backend.ScoringEngine()
+                scoring_engine.load_audio_data(recorded, getattr(self, '_recorded_sample_rate', 44100))
+                
+                result = scoring_engine.calculate_score(quick=True)
+                
+                self.after(0, processing_dialog.destroy)
+                
+                if result:
+                    print(f"✅ [CHẤM ĐIỂM] Điểm: {result.get('total_score', 0):.1f}")
+                    self.current_score = result.get("total_score", 0)
+                    self.after(0, lambda: self.update_score_display(self.current_score))
+                    self.after(300, lambda: ScoringDialog(self, result, animated=True))
+                else:
+                    self.after(100, lambda: self._show_error("Không thể tính điểm."))
+            except Exception as e:
+                print(f"❌ [CHẤM ĐIỂM] Lỗi: {e}")
+                self.after(0, processing_dialog.destroy)
+                self.after(100, lambda: self._show_error(f"Lỗi: {str(e)}"))
+        
+        threading.Thread(target=score_thread, daemon=True).start()
     
     def _score_from_file(self):
         """Chấm điểm từ file audio"""
@@ -1385,7 +2147,7 @@ class MainDashboard(ctk.CTk):
             url_dialog,
             text="📺 Nhập URL video YouTube",
             font=("Inter", 16, "bold"),
-            text_color="#EF4444"
+            text_color=COLORS["danger"]
         ).pack(pady=15)
         
         url_entry = ctk.CTkEntry(
@@ -1417,7 +2179,7 @@ class MainDashboard(ctk.CTk):
             button_frame,
             text="Xác nhận",
             width=120,
-            color="#EF4444",
+            color=COLORS["danger"],
             command=process_url
         ).pack(side="left", padx=5)
         
@@ -1432,125 +2194,137 @@ class MainDashboard(ctk.CTk):
         url_entry.bind("<Return>", lambda e: process_url())
     
     def _process_scoring(self, source, is_youtube=False):
-        """Xử lý chấm điểm từ file hoặc YouTube"""
-        # Hiển thị dialog đang xử lý
+        """Xử lý chấm điểm với animation loading"""
+        # Hiển thị dialog đang xử lý với animation
         processing_dialog = ctk.CTkToplevel(self)
-        processing_dialog.title("Đang xử lý...")
-        processing_dialog.geometry("350x180")
+        processing_dialog.title("")
+        processing_dialog.geometry("380x250")
         processing_dialog.attributes("-topmost", True)
         processing_dialog.transient(self)
+        processing_dialog.overrideredirect(True)  # Bỏ title bar
+        
+        # Center dialog
+        processing_dialog.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - 380) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - 250) // 2
+        processing_dialog.geometry(f"380x250+{x}+{y}")
+        
+        main_frame = ctk.CTkFrame(processing_dialog, corner_radius=15)
+        main_frame.pack(fill="both", expand=True, padx=2, pady=2)
+        
+        # Spinner animation text
+        spinner_chars = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█", "▇", "▆", "▅", "▄", "▃", "▂"]
+        self._spinner_idx = 0
+        
+        spinner_label = ctk.CTkLabel(
+            main_frame,
+            text="🎵",
+            font=("Segoe UI Emoji", 40)
+        )
+        spinner_label.pack(pady=(25, 10))
         
         status_label = ctk.CTkLabel(
-            processing_dialog,
-            text="🎤 Đang tải audio..." if is_youtube else "🎤 Đang phân tích audio...",
-            font=("Inter", 16, "bold")
+            main_frame,
+            text="Đang chuẩn bị..." if is_youtube else "Đang phân tích...",
+            font=("Inter", 16, "bold"),
+            text_color=COLORS["primary"]
         )
-        status_label.pack(pady=20)
+        status_label.pack(pady=5)
         
-        progress = ctk.CTkProgressBar(processing_dialog, width=300)
+        progress = ctk.CTkProgressBar(main_frame, width=280, mode="indeterminate")
         progress.pack(pady=10)
-        progress.set(0.1)
+        progress.start()
         
-        # Xử lý trong thread riêng để không block UI
+        detail_label = ctk.CTkLabel(
+            main_frame,
+            text="Vui lòng chờ...",
+            font=("Inter", 11),
+            text_color=COLORS["text_muted"]
+        )
+        detail_label.pack(pady=5)
+        
+        # Spinner animation
+        def animate_spinner():
+            if not processing_dialog.winfo_exists():
+                return
+            notes = ["🎵", "🎶", "🎤", "🎧", "🎵"]
+            self._spinner_idx = (self._spinner_idx + 1) % len(notes)
+            spinner_label.configure(text=notes[self._spinner_idx])
+            processing_dialog.after(400, animate_spinner)
+        
+        processing_dialog.after(400, animate_spinner)
+        
+        # Xử lý trong thread riêng
         def process_audio():
             try:
                 print("=" * 60)
-                print("🎤 [CHẤM ĐIỂM] Bắt đầu chấm điểm thủ công...")
-                print(f"📂 Nguồn: {'YouTube URL' if is_youtube else 'File audio'}")
-                print(f"🔗 Source: {source}")
+                print("🎤 [CHẤM ĐIỂM] Bắt đầu chấm điểm...")
                 
                 scoring_engine = backend.ScoringEngine()
                 
-                # Tải audio từ YouTube hoặc load từ file
                 if is_youtube:
                     try:
-                        status_label.configure(text="📥 Đang tải từ YouTube...")
-                        progress.set(0.2)
+                        self.after(0, lambda: status_label.configure(text="Đang tải từ YouTube..."))
+                        self.after(0, lambda: detail_label.configure(text="Tải audio từ video"))
                         
                         audio_path = scoring_engine.download_youtube_audio(source)
                         if not audio_path:
-                            print("❌ [CHẤM ĐIỂM] Không thể tải audio từ YouTube")
-                            processing_dialog.destroy()
-                            self._show_error("Không thể tải audio từ YouTube. Vui lòng kiểm tra URL.")
+                            self.after(0, processing_dialog.destroy)
+                            self.after(100, lambda: self._show_error("Không thể tải audio từ YouTube."))
                             return
                         
-                        status_label.configure(text="🎤 Đang phân tích audio...")
-                        progress.set(0.5)
-                    except ImportError as e:
-                        print(f"❌ [CHẤM ĐIỂM] Lỗi import: {e}")
-                        processing_dialog.destroy()
-                        self._show_error(str(e))
-                        return
+                        self.after(0, lambda: status_label.configure(text="Đang phân tích..."))
+                        self.after(0, lambda: detail_label.configure(text="Phân tích chất lượng âm thanh"))
                     except Exception as e:
-                        print(f"❌ [CHẤM ĐIỂM] Lỗi tải YouTube: {e}")
-                        processing_dialog.destroy()
-                        self._show_error(f"Lỗi tải YouTube: {str(e)}")
+                        self.after(0, processing_dialog.destroy)
+                        self.after(100, lambda: self._show_error(f"Lỗi tải YouTube: {str(e)}"))
                         return
                 else:
                     audio_path = source
-                    progress.set(0.3)
-                    print(f"📂 [CHẤM ĐIỂM] Sử dụng file audio: {audio_path}")
                 
                 # Load audio
                 try:
+                    self.after(0, lambda: detail_label.configure(text="Đọc dữ liệu âm thanh..."))
                     if not scoring_engine.load_audio(audio_path):
-                        print("❌ [CHẤM ĐIỂM] Không thể load audio file")
-                        processing_dialog.destroy()
-                        self._show_error("Không thể load file audio. Vui lòng kiểm tra file.")
+                        self.after(0, processing_dialog.destroy)
+                        self.after(100, lambda: self._show_error("Không thể load file audio."))
                         return
                 except ImportError as e:
-                    print(f"❌ [CHẤM ĐIỂM] Lỗi import: {e}")
-                    processing_dialog.destroy()
-                    self._show_error(str(e))
+                    self.after(0, processing_dialog.destroy)
+                    self.after(100, lambda: self._show_error(str(e)))
                     return
                 
-                progress.set(0.7)
-                status_label.configure(text="📊 Đang tính điểm...")
+                self.after(0, lambda: status_label.configure(text="Đang tính điểm..."))
+                self.after(0, lambda: detail_label.configure(text="Đánh giá độ chính xác và ổn định"))
                 
-                # Tính điểm
-                print("🧮 [CHẤM ĐIỂM] Đang tính điểm...")
-                result = scoring_engine.calculate_score()
+                # Tính điểm (quick mode - nhẹ tay và nhanh)
+                result = scoring_engine.calculate_score(quick=True)
                 
-                # Cleanup temp file nếu là YouTube
                 if is_youtube:
-                    print("🧹 [CHẤM ĐIỂM] Đang dọn dẹp file tạm...")
                     scoring_engine.cleanup_temp_file()
                 
-                progress.set(1.0)
-                processing_dialog.destroy()
+                # Đóng processing dialog
+                self.after(0, processing_dialog.destroy)
                 
                 if result:
-                    print("=" * 60)
-                    print("✅ [CHẤM ĐIỂM] Kết quả chấm điểm:")
-                    print(f"   📊 Điểm tổng: {result.get('total_score', 0):.1f}")
-                    print(f"   🎵 Pitch accuracy: {result.get('pitch_accuracy', 0):.1f}")
-                    print(f"   📈 Pitch stability: {result.get('pitch_stability', 0):.1f}")
-                    print(f"   🔊 Volume consistency: {result.get('volume_consistency', 0):.1f}")
-                    print(f"   ⏱️  Timing accuracy: {result.get('timing_accuracy', 0):.1f}")
-                    print(f"   💬 Feedback: {result.get('feedback', 'N/A')}")
-                    print("=" * 60)
+                    print(f"✅ [CHẤM ĐIỂM] Điểm tổng: {result.get('total_score', 0):.1f}")
                     
-                    # Lưu điểm số và cập nhật hiển thị
                     self.current_score = result.get("total_score", 0)
-                    self.update_score_display(self.current_score)
+                    self.after(0, lambda: self.update_score_display(self.current_score))
                     
-                    # Hiển thị kết quả
-                    ScoringDialog(self, result)
+                    # Hiển kết quả với animation
+                    self.after(300, lambda: ScoringDialog(self, result, animated=True))
                 else:
-                    print("❌ [CHẤM ĐIỂM] Không thể tính điểm")
-                    self._show_error("Không thể tính điểm. Vui lòng thử lại.")
+                    self.after(100, lambda: self._show_error("Không thể tính điểm."))
             except Exception as e:
-                print("=" * 60)
                 print(f"❌ [CHẤM ĐIỂM] Lỗi: {e}")
                 import traceback
-                print(traceback.format_exc())
-                print("=" * 60)
-                processing_dialog.destroy()
-                self._show_error(f"Lỗi: {str(e)}")
+                traceback.print_exc()
+                self.after(0, processing_dialog.destroy)
+                self.after(100, lambda: self._show_error(f"Lỗi: {str(e)}"))
         
         import threading
-        thread = threading.Thread(target=process_audio, daemon=True)
-        thread.start()
+        threading.Thread(target=process_audio, daemon=True).start()
     
     def _show_error(self, message):
         """Hiển thị thông báo lỗi"""
@@ -1564,7 +2338,7 @@ class MainDashboard(ctk.CTk):
             error_dialog,
             text=message,
             font=("Inter", 14),
-            text_color="#EF4444",
+            text_color=COLORS["danger"],
             wraplength=350
         ).pack(pady=30, padx=20)
         
@@ -1576,95 +2350,123 @@ class MainDashboard(ctk.CTk):
         ).pack(pady=10)
     
     def _show_save_song_dialog(self):
-        """Dialog lưu bài hát"""
+        """Lưu bài hát nhanh - tự động lấy URL, title, tone"""
+        auto_url = getattr(self.engine, 'current_youtube_url', '') or ''
+        auto_tone = getattr(self, 'current_tone', 'C')
+        if hasattr(self, 'tone_option'):
+            auto_tone = self.tone_option.get()
+        
+        # Nếu có URL đang phát → lưu thẳng
+        if auto_url:
+            auto_title = ''
+            # Thử lấy title từ manual timeline
+            timeline_data = backend.ManualToneTimeline.load_timeline(auto_url)
+            if timeline_data:
+                auto_title = timeline_data.get('title', '')
+                tl = timeline_data.get('timeline', [])
+                if tl:
+                    auto_tone = tl[0].get('key_display', auto_tone)
+            
+            # Nếu chưa có title, lấy từ YouTube
+            if not auto_title:
+                try:
+                    import yt_dlp
+                    ydl_opts = {'quiet': True, 'no_warnings': True, 'skip_download': True}
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(auto_url, download=False)
+                        auto_title = info.get('title', 'Bài hát không tên')
+                except:
+                    auto_title = 'Bài hát không tên'
+            
+            if backend.SongManager.add_song(auto_title, auto_url, auto_tone):
+                success_label = ctk.CTkLabel(
+                    self,
+                    text=f"✅ Đã lưu: {auto_title[:40]}",
+                    text_color=COLORS["success"],
+                    font=("Inter", 12, "bold")
+                )
+                success_label.place(relx=0.5, rely=0.1, anchor="center")
+                self.after(2500, success_label.destroy)
+            else:
+                self._show_error("Lỗi khi lưu bài hát")
+            return
+        
+        # Không có URL đang phát → dialog nhập URL
         save_dialog = ctk.CTkToplevel(self)
         save_dialog.title("💾 Lưu bài hát")
-        save_dialog.geometry("500x300")
+        save_dialog.geometry("500x200")
         save_dialog.attributes("-topmost", True)
         save_dialog.transient(self)
         
         ctk.CTkLabel(
             save_dialog,
-            text="💾 Lưu bài hát",
-            font=("Inter", 20, "bold"),
-            text_color="#10B981"
+            text="💾 Nhập URL bài hát cần lưu",
+            font=("Inter", 18, "bold"),
+            text_color=COLORS["success"]
         ).pack(pady=15)
         
-        # Tên bài hát
-        title_frame = ctk.CTkFrame(save_dialog, fg_color="transparent")
-        title_frame.pack(fill="x", padx=30, pady=10)
+        url_entry = ctk.CTkEntry(
+            save_dialog, width=440,
+            placeholder_text="https://www.youtube.com/watch?v=...",
+            font=("Inter", 12)
+        )
+        url_entry.pack(padx=30, pady=10)
+        url_entry.focus()
         
-        ctk.CTkLabel(title_frame, text="Tên bài hát:", font=("Inter", 14)).pack(anchor="w", pady=(0, 5))
-        title_entry = ctk.CTkEntry(title_frame, width=440, placeholder_text="Nhập tên bài hát")
-        title_entry.pack(fill="x")
-        
-        # URL YouTube
-        url_frame = ctk.CTkFrame(save_dialog, fg_color="transparent")
-        url_frame.pack(fill="x", padx=30, pady=10)
-        
-        ctk.CTkLabel(url_frame, text="URL YouTube:", font=("Inter", 14)).pack(anchor="w", pady=(0, 5))
-        url_entry = ctk.CTkEntry(url_frame, width=440, placeholder_text="https://www.youtube.com/watch?v=...")
-        url_entry.pack(fill="x")
-        
-        # Tone
-        tone_frame = ctk.CTkFrame(save_dialog, fg_color="transparent")
-        tone_frame.pack(fill="x", padx=30, pady=10)
-        
-        ctk.CTkLabel(tone_frame, text="Tone bài hát:", font=("Inter", 14)).pack(anchor="w", pady=(0, 5))
-        music_keys = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B", 
-                     "Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"]
-        tone_option = ctk.CTkOptionMenu(tone_frame, values=music_keys, width=440)
-        tone_option.pack(fill="x")
-        # Sử dụng tone hiện tại từ header
-        current_tone = getattr(self, 'current_tone', 'C')
-        if hasattr(self, 'tone_option'):
-            current_tone = self.tone_option.get()
-        tone_option.set(current_tone)
-        
-        def save_song():
-            title = title_entry.get().strip()
+        def save_from_url():
             url = url_entry.get().strip()
-            tone = tone_option.get()
-            
-            if not title or not url:
-                self._show_error("Vui lòng nhập đầy đủ tên bài hát và URL")
+            if not url or ("youtube.com" not in url and "youtu.be" not in url):
+                self._show_error("Vui lòng nhập URL YouTube hợp lệ")
                 return
             
-            if "youtube.com" not in url and "youtu.be" not in url:
-                self._show_error("URL không hợp lệ. Vui lòng nhập URL YouTube.")
-                return
+            save_dialog.destroy()
+            
+            # Lấy title + tone tự động
+            title = 'Bài hát không tên'
+            tone = auto_tone
+            
+            timeline_data = backend.ManualToneTimeline.load_timeline(url)
+            if timeline_data:
+                title = timeline_data.get('title', title)
+                tl = timeline_data.get('timeline', [])
+                if tl:
+                    tone = tl[0].get('key_display', tone)
+            else:
+                try:
+                    import yt_dlp
+                    ydl_opts = {'quiet': True, 'no_warnings': True, 'skip_download': True}
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                        title = info.get('title', title)
+                except:
+                    pass
             
             if backend.SongManager.add_song(title, url, tone):
-                save_dialog.destroy()
-                # Hiển thị thông báo thành công
                 success_label = ctk.CTkLabel(
                     self,
-                    text="✅ Đã lưu bài hát!",
-                    text_color="#10B981",
+                    text=f"✅ Đã lưu: {title[:40]}",
+                    text_color=COLORS["success"],
                     font=("Inter", 12, "bold")
                 )
                 success_label.place(relx=0.5, rely=0.1, anchor="center")
-                self.after(2000, success_label.destroy)
+                self.after(2500, success_label.destroy)
             else:
                 self._show_error("Lỗi khi lưu bài hát")
         
-        button_frame = ctk.CTkFrame(save_dialog, fg_color="transparent")
-        button_frame.pack(pady=20)
+        btn_frame = ctk.CTkFrame(save_dialog, fg_color="transparent")
+        btn_frame.pack(pady=15)
         
         ColorButton(
-            button_frame,
-            text="💾 Lưu",
-            width=120,
-            color="#10B981",
-            command=save_song
+            btn_frame, text="💾 Lưu", width=120,
+            color=COLORS["success"], command=save_from_url
         ).pack(side="left", padx=5)
         
         ctk.CTkButton(
-            button_frame,
-            text="Hủy",
-            width=120,
+            btn_frame, text="Hủy", width=120,
             command=save_dialog.destroy
         ).pack(side="left", padx=5)
+        
+        url_entry.bind("<Return>", lambda e: save_from_url())
     
     def _show_songs_list(self):
         """Hiển thị danh sách bài hát đã lưu"""
@@ -1672,7 +2474,7 @@ class MainDashboard(ctk.CTk):
         
         list_dialog = ctk.CTkToplevel(self)
         list_dialog.title("📋 Danh sách bài hát")
-        list_dialog.geometry("700x500")
+        list_dialog.geometry("750x500")
         list_dialog.attributes("-topmost", True)
         list_dialog.transient(self)
         
@@ -1684,7 +2486,7 @@ class MainDashboard(ctk.CTk):
             header_frame,
             text="📋 Danh sách bài hát đã lưu",
             font=("Inter", 20, "bold"),
-            text_color="#22C55E"
+            text_color=COLORS["success"]
         ).pack(pady=15)
         
         # Scrollable frame cho danh sách
@@ -1696,7 +2498,7 @@ class MainDashboard(ctk.CTk):
                 scroll_frame,
                 text="Chưa có bài hát nào được lưu",
                 font=("Inter", 14),
-                text_color="#94A3B8"
+                text_color=COLORS["text_muted"]
             ).pack(pady=50)
         else:
             for song in songs:
@@ -1707,20 +2509,46 @@ class MainDashboard(ctk.CTk):
                 info_frame = ctk.CTkFrame(song_frame, fg_color="transparent")
                 info_frame.pack(side="left", fill="both", expand=True, padx=10, pady=10)
                 
+                # Kiểm tra manual timeline
+                song_url = song.get("url", "")
+                has_timeline = False
+                if song_url:
+                    tl_data = backend.ManualToneTimeline.load_timeline(song_url)
+                    has_timeline = tl_data is not None and bool(tl_data.get('timeline'))
+                
+                # Title + badge timeline
+                title_line = ctk.CTkFrame(info_frame, fg_color="transparent")
+                title_line.pack(anchor="w")
+                
                 ctk.CTkLabel(
-                    info_frame,
+                    title_line,
                     text=song.get("title", "Không có tên"),
                     font=("Inter", 14, "bold")
-                ).pack(anchor="w")
+                ).pack(side="left")
+                
+                if has_timeline:
+                    ctk.CTkLabel(
+                        title_line,
+                        text="  🎵",
+                        font=("Segoe UI Emoji", 12),
+                        text_color=COLORS["primary_hover"]
+                    ).pack(side="left")
+                
+                # Info line
+                tone_text = f"Tone: {song.get('tone', 'N/A')}"
+                if has_timeline:
+                    tl_entries = tl_data.get('timeline', [])
+                    tone_text += f" | 🎵 {len(tl_entries)} tone changes"
+                tone_text += f" | {song.get('date_added', '')}"
                 
                 ctk.CTkLabel(
                     info_frame,
-                    text=f"Tone: {song.get('tone', 'N/A')} | {song.get('date_added', '')}",
+                    text=tone_text,
                     font=("Inter", 11),
-                    text_color="#94A3B8"
+                    text_color=COLORS["text_muted"]
                 ).pack(anchor="w", pady=(2, 0))
                 
-                # Nút Play và Delete
+                # Nút Play, Dò Tone và Delete
                 button_frame = ctk.CTkFrame(song_frame, fg_color="transparent")
                 button_frame.pack(side="right", padx=10, pady=10)
                 
@@ -1762,6 +2590,13 @@ class MainDashboard(ctk.CTk):
                             list_dialog.destroy()
                     return play_song
                 
+                def make_edit_tone_func(song_data):
+                    def edit_tone():
+                        url = song_data.get("url", "")
+                        list_dialog.destroy()
+                        ManualToneDialog(self, engine=self.engine, edit_url=url)
+                    return edit_tone
+                
                 def make_delete_func(song_id):
                     def delete_song():
                         if backend.SongManager.delete_song(song_id):
@@ -1774,8 +2609,17 @@ class MainDashboard(ctk.CTk):
                     text="▶️",
                     width=50,
                     height=35,
-                    color="#22C55E",
+                    color=COLORS["success"],
                     command=make_play_func(song)
+                ).pack(side="left", padx=2)
+                
+                ColorButton(
+                    button_frame,
+                    text="✏️",
+                    width=50,
+                    height=35,
+                    color=COLORS["primary_hover"],
+                    command=make_edit_tone_func(song)
                 ).pack(side="left", padx=2)
                 
                 ColorButton(
@@ -1783,7 +2627,7 @@ class MainDashboard(ctk.CTk):
                     text="🗑️",
                     width=50,
                     height=35,
-                    color="#EF4444",
+                    color=COLORS["danger"],
                     command=make_delete_func(song.get("id"))
                 ).pack(side="left", padx=2)
         
@@ -1798,20 +2642,20 @@ class MainDashboard(ctk.CTk):
     
     def setup_body(self):
         self.body_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.body_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        self.body_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 10))
         
         self.body_frame.grid_columnconfigure((0, 1, 2), weight=1)
         self.body_frame.grid_rowconfigure(0, weight=1)
 
         # === 1. CỘT TRÁI: TONE ===
         self.col_left = ctk.CTkFrame(self.body_frame)
-        self.col_left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        self.col_left.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         
         ctk.CTkLabel(
             self.col_left, 
             text="ĐIỀU CHỈNH TONE", 
             font=("Inter", 16, "bold"), 
-            text_color="#22C55E"
+            text_color=COLORS["success"]
         ).pack(pady=15)
 
         # Tone Nhạc
@@ -1822,23 +2666,23 @@ class MainDashboard(ctk.CTk):
 
         # === 2. CỘT GIỮA: MIXER ===
         self.col_center = ctk.CTkFrame(self.body_frame)
-        self.col_center.grid(row=0, column=1, sticky="nsew", padx=10)
+        self.col_center.grid(row=0, column=1, sticky="nsew", padx=5)
         
         ctk.CTkLabel(
             self.col_center, 
             text="MIXER TỔNG", 
             font=("Inter", 16, "bold"), 
-            text_color="#22C55E"
+            text_color=COLORS["success"]
         ).pack(pady=(15, 10))
 
         slider_container = ctk.CTkFrame(self.col_center, fg_color="transparent")
         slider_container.pack(fill="both", expand=True)
 
         mix_config = [
-            {"icon": "🔊", "color": "#3B8ED0", "label": "NHẠC", "cc": "mix_music", "range": (0, 100), "default": 70, "unit": ""},
-            {"icon": "🎙️", "color": "#EF4444", "label": "MIC", "cc": "mix_mic", "range": (-10, 10), "default": 0, "unit": " dB"},
-            {"icon": "📢", "color": "#EAB308", "label": "VANG", "cc": "mix_reverb", "range": (-10, 10), "default": 0, "unit": " dB"},
-            {"icon": "👥", "color": "#A855F7", "label": "BÈ", "cc": "mix_backing", "range": (0, 100), "default": 70, "unit": ""}
+            {"icon": "🔊", "color": COLORS["primary"], "label": "NHẠC", "cc": "mix_music", "range": (0, 100), "default": 70, "unit": ""},
+            {"icon": "🎙️", "color": COLORS["danger"], "label": "MIC", "cc": "mix_mic", "range": (-10, 10), "default": 0, "unit": " dB"},
+            {"icon": "📢", "color": COLORS["warning"], "label": "VANG", "cc": "mix_reverb", "range": (-10, 10), "default": 0, "unit": " dB"},
+            {"icon": "👥", "color": COLORS["primary_hover"], "label": "BÈ", "cc": "mix_backing", "range": (0, 100), "default": 70, "unit": ""}
         ]
         
         for i in range(4): 
@@ -1888,7 +2732,7 @@ class MainDashboard(ctk.CTk):
             slider = ctk.CTkSlider(
                 slider_container, 
                 orientation="vertical", 
-                height=120,
+                height=100,
                 width=20,
                 from_=0, to=100,
                 progress_color=item["color"],
@@ -1916,13 +2760,13 @@ class MainDashboard(ctk.CTk):
 
         # === 3. CỘT PHẢI: CHẾ ĐỘ HÁT ===
         self.col_right = ctk.CTkFrame(self.body_frame)
-        self.col_right.grid(row=0, column=2, sticky="nsew", padx=(10, 0))
+        self.col_right.grid(row=0, column=2, sticky="nsew", padx=(5, 0))
         
         ctk.CTkLabel(
             self.col_right, 
             text="CHẾ ĐỘ HÁT", 
             font=("Inter", 16, "bold"), 
-            text_color="#22C55E"
+            text_color=COLORS["success"]
         ).pack(pady=15)
         
         btn_container = ctk.CTkFrame(self.col_right, fg_color="transparent")
@@ -1930,12 +2774,12 @@ class MainDashboard(ctk.CTk):
         
         # Mode buttons với màu sắc riêng
         modes_config = [
-            ("Đa Thể Loại", "#22C55E"),  # Green
-            ("Bolero", "#F59E0B"),  # Orange
-            ("Dân Ca", "#EF4444"),  # Red
-            ("Lofi", "#8B5CF6"),  # Purple
-            ("Remix", "#EC4899"),  # Pink
-            ("Pop", "#3B82F6")  # Blue
+            ("Đa Thể Loại", COLORS["success"]),  # Green
+            ("Bolero", COLORS["warning"]),  # Orange
+            ("Dân Ca", COLORS["danger"]),  # Red
+            ("Lofi", COLORS["primary_hover"]),  # Purple
+            ("Remix", COLORS["danger_hover"]),  # Pink
+            ("Pop", COLORS["primary"])  # Blue
         ]
         
         btn_container.grid_columnconfigure((0, 1), weight=1)
@@ -1948,7 +2792,7 @@ class MainDashboard(ctk.CTk):
             btn = ColorButton(
                 btn_container, 
                 text=mode, 
-                height=45, 
+                height=40, 
                 font=("Inter", 13, "bold"),
                 color=color,
                 command=lambda m=mode: self.on_mode_selected(m)
@@ -2001,7 +2845,7 @@ class MainDashboard(ctk.CTk):
             text="-", 
             width=40, 
             height=30, 
-            color="#3B82F6",  # Blue
+            color=COLORS["primary"],  # Blue
             command=decrease
         ).pack(side="left", padx=5)
         
@@ -2013,7 +2857,7 @@ class MainDashboard(ctk.CTk):
             text="+", 
             width=40, 
             height=30, 
-            color="#10B981",  # Green
+            color=COLORS["success"],  # Green
             command=increase
         ).pack(side="left", padx=5)
         
@@ -2023,17 +2867,17 @@ class MainDashboard(ctk.CTk):
         """Xử lý khi chọn chế độ hát"""
         # Mode colors mapping
         mode_colors = {
-            "Đa Thể Loại": "#22C55E",  # Green
-            "Bolero": "#F59E0B",  # Orange
-            "Dân Ca": "#EF4444",  # Red
-            "Lofi": "#8B5CF6",  # Purple
-            "Remix": "#EC4899",  # Pink
-            "Pop": "#3B82F6"  # Blue
+            "Đa Thể Loại": COLORS["success"],  # Green
+            "Bolero": COLORS["warning"],  # Orange
+            "Dân Ca": COLORS["danger"],  # Red
+            "Lofi": COLORS["primary_hover"],  # Purple
+            "Remix": COLORS["danger_hover"],  # Pink
+            "Pop": COLORS["primary"]  # Blue
         }
         
         # Cập nhật màu cho nút - làm sáng nút được chọn
         for m, btn in self.mode_buttons.items():
-            base_color = mode_colors.get(m, "#334155")
+            base_color = mode_colors.get(m, COLORS["bg_card_hover"])
             if m == mode:
                 # Làm sáng màu cho mode được chọn
                 btn.base_color = interpolate_color(base_color, "#FFFFFF", 0.2)

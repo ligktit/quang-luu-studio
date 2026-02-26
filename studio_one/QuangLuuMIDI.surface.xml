@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QuangLuuMIDI - Studio One Control Surface Definition
+  Tạo bởi Quang Lưu Studio
+  
+  Cách sử dụng:
+  1. Copy file này vào: %APPDATA%\PreSonus\Studio One 7\User Devices\QuangLuuMIDI\
+  2. Mở Studio One → Options → External Devices → Add
+  3. Chọn "QuangLuuMIDI" từ danh sách
+  4. Chọn MIDI input port: QuangLuuMIDI (loopMIDI)
+  5. Dùng Control Link để gán controls vào parameters
+-->
+<ControlSurface name="QuangLuuMIDI" 
+                manufacturer="QuangLuuStudio" 
+                model="QuangLuuMIDI"
+                protocol="MIDI"
+                version="1.0">
+
+  <Controls>
+    <!-- ============================================ -->
+    <!-- TONE CONTROLS (Knobs - CC 10-11)             -->
+    <!-- ============================================ -->
+    
+    <!-- Tone Nhạc: Pitch shift nhạc nền (-12 đến +12 semitones, mapped 0-127) -->
+    <Control name="toneNhac" title="Tone Nhạc" type="knob" options="receive public">
+      <MidiMessage status="#B0" address="10"/>
+    </Control>
+    
+    <!-- Tone Giọng: Pitch shift giọng hát (-12 đến +12 semitones, mapped 0-127) -->
+    <Control name="toneGiong" title="Tone Giọng" type="knob" options="receive public">
+      <MidiMessage status="#B0" address="11"/>
+    </Control>
+
+    <!-- ============================================ -->
+    <!-- MIXER CONTROLS (Faders - CC 20-23)           -->
+    <!-- ============================================ -->
+    
+    <!-- Mix Nhạc: Volume nhạc nền (0-100%, mapped 0-127) -->
+    <Control name="mixNhac" title="Mix Nhạc" type="fader" options="receive public">
+      <MidiMessage status="#B0" address="20"/>
+    </Control>
+    
+    <!-- Mix Mic: Volume microphone (0-100%, mapped 0-127) -->
+    <Control name="mixMic" title="Mix Mic" type="fader" options="receive public">
+      <MidiMessage status="#B0" address="21"/>
+    </Control>
+    
+    <!-- Mix Vang: Reverb level (0-100%, mapped 0-127) -->
+    <Control name="mixVang" title="Mix Vang" type="fader" options="receive public">
+      <MidiMessage status="#B0" address="22"/>
+    </Control>
+    
+    <!-- Mix Bè: Backing vocal level (0-100%, mapped 0-127) -->
+    <Control name="mixBe" title="Mix Bè" type="fader" options="receive public">
+      <MidiMessage status="#B0" address="23"/>
+    </Control>
+
+    <!-- ============================================ -->
+    <!-- TONE FUNCTION BUTTONS (CC 30-32)             -->
+    <!-- ============================================ -->
+    
+    <!-- Dò Tone: Bật/tắt chế độ dò tone (0=Off, 127=On) -->
+    <Control name="doTone" title="Dò Tone" type="button" options="receive public">
+      <MidiMessage status="#B0" address="30"/>
+    </Control>
+    
+    <!-- Lấy Tone: Trigger lấy tone (0=Off, 127=On) -->
+    <Control name="layTone" title="Lấy Tone" type="button" options="receive public">
+      <MidiMessage status="#B0" address="31"/>
+    </Control>
+    
+    <!-- Tone Auto: Bật/tắt auto tone (0=Off, 127=On) -->
+    <Control name="toneAuto" title="Tone Auto" type="button" options="receive public">
+      <MidiMessage status="#B0" address="32"/>
+    </Control>
+
+    <!-- ============================================ -->
+    <!-- AUTO-TUNE CONTROLS (CC 34-35)                -->
+    <!-- ============================================ -->
+    
+    <!-- AutoTune Key: Key gốc cho Auto-Tune (0-127, mapped to C-B) -->
+    <Control name="autoTuneKey" title="AutoTune Key" type="knob" options="receive public">
+      <MidiMessage status="#B0" address="34"/>
+    </Control>
+    
+    <!-- AutoTune Scale: Loại scale (0=Major, 127=Minor) -->
+    <Control name="autoTuneScale" title="AutoTune Scale" type="button" options="receive public">
+      <MidiMessage status="#B0" address="35"/>
+    </Control>
+
+    <!-- ============================================ -->
+    <!-- MIXER FUNCTION BUTTONS (CC 40-43)            -->
+    <!-- ============================================ -->
+    
+    <!-- Bè: Bật/tắt backing vocal (0=Off, 127=On) -->
+    <Control name="be" title="Bè" type="button" options="receive public">
+      <MidiMessage status="#B0" address="40"/>
+    </Control>
+    
+    <!-- Vang: Bật/tắt reverb (0=Off, 127=On) -->
+    <Control name="vang" title="Vang" type="button" options="receive public">
+      <MidiMessage status="#B0" address="41"/>
+    </Control>
+    
+    <!-- Nhạc: Bật/tắt nhạc nền (0=Off, 127=On) -->
+    <Control name="nhac" title="Nhạc" type="button" options="receive public">
+      <MidiMessage status="#B0" address="42"/>
+    </Control>
+    
+    <!-- Fix Méo: Bật/tắt fix méo tiếng (0=Off, 127=On) -->
+    <Control name="fixMeo" title="Fix Méo" type="button" options="receive public">
+      <MidiMessage status="#B0" address="43"/>
+    </Control>
+    
+  </Controls>
+  
+</ControlSurface>

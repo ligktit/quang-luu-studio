@@ -39,6 +39,7 @@ SETTINGS_FILE = "settings.json"
 SONGS_FILE = "saved_songs.json"
 ACTIVATION_FILE = "activation.json"
 MIDI_PORT_NAME = "QuangLuuMIDI"
+MANUAL_TIMELINES_FILE = "manual_timelines.json"
 
 
 class ConfigManager:
@@ -196,6 +197,151 @@ class ToneCacheManager:
         cache[video_id] = result
         return ToneCacheManager.save_cache(cache)
 
+class ManualToneTimeline:
+    """Quản lý timeline tone thủ công per YouTube video"""
+    
+    # Danh sách key hợp lệ (khớp với UI tone selector)
+    MAJOR_KEYS = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
+    MINOR_KEYS = ["Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"]
+    ALL_KEYS = MAJOR_KEYS + MINOR_KEYS
+    
+    @staticmethod
+    def parse_key_display(key_display):
+        """
+        Parse key_display (VD: 'Cm', 'D', 'F#m') thành dict {key_index, scale, key_display}.
+        Trả về None nếu key không hợp lệ.
+        """
+        if key_display in ManualToneTimeline.MAJOR_KEYS:
+            key_index = ManualToneTimeline.MAJOR_KEYS.index(key_display)
+            return {"key_index": key_index, "scale": "Major", "key_display": key_display}
+        elif key_display in ManualToneTimeline.MINOR_KEYS:
+            key_index = ManualToneTimeline.MINOR_KEYS.index(key_display)
+            return {"key_index": key_index, "scale": "Minor", "key_display": key_display}
+        return None
+    
+    @staticmethod
+    def parse_time_str(time_str):
+        """
+        Parse thời gian 'MM:SS' hoặc 'H:MM:SS' thành giây (float).
+        Trả về None nếu format sai.
+        """
+        try:
+            parts = time_str.strip().split(':')
+            if len(parts) == 2:
+                minutes, seconds = int(parts[0]), int(parts[1])
+                return minutes * 60 + seconds
+            elif len(parts) == 3:
+                hours, minutes, seconds = int(parts[0]), int(parts[1]), int(parts[2])
+                return hours * 3600 + minutes * 60 + seconds
+        except (ValueError, IndexError):
+            pass
+        return None
+    
+    @staticmethod
+    def seconds_to_time_str(seconds):
+        """Chuyển giây (int/float) thành 'MM:SS'"""
+        seconds = int(seconds)
+        m, s = divmod(seconds, 60)
+        return f"{m}:{s:02d}"
+    
+    @staticmethod
+    def load_all():
+        """Load tất cả manual timelines từ file"""
+        if os.path.exists(MANUAL_TIMELINES_FILE):
+            try:
+                with open(MANUAL_TIMELINES_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+    
+    @staticmethod
+    def _save_all(data):
+        """Lưu tất cả timelines vào file"""
+        try:
+            with open(MANUAL_TIMELINES_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print(f"❌ Lỗi lưu manual timelines: {e}")
+            return False
+    
+    @staticmethod
+    def load_timeline(url):
+        """
+        Load timeline cho 1 URL cụ thể.
+        Trả về dict {url, title, timeline: [{time, key_display, key_index, scale}, ...]} hoặc None.
+        """
+        video_id = ToneCacheManager._extract_video_id(url)
+        if not video_id:
+            return None
+        data = ManualToneTimeline.load_all()
+        return data.get(video_id)
+    
+    @staticmethod
+    def save_timeline(url, title, timeline_entries):
+        """
+        Lưu timeline thủ công.
+        timeline_entries: list of {time: float (giây), key_display: str}
+        """
+        video_id = ToneCacheManager._extract_video_id(url)
+        if not video_id:
+            print("❌ Không thể trích xuất video ID từ URL")
+            return False
+        
+        # Parse và validate từng entry
+        parsed_entries = []
+        for entry in timeline_entries:
+            t = entry.get("time")
+            key_display = entry.get("key_display", "")
+            
+            if t is None or t < 0:
+                continue
+            
+            key_info = ManualToneTimeline.parse_key_display(key_display)
+            if key_info is None:
+                print(f"⚠️ Bỏ qua key không hợp lệ: {key_display}")
+                continue
+            
+            parsed_entries.append({
+                "time": float(t),
+                "key_display": key_info["key_display"],
+                "key_index": key_info["key_index"],
+                "scale": key_info["scale"]
+            })
+        
+        # Sắp xếp theo thời gian
+        parsed_entries.sort(key=lambda x: x["time"])
+        
+        if not parsed_entries:
+            print("⚠️ Không có entry hợp lệ để lưu")
+            return False
+        
+        data = ManualToneTimeline.load_all()
+        data[video_id] = {
+            "url": url,
+            "title": title,
+            "timeline": parsed_entries,
+            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        success = ManualToneTimeline._save_all(data)
+        if success:
+            print(f"✅ Đã lưu manual timeline: {title} ({len(parsed_entries)} entries)")
+        return success
+    
+    @staticmethod
+    def delete_timeline(url):
+        """Xóa timeline theo URL"""
+        video_id = ToneCacheManager._extract_video_id(url)
+        if not video_id:
+            return False
+        data = ManualToneTimeline.load_all()
+        if video_id in data:
+            del data[video_id]
+            return ManualToneTimeline._save_all(data)
+        return False
+
 class SystemEngine:
     def __init__(self, settings=None):
         self.settings = settings or {}
@@ -350,7 +496,7 @@ class SystemEngine:
         try: os.system('taskkill /F /IM "Studio One.exe"')
         except: pass
     
-    def open_youtube_url(self, url, on_video_end_callback=None, on_tone_detected=None):
+    def open_youtube_url(self, url, on_video_end_callback=None, on_tone_detected=None, manual_timeline=None):
         """
         Mở YouTube URL trong browser, tự động dò tone và chấm điểm khi kết thúc
         
@@ -358,6 +504,7 @@ class SystemEngine:
             url: YouTube URL
             on_video_end_callback: Callback(result) khi video kết thúc
             on_tone_detected: Callback(result) khi phát hiện tone/chuyển tone
+            manual_timeline: list of {time, key_display, key_index, scale} - nếu có, ưu tiên replay thủ công
         """
         if not url:
             return
@@ -431,24 +578,41 @@ class SystemEngine:
         
         threading.Thread(target=open_browser, daemon=True).start()
         
-        # Tự động dò tone sau 5s delay
-        def auto_detect_tone():
-            print("🎵 [AUTO TONE] Đợi 5s cho nhạc bắt đầu phát...")
-            time.sleep(5)
-            
-            # Kiểm tra cache trước
-            cached = ToneCacheManager.get_cached_tone(url)
-            if cached:
-                print(f"✅ [AUTO TONE] Đã có cache: {cached.get('primary_key', '?')}")
-                # Replay timeline từ cache
-                self._replay_cached_timeline(cached)
-                return
-            
-            # Không có cache → dò tone liên tục
-            print("🔍 [AUTO TONE] Không có cache, bắt đầu dò tone liên tục...")
-            self.detect_tone_continuous(url=url)
-        
-        threading.Thread(target=auto_detect_tone, daemon=True).start()
+        # Xử lý tone: ưu tiên manual_timeline > cache > auto-detect
+        if manual_timeline:
+            # Có manual timeline → replay thủ công (bỏ qua cache + auto-detect)
+            def replay_manual():
+                print("🎵 [MANUAL TONE] Đợi 5s cho nhạc bắt đầu phát...")
+                time.sleep(5)
+                self._replay_manual_timeline(manual_timeline)
+            threading.Thread(target=replay_manual, daemon=True).start()
+        else:
+            # Kiểm tra manual timeline đã lưu trước
+            saved_manual = ManualToneTimeline.load_timeline(url)
+            if saved_manual and saved_manual.get('timeline'):
+                def replay_saved_manual():
+                    print("🎵 [MANUAL TONE] Đợi 5s cho nhạc bắt đầu phát...")
+                    time.sleep(5)
+                    self._replay_manual_timeline(saved_manual['timeline'])
+                threading.Thread(target=replay_saved_manual, daemon=True).start()
+            else:
+                # Không có manual → auto-detect (logic cũ)
+                def auto_detect_tone():
+                    print("🎵 [AUTO TONE] Đợi 5s cho nhạc bắt đầu phát...")
+                    time.sleep(5)
+                    
+                    # Kiểm tra cache trước
+                    cached = ToneCacheManager.get_cached_tone(url)
+                    if cached:
+                        print(f"✅ [AUTO TONE] Đã có cache: {cached.get('primary_key', '?')}")
+                        self._replay_cached_timeline(cached)
+                        return
+                    
+                    # Không có cache → dò tone liên tục
+                    print("🔍 [AUTO TONE] Không có cache, bắt đầu dò tone liên tục...")
+                    self.detect_tone_continuous(url=url)
+                
+                threading.Thread(target=auto_detect_tone, daemon=True).start()
         
         # Lấy duration của video và tạo timer
         self._start_youtube_monitoring(url)
@@ -1054,6 +1218,65 @@ class SystemEngine:
         
         threading.Thread(target=_replay, daemon=True).start()
     
+    def _replay_manual_timeline(self, timeline):
+        """
+        Replay timeline tone thủ công: gửi MIDI đúng thời điểm.
+        Chạy trong thread riêng.
+        
+        Args:
+            timeline: list of {time, key_display, key_index, scale}
+        """
+        if not timeline:
+            return
+        
+        self.tone_detection_active = True
+        print(f"▶️ [MANUAL REPLAY] Bắt đầu replay thủ công: {len(timeline)} entries")
+        
+        def _replay():
+            prev_time = 0
+            current_key = None
+            
+            for entry in timeline:
+                if not self.tone_detection_active:
+                    break
+                
+                # Đợi đến thời điểm
+                wait = entry['time'] - prev_time
+                if wait > 0:
+                    # Đợi theo chunk 1s để check dừng sớm
+                    for _ in range(int(wait)):
+                        if not self.tone_detection_active:
+                            break
+                        time.sleep(1)
+                    # Đợi phần lẻ
+                    remainder = wait - int(wait)
+                    if remainder > 0 and self.tone_detection_active:
+                        time.sleep(remainder)
+                prev_time = entry['time']
+                
+                if not self.tone_detection_active:
+                    break
+                
+                new_key = entry['key_display']
+                if new_key != current_key:
+                    current_key = new_key
+                    # Gửi MIDI
+                    self._send_tone_midi(entry)
+                    time_str = ManualToneTimeline.seconds_to_time_str(entry['time'])
+                    print(f"▶️ [MANUAL REPLAY] t={time_str}: {new_key}")
+                    
+                    # Callback UI
+                    if self.on_tone_detected_callback:
+                        try:
+                            self.on_tone_detected_callback(entry)
+                        except:
+                            pass
+            
+            self.tone_detection_active = False
+            print("🏁 [MANUAL REPLAY] Kết thúc replay thủ công")
+        
+        threading.Thread(target=_replay, daemon=True).start()
+
 class SongManager:
     """Quản lý danh sách bài hát đã lưu"""
     @staticmethod
@@ -1125,6 +1348,15 @@ class ScoringEngine:
         self.audio_data = None
         self.sample_rate = None
         self.temp_audio_path = None
+    
+    def load_audio_data(self, audio_data, sample_rate=44100):
+        """Load audio trực tiếp từ numpy array (không cần file)"""
+        import numpy as np
+        self.audio_data = audio_data.astype(np.float32)
+        self.sample_rate = sample_rate
+        duration = len(self.audio_data) / self.sample_rate
+        print(f"✅ [LOAD AUDIO] Loaded from memory: {duration:.1f}s, {len(self.audio_data)} samples")
+        return True
     
     def download_youtube_audio(self, youtube_url, output_dir="temp_audio"):
         """Tải audio từ YouTube URL"""
@@ -1259,13 +1491,14 @@ class ScoringEngine:
             print(f"Lỗi phân tích pitch: {e}")
             return None
     
-    def calculate_score(self, target_notes=None, video_end=False):
+    def calculate_score(self, target_notes=None, video_end=False, quick=False):
         """
         Tính điểm dựa trên phân tích audio - Random 77-100, ưu tiên điểm cao dựa vào độ ổn định âm lượng
         
         Args:
             target_notes: Target notes (không dùng trong thuật toán mới)
             video_end: True nếu được gọi khi video YouTube kết thúc (dùng thuật toán đơn giản hơn)
+            quick: True = chế độ nhanh (bỏ qua pitch analysis, chỉ dùng volume, điểm nhẹ tay 80-100)
         """
         try:
             import numpy as np
@@ -1274,8 +1507,8 @@ class ScoringEngine:
             if self.audio_data is None:
                 return None
             
-            # Nếu được gọi khi video YouTube kết thúc, chỉ tính điểm dựa trên volume_consistency
-            if video_end:
+            # Quick mode: bỏ qua pitch analysis, chấm nhẹ tay (80-100)
+            if quick or video_end:
                 print("🎯 [CALCULATE SCORE] Chế độ: video_end=True (chỉ tính dựa trên volume_consistency)")
                 
                 # Tính volume_consistency
@@ -1297,7 +1530,7 @@ class ScoringEngine:
                 volume_factor = volume_consistency / 100.0  # 0.0 - 1.0
                 random_bonus = random.uniform(0, score_range * volume_factor)
                 total_score = base_score + random_bonus
-                total_score = min(100, max(77, total_score))
+                total_score = min(100, max(80, total_score))
                 
                 print(f"🎲 [CALCULATE SCORE] Random calculation:")
                 print(f"   📌 Base score: {base_score}")
@@ -1306,7 +1539,7 @@ class ScoringEngine:
                 print(f"   ✅ Total score: {total_score:.1f}")
                 
                 duration = len(self.audio_data) / self.sample_rate
-                feedback = self._generate_feedback(total_score, 0, 0)
+                feedback = self._generate_feedback(total_score, 0, 0, volume_consistency, 85)
                 
                 return {
                     "total_score": round(total_score, 1),
@@ -1343,7 +1576,7 @@ class ScoringEngine:
                 total_score = min(100, max(77, total_score))
                 
                 duration = len(self.audio_data) / self.sample_rate
-                feedback = self._generate_feedback(total_score, 0, 0)
+                feedback = self._generate_feedback(total_score, 0, 0, volume_consistency, 85)
                 
                 return {
                     "total_score": round(total_score, 1),
@@ -1393,7 +1626,7 @@ class ScoringEngine:
             total_score = min(100, max(77, total_score))
             
             # Tạo feedback
-            feedback = self._generate_feedback(total_score, pitch_accuracy, pitch_stability)
+            feedback = self._generate_feedback(total_score, pitch_accuracy, pitch_stability, volume_consistency, timing_accuracy)
             
             return {
                 "total_score": round(total_score, 1),
@@ -1414,21 +1647,56 @@ class ScoringEngine:
                 "pitch_stability": 0,
                 "volume_consistency": 0,
                 "timing_accuracy": 0,
-                "feedback": f"Lỗi: {str(e)}"
+                "feedback": {"main": f"Lỗi: {str(e)}", "tips": []}
             }
     
-    def _generate_feedback(self, total_score, pitch_accuracy, pitch_stability):
-        """Tạo feedback dựa trên điểm số"""
-        if total_score >= 90:
-            return "🎉 Xuất sắc! Bạn hát rất tốt!"
+    def _generate_feedback(self, total_score, pitch_accuracy, pitch_stability,
+                           volume_consistency=0, timing_accuracy=0):
+        """Tạo feedback + gợi ý cải thiện dựa trên điểm số"""
+        # Main feedback
+        if total_score >= 95:
+            main = "🏆 Tuyệt vời! Giọng hát cực kỳ ấn tượng!"
+        elif total_score >= 90:
+            main = "🎉 Xuất sắc! Bạn hát rất tốt!"
+        elif total_score >= 85:
+            main = "👍 Rất tốt! Gần hoàn hảo rồi!"
         elif total_score >= 80:
-            return "👍 Tốt! Hãy tiếp tục luyện tập!"
-        elif total_score >= 70:
-            return "👌 Khá tốt! Cần cải thiện thêm một chút."
-        elif total_score >= 60:
-            return "💪 Ổn! Hãy luyện tập nhiều hơn."
+            main = "👌 Tốt! Hãy tiếp tục luyện tập!"
         else:
-            return "📚 Cần luyện tập thêm để cải thiện!"
+            main = "💪 Ổn! Hãy luyện tập thêm nhé!"
+        
+        # Gợi ý cải thiện dựa trên từng chỉ số
+        tips = []
+        
+        if pitch_accuracy > 0 and pitch_accuracy < 85:
+            tips.append("🎵 Hãy nghe kỹ beat và cố gắng hát đúng cao độ hơn. Luyện từng đoạn ngắn trước.")
+        
+        if pitch_stability > 0 and pitch_stability < 85:
+            tips.append("📈 Giữ hơi đều hơn để giọng không bị rung. Tập thở bụng sẽ giúp ổn định giọng.")
+        
+        if volume_consistency > 0 and volume_consistency < 80:
+            tips.append("🔊 Giữ khoảng cách với micro ổn định hơn để âm lượng đều hơn.")
+        elif volume_consistency >= 90:
+            tips.append("🔊 Âm lượng rất ổn định, tuyệt vời!")
+        
+        if timing_accuracy > 0 and timing_accuracy < 85:
+            tips.append("⏱️ Cố gắng vào nhịp chính xác hơn. Nghe nhạc nền nhiều lần để quen beat.")
+        
+        # Thêm gợi ý chung nếu điểm cao
+        if total_score >= 90 and len(tips) == 0:
+            tips.append("⭐ Tiếp tục duy trì phong độ này! Thử thách với bài khó hơn nhé.")
+            tips.append("🎤 Thử thêm cảm xúc và kỹ thuật vocal để nâng tầm giọng hát.")
+        elif total_score >= 85 and len(tips) == 0:
+            tips.append("🎯 Còn chút nữa là hoàn hảo! Chú ý những nốt cao và nốt dài.")
+            tips.append("💡 Nghe lại bản thu và so sánh với bài gốc để tìm điểm cần cải thiện.")
+        elif len(tips) == 0:
+            tips.append("💡 Luyện tập đều đặn mỗi ngày sẽ giúp bạn tiến bộ nhanh chóng.")
+            tips.append("🎧 Nghe và hát theo bài gốc nhiều lần trước khi thu âm.")
+        
+        return {
+            "main": main,
+            "tips": tips[:3]  # Tối đa 3 gợi ý
+        }
 
 class ToneDetector:
     """
