@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DeviceDefinition
+    vendor="QuangLuuStudio"
+    name="QuangLuuMIDI"
+    family="QuangLuuMIDI"
+    type="Surface"
+    classID="{A2B3C4D5-E6F7-4859-9A0B-1C2D3E4F5G6H}"
+    category="Surface"
+    nativeSkins="1"
+    surfaceFile="QuangLuuMIDI.surface.xml"
+/>

@@ -9,22 +9,29 @@ import backend
 ctk.set_default_color_theme("blue")
 ctk.set_appearance_mode("Dark")
 
-# Bảng màu chuẩn (Modern Dark Theme)
+# Bảng màu chuẩn — khớp ui.html (Social Star Karaoke Studio)
 COLORS = {
-    "bg_main": "#0F172A",      # Slate 900
-    "bg_card": "#1E293B",      # Slate 800
-    "bg_card_hover": "#334155",# Slate 700
-    "primary": "#6366F1",      # Indigo 500
-    "primary_hover": "#4F46E5",# Indigo 600
-    "success": "#10B981",      # Emerald 500
-    "success_hover": "#059669",# Emerald 600
-    "danger": "#EF4444",       # Rose 500
-    "danger_hover": "#DC2626", # Rose 600
-    "warning": "#F59E0B",      # Amber 500
-    "warning_hover": "#D97706",# Amber 600
-    "text_main": "#F8FAFC",    # Slate 50
-    "text_muted": "#94A3B8",   # Slate 400
-    "border": "#334155"        # Slate 700
+    "bg_main": "#1a1f36",       # App background
+    "bg_card": "#242b42",       # Card background
+    "bg_card_hover": "#353b50", # Card hover/track
+    "primary": "#6366F1",       # Indigo 500
+    "primary_hover": "#4F46E5", # Indigo 600
+    "teal": "#0abde3",          # Teal — Volume, Lấy Tone, Tone Nhạc, Đa Thể Loại
+    "orange": "#ff9f43",        # Orange — Dò Tone, Bolero, Mic slider
+    "pink": "#ff6b6b",          # Pink — Tone Auto, Remix
+    "deep_purple": "#5f27cd",   # Deep Purple — Fix Méo
+    "accent": "#ff4b5c",        # Red accent — Tune, Effects, Tone Giọng, Dân Ca
+    "light_purple": "#a55eea",  # Light Purple — Chấm điểm, Social Audio, Lofi
+    "blue": "#54a0ff",          # Blue — Pop
+    "success": "#10B981",       # Emerald 500
+    "success_hover": "#059669", # Emerald 600
+    "danger": "#EF4444",        # Rose 500
+    "danger_hover": "#DC2626",  # Rose 600
+    "warning": "#F59E0B",       # Amber 500
+    "warning_hover": "#D97706", # Amber 600
+    "text_main": "#F8FAFC",     # Slate 50
+    "text_muted": "#94A3B8",    # Slate 400
+    "border": "#334155"         # Slate 700
 }
 
 # --- MIDI CC MAPPING ---
@@ -50,9 +57,16 @@ MIDI_CC = {
     "nhac": 42,            # Nhạc
     "fix_meo": 43,         # Fix Méo
     
+    # Buttons - Mixer Mute (Toggle Mở/Tắt từng kênh)
+    "mute_music": 50,      # Mute Nhạc (0=Unmute, 127=Mute)
+    "mute_mic": 51,        # Mute Mic
+    "mute_reverb": 52,     # Mute Vang
+    "mute_backing": 53,    # Mute Bè
+    
     # Auto-Tune Control (gửi đến Studio One)
     "auto_tune_key": 34,       # Key gốc (0-127) -> Auto-Tune
     "auto_tune_scale": 35,     # Scale type (0=Major, 127=Minor) -> Auto-Tune
+    "tune_on_off": 36,         # Tune On/Off bypass (0=Off, 127=On)
 }
 
 # HOTKEY MAPPING đã được thay thế bằng MIDI CC mapping
@@ -436,8 +450,8 @@ class ManualToneDialog(ctk.CTkToplevel):
             time_entry.insert(0, time_str)
         
         # Tone dropdown
-        music_keys = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B",
-                     "Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"]
+        music_keys = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+                     "Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "A#m", "Bm"]
         tone_option = ctk.CTkOptionMenu(
             row_frame,
             values=music_keys,
@@ -1116,22 +1130,36 @@ class MainDashboard(ctk.CTk):
         self.be_state = False  # Bè button state
         self.vang_state = False  # Vang button state
         
+        # Trạng thái Mute cho mixer channels (icon toggle buttons)
+        self.mute_states = {
+            "mix_music": False,   # NHẠC: False = đang bật (unmuted)
+            "mix_mic": False,     # MIC
+            "mix_reverb": False,  # VANG
+            "mix_backing": False  # BÈ
+        }
+        
         # Trạng thái AutoKey
         self.autokey_active = False
         
+        # Trạng thái Tune On/Off
+        self.tune_state = True  # Tune mặc định là BẬT
+        
+        # Trạng thái Scale (Major/Minor)
+        self.current_scale = "Major"  # Mặc định Major
+        
         # 1. Cấu hình cửa sổ
         self.title("Quang Lưu Studio")
-        self.geometry("1050x380")
+        self.geometry("1050x520")
         self.attributes("-topmost", True)
         
-        # Lưới chính: Header(0) - Menu(1) - Body(2)
-        self.grid_rowconfigure(2, weight=1) 
+        # Lưới chính: Header(0) - Body(1) - BottomBar(2)
+        self.grid_rowconfigure(1, weight=1) 
         self.grid_columnconfigure(0, weight=1)
 
         # --- KHỞI TẠO GIAO DIỆN ---
-        self.setup_header() # Row 0
-        self.setup_menu()   # Row 1
-        self.setup_body()   # Row 2
+        self.setup_header()      # Row 0
+        self.setup_body()        # Row 1
+        self.setup_bottom_bar()  # Row 2
         
         # Đăng ký callback MIDI để tự động cập nhật status indicator
         self.engine.register_midi_callback(self.on_midi_status_changed)
@@ -1197,8 +1225,8 @@ class MainDashboard(ctk.CTk):
 
         ctk.CTkLabel(self.tone_frame, text="Tone Bài Hát:", font=("Inter", 14, "bold")).pack(side="left", padx=(0, 5))
         
-        music_keys = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B", 
-                     "Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"]
+        music_keys = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B", 
+                     "Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "A#m", "Bm"]
         self.tone_option = ctk.CTkOptionMenu(
             self.tone_frame, 
             values=music_keys, 
@@ -1307,6 +1335,17 @@ class MainDashboard(ctk.CTk):
         self.status_frame = ctk.CTkFrame(self.header_frame, fg_color="transparent")
         self.status_frame.grid(row=0, column=3, padx=10, pady=5, sticky="e")
 
+        # Nút Learn MIDI (mới thêm)
+        ColorButton(
+            self.status_frame,
+            text="🎹 Learn MIDI",
+            width=100,
+            height=28,
+            color=COLORS["deep_purple"],
+            font=("Inter", 11, "bold"),
+            command=self.engine.trigger_midi_learn
+        ).pack(side="left", padx=(0, 15))
+
         ctk.CTkLabel(self.status_frame, text="Trạng thái:", font=("Inter", 12)).pack(side="left", padx=(0, 5))
         
         self.status_indicator = ctk.CTkLabel(
@@ -1359,66 +1398,8 @@ class MainDashboard(ctk.CTk):
         self.after(20, self.animate_marquee)
     
     def setup_menu(self):
-        """Khu vực Menu Toolbar"""
-        self.menu_frame = ctk.CTkFrame(self, height=40, corner_radius=0, fg_color="transparent")
-        self.menu_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 5))
-        
-        # Danh sách nút Text với callback và màu sắc riêng
-        text_btns = [
-            ("Dò Tone", self.on_do_tone, COLORS["primary"]),  # Blue
-            ("Lấy Tone", self.on_lay_tone, COLORS["primary_hover"]),  # Purple
-            ("Tone Auto", self.on_tone_auto, COLORS["success"]),  # Green
-            ("Bè", self.on_be, COLORS["primary_hover"]),  # Purple
-            ("Vang", self.on_vang, COLORS["warning"]),  # Yellow
-            ("Nhạc", self.on_nhac, COLORS["primary"]),  # Blue
-            ("Fix Méo", self.on_fix_meo, COLORS["warning_hover"]),  # Orange
-            ("Chấm điểm", self.on_score, COLORS["danger"])  # Pink
-        ]
-        
-        # Tạo nhóm nút Text (Bên trái) với màu sắc
-        for btn_text, callback, color in text_btns:
-            btn = ColorButton(
-                self.menu_frame, 
-                text=btn_text,
-                width=75, 
-                height=30,
-                color=color,
-                font=("Inter", 13, "bold"),
-                command=callback
-            )
-            btn.pack(side="left", padx=(0, 5))
-            
-            # Lưu reference cho buttons Bè, Vang, Dò Tone
-            if btn_text == "Bè":
-                self.be_button = btn
-            elif btn_text == "Vang":
-                self.vang_button = btn
-            elif btn_text == "Dò Tone":
-                self.do_tone_button = btn
-
-        # Danh sách nút Icon với callback và màu sắc riêng
-        icon_btns = [
-            {"icon": "🔍", "color": COLORS["primary"], "callback": None},  # Cyan
-            {"icon": "💾", "color": COLORS["success"], "callback": self.on_save},  # Green
-            {"icon": "📋", "color": COLORS["primary_hover"], "callback": self._show_songs_list},  # Purple
-            {"icon": "📂", "color": COLORS["primary"], "callback": self.on_open},  # Indigo
-            {"icon": "⏺️", "color": COLORS["danger"], "callback": self.on_record}  # Red
-        ]
-
-        # Tạo nhóm nút Icon (Bên phải) với màu sắc
-        for item in reversed(icon_btns):
-            btn = ColorButton(
-                self.menu_frame,
-                text=item["icon"],
-                width=35,
-                height=30,
-                color=item["color"],
-                font=("Segoe UI Emoji", 18),
-                command=item["callback"]
-            )
-            btn.pack(side="right", padx=(5, 0))
-            if item["icon"] == "⏺️":
-                self.record_button = btn
+        """Legacy — buttons đã chuyển vào body và bottom bar"""
+        pass
     
     # --- CALLBACKS CHO MENU BUTTONS ---
     def on_do_tone(self):
@@ -1584,6 +1565,40 @@ class MainDashboard(ctk.CTk):
         # Chỉ gửi MIDI CC
         self.engine.send_midi(MIDI_CC["fix_meo"], 127)
     
+    def on_tune_toggle(self):
+        """Toggle Tune On/Off - Bật/tắt Auto-Tune trong Studio One"""
+        self.tune_state = not self.tune_state
+        midi_value = 127 if self.tune_state else 0
+        self.engine.send_midi(MIDI_CC["tune_on_off"], midi_value)
+        
+        # Cập nhật màu button
+        if hasattr(self, 'tune_button'):
+            if self.tune_state:
+                self.tune_button.base_color = COLORS["success"]
+                self.tune_button.hover_color = interpolate_color(COLORS["success"], "#FFFFFF", 0.2)
+                self.tune_button.configure(fg_color=COLORS["success"], text="Tune ✓")
+            else:
+                self.tune_button.base_color = COLORS["danger"]
+                self.tune_button.hover_color = interpolate_color(COLORS["danger"], "#FFFFFF", 0.2)
+                self.tune_button.configure(fg_color=COLORS["danger"], text="Tune ✗")
+    
+    def on_scale_toggle(self):
+        """Toggle Scale Major ↔ Minor → gửi MIDI CC đến Auto-Tune"""
+        if self.current_scale == "Major":
+            self.current_scale = "Minor"
+            self.engine.send_midi(MIDI_CC["auto_tune_scale"], 127)
+            if hasattr(self, 'scale_button'):
+                self.scale_button.base_color = COLORS["primary"]
+                self.scale_button.hover_color = interpolate_color(COLORS["primary"], "#FFFFFF", 0.2)
+                self.scale_button.configure(fg_color=COLORS["primary"], text="Minor")
+        else:
+            self.current_scale = "Major"
+            self.engine.send_midi(MIDI_CC["auto_tune_scale"], 0)
+            if hasattr(self, 'scale_button'):
+                self.scale_button.base_color = COLORS["success"]
+                self.scale_button.hover_color = interpolate_color(COLORS["success"], "#FFFFFF", 0.2)
+                self.scale_button.configure(fg_color=COLORS["success"], text="Major")
+
     # --- DÒ TONE - THU ÂM TRỰC TIẾP TỪ HỆ THỐNG ---
     def _start_tone_detection(self):
         """Bắt đầu dò tone bằng cách thu âm loopback từ hệ thống"""
@@ -2642,53 +2657,111 @@ class MainDashboard(ctk.CTk):
     
     def setup_body(self):
         self.body_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.body_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.body_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 5))
         
-        self.body_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        self.body_frame.grid_columnconfigure(0, weight=2)  # Cột trái
+        self.body_frame.grid_columnconfigure(1, weight=3)  # Cột giữa (rộng nhất)
+        self.body_frame.grid_columnconfigure(2, weight=2)  # Cột phải
         self.body_frame.grid_rowconfigure(0, weight=1)
 
-        # === 1. CỘT TRÁI: TONE ===
+        # ╔══════════════════════════════════════╗
+        # ║  1. CỘT TRÁI: TONE & AUTO           ║
+        # ╚══════════════════════════════════════╝
         self.col_left = ctk.CTkFrame(self.body_frame)
         self.col_left.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         
+        # --- Section 1: Tone & Auto Buttons (grid 2×4) ---
         ctk.CTkLabel(
             self.col_left, 
-            text="ĐIỀU CHỈNH TONE", 
-            font=("Inter", 16, "bold"), 
+            text="Tone & Auto", 
+            font=("Inter", 14, "bold"), 
             text_color=COLORS["success"]
-        ).pack(pady=15)
-
-        # Tone Nhạc
-        self.tone_music_frame = self.create_tone_control(self.col_left, "Tone Nhạc", "tone_music")
+        ).pack(pady=(10, 8))
         
-        # Tone Giọng
-        self.tone_voice_frame = self.create_tone_control(self.col_left, "Tone Giọng", "tone_voice")
+        btn_grid = ctk.CTkFrame(self.col_left, fg_color=COLORS["bg_card"], corner_radius=10)
+        btn_grid.pack(padx=10, fill="x", pady=(0, 5))
+        btn_grid.grid_columnconfigure((0, 1), weight=1)
+        
+        # Danh sách buttons cho grid — màu khớp ui.html
+        func_btns = [
+            ("Dò Tone", self.on_do_tone, COLORS["orange"]),
+            ("Lấy Tone", self.on_lay_tone, COLORS["teal"]),
+            ("Tone Auto", self.on_tone_auto, COLORS["pink"]),
+            ("Fix Méo", self.on_fix_meo, COLORS["deep_purple"]),
+            ("Tune", self.on_tune_toggle, COLORS["accent"]),
+            ("Chấm điểm", self.on_score, COLORS["light_purple"]),
+        ]
+        
+        for i, (text, callback, color) in enumerate(func_btns):
+            r = i // 2
+            c = i % 2
+            btn = ColorButton(
+                btn_grid,
+                text=text,
+                height=35,
+                font=("Inter", 12, "bold"),
+                color=color,
+                command=callback
+            )
+            btn.grid(row=r, column=c, padx=4, pady=4, sticky="ew")
+            
+            # Lưu reference cho buttons cần cập nhật state
+            if text == "Dò Tone":
+                self.do_tone_button = btn
+            elif text == "Tune":
+                self.tune_button = btn
+        
+        # --- Section 2: Điều Chỉnh Tone ---
+        ctk.CTkLabel(
+            self.col_left, 
+            text="Điều Chỉnh Tone", 
+            font=("Inter", 14, "bold"), 
+            text_color=COLORS["success"]
+        ).pack(pady=(8, 2))
 
-        # === 2. CỘT GIỮA: MIXER ===
+        # Tone Nhạc (teal)
+        self.tone_music_frame = self.create_tone_control(self.col_left, "Tone Nhạc", "tone_music", COLORS["teal"])
+        
+        # Tone Giọng (red accent)
+        self.tone_voice_frame = self.create_tone_control(self.col_left, "Tone Giọng", "tone_voice", COLORS["accent"])
+
+        # ╔══════════════════════════════════════╗
+        # ║  2. CỘT GIỮA: MIXER TỔNG            ║
+        # ╚══════════════════════════════════════╝
         self.col_center = ctk.CTkFrame(self.body_frame)
         self.col_center.grid(row=0, column=1, sticky="nsew", padx=5)
         
         ctk.CTkLabel(
             self.col_center, 
-            text="MIXER TỔNG", 
-            font=("Inter", 16, "bold"), 
+            text="Mixer Tổng", 
+            font=("Inter", 14, "bold"), 
             text_color=COLORS["success"]
-        ).pack(pady=(15, 10))
+        ).pack(pady=(10, 5))
 
         slider_container = ctk.CTkFrame(self.col_center, fg_color="transparent")
-        slider_container.pack(fill="both", expand=True)
+        slider_container.pack(fill="both", expand=True, padx=10)
 
+        # CC keys cho mute toggle tương ứng từng kênh mixer
+        mute_cc_map = {
+            "mix_music": "mute_music",
+            "mix_mic": "mute_mic",
+            "mix_reverb": "mute_reverb",
+            "mix_backing": "mute_backing"
+        }
+        
         mix_config = [
-            {"icon": "🔊", "color": COLORS["primary"], "label": "NHẠC", "cc": "mix_music", "range": (0, 100), "default": 70, "unit": ""},
-            {"icon": "🎙️", "color": COLORS["danger"], "label": "MIC", "cc": "mix_mic", "range": (-10, 10), "default": 0, "unit": " dB"},
-            {"icon": "📢", "color": COLORS["warning"], "label": "VANG", "cc": "mix_reverb", "range": (-10, 10), "default": 0, "unit": " dB"},
-            {"icon": "👥", "color": COLORS["primary_hover"], "label": "BÈ", "cc": "mix_backing", "range": (0, 100), "default": 70, "unit": ""}
+            {"icon": "🔊", "icon_muted": "🔇", "color": COLORS["teal"], "label": "Volume", "cc": "mix_music", "range": (0, 100), "default": 70, "unit": ""},
+            {"icon": "🎙️", "icon_muted": "🚫", "color": COLORS["orange"], "label": "Mic", "cc": "mix_mic", "range": (-10, 10), "default": 0, "unit": " dB"},
+            {"icon": "📢", "icon_muted": "🔇", "color": COLORS["accent"], "label": "Effects", "cc": "mix_reverb", "range": (-10, 10), "default": 0, "unit": " dB"},
+            {"icon": "👥", "icon_muted": "🚫", "color": COLORS["light_purple"], "label": "Social Audio", "cc": "mix_backing", "range": (0, 100), "default": 70, "unit": ""}
         ]
         
         for i in range(4): 
             slider_container.grid_columnconfigure(i, weight=1)
 
         self.mixer_sliders = {}
+        self.mute_icon_buttons = {}  # Lưu reference đến icon buttons
+        
         for i, item in enumerate(mix_config):
             # Xác định giá trị mặc định và format hiển thị
             default_val = item["default"]
@@ -2706,83 +2779,106 @@ class MainDashboard(ctk.CTk):
 
             def make_update_func(label_widget, cc_key, min_val, max_val, unit):
                 def update_val(value):
-                    # Chuyển đổi từ slider value (0-100) sang giá trị thực tế
                     if unit == " dB":
-                        # Range -10 đến +10 dB
-                        # Slider: 0 = -10dB, 50 = 0dB, 100 = +10dB
                         db_value = min_val + ((max_val - min_val) * (value / 100))
                         db_value = round(db_value, 1)
-                        # Format hiển thị: +0.0 dB, -5.0 dB, +10.0 dB
                         label_widget.configure(text=f"{db_value:+.1f}{unit}")
-                        # Chuyển đổi dB sang MIDI CC: -10dB=0, 0dB=64, +10dB=127
-                        # Công thức: midi_value = ((db_value - min_val) / (max_val - min_val)) * 127
                         midi_value = int(((db_value - min_val) / (max_val - min_val)) * 127)
                         midi_value = max(0, min(127, midi_value))
                     else:
-                        # Range 0-100 (cho Nhạc và Bè)
                         int_value = int(value)
                         label_widget.configure(text=f"{int_value}{unit}")
                         midi_value = int((value / 100) * 127)
-                    
-                    # Gửi MIDI CC
                     self.engine.send_midi(MIDI_CC[cc_key], midi_value)
                 return update_val
 
-            # Slider với màu sắc
+            # Slider dọc — cao hơn để giống hình mẫu
             slider = ctk.CTkSlider(
                 slider_container, 
                 orientation="vertical", 
-                height=100,
-                width=20,
+                height=150,
+                width=22,
                 from_=0, to=100,
                 progress_color=item["color"],
                 button_color=interpolate_color(item["color"], "#FFFFFF", 0.5),
                 button_hover_color=interpolate_color(item["color"], "#FFFFFF", 0.7),
-                button_length=12,
+                button_length=14,
                 command=make_update_func(val_label, item["cc"], min_val, max_val, unit)
             )
-            # Set giá trị mặc định: 0 dB = giữa slider (50)
             if unit == " dB":
-                slider.set(50)  # Giữa slider = 0 dB
+                slider.set(50)
             else:
                 slider.set(default_val)
-            slider.grid(row=1, column=i, padx=5, pady=5)
+            slider.grid(row=1, column=i, padx=8, pady=5)
             
             self.mixer_sliders[item["cc"]] = slider
             
-            # Icon
-            ctk.CTkLabel(
-                slider_container, 
-                text=item["icon"], 
+            # Icon button (Mở/Tắt toggle)
+            def make_mute_toggle(cc_key, icon_on, icon_off, color):
+                def toggle_mute():
+                    self.mute_states[cc_key] = not self.mute_states[cc_key]
+                    is_muted = self.mute_states[cc_key]
+                    mute_cc = mute_cc_map[cc_key]
+                    midi_value = 127 if is_muted else 0
+                    self.engine.send_midi(MIDI_CC[mute_cc], midi_value)
+                    btn = self.mute_icon_buttons[cc_key]
+                    if is_muted:
+                        btn.configure(text=icon_off, fg_color=COLORS["bg_card_hover"], text_color=COLORS["text_muted"])
+                    else:
+                        btn.configure(text=icon_on, fg_color="transparent", text_color=color)
+                return toggle_mute
+            
+            icon_btn = ctk.CTkButton(
+                slider_container,
+                text=item["icon"],
                 text_color=item["color"],
-                font=("Segoe UI Emoji", 32)
-            ).grid(row=2, column=i, pady=(0, 0))
+                font=("Segoe UI Emoji", 24),
+                fg_color="transparent",
+                hover_color=COLORS["bg_card_hover"],
+                width=45,
+                height=36,
+                corner_radius=8,
+                command=make_mute_toggle(item["cc"], item["icon"], item["icon_muted"], item["color"])
+            )
+            icon_btn.grid(row=2, column=i, pady=(0, 2))
+            self.mute_icon_buttons[item["cc"]] = icon_btn
+            
+            # Text label dưới icon (Volume, Mic, Effects, Social Audio)
+            ctk.CTkLabel(
+                slider_container,
+                text=item["label"],
+                font=("Inter", 10),
+                text_color=COLORS["text_muted"]
+            ).grid(row=3, column=i, pady=(0, 8))
 
-        # === 3. CỘT PHẢI: CHẾ ĐỘ HÁT ===
+        # ╔══════════════════════════════════════╗
+        # ║  3. CỘT PHẢI: CHẾ ĐỘ HÁT           ║
+        # ╚══════════════════════════════════════╝
         self.col_right = ctk.CTkFrame(self.body_frame)
         self.col_right.grid(row=0, column=2, sticky="nsew", padx=(5, 0))
         
         ctk.CTkLabel(
             self.col_right, 
-            text="CHẾ ĐỘ HÁT", 
-            font=("Inter", 16, "bold"), 
+            text="Chế Độ Hát", 
+            font=("Inter", 14, "bold"), 
             text_color=COLORS["success"]
-        ).pack(pady=15)
+        ).pack(pady=(10, 8))
         
         btn_container = ctk.CTkFrame(self.col_right, fg_color="transparent")
-        btn_container.pack(fill="both", expand=True, padx=20)
+        btn_container.pack(fill="both", expand=True, padx=15)
         
-        # Mode buttons với màu sắc riêng
+        # Mode buttons với màu sắc khớp ui.html
         modes_config = [
-            ("Đa Thể Loại", COLORS["success"]),  # Green
-            ("Bolero", COLORS["warning"]),  # Orange
-            ("Dân Ca", COLORS["danger"]),  # Red
-            ("Lofi", COLORS["primary_hover"]),  # Purple
-            ("Remix", COLORS["danger_hover"]),  # Pink
-            ("Pop", COLORS["primary"])  # Blue
+            ("Đa Thể Loại", COLORS["teal"]),
+            ("Bolero", COLORS["orange"]),
+            ("Dân Ca", COLORS["accent"]),
+            ("Lofi", COLORS["light_purple"]),
+            ("Remix", COLORS["pink"]),
+            ("Pop", COLORS["blue"])
         ]
         
         btn_container.grid_columnconfigure((0, 1), weight=1)
+        btn_container.grid_rowconfigure((0, 1, 2), weight=1)
         
         self.mode_buttons = {}
         for i, (mode, color) in enumerate(modes_config):
@@ -2792,34 +2888,110 @@ class MainDashboard(ctk.CTk):
             btn = ColorButton(
                 btn_container, 
                 text=mode, 
-                height=40, 
-                font=("Inter", 13, "bold"),
+                height=55, 
+                font=("Inter", 14, "bold"),
                 color=color,
                 command=lambda m=mode: self.on_mode_selected(m)
             )
-            btn.grid(row=r, column=c, padx=5, pady=8, sticky="ew")
+            btn.grid(row=r, column=c, padx=5, pady=5, sticky="nsew")
             self.mode_buttons[mode] = btn
 
-    def create_tone_control(self, parent, label_text, cc_key):
-        """Tạo điều khiển tone với nút +/-"""
-        frame = ctk.CTkFrame(parent, fg_color="transparent")
-        frame.pack(pady=10)
+    def setup_bottom_bar(self):
+        """Thanh điều khiển phía dưới — Record nổi bật ở giữa"""
+        self.bottom_bar = ctk.CTkFrame(self, height=55, corner_radius=0, fg_color=COLORS["bg_card"])
+        self.bottom_bar.grid(row=2, column=0, sticky="ew", padx=0, pady=0)
+        self.bottom_bar.grid_columnconfigure(1, weight=1)  # Giữa stretch
         
-        ctk.CTkLabel(frame, text=label_text, font=("Inter", 14)).pack(pady=(0, 5))
+        # --- Bên trái: Save + List ---
+        left_frame = ctk.CTkFrame(self.bottom_bar, fg_color="transparent")
+        left_frame.grid(row=0, column=0, padx=15, pady=8, sticky="w")
         
-        ctrl_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        ColorButton(
+            left_frame,
+            text="💾 Save",
+            width=85,
+            height=36,
+            font=("Inter", 13, "bold"),
+            color=COLORS["teal"],
+            command=self.on_save
+        ).pack(side="left", padx=(0, 8))
+        
+        ColorButton(
+            left_frame,
+            text="📋 List",
+            width=85,
+            height=36,
+            font=("Inter", 13, "bold"),
+            color=COLORS["orange"],
+            command=self._show_songs_list
+        ).pack(side="left")
+        
+        # --- Giữa: RECORD (nổi bật) ---
+        center_frame = ctk.CTkFrame(self.bottom_bar, fg_color="transparent")
+        center_frame.grid(row=0, column=1, pady=8)
+        
+        self.record_button = ctk.CTkButton(
+            center_frame,
+            text="🎙️  RECORD",
+            width=180,
+            height=40,
+            font=("Inter", 16, "bold"),
+            fg_color=COLORS["danger"],
+            hover_color=COLORS["danger_hover"],
+            corner_radius=20,
+            command=self.on_record
+        )
+        self.record_button.pack()
+        
+        # --- Bên phải: Open + Folder ---
+        right_frame = ctk.CTkFrame(self.bottom_bar, fg_color="transparent")
+        right_frame.grid(row=0, column=2, padx=15, pady=8, sticky="e")
+        
+        ColorButton(
+            right_frame,
+            text="📂 Open",
+            width=85,
+            height=36,
+            font=("Inter", 13, "bold"),
+            color=COLORS["pink"],
+            command=self.on_open
+        ).pack(side="left", padx=(0, 8))
+        
+        ColorButton(
+            right_frame,
+            text="📁 Folder",
+            width=85,
+            height=36,
+            font=("Inter", 13, "bold"),
+            color=COLORS["light_purple"],
+            command=None
+        ).pack(side="left")
+
+    def create_tone_control(self, parent, label_text, cc_key, btn_color=None):
+        """Điều khiển tone với nút +/- tròn lớn (giống ui.html)"""
+        if btn_color is None:
+            btn_color = COLORS["teal"]
+        frame = ctk.CTkFrame(parent, fg_color=COLORS["bg_card"], corner_radius=10)
+        frame.pack(pady=5, padx=15, fill="x")
+        
+        inner = ctk.CTkFrame(frame, fg_color="transparent")
+        inner.pack(pady=8, padx=10)
+        
+        ctk.CTkLabel(inner, text=label_text, font=("Inter", 13), text_color=COLORS["text_muted"]).pack(pady=(0, 5))
+        
+        ctrl_frame = ctk.CTkFrame(inner, fg_color="transparent")
         ctrl_frame.pack()
         
         value_label = ctk.CTkLabel(
             ctrl_frame, 
-            text="0", 
-            width=40, 
-            font=("Inter", 16, "bold")
+            text="+0", 
+            width=55, 
+            font=("Inter", 28, "bold"),
+            text_color=btn_color
         )
         
         def update_display(value):
             value_label.configure(text=f"{value:+d}")
-            # Gửi MIDI CC (chuyển -12 to +12 thành 0-127)
             midi_value = int(((value + 12) / 24) * 127)
             self.engine.send_midi(MIDI_CC[cc_key], midi_value)
         
@@ -2839,25 +3011,31 @@ class MainDashboard(ctk.CTk):
                 self.tone_voice_value = min(12, self.tone_voice_value + 1)
                 update_display(self.tone_voice_value)
         
-        # Nút - với màu xanh dương
-        ColorButton(
+        # Nút - tròn lớn (màu theo tham số)
+        ctk.CTkButton(
             ctrl_frame, 
-            text="-", 
-            width=40, 
-            height=30, 
-            color=COLORS["primary"],  # Blue
+            text="−", 
+            width=48, 
+            height=48, 
+            corner_radius=24,
+            font=("Inter", 22, "bold"),
+            fg_color=btn_color,
+            hover_color=interpolate_color(btn_color, "#FFFFFF", 0.2),
             command=decrease
         ).pack(side="left", padx=5)
         
-        value_label.pack(side="left", padx=5)
+        value_label.pack(side="left", padx=8)
         
-        # Nút + với màu xanh lá
-        ColorButton(
+        # Nút + tròn lớn (màu theo tham số)
+        ctk.CTkButton(
             ctrl_frame, 
             text="+", 
-            width=40, 
-            height=30, 
-            color=COLORS["success"],  # Green
+            width=48, 
+            height=48, 
+            corner_radius=24,
+            font=("Inter", 22, "bold"),
+            fg_color=btn_color,
+            hover_color=interpolate_color(btn_color, "#FFFFFF", 0.2),
             command=increase
         ).pack(side="left", padx=5)
         

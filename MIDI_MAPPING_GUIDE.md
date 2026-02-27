@@ -82,6 +82,7 @@ Từ:  studio_one\QuangLuuMIDI.surface.xml
 |---------|-----|------|-------|-----------|
 | AutoTune Key | 34 | Knob | 0-127 | Key cho Auto-Tune (C→B) |
 | AutoTune Scale | 35 | Button | 0/127 | Scale (0=Major, 127=Minor) |
+| Tune On/Off | 36 | Button | 0/127 | Bật/tắt Auto-Tune (0=Off, 127=On) |
 
 ### Mixer Function Buttons
 | Control | CC | Loại | Values | Chức năng |
@@ -90,6 +91,14 @@ Từ:  studio_one\QuangLuuMIDI.surface.xml
 | Vang | 41 | Button | 0/127 | Toggle vang |
 | Nhạc | 42 | Button | 0/127 | Toggle nhạc |
 | Fix Méo | 43 | Button | 0/127 | Toggle fix méo |
+
+### Mixer Mute Toggles (Icon buttons bên dưới thanh cuộn)
+| Control | CC | Loại | Values | Chức năng |
+|---------|-----|------|--------|-----------|
+| Mute Nhạc | 50 | Button | 0/127 | Tắt/mở kênh nhạc |
+| Mute Mic | 51 | Button | 0/127 | Tắt/mở kênh mic |
+| Mute Vang | 52 | Button | 0/127 | Tắt/mở reverb |
+| Mute Bè | 53 | Button | 0/127 | Tắt/mở backing vocal |
 
 ---
 

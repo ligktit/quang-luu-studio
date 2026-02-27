@@ -14,6 +14,10 @@ if %errorlevel% neq 0 (
 )
 
 echo [INFO] File main.spec da co hiddenimports
+echo [INFO] Dang xoa cac thu muc cu...
+if exist build rd /s /q build
+if exist dist rd /s /q dist
+
 echo [INFO] Dang build EXE tu file spec...
 echo.
 

@@ -87,6 +87,11 @@
     <Control name="autoTuneScale" title="AutoTune Scale" type="button" options="receive public">
       <MidiMessage status="#B0" address="35"/>
     </Control>
+    
+    <!-- Tune On/Off: Bật/tắt Auto-Tune bypass (0=Off, 127=On) -->
+    <Control name="tuneOnOff" title="Tune On/Off" type="button" options="receive public">
+      <MidiMessage status="#B0" address="36"/>
+    </Control>
 
     <!-- ============================================ -->
     <!-- MIXER FUNCTION BUTTONS (CC 40-43)            -->
@@ -110,6 +115,31 @@
     <!-- Fix Méo: Bật/tắt fix méo tiếng (0=Off, 127=On) -->
     <Control name="fixMeo" title="Fix Méo" type="button" options="receive public">
       <MidiMessage status="#B0" address="43"/>
+    </Control>
+
+    <!-- ============================================ -->
+    <!-- MIXER MUTE TOGGLES (CC 50-53)               -->
+    <!-- Icons bên dưới thanh cuộn → Mở/Tắt kênh     -->
+    <!-- ============================================ -->
+    
+    <!-- Mute Nhạc: Tắt/mở kênh nhạc (0=Unmute, 127=Mute) -->
+    <Control name="muteNhac" title="Mute Nhạc" type="button" options="receive public">
+      <MidiMessage status="#B0" address="50"/>
+    </Control>
+    
+    <!-- Mute Mic: Tắt/mở kênh microphone (0=Unmute, 127=Mute) -->
+    <Control name="muteMic" title="Mute Mic" type="button" options="receive public">
+      <MidiMessage status="#B0" address="51"/>
+    </Control>
+    
+    <!-- Mute Vang: Tắt/mở reverb (0=Unmute, 127=Mute) -->
+    <Control name="muteVang" title="Mute Vang" type="button" options="receive public">
+      <MidiMessage status="#B0" address="52"/>
+    </Control>
+    
+    <!-- Mute Bè: Tắt/mở backing vocal (0=Unmute, 127=Mute) -->
+    <Control name="muteBe" title="Mute Bè" type="button" options="receive public">
+      <MidiMessage status="#B0" address="53"/>
     </Control>
     
   </Controls>

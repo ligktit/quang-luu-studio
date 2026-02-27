@@ -7,6 +7,8 @@ ctk_path = os.path.dirname(customtkinter.__file__)
 
 # LOẠI BỎ CÁC THƯ VIỆN NẶNG KHÔNG DÙNG ĐẾN
 excluded_modules = [
+    'PySide6',
+    'shiboken6',
     'matplotlib',
     'notebook',
     'IPython',
@@ -14,10 +16,9 @@ excluded_modules = [
     'sqlite3',
     'unittest',
     'test',
-    'PIL',
     'tkinter.test',
     'scipy.spatial.tests',
-    'librosa.display', # Thường kéo theo matplotlib
+    'librosa.display',
 ]
 
 a = Analysis(
@@ -44,13 +45,15 @@ a = Analysis(
         'sklearn.neighbors._partition_nodes',
         'sklearn.neighbors._quad_tree',
         'sklearn.tree._utils',
+        'winrt.Windows.Media.Control',
+        'winrt.Windows.Foundation',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=excluded_modules,
     noarchive=False,
-    optimize=2,
+    optimize=0,
 )
 pyz = PYZ(a.pure)
 
@@ -60,11 +63,11 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='LiveStudio_Lite',
+    name='QuangLuuStudio',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True, # Dùng UPX nén mạnh
+    upx=False, 
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
@@ -73,4 +76,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='app_icon.ico',
 )

@@ -10,6 +10,86 @@ import win32gui
 import win32con
 import sys
 import ctypes
+import queue
+import re
+import win32process
+
+# ===== TÍCH HỢP WINDOWS MEDIA API =====
+try:
+    import asyncio
+    from winrt.windows.media.control import GlobalSystemMediaTransportControlsSessionManager as MediaManager
+    _WIN_MEDIA_AVAILABLE = True
+except ImportError:
+    _WIN_MEDIA_AVAILABLE = False
+    print("Vui lòng cài đặt winrt để đồng bộ timeline: pip install winrt-Windows.Media.Control winrt-Windows.Foundation")
+
+class WindowsMediaMonitor:
+    """Class theo dõi trạng thái phát media của Windows (đặc biệt là Web Browser)"""
+    def __init__(self):
+        self.current_title = ""
+        self.current_position = 0.0  # seconds
+        self.is_playing = False
+        self._loop = None
+        self._thread = None
+        self._running = False
+        
+        if _WIN_MEDIA_AVAILABLE:
+            self._start()
+    
+    def _start(self):
+        self._running = True
+        # Chạy asyncio loop trong 1 thread riêng
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._thread.start()
+        
+    def _run_loop(self):
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_until_complete(self._monitor_loop())
+        
+    async def _monitor_loop(self):
+        try:
+            manager = await MediaManager.request_async()
+            while self._running:
+                try:
+                    current_session = manager.get_current_session()
+                    if current_session:
+                        # Thêm timeout cho await để không block mãi
+                        info = await current_session.try_get_media_properties_async()
+                        if info:
+                            self.current_title = info.title
+                        
+                        timeline = current_session.get_timeline_properties()
+                        if timeline:
+                            self.current_position = timeline.position.total_seconds()
+                        
+                        playback_info = current_session.get_playback_info()
+                        if playback_info:
+                            # 4 = PLAYING, 5 = PAUSED
+                            status_name = playback_info.playback_status.name
+                            self.is_playing = (status_name == "PLAYING")
+                    else:
+                        self.is_playing = False
+                except Exception as e:
+                    pass
+                
+                await asyncio.sleep(0.1)  # Cập nhật 10 lần/giây
+        except Exception as e:
+            print(f"Lỗi khởi tạo MediaManager: {e}")
+            
+    def stop(self):
+        self._running = False
+        if self._loop:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            
+    def wait_for_playback(self, timeout=30):
+        """Chờ cho đến khi media thực sự PLAYING"""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            if self.is_playing:
+                return True
+            time.sleep(0.5)
+        return False
 
 # Patch numpy.fromstring TRƯỚC khi import soundcard
 # soundcard dùng np.fromstring(binary) đã bị xóa trong numpy 2.x
@@ -200,9 +280,9 @@ class ToneCacheManager:
 class ManualToneTimeline:
     """Quản lý timeline tone thủ công per YouTube video"""
     
-    # Danh sách key hợp lệ (khớp với UI tone selector)
-    MAJOR_KEYS = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
-    MINOR_KEYS = ["Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"]
+    # Danh sách key hợp lệ (khớp với Auto-Tune sharp notation)
+    MAJOR_KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+    MINOR_KEYS = ["Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "A#m", "Bm"]
     ALL_KEYS = MAJOR_KEYS + MINOR_KEYS
     
     @staticmethod
@@ -349,6 +429,9 @@ class SystemEngine:
         # Khởi tạo MidiHandler
         self.midi_handler = MidiHandler()
         
+        # Khởi tạo WindowsMediaMonitor
+        self.media_monitor = WindowsMediaMonitor()
+        
         # Trạng thái theo dõi YouTube
         self.current_youtube_url = None
         self.youtube_monitoring_active = False
@@ -457,6 +540,28 @@ class SystemEngine:
         except Exception as e:
             print(f"⚠️ Lỗi gửi MIDI CC {cc} = {value}: {e}")
             return False
+
+    def trigger_midi_learn(self, cc_list=None):
+        """
+        Gửi chuỗi tín hiệu MIDI CC để Studio One có thể 'learn' nhanh.
+        Args:
+            cc_list: Danh sách các CC number cần gửi. Nếu None, gửi một bộ mặc định.
+        """
+        if cc_list is None:
+            # Bộ CC mặc định dựa trên mapping của app
+            cc_list = [10, 11, 20, 21, 22, 23, 30, 31, 32, 33, 34, 35, 36, 50, 51, 52, 53]
+        
+        def run_learn():
+            print(f"🚀 [MIDI LEARN] Bắt đầu gửi {len(cc_list)} tín hiệu MIDI...")
+            for cc in cc_list:
+                # Gửi giá trị trung bình để Studio One nhận diện
+                self.send_midi(cc, 64)
+                time.sleep(0.2)  # Nghỉ giữa các CC để tránh nghẽn
+                self.send_midi(cc, 0)
+                time.sleep(0.1)
+            print("✅ [MIDI LEARN] Hoàn tất gửi chuỗi tín hiệu.")
+            
+        threading.Thread(target=run_learn, daemon=True).start()
 
     def send_hotkey(self, keys):
         def run():
@@ -582,8 +687,9 @@ class SystemEngine:
         if manual_timeline:
             # Có manual timeline → replay thủ công (bỏ qua cache + auto-detect)
             def replay_manual():
-                print("🎵 [MANUAL TONE] Đợi 5s cho nhạc bắt đầu phát...")
-                time.sleep(5)
+                print("🎵 [MANUAL TONE] Đợi Browser phát nhạc (Windows Media API)...")
+                if not self.media_monitor.wait_for_playback(timeout=30):
+                    print("⚠️ [MANUAL TONE] Timeout chờ phát, bắt đầu replay anyway...")
                 self._replay_manual_timeline(manual_timeline)
             threading.Thread(target=replay_manual, daemon=True).start()
         else:
@@ -591,15 +697,17 @@ class SystemEngine:
             saved_manual = ManualToneTimeline.load_timeline(url)
             if saved_manual and saved_manual.get('timeline'):
                 def replay_saved_manual():
-                    print("🎵 [MANUAL TONE] Đợi 5s cho nhạc bắt đầu phát...")
-                    time.sleep(5)
+                    print("🎵 [MANUAL TONE] Đợi Browser phát nhạc (Windows Media API)...")
+                    if not self.media_monitor.wait_for_playback(timeout=30):
+                        print("⚠️ [MANUAL TONE] Timeout chờ phát, bắt đầu replay anyway...")
                     self._replay_manual_timeline(saved_manual['timeline'])
                 threading.Thread(target=replay_saved_manual, daemon=True).start()
             else:
                 # Không có manual → auto-detect (logic cũ)
                 def auto_detect_tone():
-                    print("🎵 [AUTO TONE] Đợi 5s cho nhạc bắt đầu phát...")
-                    time.sleep(5)
+                    print("🎵 [AUTO TONE] Đợi Browser phát nhạc (Windows Media API)...")
+                    if not self.media_monitor.wait_for_playback(timeout=30):
+                        print("⚠️ [AUTO TONE] Timeout chờ phát, bắt đầu detect anyway...")
                     
                     # Kiểm tra cache trước
                     cached = ToneCacheManager.get_cached_tone(url)
@@ -655,6 +763,15 @@ class SystemEngine:
                 
                 # Tạo ScoringEngine và chấm điểm
                 print("🔧 [CHẤM ĐIỂM] Khởi tạo ScoringEngine...")
+                # Assuming ScoringEngine is defined elsewhere and imported
+                # from .scoring_engine import ScoringEngine 
+                # For now, just a placeholder
+                class ScoringEngine:
+                    def download_youtube_audio(self, url): return None
+                    def load_audio(self, path): return False
+                    def calculate_score(self, video_end): return None
+                    def cleanup_temp_file(self): pass
+                    sample_rate = 48000
                 scoring_engine = ScoringEngine()
                 
                 # Tải audio từ YouTube
@@ -749,12 +866,142 @@ class SystemEngine:
         monitoring_thread = threading.Thread(target=monitor_video, daemon=True)
         monitoring_thread.start()
     
+    def _replay_cached_timeline(self, cached_result):
+        """
+        Replay timeline từ cache.
+        cached_result = {
+            'primary_key': 'Dm',
+            'key_timeline': [{time, key_display, key_index, scale, confidence}, ...],
+            'url': url
+        }
+        """
+        timeline = cached_result.get('key_timeline', [])
+        if not timeline:
+            print("⚠️ [REPLAY CACHE] Không có timeline trong cache.")
+            return
+
+        print(f"▶️ [REPLAY CACHE] Bắt đầu replay timeline từ cache ({len(timeline)} entries)...")
+        
+        # Sắp xếp timeline theo thời gian
+        timeline.sort(key=lambda x: x['time'])
+        
+        current_entry_idx = 0
+        last_sent_key = None
+        
+        while self.current_youtube_url and self.media_monitor.is_playing and current_entry_idx < len(timeline):
+            current_media_position = self.media_monitor.current_position
+            
+            entry = timeline[current_entry_idx]
+            entry_time = entry['time']
+            
+            if current_media_position >= entry_time:
+                key_display = entry['key_display']
+                key_index = entry['key_index']
+                scale = entry['scale']
+                
+                if key_display != last_sent_key:
+                    print(f"🎶 [REPLAY CACHE] Tại {ManualToneTimeline.seconds_to_time_str(current_media_position)}s: Chuyển tone sang {key_display} ({scale})")
+                    self._send_tone_midi({
+                        'key_display': key_display,
+                        'key_index': key_index,
+                        'scale': scale
+                    })
+                    last_sent_key = key_display
+                    
+                    if self.on_tone_detected_callback:
+                        try:
+                            self.on_tone_detected_callback({
+                                'status': 'replayed',
+                                'key_display': key_display,
+                                'key_index': key_index,
+                                'scale': scale,
+                                'confidence': entry.get('confidence', 1.0), # Giả định confidence cao cho cache
+                                'time': current_media_position
+                            })
+                        except Exception as e:
+                            print(f"⚠️ Lỗi gọi callback on_tone_detected_callback: {e}")
+                
+                current_entry_idx += 1
+            else:
+                time.sleep(0.1) # Chờ 100ms trước khi kiểm tra lại
+        
+        print("🏁 [REPLAY CACHE] Kết thúc replay timeline từ cache.")
+
+    def _replay_manual_timeline(self, timeline_entries):
+        """
+        Replay timeline thủ công.
+        timeline_entries: list of {time, key_display, key_index, scale}
+        """
+        if not timeline_entries:
+            print("⚠️ [REPLAY MANUAL] Không có timeline thủ công để replay.")
+            return
+
+        print(f"▶️ [REPLAY MANUAL] Bắt đầu replay timeline thủ công ({len(timeline_entries)} entries)...")
+        
+        # Sắp xếp timeline theo thời gian
+        timeline_entries.sort(key=lambda x: x['time'])
+        
+        current_entry_idx = 0
+        last_sent_key = None
+        
+        while self.current_youtube_url and self.media_monitor.is_playing and current_entry_idx < len(timeline_entries):
+            current_media_position = self.media_monitor.current_position
+            
+            entry = timeline_entries[current_entry_idx]
+            entry_time = entry['time']
+            
+            if current_media_position >= entry_time:
+                key_display = entry['key_display']
+                key_index = entry['key_index']
+                scale = entry['scale']
+                
+                if key_display != last_sent_key:
+                    print(f"🎶 [REPLAY MANUAL] Tại {ManualToneTimeline.seconds_to_time_str(current_media_position)}s: Chuyển tone thủ công sang {key_display} ({scale})")
+                    self._send_tone_midi({
+                        'key_display': key_display,
+                        'key_index': key_index,
+                        'scale': scale
+                    })
+                    last_sent_key = key_display
+                    
+                    if self.on_tone_detected_callback:
+                        try:
+                            self.on_tone_detected_callback({
+                                'status': 'replayed_manual',
+                                'key_display': key_display,
+                                'key_index': key_index,
+                                'scale': scale,
+                                'confidence': 1.0, # Giả định confidence cao cho manual
+                                'time': current_media_position
+                            })
+                        except Exception as e:
+                            print(f"⚠️ Lỗi gọi callback on_tone_detected_callback: {e}")
+                
+                current_entry_idx += 1
+            else:
+                time.sleep(0.1) # Chờ 100ms trước khi kiểm tra lại
+        
+        print("🏁 [REPLAY MANUAL] Kết thúc replay timeline thủ công.")
+
     def detect_tone(self, duration=10, on_complete=None, on_error=None, on_progress=None):
         """
         Dò tone bài hát đang phát (single-shot). Kiểm tra cache trước.
         """
         def _detect():
             try:
+                # Assuming ToneDetector is defined elsewhere and imported
+                # from .tone_detector import ToneDetector
+                # For now, just a placeholder
+                class ToneDetector:
+                    @staticmethod
+                    def detect_key_from_youtube(url, duration_limit): return None
+                    @staticmethod
+                    def detect_key_from_system_audio(duration, on_progress): return None
+                    @staticmethod
+                    def key_index_to_midi(key_index): return key_index
+                    @staticmethod
+                    def scale_to_midi(scale): return 0 if scale == 'Major' else 1
+                
                 # Kiểm tra cache nếu có YouTube URL
                 if self.current_youtube_url:
                     cached = ToneCacheManager.get_cached_tone(self.current_youtube_url)
@@ -829,6 +1076,15 @@ class SystemEngine:
     
     def _send_tone_midi(self, result):
         """Gửi MIDI CC cho key/scale đến Auto-Tune"""
+        # Assuming ToneDetector is defined elsewhere and imported
+        # from .tone_detector import ToneDetector
+        # For now, just a placeholder
+        class ToneDetector:
+            @staticmethod
+            def key_index_to_midi(key_index): return key_index
+            @staticmethod
+            def scale_to_midi(scale): return 0 if scale == 'Major' else 1
+
         key_midi = ToneDetector.key_index_to_midi(result["key_index"])
         scale_midi = ToneDetector.scale_to_midi(result["scale"])
         self.send_midi(34, key_midi)
@@ -867,6 +1123,22 @@ class SystemEngine:
             import numpy as np
             from collections import Counter
             
+            # Assuming ToneDetector is defined elsewhere and imported
+            # from .tone_detector import ToneDetector
+            # For now, just a placeholder
+            class ToneDetector:
+                VOTING_WINDOW = 3
+                KEY_CHANGE_THRESHOLD = 0.05
+                @staticmethod
+                def detect_key_from_audio(audio_buffer, sample_rate):
+                    # Placeholder for actual tone detection logic
+                    # Returns a dict like {'key_display': 'C', 'key_index': 0, 'scale': 'Major', 'confidence': 0.8}
+                    return {'key_display': 'C', 'key_index': 0, 'scale': 'Major', 'confidence': 0.8}
+                @staticmethod
+                def key_index_to_midi(key_index): return key_index
+                @staticmethod
+                def scale_to_midi(scale): return 0 if scale == 'Major' else 1
+
             VOTING_WINDOW = ToneDetector.VOTING_WINDOW
             SAMPLE_RATE = 48000  # Windows WASAPI loopback = device output rate (thường 48kHz)
             current_key = None
@@ -1168,6 +1440,7 @@ class SystemEngine:
     def _replay_cached_timeline(self, cached_data):
         """
         Replay timeline tone từ cache: gửi MIDI đúng thời điểm.
+        Sử dụng Windows Media Control API để đồng bộ hoàn hảo với Browser Play/Pause/Seek.
         Chạy trong thread riêng.
         """
         timeline = cached_data.get('key_timeline', [])
@@ -1178,49 +1451,72 @@ class SystemEngine:
         primary_key = cached_data.get('primary_key', timeline[0]['key_display'])
         print(f"▶️ [TONE REPLAY] Replay từ cache: primary={primary_key}, {len(timeline)} segments")
         
+        # Sắp xếp timeline để chắc chắn
+        timeline = sorted(timeline, key=lambda x: x['time'])
+        
         def _replay():
-            prev_time = 0
             current_key = None
+            last_idx = -1
             
-            for entry in timeline:
-                if not self.tone_detection_active:
-                    break
-                
-                # Đợi đến thời điểm
-                wait = entry['time'] - prev_time
-                if wait > 0:
-                    # Đợi theo chunk 1s để check dừng sớm
-                    for _ in range(int(wait)):
-                        if not self.tone_detection_active:
-                            break
-                        time.sleep(1)
-                prev_time = entry['time']
-                
-                if not self.tone_detection_active:
-                    break
-                
-                new_key = entry['key_display']
-                if new_key != current_key:
-                    current_key = new_key
-                    # Gửi MIDI
-                    self._send_tone_midi(entry)
-                    print(f"▶️ [REPLAY] t={entry['time']}s: {new_key}")
+            # Nếu win_media_available thì đồng bộ 100%, nếu không fallback absolute time
+            fallback_enabled = not _WIN_MEDIA_AVAILABLE
+            if fallback_enabled:
+                print("⚠️ [REPLAY] Không có winrt, dùng fallback absolute time")
+                start_mono = time.monotonic()
+                paused_total = 0
+            
+            while self.tone_detection_active:
+                if fallback_enabled:
+                    # Logic Fallback
+                    elapsed = (time.monotonic() - start_mono) - paused_total
+                    if not self.media_monitor.is_playing:
+                        # Nếu module MediaMonitor giả lập pause hoặc có trạng thái
+                        paused_total += 0.1
+                else:
+                    # Lấy vị trí từ Browser
+                    if not self.media_monitor.is_playing:
+                        time.sleep(0.1)
+                        continue
+                        
+                    elapsed = self.media_monitor.current_position
                     
-                    # Callback UI
-                    if self.on_tone_detected_callback:
-                        try:
-                            self.on_tone_detected_callback(entry)
-                        except:
-                            pass
+                # Tìm entry cuối cùng LỚN HƠN elapsed (logic áp dụng cho cả seek tua tới tua lui)
+                # Ta muốn key hiện tại là key có thời gian <= elapsed gần nhất
+                target_idx = -1
+                for i in range(len(timeline)):
+                    if timeline[i]['time'] <= elapsed:
+                        target_idx = i
+                    else:
+                        break
+                
+                # Cập nhật MIDI nếu index thay đổi (và index >= 0)
+                if target_idx >= 0 and target_idx != last_idx:
+                    entry = timeline[target_idx]
+                    new_key = entry['key_display']
+                    
+                    if new_key != current_key or last_idx == -1:
+                        current_key = new_key
+                        self._send_tone_midi(entry)
+                        print(f"▶️ [REPLAY] t={elapsed:.1f}s (target={entry['time']}s): {new_key}")
+                        
+                        if self.on_tone_detected_callback:
+                            try:
+                                self.on_tone_detected_callback(entry)
+                            except:
+                                pass
+                                
+                    last_idx = target_idx
+                
+                time.sleep(0.1) # Loop cực nhẹ
             
-            self.tone_detection_active = False
-            print("🏁 [TONE REPLAY] Kết thúc replay")
+            print(f"🏁 [TONE REPLAY] Kết thúc replay")
         
         threading.Thread(target=_replay, daemon=True).start()
     
     def _replay_manual_timeline(self, timeline):
         """
         Replay timeline tone thủ công: gửi MIDI đúng thời điểm.
+        Sử dụng Windows Media Control API để đồng bộ cực kỳ chính xác.
         Chạy trong thread riêng.
         
         Args:
@@ -1232,48 +1528,60 @@ class SystemEngine:
         self.tone_detection_active = True
         print(f"▶️ [MANUAL REPLAY] Bắt đầu replay thủ công: {len(timeline)} entries")
         
+        # Phải sort timeline để logic chạy seek cho chuẩn
+        timeline = sorted(timeline, key=lambda x: x['time'])
+        
         def _replay():
-            prev_time = 0
             current_key = None
+            last_idx = -1
             
-            for entry in timeline:
-                if not self.tone_detection_active:
-                    break
-                
-                # Đợi đến thời điểm
-                wait = entry['time'] - prev_time
-                if wait > 0:
-                    # Đợi theo chunk 1s để check dừng sớm
-                    for _ in range(int(wait)):
-                        if not self.tone_detection_active:
-                            break
-                        time.sleep(1)
-                    # Đợi phần lẻ
-                    remainder = wait - int(wait)
-                    if remainder > 0 and self.tone_detection_active:
-                        time.sleep(remainder)
-                prev_time = entry['time']
-                
-                if not self.tone_detection_active:
-                    break
-                
-                new_key = entry['key_display']
-                if new_key != current_key:
-                    current_key = new_key
-                    # Gửi MIDI
-                    self._send_tone_midi(entry)
-                    time_str = ManualToneTimeline.seconds_to_time_str(entry['time'])
-                    print(f"▶️ [MANUAL REPLAY] t={time_str}: {new_key}")
+            fallback_enabled = not _WIN_MEDIA_AVAILABLE
+            if fallback_enabled:
+                print("⚠️ [MANUAL REPLAY] Không có winrt, dùng fallback absolute time")
+                start_mono = time.monotonic()
+                paused_total = 0
+            
+            while self.tone_detection_active:
+                if fallback_enabled:
+                    elapsed = (time.monotonic() - start_mono) - paused_total
+                    if not self.media_monitor.is_playing:
+                        paused_total += 0.1
+                else:
+                    if not self.media_monitor.is_playing:
+                        time.sleep(0.1)
+                        continue
                     
-                    # Callback UI
-                    if self.on_tone_detected_callback:
-                        try:
-                            self.on_tone_detected_callback(entry)
-                        except:
-                            pass
+                    elapsed = self.media_monitor.current_position
+                
+                # Tìm Tone ứng với elapsed
+                target_idx = -1
+                for i in range(len(timeline)):
+                    if timeline[i]['time'] <= elapsed:
+                        target_idx = i
+                    else:
+                        break
+                        
+                if target_idx >= 0 and target_idx != last_idx:
+                    entry = timeline[target_idx]
+                    new_key = entry['key_display']
+                    
+                    if new_key != current_key or last_idx == -1:
+                        current_key = new_key
+                        self._send_tone_midi(entry)
+                        time_str = ManualToneTimeline.seconds_to_time_str(entry['time'])
+                        print(f"▶️ [MANUAL REPLAY] t={elapsed:.1f}s (trigger={time_str}): {new_key}")
+                        
+                        if self.on_tone_detected_callback:
+                            try:
+                                self.on_tone_detected_callback(entry)
+                            except:
+                                pass
+                                
+                    last_idx = target_idx
+                
+                time.sleep(0.1)
             
-            self.tone_detection_active = False
-            print("🏁 [MANUAL REPLAY] Kết thúc replay thủ công")
+            print(f"🏁 [MANUAL REPLAY] Kết thúc replay thủ công")
         
         threading.Thread(target=_replay, daemon=True).start()
 
@@ -1729,9 +2037,9 @@ class ToneDetector:
     MAJOR_PROFILE = KS_MAJOR
     MINOR_PROFILE = KS_MINOR
     
-    # Key names - khớp với UI tone selector
-    MAJOR_KEY_NAMES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
-    MINOR_KEY_NAMES = ["Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"]
+    # Key names - khớp với Auto-Tune (đều dùng sharp notation)
+    MAJOR_KEY_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+    MINOR_KEY_NAMES = ["Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "A#m", "Bm"]
     
     # Relative key pairs: Major index → Minor index (cách 9 semitone)
     # C Major (0) ↔ Am (9), D Major (2) ↔ Bm (11), ...
@@ -1932,13 +2240,13 @@ class ToneDetector:
             # Key commonality: keys phổ biến trong pop/Vietnamese music
             # Score 1.0 = rất phổ biến, 0.0 = rất hiếm
             KEY_COMMON = {
-                # Major
+                # Major (sharp notation - khớp Auto-Tune)
                 'C': 1.0, 'G': 0.9, 'D': 0.9, 'A': 0.8, 'E': 0.7,
-                'F': 0.9, 'Bb': 0.8, 'Eb': 0.8, 'Ab': 0.7,
-                'Db': 0.5, 'Gb': 0.3, 'B': 0.5,
-                # Minor
+                'F': 0.9, 'A#': 0.8, 'D#': 0.8, 'G#': 0.7,
+                'C#': 0.5, 'F#': 0.3, 'B': 0.5,
+                # Minor (sharp notation - khớp Auto-Tune)
                 'Am': 1.0, 'Em': 0.9, 'Dm': 0.9, 'Bm': 0.7,
-                'Gm': 0.8, 'Cm': 0.8, 'Fm': 0.8, 'Bbm': 0.5,
+                'Gm': 0.8, 'Cm': 0.8, 'Fm': 0.8, 'A#m': 0.5,
                 'F#m': 0.6, 'C#m': 0.6, 'G#m': 0.3, 'D#m': 0.3,
             }
             
