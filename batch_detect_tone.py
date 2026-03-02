@@ -122,50 +122,7 @@ def analyze_full_song(audio_path, segment_sec=SEGMENT_DURATION):
     total_duration = len(y) / sr
     print(f"  ⏱️  Duration: {total_duration:.1f}s ({total_duration/60:.1f} phút)")
 
-    segment_samples = int(segment_sec * sr)
-    num_segments = int(np.ceil(total_duration / segment_sec))
-
-    timeline = []
-    prev_key = None
-
-    for i in range(num_segments):
-        start_sample = i * segment_samples
-        end_sample = min(start_sample + segment_samples, len(y))
-        segment = y[start_sample:end_sample]
-
-        # Bỏ qua segment quá ngắn hoặc quá nhỏ
-        if len(segment) < sr * 2:
-            continue
-        rms = np.sqrt(np.mean(segment ** 2))
-        if rms < 0.005:
-            continue
-
-        start_time = i * segment_sec
-        result = ToneDetector.detect_key_from_audio(segment, sr)
-
-        if result:
-            key_display = result["key_display"]
-            key_index = result["key_index"]
-            scale = result["scale"]
-            confidence = result.get("confidence", 0)
-            time_str = ManualToneTimeline.seconds_to_time_str(start_time)
-
-            # Chỉ thêm entry khi key thay đổi
-            if key_display != prev_key:
-                timeline.append({
-                    "time": float(start_time),
-                    "key_display": key_display,
-                    "key_index": key_index,
-                    "scale": scale,
-                    "confidence": confidence
-                })
-                marker = " 🔄 CHANGE" if prev_key else ""
-                print(f"  🎵 [{time_str}] {key_display} ({scale}) conf={confidence:.3f}{marker}")
-                prev_key = key_display
-            else:
-                print(f"  🎵 [{time_str}] {key_display} ({scale}) conf={confidence:.3f} (giữ nguyên)")
-        else:
-            print(f"  ⚠️  [{ManualToneTimeline.seconds_to_time_str(start_time)}] Không thể dò tone")
+    timeline = ToneDetector.detect_timeline_advanced(y, sr)
 
     return timeline, total_duration
 

@@ -557,5 +557,127 @@
             }
         ],
         "updated_at": "2026-02-25 01:07:17"
+    },
+    "IHStf2AlYgU": {
+        "url": "https://www.youtube.com/watch?v=IHStf2AlYgU",
+        "title": "[KARAOKE] ANH NHÀ Ở ĐÂU THẾ - AMEE x B RAY | Instrumental/Beat Gốc (Tone Nữ)",
+        "timeline": [
+            {
+                "time": 0.0,
+                "key_display": "A#",
+                "key_index": 10,
+                "scale": "Major"
+            },
+            {
+                "time": 30.0,
+                "key_display": "Gm",
+                "key_index": 7,
+                "scale": "Minor"
+            },
+            {
+                "time": 40.0,
+                "key_display": "A#",
+                "key_index": 10,
+                "scale": "Major"
+            },
+            {
+                "time": 120.0,
+                "key_display": "Gm",
+                "key_index": 7,
+                "scale": "Minor"
+            },
+            {
+                "time": 130.0,
+                "key_display": "F",
+                "key_index": 5,
+                "scale": "Major"
+            },
+            {
+                "time": 140.0,
+                "key_display": "A#",
+                "key_index": 10,
+                "scale": "Major"
+            }
+        ],
+        "updated_at": "2026-03-01 18:31:30"
+    },
+    "4o4P7rO8vzc": {
+        "url": "https://www.youtube.com/watch?v=4o4P7rO8vzc",
+        "title": "KARAOKE || Liễu Thanh Yên | Jack - J97 - (Beat Chuẩn)",
+        "timeline": [
+            {
+                "time": 0.0,
+                "key_display": "Em",
+                "key_index": 4,
+                "scale": "Minor"
+            },
+            {
+                "time": 9.0,
+                "key_display": "C",
+                "key_index": 0,
+                "scale": "Major"
+            },
+            {
+                "time": 19.5,
+                "key_display": "G",
+                "key_index": 7,
+                "scale": "Major"
+            },
+            {
+                "time": 34.5,
+                "key_display": "A",
+                "key_index": 9,
+                "scale": "Major"
+            },
+            {
+                "time": 49.5,
+                "key_display": "Bm",
+                "key_index": 11,
+                "scale": "Minor"
+            },
+            {
+                "time": 59.5,
+                "key_display": "C",
+                "key_index": 0,
+                "scale": "Major"
+            },
+            {
+                "time": 70.5,
+                "key_display": "G",
+                "key_index": 7,
+                "scale": "Major"
+            },
+            {
+                "time": 83.5,
+                "key_display": "Em",
+                "key_index": 4,
+                "scale": "Minor"
+            },
+            {
+                "time": 102.5,
+                "key_display": "G",
+                "key_index": 7,
+                "scale": "Major"
+            },
+            {
+                "time": 111.0,
+                "key_display": "Bm",
+                "key_index": 11,
+                "scale": "Minor"
+            },
+            {
+                "time": 136.0,
+                "key_display": "C",
+                "key_index": 0,
+                "scale": "Major"
+            },
+            {
+                "time": 147.0,
+                "key_display": "G",
+                "key_index": 7,
+                "scale": "Major"
+            }
+        ],
+        "updated_at": "2026-03-02 00:23:05"
     }
 }

@@ -91,28 +91,8 @@ class WindowsMediaMonitor:
             time.sleep(0.5)
         return False
 
-# Patch numpy.fromstring TRƯỚC khi import soundcard
-# soundcard dùng np.fromstring(binary) đã bị xóa trong numpy 2.x
-import numpy as np
-_orig_np_fromstring = np.fromstring
-def _patched_fromstring(string, dtype=float, count=-1, *, sep='', like=None):
-    if not sep:
-        # Binary mode → dùng frombuffer (nhận mọi buffer-like object kể cả cffi.buffer)
-        return np.frombuffer(string, dtype=dtype, count=count)
-    return _orig_np_fromstring(string, dtype=dtype, count=count, sep=sep)
-np.fromstring = _patched_fromstring
-
-# Import soundcard ở module level (main thread) để COM init thành công
-try:
-    import soundcard as sc
-    _SOUNDCARD_AVAILABLE = True
-except Exception:
-    sc = None
-    _SOUNDCARD_AVAILABLE = False
-
-# Suppress soundcard warnings (data discontinuity spam)
-import warnings
-warnings.filterwarnings('ignore', message='data discontinuity')
+# (soundcard đã được thay thế bằng PyAudioWPatch trong subprocess recorder_worker.py)
+# Không cần import soundcard ở đây nữa
 
 # --- CẤU HÌNH CỐT LÕI ---
 SETTINGS_FILE = "settings.json"
@@ -148,15 +128,34 @@ class ConfigManager:
 class MidiHandler:
     def __init__(self):
         self.outport = None
+        self.inport = None
         self._warned = False
+        self._is_listening = False
+        self._listen_thread = None
+        self.on_cc_received = None
         self.connect()
+
     def connect(self):
         try:
             outputs = mido.get_output_names()
+            inputs = mido.get_input_names()
+            
             port_name = next((name for name in outputs if MIDI_PORT_NAME in name), None)
+            in_name = next((name for name in inputs if MIDI_PORT_NAME in name), None)
+
             if port_name:
                 self.outport = mido.open_output(port_name)
-                print(f"✅ MIDI Connected: {port_name}")
+                print(f"✅ MIDI Out Connected: {port_name}")
+            
+            if in_name:
+                try:
+                    self.inport = mido.open_input(in_name)
+                    print(f"✅ MIDI In Connected: {in_name}")
+                    self.start_listening()
+                except Exception as ein:
+                    print(f"⚠️ Lỗi kết nối MIDI In: {ein}")
+
+            if port_name or in_name:
                 self._warned = False
                 return True
             else:
@@ -169,6 +168,23 @@ class MidiHandler:
                 print(f"⚠️ Lỗi MIDI: {e}")
                 self._warned = True
             return False
+
+    def start_listening(self):
+        if self._is_listening or not self.inport: return
+        self._is_listening = True
+        import threading
+        self._listen_thread = threading.Thread(target=self._listen_loop, daemon=True)
+        self._listen_thread.start()
+
+    def _listen_loop(self):
+        try:
+            for msg in self.inport:
+                if msg.type == 'control_change':
+                    if self.on_cc_received:
+                        self.on_cc_received(msg.control, msg.value)
+        except Exception as e:
+            print(f"⚠️ MIDI Listen Error: {e}")
+            self._is_listening = False
     def send_cc(self, cc_number, value, channel=0):
         """
         Gửi MIDI Control Change message.
@@ -422,12 +438,114 @@ class ManualToneTimeline:
             return ManualToneTimeline._save_all(data)
         return False
 
+class AudioRecorder:
+    """Thu âm loopback (WASAPI) chạy trong subprocess riêng biệt — tránh xung đột COM với PySide6."""
+    
+    def __init__(self):
+        self._process = None
+        self._stop_flag_path = None
+        self._temp_wav_path = None
+        self._is_recording = False
+
+    def start_recording(self):
+        import subprocess, tempfile
+        if self._is_recording:
+            return
+        
+        # Tạo file tạm cho output WAV và stop flag
+        self._temp_wav_path = os.path.join(tempfile.gettempdir(), f"qlstudio_rec_{int(time.time())}.wav")
+        self._stop_flag_path = os.path.join(tempfile.gettempdir(), f"qlstudio_rec_flag_{int(time.time())}.tmp")
+        
+        # Tạo file flag (worker sẽ chạy cho đến khi file này bị xóa)
+        with open(self._stop_flag_path, 'w') as f:
+            f.write("recording")
+        
+        # Tìm đường dẫn recorder_worker.py cùng thư mục với backend.py
+        worker_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recorder_worker.py")
+        
+        self._process = subprocess.Popen(
+            [sys.executable, worker_script, self._temp_wav_path, self._stop_flag_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        self._is_recording = True
+        
+        # Đọc stdout trong thread riêng để theo dõi trạng thái
+        def monitor():
+            try:
+                for line in self._process.stdout:
+                    line = line.strip()
+                    if line:
+                        print(f"🎤 [RECORDING] {line}")
+            except:
+                pass
+        threading.Thread(target=monitor, daemon=True).start()
+        print(f"🎤 [RECORDING] Đã khởi chạy subprocess thu âm (PID: {self._process.pid})")
+
+    def stop_recording(self, save_path=None):
+        """Dừng thu âm. Nếu save_path được cung cấp, di chuyển file WAV tạm đến đó."""
+        import shutil
+        
+        if not self._is_recording:
+            return False
+        self._is_recording = False
+        
+        # Xóa file flag → subprocess sẽ tự dừng (nếu không bị blocking)
+        if self._stop_flag_path and os.path.exists(self._stop_flag_path):
+            try:
+                os.remove(self._stop_flag_path)
+            except:
+                pass
+        
+        # Đợi 1s, nếu subprocess vẫn chạy (WASAPI block) → kill nó
+        # File WAV vẫn hợp lệ vì worker ghi streaming trực tiếp ra disk
+        if self._process:
+            try:
+                self._process.wait(timeout=1.0)
+            except:
+                try:
+                    self._process.terminate()
+                    self._process.wait(timeout=0.5)
+                except:
+                    self._process.kill()
+            self._process = None
+        
+        # Kiểm tra file WAV tạm
+        if not self._temp_wav_path or not os.path.exists(self._temp_wav_path):
+            print("⚠️ [RECORDING] Không tìm thấy file thu âm tạm.")
+            return False
+        
+        file_size = os.path.getsize(self._temp_wav_path)
+        if file_size < 100:  # WAV header ~44 bytes, nếu chỉ có header = rỗng
+            print("⚠️ [RECORDING] File thu âm rỗng (không thu được âm thanh).")
+            try: os.remove(self._temp_wav_path)
+            except: pass
+            return False 
+        
+        if not save_path:
+            try: os.remove(self._temp_wav_path)
+            except: pass
+            return False
+        
+        try:
+            shutil.move(self._temp_wav_path, save_path)
+            size_mb = file_size / (1024 * 1024)
+            print(f"✅ [RECORDING] Đã lưu file: {save_path} ({size_mb:.1f} MB)")
+            return True
+        except Exception as e:
+            print(f"⚠️ [RECORDING] Lỗi khi lưu file: {e}")
+            return False
+
 class SystemEngine:
     def __init__(self, settings=None):
         self.settings = settings or {}
-        
+
         # Khởi tạo MidiHandler
         self.midi_handler = MidiHandler()
+        
+        # Khởi tạo Loopback AudioRecorder
+        self.recorder = AudioRecorder()
         
         # Khởi tạo WindowsMediaMonitor
         self.media_monitor = WindowsMediaMonitor()
@@ -444,6 +562,14 @@ class SystemEngine:
         # Trạng thái AutoKey (dò tone liên tục toàn bài)
         self.autokey_active = False
         self._autokey_thread = None
+        
+        # Callback nhận MIDI CC
+        self.on_midi_cc_callback = None
+        self.midi_handler.on_cc_received = self._handle_midi_in
+
+    def _handle_midi_in(self, cc, value):
+        if self.on_midi_cc_callback:
+            self.on_midi_cc_callback(cc, value)
     
 
     # --- MIDI WRAPPER METHODS (tương thích với code cũ) ---
@@ -1074,23 +1200,252 @@ class SystemEngine:
         
         threading.Thread(target=_detect, daemon=True).start()
     
-    def _send_tone_midi(self, result):
-        """Gửi MIDI CC cho key/scale đến Auto-Tune"""
-        # Assuming ToneDetector is defined elsewhere and imported
-        # from .tone_detector import ToneDetector
-        # For now, just a placeholder
-        class ToneDetector:
-            @staticmethod
-            def key_index_to_midi(key_index): return key_index
-            @staticmethod
-            def scale_to_midi(scale): return 0 if scale == 'Major' else 1
+    def detect_tone_from_youtube(self, url=None, on_complete=None, on_error=None, on_progress=None):
+        """
+        Dò tone từ YouTube URL. Tải audio → nhận diện key/scale → gửi MIDI → cache.
+        
+        Args:
+            url: YouTube URL (nếu None, dùng self.current_youtube_url)
+            on_complete: Callback(result_dict) khi hoàn thành
+            on_error: Callback(error_msg) khi lỗi
+            on_progress: Callback(status_text) cập nhật trạng thái
+        """
+        youtube_url = url or self.current_youtube_url
+        if not youtube_url:
+            if on_error:
+                on_error("Không có YouTube URL để dò tone.")
+            return
+        
+        def _detect():
+            try:
+                # 1. Kiểm tra cache trước
+                if on_progress:
+                    on_progress("Đang kiểm tra cache...")
+                
+                cached = ToneCacheManager.get_cached_tone(youtube_url)
+                if cached:
+                    print(f"✅ [LẤY TONE YT] Cache hit: {cached.get('primary_key', '?')}")
+                    timeline = cached.get('key_timeline', [])
+                    if timeline:
+                        latest = timeline[-1] if timeline else timeline[0]
+                        result = {
+                            'key_display': cached.get('primary_key', latest.get('key_display', 'C')),
+                            'key_index': latest.get('key_index', 0),
+                            'scale': latest.get('scale', 'Major'),
+                            'confidence': latest.get('confidence', 0),
+                            'from_cache': True,
+                            'key_timeline': timeline
+                        }
+                        self._send_tone_midi(result)
+                        if on_complete:
+                            on_complete(result)
+                        return
+                
+                # 2. Tải audio từ YouTube
+                if on_progress:
+                    on_progress("Đang tải audio từ YouTube...")
+                
+                print(f"🎵 [LẤY TONE YT] Bắt đầu dò tone từ YouTube...")
+                print(f"🔗 URL: {youtube_url}")
+                
+                result = ToneDetector.detect_key_from_youtube(youtube_url, duration_limit=30)
+                
+                if result:
+                    # 3. Gửi MIDI
+                    self._send_tone_midi(result)
+                    
+                    # 4. Lưu cache
+                    cache_data = {
+                        'primary_key': result['key_display'],
+                        'key_timeline': [{
+                            'time': 0,
+                            'key_display': result['key_display'],
+                            'key_index': result['key_index'],
+                            'scale': result['scale'],
+                            'confidence': result.get('confidence', 0)
+                        }]
+                    }
+                    ToneCacheManager.save_tone(youtube_url, cache_data)
+                    
+                    if on_complete:
+                        on_complete(result)
+                else:
+                    if on_error:
+                        on_error("Không thể dò tone từ YouTube. Hãy thử lại.")
+            except Exception as e:
+                print(f"❌ [LẤY TONE YT] Lỗi: {e}")
+                import traceback
+                traceback.print_exc()
+                if on_error:
+                    on_error(str(e))
+        
+        threading.Thread(target=_detect, daemon=True).start()
 
-        key_midi = ToneDetector.key_index_to_midi(result["key_index"])
-        scale_midi = ToneDetector.scale_to_midi(result["scale"])
+    def auto_detect_youtube_timeline(self, url, on_complete=None, on_error=None, on_progress=None):
+        """
+        Tự động dò tone toàn bài YouTube → lưu timeline chuyển tone vào manual_timelines.json.
+        
+        Tải toàn bộ audio → chia segment 10s → dò tone mỗi segment → voting window →
+        phát hiện chuyển tone → lưu thành timeline (giống nhập thủ công).
+        
+        Args:
+            url: YouTube URL
+            on_complete: Callback(timeline_data) khi hoàn thành
+                         timeline_data = {url, title, timeline: [{time, key_display, key_index, scale}, ...]}
+            on_error: Callback(error_msg) khi lỗi
+            on_progress: Callback(status_text) cập nhật trạng thái
+        """
+        if not url:
+            if on_error:
+                on_error("Không có YouTube URL.")
+            return
+        
+        def _detect_full():
+            try:
+                import librosa
+                import numpy as np
+                from PySide6.QtCore import QTimer
+                
+                SEGMENT_DURATION = 15  # giây per segment (15s như batch_detect_tone.py)
+                
+                # 1. Lấy title video
+                if on_progress:
+                    on_progress("Đang lấy thông tin video...")
+                
+                video_title = "Bài hát không tên"
+                try:
+                    import yt_dlp
+                    ydl_opts = {'quiet': True, 'no_warnings': True, 'skip_download': True}
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                        video_title = info.get('title', video_title)
+                except Exception as e:
+                    print(f"⚠️ [AUTO TIMELINE] Không lấy được title: {e}")
+                
+                # 2. Tải audio
+                if on_progress:
+                    on_progress(f"Đang tải audio...")
+                
+                print(f"🎵 [AUTO TIMELINE] Bắt đầu dò tone toàn bài: {video_title}")
+                print(f"🔗 URL: {url}")
+                
+                scoring_engine = ScoringEngine()
+                audio_path = scoring_engine.download_youtube_audio(url)
+                
+                if not audio_path:
+                    if on_error:
+                        on_error("Không thể tải audio từ YouTube.")
+                    return
+                
+                try:
+                    # 3. Load toàn bộ audio
+                    if on_progress:
+                        on_progress("Đang load file âm thanh...")
+                    
+                    audio_data, sr = librosa.load(audio_path, sr=22050, mono=True)
+                    total_seconds = len(audio_data) / sr
+                    
+                    segment_samples = int(SEGMENT_DURATION * sr)
+                    num_segments = int(np.ceil(total_seconds / SEGMENT_DURATION))
+                    
+                    print(f"✅ [AUTO TIMELINE] Audio: {total_seconds:.1f}s, {num_segments} segments (15s/segment)")
+                    
+                    # 4. Phân tích dò tone từ ToneDetector
+                    timeline_entries = ToneDetector.detect_timeline_advanced(audio_data, sr, on_progress)
+                    
+                    if not timeline_entries:
+                        if on_error:
+                            on_error("Không phát hiện được tone nào trong bài hát.")
+                        return
+                    
+                    # 6. Lưu timeline
+                    if on_progress:
+                        on_progress("Đang lưu kết quả...")
+                    
+                    success = ManualToneTimeline.save_timeline(url, video_title, timeline_entries)
+                    
+                    if success:
+                        print(f"✅ [AUTO TIMELINE] Đã lưu: {video_title} ({len(timeline_entries)} entries)")
+                    
+                    # 7. Lưu vào ToneCacheManager
+                    cache_timeline = []
+                    for e in timeline_entries:
+                        cache_entry = dict(e)
+                        if 'confidence' not in cache_entry:
+                            cache_entry['confidence'] = 0.8
+                        cache_timeline.append(cache_entry)
+                    
+                    cache_data = {
+                        'primary_key': timeline_entries[0]['key_display'],
+                        'key_timeline': cache_timeline
+                    }
+                    ToneCacheManager.save_tone(url, cache_data)
+                    
+                    # 8. Gửi MIDI cho key đầu tiên
+                    first_key = timeline_entries[0]
+                    self._send_tone_midi({
+                        'key_display': first_key['key_display'],
+                        'key_index': first_key['key_index'],
+                        'scale': first_key['scale']
+                    })
+                    
+                    # 9. Callback
+                    timeline_data = {
+                        'url': url,
+                        'title': video_title,
+                        'timeline': timeline_entries,
+                        'total_duration': total_seconds
+                    }
+                    
+                    if on_complete:
+                        on_complete(timeline_data)
+                    
+                finally:
+                    scoring_engine.cleanup_temp_file()
+                    
+            except Exception as e:
+                print(f"❌ [AUTO TIMELINE] Lỗi: {e}")
+                import traceback
+                traceback.print_exc()
+                if on_error:
+                    on_error(str(e))
+        
+        threading.Thread(target=_detect_full, daemon=True).start()
+
+    def _send_tone_midi(self, result):
+        """Gửi MIDI CC cho key/scale đến Auto-Tune
+        
+        Key (CC 34): 12 nốt chromatic C..B, ánh xạ đều vào 0-127
+          C=0, C#=10, D=21, D#=32, E=42, F=53, F#=63,
+          G=74, G#=85, A=95, A#=106, B=116
+        Scale (CC 35): Minor=8, Major=14
+        """
+        # Bảng ánh xạ Key → MIDI CC value (12 nốt, hỗ trợ cả sharp và flat)
+        KEY_MIDI_MAP = {
+            "C": 0,   "C#": 10, "Db": 10,  "D": 21,  "D#": 32, "Eb": 32,
+            "E": 42,  "F": 53,  "F#": 63,  "G": 74,
+            "G#": 85, "Ab": 85, "A": 95,   "A#": 106, "Bb": 106, "B": 116,
+        }
+        # Scale → MIDI CC value 
+        SCALE_MIDI_MAP = {
+            "Minor": 8,
+            "Major": 14,
+        }
+        
+        # Lấy key_display, bỏ "m" suffix nếu có (Cm → C, Am → A)
+        key_display = result.get("key_display", "C")
+        key_root = key_display.replace("m", "") if key_display.endswith("m") and not key_display.endswith("#m") else key_display
+        if key_display.endswith("#m"):
+            key_root = key_display[:-1]  # "C#m" → "C#"
+        
+        key_midi = KEY_MIDI_MAP.get(key_root, 0)
+        scale = result.get("scale", "Major")
+        scale_midi = SCALE_MIDI_MAP.get(scale, 14)
+        
         self.send_midi(34, key_midi)
         time.sleep(0.05)
         self.send_midi(35, scale_midi)
-        print(f"📤 [TONE] MIDI → CC34={key_midi} ({result['key_display']}), CC35={scale_midi} ({result['scale']})")
+        print(f"📤 [TONE] MIDI → CC34={key_midi} (Key={key_root}), CC35={scale_midi} (Scale={scale})")
     
     def stop_tone_detection(self):
         """Dừng dò tone liên tục"""
@@ -2497,6 +2852,165 @@ class ToneDetector:
             print(traceback.format_exc())
             return None
     
+    @staticmethod
+    def detect_timeline_advanced(audio_data, sr, on_progress=None):
+        """
+        Dò tone tiên tiến:
+        1. Dùng novelty-based segmentation để tìm đổi cấu trúc.
+        2. Refine với sliding window nhỏ (±3s).
+        3. Dò tone mỗi segment.
+        4. Merge segment cùng key.
+        5. Filter chuyển tone ngắn (<8s).
+        """
+        import librosa
+        import numpy as np
+        import scipy.signal
+        
+        duration = len(audio_data) / sr
+        if on_progress: on_progress("Đang phân tích cấu trúc bài hát (novelty curve)...")
+        print("🔍 [NOVELTY] Bắt đầu phân tích cấu trúc...")
+        
+        # 1. Novelty curve (dựa trên chroma)
+        hop_length = int(sr / 2) # 0.5s per frame
+        chroma = librosa.feature.chroma_cqt(y=audio_data, sr=sr, hop_length=hop_length)
+        
+        novelty = np.zeros(chroma.shape[1])
+        window_frames = 10 # 5s
+        for i in range(window_frames, chroma.shape[1] - window_frames):
+            past = np.mean(chroma[:, i-window_frames:i], axis=1)
+            future = np.mean(chroma[:, i:i+window_frames], axis=1)
+            n_p = np.linalg.norm(past)
+            n_f = np.linalg.norm(future)
+            if n_p > 0 and n_f > 0:
+                novelty[i] = 1.0 - np.dot(past, future) / (n_p * n_f)
+                
+        peaks, _ = scipy.signal.find_peaks(novelty, prominence=0.03, distance=16) # distance = 8s
+        initial_boundaries = [p * hop_length / sr for p in peaks]
+        print(f"📊 [NOVELTY] Đã tìm thấy {len(initial_boundaries)} điểm thay đổi cấu trúc thô")
+        
+        # 2. Refine với sliding window (±3s)
+        if on_progress: on_progress("Đang tinh chỉnh các điểm chuyển đoạn...")
+        refined_boundaries = []
+        for b in initial_boundaries:
+            start_frame = int(max(0, b - 3.0) * sr / hop_length)
+            end_frame = int(min(duration, b + 3.0) * sr / hop_length)
+            if start_frame < end_frame:
+                local_nov = novelty[start_frame:end_frame]
+                local_max_idx = np.argmax(local_nov)
+                refined_b = max(0, b - 3.0) + local_max_idx * hop_length / sr
+                refined_boundaries.append(refined_b)
+            else:
+                refined_boundaries.append(b)
+                
+        boundaries = [0.0] + refined_boundaries + [duration]
+        boundaries = sorted(list(set(boundaries)))
+        print(f"🎯 [NOVELTY] Refined {len(refined_boundaries)} điểm chuyển cấu trúc")
+        
+        # 3. Detect tone cho mỗi phân đoạn
+        segments = []
+        for i in range(len(boundaries) - 1):
+            start = boundaries[i]
+            end = boundaries[i+1]
+            
+            if on_progress:
+                pct = int((i + 1) / (len(boundaries) - 1) * 100)
+                on_progress(f"Dò tone phân đoạn {i+1}/{len(boundaries)-1} ({pct}%)...")
+                
+            seg_audio = audio_data[int(start*sr):int(end*sr)]
+            if len(seg_audio) < sr * 2:
+                continue
+                
+            rms = np.sqrt(np.mean(seg_audio ** 2))
+            if rms < 0.005:
+                segments.append({'start': start, 'end': end, 'key_display': 'Silence', 'result': None})
+                continue
+                
+            result = ToneDetector.detect_key_from_audio(seg_audio, sr)
+            if result:
+                segments.append({
+                    'start': start, 'end': end,
+                    'key_display': result['key_display'],
+                    'result': result
+                })
+                print(f"   🎵 Phân đoạn [{start:.1f}s - {end:.1f}s]: {result['key_display']} (conf={result.get('confidence',0):.3f})")
+            else:
+                segments.append({'start': start, 'end': end, 'key_display': 'Unknown', 'result': None})
+                
+        # 4. Merge adjacent segments (bỏ Silence/Unknown)
+        merged_segments = []
+        for seg in segments:
+            if not merged_segments:
+                merged_segments.append(seg)
+            else:
+                last_seg = merged_segments[-1]
+                if seg['key_display'] in ['Silence', 'Unknown']:
+                    last_seg['end'] = seg['end']
+                elif last_seg['key_display'] in ['Silence', 'Unknown']:
+                    last_seg['key_display'] = seg['key_display']
+                    last_seg['result'] = seg['result']
+                    last_seg['end'] = seg['end']
+                elif last_seg['key_display'] == seg['key_display']:
+                    last_seg['end'] = seg['end']
+                    if seg['result'] and last_seg['result']:
+                        if seg['result'].get('confidence',0) > last_seg['result'].get('confidence',0):
+                            last_seg['result'] = seg['result']
+                else:
+                    merged_segments.append(seg)
+                    
+        # 5. Filter short segments (<8s) (Loc Nhiễu)
+        MIN_DURATION = 8.0
+        filtered_segments = []
+        for seg in merged_segments:
+            seg_dur = seg['end'] - seg['start']
+            if seg_dur < MIN_DURATION:
+                if not filtered_segments:
+                    filtered_segments.append(seg)
+                else:
+                    filtered_segments[-1]['end'] = seg['end']
+                    print(f"   ✂️ Bỏ qua đoạn chuyển nhiễu ({seg_dur:.1f}s), gộp vào {filtered_segments[-1]['key_display']}")
+            else:
+                if filtered_segments and filtered_segments[-1]['key_display'] == seg['key_display']:
+                    filtered_segments[-1]['end'] = seg['end']
+                else:
+                    filtered_segments.append(seg)
+                    
+        # Final pass merge
+        final_segments = []
+        for seg in filtered_segments:
+            if not final_segments:
+                final_segments.append(seg)
+            elif final_segments[-1]['key_display'] == seg['key_display']:
+                final_segments[-1]['end'] = seg['end']
+            else:
+                final_segments.append(seg)
+                
+        # Tạo kết quả cuối cùng
+        timeline_entries = []
+        for seg in final_segments:
+            if seg['result'] and seg['key_display'] not in ['Silence', 'Unknown']:
+                entry = {
+                    'time': float(seg['start']),
+                    'key_display': seg['result']['key_display'],
+                    'key_index': seg['result']['key_index'],
+                    'scale': seg['result']['scale'],
+                    'confidence': float(seg['result'].get('confidence', 0.8))
+                }
+                timeline_entries.append(entry)
+                print(f"✅ [TIMELINE] {seg['start']:.1f}s → {seg['key_display']}")
+                
+        # Xử lý case track toàn bị Silent/ngắn
+        if not timeline_entries and final_segments and final_segments[0]['result']:
+            seg = final_segments[0]
+            timeline_entries.append({
+                'time': 0.0,
+                'key_display': seg['result']['key_display'],
+                'key_index': seg['result']['key_index'],
+                'scale': seg['result']['scale'],
+                'confidence': float(seg['result'].get('confidence', 0.8))
+            })
+            
+        return timeline_entries
+        
     @staticmethod
     def key_index_to_midi(key_index):
         """Chuyển key index (0-11) sang MIDI CC value (0-127)"""
