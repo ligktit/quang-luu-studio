@@ -91,8 +91,10 @@ class WindowsMediaMonitor:
             time.sleep(0.5)
         return False
 
-# (soundcard đã được thay thế bằng PyAudioWPatch trong subprocess recorder_worker.py)
-# Không cần import soundcard ở đây nữa
+# WASAPI loopback sử dụng pyaudiowpatch (thay thế soundcard)
+# - recorder_worker.py: subprocess thu âm
+# - ToneDetector.detect_key_from_system_audio: dò tone
+# - SystemEngine._autokey_loop: dò tone liên tục
 
 # --- CẤU HÌNH CỐT LÕI ---
 SETTINGS_FILE = "settings.json"
@@ -112,15 +114,18 @@ class ConfigManager:
         return None
 
     @staticmethod
-    def save(s1, web, auto_launch_studio_one=False, midi_port_name=None):
-        settings = {
-            "studio_one_path": s1, 
-            "browser_path": web,
-            "auto_launch_studio_one": auto_launch_studio_one
-        }
-        # Thêm MIDI port name nếu được cung cấp
-        if midi_port_name:
-            settings["midi_port_name"] = midi_port_name
+    def save(settings_or_s1=None, web=None, auto_launch_studio_one=False, midi_port_name=None):
+        # Hỗ trợ cả dict lẫn positional args
+        if isinstance(settings_or_s1, dict):
+            settings = settings_or_s1
+        else:
+            settings = {
+                "studio_one_path": settings_or_s1 or "", 
+                "browser_path": web or "",
+                "auto_launch_studio_one": auto_launch_studio_one
+            }
+            if midi_port_name:
+                settings["midi_port_name"] = midi_port_name
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=4)
 
@@ -991,123 +996,7 @@ class SystemEngine:
         # Bắt đầu monitoring trong thread riêng
         monitoring_thread = threading.Thread(target=monitor_video, daemon=True)
         monitoring_thread.start()
-    
-    def _replay_cached_timeline(self, cached_result):
-        """
-        Replay timeline từ cache.
-        cached_result = {
-            'primary_key': 'Dm',
-            'key_timeline': [{time, key_display, key_index, scale, confidence}, ...],
-            'url': url
-        }
-        """
-        timeline = cached_result.get('key_timeline', [])
-        if not timeline:
-            print("⚠️ [REPLAY CACHE] Không có timeline trong cache.")
-            return
 
-        print(f"▶️ [REPLAY CACHE] Bắt đầu replay timeline từ cache ({len(timeline)} entries)...")
-        
-        # Sắp xếp timeline theo thời gian
-        timeline.sort(key=lambda x: x['time'])
-        
-        current_entry_idx = 0
-        last_sent_key = None
-        
-        while self.current_youtube_url and self.media_monitor.is_playing and current_entry_idx < len(timeline):
-            current_media_position = self.media_monitor.current_position
-            
-            entry = timeline[current_entry_idx]
-            entry_time = entry['time']
-            
-            if current_media_position >= entry_time:
-                key_display = entry['key_display']
-                key_index = entry['key_index']
-                scale = entry['scale']
-                
-                if key_display != last_sent_key:
-                    print(f"🎶 [REPLAY CACHE] Tại {ManualToneTimeline.seconds_to_time_str(current_media_position)}s: Chuyển tone sang {key_display} ({scale})")
-                    self._send_tone_midi({
-                        'key_display': key_display,
-                        'key_index': key_index,
-                        'scale': scale
-                    })
-                    last_sent_key = key_display
-                    
-                    if self.on_tone_detected_callback:
-                        try:
-                            self.on_tone_detected_callback({
-                                'status': 'replayed',
-                                'key_display': key_display,
-                                'key_index': key_index,
-                                'scale': scale,
-                                'confidence': entry.get('confidence', 1.0), # Giả định confidence cao cho cache
-                                'time': current_media_position
-                            })
-                        except Exception as e:
-                            print(f"⚠️ Lỗi gọi callback on_tone_detected_callback: {e}")
-                
-                current_entry_idx += 1
-            else:
-                time.sleep(0.1) # Chờ 100ms trước khi kiểm tra lại
-        
-        print("🏁 [REPLAY CACHE] Kết thúc replay timeline từ cache.")
-
-    def _replay_manual_timeline(self, timeline_entries):
-        """
-        Replay timeline thủ công.
-        timeline_entries: list of {time, key_display, key_index, scale}
-        """
-        if not timeline_entries:
-            print("⚠️ [REPLAY MANUAL] Không có timeline thủ công để replay.")
-            return
-
-        print(f"▶️ [REPLAY MANUAL] Bắt đầu replay timeline thủ công ({len(timeline_entries)} entries)...")
-        
-        # Sắp xếp timeline theo thời gian
-        timeline_entries.sort(key=lambda x: x['time'])
-        
-        current_entry_idx = 0
-        last_sent_key = None
-        
-        while self.current_youtube_url and self.media_monitor.is_playing and current_entry_idx < len(timeline_entries):
-            current_media_position = self.media_monitor.current_position
-            
-            entry = timeline_entries[current_entry_idx]
-            entry_time = entry['time']
-            
-            if current_media_position >= entry_time:
-                key_display = entry['key_display']
-                key_index = entry['key_index']
-                scale = entry['scale']
-                
-                if key_display != last_sent_key:
-                    print(f"🎶 [REPLAY MANUAL] Tại {ManualToneTimeline.seconds_to_time_str(current_media_position)}s: Chuyển tone thủ công sang {key_display} ({scale})")
-                    self._send_tone_midi({
-                        'key_display': key_display,
-                        'key_index': key_index,
-                        'scale': scale
-                    })
-                    last_sent_key = key_display
-                    
-                    if self.on_tone_detected_callback:
-                        try:
-                            self.on_tone_detected_callback({
-                                'status': 'replayed_manual',
-                                'key_display': key_display,
-                                'key_index': key_index,
-                                'scale': scale,
-                                'confidence': 1.0, # Giả định confidence cao cho manual
-                                'time': current_media_position
-                            })
-                        except Exception as e:
-                            print(f"⚠️ Lỗi gọi callback on_tone_detected_callback: {e}")
-                
-                current_entry_idx += 1
-            else:
-                time.sleep(0.1) # Chờ 100ms trước khi kiểm tra lại
-        
-        print("🏁 [REPLAY MANUAL] Kết thúc replay timeline thủ công.")
 
     def detect_tone(self, duration=10, on_complete=None, on_error=None, on_progress=None):
         """
@@ -1115,19 +1004,7 @@ class SystemEngine:
         """
         def _detect():
             try:
-                # Assuming ToneDetector is defined elsewhere and imported
-                # from .tone_detector import ToneDetector
-                # For now, just a placeholder
-                class ToneDetector:
-                    @staticmethod
-                    def detect_key_from_youtube(url, duration_limit): return None
-                    @staticmethod
-                    def detect_key_from_system_audio(duration, on_progress): return None
-                    @staticmethod
-                    def key_index_to_midi(key_index): return key_index
-                    @staticmethod
-                    def scale_to_midi(scale): return 0 if scale == 'Major' else 1
-                
+
                 # Kiểm tra cache nếu có YouTube URL
                 if self.current_youtube_url:
                     cached = ToneCacheManager.get_cached_tone(self.current_youtube_url)
@@ -1478,24 +1355,7 @@ class SystemEngine:
             import numpy as np
             from collections import Counter
             
-            # Assuming ToneDetector is defined elsewhere and imported
-            # from .tone_detector import ToneDetector
-            # For now, just a placeholder
-            class ToneDetector:
-                VOTING_WINDOW = 3
-                KEY_CHANGE_THRESHOLD = 0.05
-                @staticmethod
-                def detect_key_from_audio(audio_buffer, sample_rate):
-                    # Placeholder for actual tone detection logic
-                    # Returns a dict like {'key_display': 'C', 'key_index': 0, 'scale': 'Major', 'confidence': 0.8}
-                    return {'key_display': 'C', 'key_index': 0, 'scale': 'Major', 'confidence': 0.8}
-                @staticmethod
-                def key_index_to_midi(key_index): return key_index
-                @staticmethod
-                def scale_to_midi(scale): return 0 if scale == 'Major' else 1
-
             VOTING_WINDOW = ToneDetector.VOTING_WINDOW
-            SAMPLE_RATE = 48000  # Windows WASAPI loopback = device output rate (thường 48kHz)
             current_key = None
             current_confidence = 0
             recent_keys = []
@@ -1509,61 +1369,85 @@ class SystemEngine:
                 pass
             
             try:
-                # Kiểm tra soundcard
-                if not _SOUNDCARD_AVAILABLE:
-                    print("❌ [AUTOKEY] soundcard không khả dụng")
+                # Import pyaudiowpatch (thay thế soundcard)
+                try:
+                    import pyaudiowpatch as pyaudio
+                except ImportError:
+                    print("❌ [AUTOKEY] pyaudiowpatch không khả dụng. Cài đặt: pip install pyaudiowpatch")
                     self.autokey_active = False
                     return
                 
-                # Tìm loopback mic một lần duy nhất
-                all_mics = sc.all_microphones(include_loopback=True)
-                loopback_mic = None
-                default_speaker = sc.default_speaker()
-                speaker_name = default_speaker.name if default_speaker else ""
+                pa = pyaudio.PyAudio()
                 
-                for mic in all_mics:
-                    is_loopback = hasattr(mic, 'isloopback') and mic.isloopback
-                    if is_loopback:
-                        if loopback_mic is None:
-                            loopback_mic = mic
-                        if speaker_name and speaker_name.lower() in mic.name.lower():
-                            loopback_mic = mic
+                # Tìm WASAPI loopback device (giống recorder_worker.py)
+                wasapi_info = None
+                for i in range(pa.get_host_api_count()):
+                    info = pa.get_host_api_info_by_index(i)
+                    if "wasapi" in info.get("name", "").lower():
+                        wasapi_info = info
+                        break
                 
-                if not loopback_mic:
-                    try:
-                        loopback_mic = sc.get_microphone(
-                            id=str(default_speaker.name), include_loopback=True
-                        )
-                    except:
-                        pass
+                if not wasapi_info:
+                    print("❌ [AUTOKEY] Không tìm thấy WASAPI host API!")
+                    pa.terminate()
+                    self.autokey_active = False
+                    return
                 
-                if not loopback_mic:
+                loopback_dev = None
+                for i in range(pa.get_device_count()):
+                    dev = pa.get_device_info_by_index(i)
+                    if dev.get("isLoopbackDevice", False):
+                        if dev.get("hostApi") == wasapi_info["index"]:
+                            loopback_dev = dev
+                            break
+                
+                if not loopback_dev:
                     print("❌ [AUTOKEY] Không tìm thấy thiết bị loopback!")
+                    pa.terminate()
                     self.autokey_active = False
                     return
+                
+                SAMPLE_RATE = int(loopback_dev["defaultSampleRate"])
+                channels = loopback_dev["maxInputChannels"]
+                chunk_size = 1024
                 
                 print("=" * 60)
-                print(f"🎹 [AUTOKEY] Bắt đầu — segment={segment_duration}s, mic={loopback_mic.name}")
+                print(f"🎹 [AUTOKEY] Bắt đầu — segment={segment_duration}s, device={loopback_dev['name']}")
                 
-                # Giữ recorder mở suốt session → tránh init lại mỗi segment
-                # ROLLING AUDIO BUFFER: tích lũy audio thật, phân tích toàn bộ
-                RECORD_CHUNK = segment_duration  # Thu 5s mỗi lần
-                MAX_BUFFER_SEC = 30  # Giữ tối đa 30s audio (bao phủ nhiều chord hơn)
+                # ROLLING AUDIO BUFFER: tích lũy audio, phân tích toàn bộ
+                RECORD_CHUNK = segment_duration
+                MAX_BUFFER_SEC = 30
                 MAX_BUFFER_FRAMES = MAX_BUFFER_SEC * SAMPLE_RATE
                 audio_buffer = np.array([], dtype=np.float32)
                 
                 print(f"🎹 [AUTOKEY] Rolling buffer: chunk={RECORD_CHUNK}s, max={MAX_BUFFER_SEC}s")
                 
-                with loopback_mic.recorder(samplerate=SAMPLE_RATE, channels=1) as recorder:
+                stream = pa.open(
+                    format=pyaudio.paFloat32,
+                    channels=1,
+                    rate=SAMPLE_RATE,
+                    input=True,
+                    input_device_index=loopback_dev["index"],
+                    frames_per_buffer=chunk_size
+                )
+                
+                try:
                     while self.autokey_active:
                         try:
                             # Thu âm chunk mới
-                            frames = RECORD_CHUNK * SAMPLE_RATE
-                            chunk = recorder.record(numframes=frames)
+                            frames_needed = RECORD_CHUNK * SAMPLE_RATE
+                            chunks = []
+                            frames_read = 0
+                            while frames_read < frames_needed and self.autokey_active:
+                                data = stream.read(chunk_size, exception_on_overflow=False)
+                                chunk_np = np.frombuffer(data, dtype=np.float32)
+                                chunks.append(chunk_np)
+                                frames_read += len(chunk_np)
                             
-                            if chunk.ndim > 1:
-                                chunk = chunk[:, 0]
-                            chunk = chunk.astype(np.float32)
+                            if not self.autokey_active:
+                                break
+                            
+                            chunk = np.concatenate(chunks)
                             chunk = np.nan_to_num(chunk, nan=0.0, posinf=0.0, neginf=0.0)
                             
                             # Kiểm tra im lặng
@@ -1591,7 +1475,7 @@ class SystemEngine:
                             buffer_sec = len(audio_buffer) / SAMPLE_RATE
                             print(f"📦 [AUTOKEY] Buffer: {buffer_sec:.1f}s")
                             
-                            # Phân tích TOÀN BỘ buffer (giống test_tone_youtube phân tích 30s)
+                            # Phân tích TOÀN BỘ buffer
                             result = ToneDetector.detect_key_from_audio(audio_buffer, SAMPLE_RATE)
                             
                             if not result:
@@ -1648,6 +1532,10 @@ class SystemEngine:
                         except Exception as e:
                             print(f"❌ [AUTOKEY] Lỗi segment: {e}")
                             time.sleep(1)
+                finally:
+                    stream.stop_stream()
+                    stream.close()
+                    pa.terminate()
                 
             except Exception as e:
                 print(f"❌ [AUTOKEY] Lỗi khởi tạo: {e}")
@@ -2700,14 +2588,16 @@ class ToneDetector:
         Thu âm loopback từ hệ thống (bắt âm thanh đang phát trên loa)
         và phát hiện tone bài hát. Không cần tải từ YouTube.
         
-        Sử dụng WASAPI Loopback (Windows) qua thư viện soundcard.
+        Sử dụng WASAPI Loopback (Windows) qua thư viện pyaudiowpatch.
         """
         import numpy as np
         
-        # Kiểm tra soundcard
-        if not _SOUNDCARD_AVAILABLE:
-            print("❌ [DÒ TONE] Thư viện 'soundcard' chưa được cài đặt.")
-            print("   Chạy: pip install soundcard")
+        # Import pyaudiowpatch (thay thế soundcard)
+        try:
+            import pyaudiowpatch as pyaudio
+        except ImportError:
+            print("❌ [DÒ TONE] Thư viện 'pyaudiowpatch' chưa được cài đặt.")
+            print("   Chạy: pip install pyaudiowpatch")
             return None
         
         # Khởi tạo COM cho background thread (WASAPI yêu cầu COM per-thread)
@@ -2718,66 +2608,78 @@ class ToneDetector:
         except:
             pass
         
+        pa = None
+        stream = None
         try:
             print("=" * 60)
             print(f"🎤 [DÒ TONE] Thu âm loopback từ hệ thống ({duration}s)...")
             
-            # Tìm loopback microphone
-            all_mics = sc.all_microphones(include_loopback=True)
+            pa = pyaudio.PyAudio()
             
-            loopback_mic = None
-            default_speaker = sc.default_speaker()
-            speaker_name = default_speaker.name if default_speaker else ""
+            # Tìm WASAPI loopback device
+            wasapi_info = None
+            for i in range(pa.get_host_api_count()):
+                info = pa.get_host_api_info_by_index(i)
+                if "wasapi" in info.get("name", "").lower():
+                    wasapi_info = info
+                    break
             
-            print(f"🔊 [DÒ TONE] Default speaker: {speaker_name}")
-            print(f"🎙️ [DÒ TONE] Tìm thấy {len(all_mics)} microphone(s):")
+            if not wasapi_info:
+                print("❌ [DÒ TONE] Không tìm thấy WASAPI host API!")
+                return None
             
-            for mic in all_mics:
-                is_loopback = hasattr(mic, 'isloopback') and mic.isloopback
-                print(f"   {'🔄' if is_loopback else '🎙️'} {mic.name} (loopback={is_loopback})")
-                
-                if is_loopback:
-                    if loopback_mic is None:
-                        loopback_mic = mic
-                    if speaker_name and speaker_name.lower() in mic.name.lower():
-                        loopback_mic = mic
+            loopback_dev = None
+            for i in range(pa.get_device_count()):
+                dev = pa.get_device_info_by_index(i)
+                if dev.get("isLoopbackDevice", False):
+                    if dev.get("hostApi") == wasapi_info["index"]:
+                        loopback_dev = dev
+                        break
             
-            if not loopback_mic:
-                try:
-                    loopback_mic = sc.get_microphone(id=str(default_speaker.name), include_loopback=True)
-                except:
-                    pass
-            
-            if not loopback_mic:
+            if not loopback_dev:
                 print("❌ [DÒ TONE] Không tìm thấy thiết bị loopback!")
                 return None
             
-            print(f"✅ [DÒ TONE] Sử dụng loopback: {loopback_mic.name}")
+            device_sr = int(loopback_dev["defaultSampleRate"])
+            chunk_size = 1024
+            
+            print(f"✅ [DÒ TONE] Sử dụng loopback: {loopback_dev['name']}")
             print(f"⏺️  [DÒ TONE] Đang thu âm {duration} giây...")
+            
+            stream = pa.open(
+                format=pyaudio.paFloat32,
+                channels=1,
+                rate=device_sr,
+                input=True,
+                input_device_index=loopback_dev["index"],
+                frames_per_buffer=chunk_size
+            )
             
             # Thu âm theo từng giây để cập nhật progress
             audio_chunks = []
-            with loopback_mic.recorder(samplerate=sample_rate, channels=1) as recorder:
-                for i in range(duration):
-                    chunk = recorder.record(numframes=sample_rate)
-                    audio_chunks.append(chunk)
-                    
-                    remaining = duration - i - 1
-                    if on_progress:
-                        try:
-                            on_progress(remaining)
-                        except:
-                            pass
-                    
-                    print(f"   ⏱️  Còn {remaining}s...")
+            for sec in range(duration):
+                frames_needed = device_sr
+                frames_read = 0
+                while frames_read < frames_needed:
+                    data = stream.read(chunk_size, exception_on_overflow=False)
+                    chunk_np = np.frombuffer(data, dtype=np.float32)
+                    audio_chunks.append(chunk_np)
+                    frames_read += len(chunk_np)
+                
+                remaining = duration - sec - 1
+                if on_progress:
+                    try:
+                        on_progress(remaining)
+                    except:
+                        pass
+                
+                print(f"   ⏱️  Còn {remaining}s...")
             
             # Ghép các chunks
-            audio_data = np.concatenate(audio_chunks, axis=0)
-            if audio_data.ndim > 1:
-                audio_data = audio_data[:, 0]
-            audio_data = audio_data.astype(np.float32)
+            audio_data = np.concatenate(audio_chunks)
+            audio_data = np.nan_to_num(audio_data, nan=0.0, posinf=0.0, neginf=0.0)
             
-            actual_duration = len(audio_data) / sample_rate
+            actual_duration = len(audio_data) / device_sr
             print(f"✅ [DÒ TONE] Đã thu: {actual_duration:.1f}s, {len(audio_data)} samples")
             
             # Kiểm tra âm thanh
@@ -2790,7 +2692,7 @@ class ToneDetector:
             
             
             # Phân tích key
-            result = ToneDetector.detect_key_from_audio(audio_data, sample_rate)
+            result = ToneDetector.detect_key_from_audio(audio_data, device_sr)
             return result
             
         except Exception as e:
@@ -2799,6 +2701,17 @@ class ToneDetector:
             print(traceback.format_exc())
             return None
         finally:
+            if stream:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except:
+                    pass
+            if pa:
+                try:
+                    pa.terminate()
+                except:
+                    pass
             if com_initialized:
                 try:
                     ctypes.windll.ole32.CoUninitialize()

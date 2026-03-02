@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QSpacerItem, QGraphicsDropShadowEffect
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QPropertyAnimation, QEasingCurve, QSize
-from PySide6.QtGui import QFont, QColor, QIcon, QFontDatabase
+from PySide6.QtGui import QFont, QColor, QIcon, QFontDatabase, QPainter, QPen, QLinearGradient
 import backend
 
 # ─── COLOR PALETTE (IMPROVE_UX_UI V2.0 — Deep Navy) ───
@@ -209,6 +209,120 @@ def add_shadow(widget, color="#000000", blur=20, offset=(0, 4)):
 
 
 # ══════════════════════════════════════════════════════
+#  WAVEFORM WIDGET
+# ══════════════════════════════════════════════════════
+class WaveformWidget(QWidget):
+    """Real-time waveform visualizer — hiển thị sóng âm thanh từ microphone"""
+
+    def __init__(self, parent=None, bar_count=28, color="#6366F1"):
+        super().__init__(parent)
+        self.bar_count = bar_count
+        self.color = color
+        self._levels = [0.0] * bar_count
+        self._active = False
+        self._stream = None
+        self._lock = __import__('threading').Lock()
+
+        self.setMinimumHeight(56)
+        self.setMaximumHeight(72)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setStyleSheet("background: transparent;")
+
+        # Timer vẽ ~30fps
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self.update)
+        self._timer.start(33)
+
+    def start(self):
+        """Bắt đầu capture audio từ default input device"""
+        if self._active:
+            return
+        self._active = True
+        import threading
+        threading.Thread(target=self._audio_loop, daemon=True).start()
+
+    def stop(self):
+        """Dừng capture"""
+        self._active = False
+        if self._stream:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+
+    def _audio_loop(self):
+        try:
+            import sounddevice as sd
+            import numpy as np
+            chunk = 512
+            with sd.InputStream(channels=1, samplerate=22050, blocksize=chunk) as stream:
+                self._stream = stream
+                while self._active:
+                    data, _ = stream.read(chunk)
+                    data = data[:, 0]  # mono
+                    # Phân chia thành bar_count đoạn, lấy RMS mỗi đoạn
+                    seg = np.array_split(data, self.bar_count)
+                    levels = [float(np.sqrt(np.mean(s**2))) for s in seg]
+                    # Normalize và smooth
+                    peak = max(max(levels), 1e-6)
+                    with self._lock:
+                        for i, lv in enumerate(levels):
+                            target = min(lv / peak, 1.0)
+                            self._levels[i] = self._levels[i] * 0.55 + target * 0.45
+        except Exception as e:
+            print(f"⚠️ WaveformWidget audio error: {e}")
+            self._active = False
+
+    def paintEvent(self, event):
+        import math
+        w, h = self.width(), self.height()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Background pill
+        bg_color = QColor(15, 23, 42, 160)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(bg_color)
+        painter.drawRoundedRect(0, 0, w, h, 10, 10)
+
+        with self._lock:
+            levels = list(self._levels)
+
+        bar_w = max(2, (w - (self.bar_count + 1) * 3) // self.bar_count)
+        spacing = (w - bar_w * self.bar_count) // (self.bar_count + 1)
+        max_bar_h = h - 16
+        mid_y = h // 2
+
+        base_color = QColor(self.color)
+        top_color = QColor(self.color).lighter(160)
+
+        for i, level in enumerate(levels):
+            bar_h = max(4, int(level * max_bar_h))
+            x = spacing + i * (bar_w + spacing)
+            y = mid_y - bar_h // 2
+
+            # Gradient per bar
+            grad = QLinearGradient(x, y, x, y + bar_h)
+            grad.setColorAt(0.0, top_color)
+            grad.setColorAt(1.0, base_color)
+
+            painter.setBrush(grad)
+            painter.drawRoundedRect(x, y, bar_w, bar_h, bar_w // 2, bar_w // 2)
+
+        # Label nhỏ góc phải
+        painter.setPen(QColor(148, 163, 184, 180))
+        fnt = painter.font()
+        fnt.setPointSize(7)
+        fnt.setFamily(FONT)
+        painter.setFont(fnt)
+        painter.drawText(w - 36, h - 3, "LIVE")
+
+        painter.end()
+
+
+# ══════════════════════════════════════════════════════
 #  MAIN DASHBOARD
 # ══════════════════════════════════════════════════════
 class MainDashboard(QMainWindow):
@@ -394,9 +508,6 @@ class MainDashboard(QMainWindow):
         vlayout.setContentsMargins(0, 0, 0, 0)
         vlayout.setSpacing(8)
 
-        title = QLabel("TONE & AUTO")
-        title.setStyleSheet(f"font-size:14px; font-weight:700; color:{C['text']}; font-family: {FONT}; letter-spacing: 1px;")
-        vlayout.addWidget(title)
 
         # Button grid 3×2
         grid = QGridLayout()
@@ -406,25 +517,21 @@ class MainDashboard(QMainWindow):
             ("Lấy Tone",   C["teal"],         self._on_lay_tone),
             ("Tone Auto",  C["pink"],         self._on_tone_auto),
             ("Fix Méo",    C["deep_purple"],  self._on_fix_meo),
-            ("Chuẩn Âm",   C["accent"],       self._on_tune_toggle),
+            ("Major",      C["green"],        self._on_scale_toggle),
             ("Chấm điểm", C["light_purple"], self._on_score),
         ]
         self._func_buttons = {}
         for i, (text, color, cb) in enumerate(func_btns):
             btn = QPushButton(text)
-            btn.setFixedHeight(40)
+            btn.setFixedHeight(32)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setStyleSheet(pill_btn_qss(color, _lighten(color, 0.12), 11, 15))
+            btn.setStyleSheet(pill_btn_qss(color, _lighten(color, 0.12), 11, 14))
             btn.clicked.connect(cb)
-            add_shadow(btn, color, 8, (0, 2))
+            add_shadow(btn, color, 6, (0, 2))
             grid.addWidget(btn, i // 2, i % 2)
             self._func_buttons[text] = btn
         vlayout.addLayout(grid)
 
-        vlayout.addSpacing(4)
-        div_label = QLabel("ĐIỀU CHỈNH TONE")
-        div_label.setStyleSheet(f"font-size:12px; font-weight:700; color:{C['text']}; font-family: {FONT}; letter-spacing: 1px;")
-        vlayout.addWidget(div_label)
 
         # Tone Nhạc (teal)
         vlayout.addWidget(self._build_tone_control("Tone Nhạc", "tone_music", C["teal"]))
@@ -457,22 +564,22 @@ class MainDashboard(QMainWindow):
         row.setSpacing(8)
 
         minus_btn = QPushButton("−")
-        minus_btn.setStyleSheet(circle_btn_qss(color, 36))
+        minus_btn.setStyleSheet(circle_btn_qss(color, 28))
         minus_btn.setCursor(Qt.PointingHandCursor)
-        add_shadow(minus_btn, color, 8, (0, 2))
+        add_shadow(minus_btn, color, 6, (0, 2))
         row.addWidget(minus_btn)
 
         # Value
         val = QLabel("+0")
-        val.setStyleSheet(f"font-size:22px; font-weight:bold; color:{color}; font-family: Consolas;")
+        val.setStyleSheet(f"font-size:17px; font-weight:bold; color:{color}; font-family: Consolas;")
         val.setAlignment(Qt.AlignCenter)
-        val.setMinimumWidth(55)
+        val.setMinimumWidth(42)
         row.addWidget(val, 1)
 
         plus_btn = QPushButton("+")
-        plus_btn.setStyleSheet(circle_btn_qss(color, 36))
+        plus_btn.setStyleSheet(circle_btn_qss(color, 28))
         plus_btn.setCursor(Qt.PointingHandCursor)
-        add_shadow(plus_btn, color, 8, (0, 2))
+        add_shadow(plus_btn, color, 6, (0, 2))
         row.addWidget(plus_btn)
 
         vl.addLayout(row)
@@ -510,9 +617,6 @@ class MainDashboard(QMainWindow):
         vlayout = QVBoxLayout(col)
         vlayout.setContentsMargins(0, 0, 0, 0)
 
-        title = QLabel("MIXER TỔNG")
-        title.setStyleSheet(f"font-size:14px; font-weight:700; color:{C['text']}; font-family: {FONT}; letter-spacing: 1px;")
-        vlayout.addWidget(title)
 
         # Slider row
         slider_row = QHBoxLayout()
@@ -652,66 +756,61 @@ class MainDashboard(QMainWindow):
 
         return w
 
-    # ── Right Column: Chế Độ Hát ──
+    # ── Right Column: Soundboard + Waveform ──
     def _build_right_col(self):
         col = QWidget()
         vlayout = QVBoxLayout(col)
         vlayout.setContentsMargins(0, 0, 0, 0)
+        vlayout.setSpacing(5)
 
-        title = QLabel("SOUNDBOARD")
-        title.setStyleSheet(f"font-size:14px; font-weight:700; color:{C['text']}; font-family: {FONT}; letter-spacing: 1px;")
-        vlayout.addWidget(title)
 
+        # ── Waveform Visualizer ──
+        self.waveform = WaveformWidget(col, bar_count=26, color=C["primary"])
+        vlayout.addWidget(self.waveform)
+        self.waveform.start()  # Bắt đầu nghe mic ngay lập tức
+
+        # ── Grid 2 cột: trái = Mode, phải = SFX ──
         grid = QGridLayout()
-        grid.setSpacing(8)
+        grid.setSpacing(5)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
 
-        # 6 buttons: 3 SFX (thay Đa Thể Loại, Bolero, Pop) + 3 Mode
-        buttons_config = [
-            ("😂 Tiếng cười", "sfx_laugh",    C["orange"]),
-            ("👏 Vỗ tay",     "sfx_applause", C["teal"]),
-            ("Dân Ca",        "mode_danca",   C["accent"]),
-            ("Lofi",          "mode_lofi",    C["light_purple"]),
-            ("🎉 Hò reo",    "sfx_cheer",    C["pink"]),
-            ("Remix",         "mode_remix",   C["blue"]),
+        sfx_config = [
+            ("😂 Cười",   "laugh",    C["orange"]),
+            ("👏 Vỗ tay", "applause", C["teal"]),
+            ("🎉 Hò reo", "cheer",    C["pink"]),
+        ]
+        mode_config = [
+            ("Dân Ca", C["accent"]),
+            ("Lofi",   C["light_purple"]),
+            ("Remix",  C["blue"]),
         ]
 
-        self._mode_buttons = {}
         self._sfx_buttons = {}
-        for i, (label, btn_id, color) in enumerate(buttons_config):
-            btn = QPushButton(label)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            btn.setMinimumHeight(60)
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {color};
-                    color: white;
-                    border: 1px solid rgba(255, 255, 255, 0.1);
-                    border-radius: 12px;
-                    font-size: 14px;
-                    font-weight: 700;
-                    font-family: {FONT};
-                }}
-                QPushButton:hover {{
-                    background-color: {_lighten(color, 0.15)};
-                    border: 1px solid {_lighten(color, 0.3)};
-                }}
-                QPushButton:pressed {{
-                    background-color: {_lighten(color, 0.25)};
-                }}
-            """)
-            add_shadow(btn, color, 10, (0, 3))
-            
-            if btn_id.startswith("sfx_"):
-                sfx_id = btn_id[4:]
-                btn.clicked.connect(lambda checked, sid=sfx_id: self._on_sfx_play(sid))
-                self._sfx_buttons[sfx_id] = btn
-            else:
-                mode_name = label
-                btn.clicked.connect(lambda checked, m=mode_name: self._on_mode_selected(m))
-                self._mode_buttons[mode_name] = btn
-            
-            grid.addWidget(btn, i // 2, i % 2)
+        self._mode_buttons = {}
+
+        for row, ((slabel, sfx_id, scolor), (mlabel, mcolor)) in enumerate(zip(sfx_config, mode_config)):
+            # Cột 0: Mode
+            mbtn = QPushButton(mlabel)
+            mbtn.setCursor(Qt.PointingHandCursor)
+            mbtn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            mbtn.setMinimumHeight(26)
+            mbtn.setStyleSheet(pill_btn_qss(mcolor, _lighten(mcolor, 0.15), 10, 10))
+            mbtn.clicked.connect(lambda checked, m=mlabel: self._on_mode_selected(m))
+            add_shadow(mbtn, mcolor, 5, (0, 1))
+            grid.addWidget(mbtn, row, 0)
+            self._mode_buttons[mlabel] = mbtn
+
+            # Cột 1: SFX
+            sbtn = QPushButton(slabel)
+            sbtn.setCursor(Qt.PointingHandCursor)
+            sbtn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            sbtn.setMinimumHeight(26)
+            sbtn.setStyleSheet(pill_btn_qss(scolor, _lighten(scolor, 0.15), 10, 10))
+            sbtn.clicked.connect(lambda checked, sid=sfx_id: self._on_sfx_play(sid))
+            add_shadow(sbtn, scolor, 5, (0, 1))
+            grid.addWidget(sbtn, row, 1)
+            self._sfx_buttons[sfx_id] = sbtn
 
         vlayout.addLayout(grid, 1)
         return col
@@ -799,7 +898,7 @@ class MainDashboard(QMainWindow):
             return
         self.current_tone = value
         key_index = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"].index(value)
-        self.engine.send_midi(backend.MIDI_CC["key_root"], int((key_index / 11) * 127))
+        self.engine.send_midi(MIDI_CC["key_root"], int((key_index / 11) * 127))
 
     def _on_scale_selected(self, value):
         if getattr(self, '_ignore_midi_send', False):
@@ -807,7 +906,7 @@ class MainDashboard(QMainWindow):
             return
         self.current_scale = value
         scale_val = 0 if value == "Major" else 127
-        self.engine.send_midi(backend.MIDI_CC["key_scale"], scale_val)
+        self.engine.send_midi(MIDI_CC["key_scale"], scale_val)
 
     def _animate_marquee(self):
         display = self._marquee_text + "   ★   " + self._marquee_text
@@ -839,7 +938,7 @@ class MainDashboard(QMainWindow):
             self._midi_dot.setStyleSheet(f"color: {C['accent']}; font-size: 8px;")
 
     def _on_midi_cc_received(self, cc, value):
-        from backend import MIDI_CC
+        # MIDI_CC đã được define ở đầu file frontend_qt.py
         self._ignore_midi_send = True
         try:
             if cc == int(MIDI_CC.get("key_root", 34)):
@@ -877,14 +976,14 @@ class MainDashboard(QMainWindow):
             self.engine.stop_autokey()
             btn = self._func_buttons.get("Dò Tone")
             if btn:
-                btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 12, 18))
+                btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
                 btn.setText("Dò Tone")
             self.autokey_dot.setStyleSheet(f"color: {C['card_hover']}; font-size: 16px;")
         else:
             self.autokey_active = True
             btn = self._func_buttons.get("Dò Tone")
             if btn:
-                btn.setStyleSheet(pill_btn_qss(C["accent"], _lighten(C["accent"], 0.12), 12, 18))
+                btn.setStyleSheet(pill_btn_qss(C["accent"], _lighten(C["accent"], 0.12), 11, 14))
                 btn.setText("⏹ Dừng")
             self.autokey_dot.setStyleSheet(f"color: {C['green']}; font-size: 16px;")
             self.engine.start_autokey(on_key_update=lambda r: self._autokey_signal.emit(r))
@@ -1070,15 +1169,26 @@ class MainDashboard(QMainWindow):
     def _on_fix_meo(self):
         self.engine.send_midi(MIDI_CC["fix_meo"], 127)
 
-    def _on_tune_toggle(self):
-        self.tune_state = not self.tune_state
-        midi_value = 127 if self.tune_state else 0
-        self.engine.send_midi(MIDI_CC["tune_on_off"], midi_value)
-        btn = self._func_buttons.get("Chuẩn Âm")
+    def _on_scale_toggle(self):
+        """Toggle Major ↔ Minor"""
+        self.scale_is_major = not getattr(self, 'scale_is_major', True)
+        if self.scale_is_major:
+            self.engine.send_midi(MIDI_CC["scale_type"], 14)  # Major
+            if hasattr(self, 'scale_combo'):
+                self.scale_combo.setCurrentText("Major")
+        else:
+            self.engine.send_midi(MIDI_CC["scale_type"], 8)   # Minor
+            if hasattr(self, 'scale_combo'):
+                self.scale_combo.setCurrentText("Minor")
+        btn = self._func_buttons.get("Major")
         if btn:
-            color = C["green"] if self.tune_state else C["accent"]
-            btn.setStyleSheet(pill_btn_qss(color, _lighten(color, 0.12), 12, 18))
-            btn.setText("Chuẩn Âm ✓" if self.tune_state else "Chuẩn Âm ✗")
+            if self.scale_is_major:
+                color = C["green"]
+                btn.setText("Major")
+            else:
+                color = C["orange"]
+                btn.setText("Minor")
+            btn.setStyleSheet(pill_btn_qss(color, _lighten(color, 0.12), 11, 14))
 
     def _on_score(self):
         from PySide6.QtWidgets import QDialog, QVBoxLayout, QPushButton, QFileDialog, QInputDialog, QMessageBox
@@ -1408,22 +1518,13 @@ class MainDashboard(QMainWindow):
                     QPushButton {{
                         background-color: {_lighten(base, 0.25)};
                         color: white; border: 2px solid white;
-                        border-radius: 12px; font-size: 14px; font-weight: 700;
+                        border-radius: 10px; font-size: 10px; font-weight: 700;
                         font-family: {FONT};
                     }}
                     QPushButton:hover {{ background-color: {_lighten(base, 0.3)}; }}
                 """)
             else:
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background-color: {base};
-                        color: white; border: 1px solid rgba(255, 255, 255, 0.1);
-                        border-radius: 12px; font-size: 14px; font-weight: 700;
-                        font-family: {FONT};
-                    }}
-                    QPushButton:hover {{ background-color: {_lighten(base, 0.15)}; }}
-                    QPushButton:pressed {{ background-color: {_lighten(base, 0.25)}; }}
-                """)
+                btn.setStyleSheet(pill_btn_qss(base, _lighten(base, 0.15), 10, 10))
 
     def _on_sfx_play(self, sfx_id):
         """Phát sound effect"""

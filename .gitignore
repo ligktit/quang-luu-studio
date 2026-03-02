@@ -1,6 +1,7 @@
 # Build outputs
 dist/
 build/
+*.spec
 
 # PyInstaller spec cache
 *.spec.cache
@@ -37,3 +38,13 @@ log.txt
 # OS
 .DS_Store
 Thumbs.db
+
+# Temp audio files
+temp_audio/
+
+# Test / batch outputs
+batch_output.txt
+test_output.txt
+
+# Binary tools
+ffmpeg.exe
