@@ -1,0 +1,39 @@
+# Build outputs
+dist/
+build/
+
+# PyInstaller spec cache
+*.spec.cache
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Environment variables
+.env
+*.env.local
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Logs
+*.log
+log.txt
+
+# OS
+.DS_Store
+Thumbs.db
