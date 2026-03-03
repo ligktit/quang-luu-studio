@@ -155,5 +155,22 @@
     "detected_at": "2026-03-02 00:23:05",
     "cached_at": 1772385785.5528226,
     "url": "https://www.youtube.com/watch?v=4o4P7rO8vzc"
+  },
+  "CU2PtRKBkuw": {
+    "primary_key": "E",
+    "key_timeline": [
+      {
+        "time": 0,
+        "key_display": "E",
+        "key_index": 4,
+        "scale": "Major",
+        "confidence": 0.9354629417594431,
+        "bpm": 161.5,
+        "duration": 207.3
+      }
+    ],
+    "detected_at": "2026-03-03 17:28:25",
+    "cached_at": 1772533705.9003031,
+    "url": "https://www.youtube.com/watch?v=CU2PtRKBkuw"
   }
 }

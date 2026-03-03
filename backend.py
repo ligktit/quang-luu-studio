@@ -10,6 +10,7 @@ import win32gui
 import win32con
 import sys
 import ctypes
+import ctypes.wintypes
 import queue
 import re
 import win32process
@@ -997,6 +998,308 @@ class SystemEngine:
         monitoring_thread = threading.Thread(target=monitor_video, daemon=True)
         monitoring_thread.start()
 
+
+    # ── Dò Tone: Phát hiện YouTube URL từ trình duyệt ──
+    # Logic lấy từ detect_youtube.py (đã kiểm chứng hoạt động)
+    @staticmethod
+    def detect_youtube_url_from_browser():
+        """
+        Phát hiện YouTube URL đang mở trên trình duyệt (Windows).
+        Sử dụng ctypes.windll.user32.EnumWindows + uiautomation.
+        
+        Returns:
+            str: YouTube URL sạch (chỉ chứa video ID), hoặc None nếu không tìm thấy.
+        """
+        try:
+            import uiautomation as auto
+        except ImportError:
+            print("❌ [DÒ TONE] Thư viện 'uiautomation' chưa được cài đặt.")
+            print("   Chạy: pip install uiautomation")
+            return None
+        
+        # Bao gồm "Microsoft​ Edge" (có U+200B) + "Edge" ngắn gọn để khớp mọi trường hợp
+        browser_keywords = [
+            "Google Chrome", "Microsoft\u200b Edge", "Microsoft Edge",
+            "Mozilla Firefox", "Brave", "Opera", "Vivaldi", "Edge",
+        ]
+        
+        # ── Bước 1: Liệt kê tất cả cửa sổ trình duyệt ──
+        all_windows = []
+        
+        def enum_callback(hwnd, _):
+            if ctypes.windll.user32.IsWindowVisible(hwnd):
+                length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+                if length > 0:
+                    buf = ctypes.create_unicode_buffer(length + 1)
+                    ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+                    all_windows.append((hwnd, buf.value))
+            return True
+        
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+        ctypes.windll.user32.EnumWindows(WNDENUMPROC(enum_callback), 0)
+        
+        # Lọc cửa sổ trình duyệt
+        browser_windows = []
+        for hwnd, title in all_windows:
+            for keyword in browser_keywords:
+                if keyword.lower() in title.lower():
+                    browser_windows.append({"hwnd": hwnd, "title": title, "browser": keyword})
+                    break
+        
+        print(f"🔍 [DÒ TONE] Tìm thấy {len(browser_windows)} cửa sổ trình duyệt")
+        
+        # ── Bước 2: Đọc URL từ thanh địa chỉ ──
+        for bw in browser_windows:
+            hwnd = bw["hwnd"]
+            try:
+                control = auto.ControlFromHandle(hwnd)
+                if control is None:
+                    continue
+                
+                # Phương pháp 1: Duyệt children → tìm EditControl
+                children = control.GetChildren()
+                for child in children:
+                    try:
+                        edit = child.EditControl(searchDepth=8)
+                        if edit and edit.Exists(0.1):
+                            value = ""
+                            try:
+                                pattern = edit.GetValuePattern()
+                                if pattern:
+                                    value = pattern.Value
+                            except Exception:
+                                pass
+                            if not value:
+                                try:
+                                    value = edit.GetWindowText() or ""
+                                except Exception:
+                                    pass
+                            if value and ("youtube.com" in value or "youtu.be" in value):
+                                url = SystemEngine._normalize_url(value)
+                                clean = SystemEngine._clean_youtube_url(url)
+                                if clean:
+                                    print(f"   ✅ YouTube URL: {clean}")
+                                    return clean
+                    except Exception:
+                        continue
+                
+                # Phương pháp 2: Tìm EditControl trực tiếp (fallback)
+                edit = control.EditControl(searchDepth=10)
+                if edit and edit.Exists(0.5):
+                    value = ""
+                    try:
+                        pattern = edit.GetValuePattern()
+                        if pattern:
+                            value = pattern.Value
+                    except Exception:
+                        pass
+                    if not value:
+                        try:
+                            value = edit.GetWindowText() or ""
+                        except Exception:
+                            pass
+                    if value and ("youtube.com" in value or "youtu.be" in value):
+                        url = SystemEngine._normalize_url(value)
+                        clean = SystemEngine._clean_youtube_url(url)
+                        if clean:
+                            print(f"   ✅ YouTube URL: {clean}")
+                            return clean
+                
+            except Exception as e:
+                print(f"   ⚠️ Lỗi đọc cửa sổ {bw['browser']}: {e}")
+                continue
+        
+        print("⚠️ [DÒ TONE] Không tìm thấy YouTube URL trên trình duyệt.")
+        return None
+    
+    @staticmethod
+    def _normalize_url(url):
+        """Thêm https:// nếu URL thiếu protocol."""
+        url = url.strip()
+        if not url.startswith("http://") and not url.startswith("https://"):
+            url = "https://" + url
+        return url
+    
+    @staticmethod
+    def _clean_youtube_url(url):
+        """Trích xuất Video ID từ YouTube URL, loại bỏ params playlist."""
+        patterns = [
+            r'(?:youtube\.com/watch\?.*v=)([a-zA-Z0-9_-]{11})',
+            r'(?:youtu\.be/)([a-zA-Z0-9_-]{11})',
+            r'(?:youtube\.com/embed/)([a-zA-Z0-9_-]{11})',
+            r'(?:youtube\.com/shorts/)([a-zA-Z0-9_-]{11})',
+        ]
+        for pat in patterns:
+            m = re.search(pat, url)
+            if m:
+                return f"https://www.youtube.com/watch?v={m.group(1)}"
+        return None
+    
+    def detect_tone_from_browser(self, on_complete=None, on_error=None, on_progress=None):
+        """
+        Dò Tone từ YouTube đang mở trên trình duyệt.
+        Luồng: Phát hiện URL → Tải audio → Phân tích Key/Scale/BPM/Camelot → Trả kết quả.
+        
+        Args:
+            on_complete: Callback(result_dict) khi hoàn thành
+            on_error: Callback(error_msg) khi lỗi
+            on_progress: Callback(status_text) cập nhật trạng thái
+        """
+        import numpy as np
+        
+        # Camelot wheel mapping
+        CAMELOT_MAJOR = ["8B", "3B", "10B", "5B", "12B", "7B", "2B", "9B", "4B", "11B", "6B", "1B"]
+        CAMELOT_MINOR = ["5A", "12A", "7A", "2A", "9A", "4A", "11A", "6A", "1A", "8A", "3A", "10A"]
+        
+        def _detect():
+            try:
+                # Bước 1: Phát hiện YouTube URL từ browser
+                if on_progress:
+                    on_progress("Đang tìm YouTube URL trên trình duyệt...")
+                
+                youtube_url = SystemEngine.detect_youtube_url_from_browser()
+                
+                if not youtube_url:
+                    if on_error:
+                        on_error("Không tìm thấy YouTube URL trên trình duyệt.\nHãy mở YouTube trên Chrome/Edge/Firefox.")
+                    return
+                
+                self.current_youtube_url = youtube_url
+                
+                # Bước 2: Kiểm tra cache
+                if on_progress:
+                    on_progress("Đang kiểm tra cache...")
+                
+                cached = ToneCacheManager.get_cached_tone(youtube_url)
+                if cached:
+                    print(f"✅ [DÒ TONE] Cache hit: {cached.get('primary_key', '?')}")
+                    timeline = cached.get('key_timeline', [])
+                    if timeline:
+                        entry = timeline[0]
+                        key_idx = entry.get('key_index', 0)
+                        scale = entry.get('scale', 'Major')
+                        camelot = CAMELOT_MAJOR[key_idx] if scale == "Major" else CAMELOT_MINOR[key_idx]
+                        result = {
+                            'key': entry.get('key_display', 'C').replace('m', ''),
+                            'key_display': entry.get('key_display', 'C'),
+                            'key_index': key_idx,
+                            'scale': scale,
+                            'bpm': entry.get('bpm', 0),
+                            'confidence': entry.get('confidence', 0),
+                            'duration': entry.get('duration', 0),
+                            'camelot': camelot,
+                            'from_cache': True,
+                            'url': youtube_url,
+                        }
+                        self._send_tone_midi(result)
+                        if on_complete:
+                            on_complete(result)
+                        return
+                
+                # Bước 3: Tải audio từ YouTube
+                if on_progress:
+                    on_progress("Đang tải audio từ YouTube...")
+                
+                print(f"🎵 [DÒ TONE] Bắt đầu dò tone từ YouTube...")
+                print(f"🔗 URL: {youtube_url}")
+                
+                scoring_engine = ScoringEngine()
+                audio_path = scoring_engine.download_youtube_audio(youtube_url)
+                
+                if not audio_path:
+                    if on_error:
+                        on_error("Không thể tải audio từ YouTube.")
+                    return
+                
+                try:
+                    # Bước 4: Load audio bằng librosa
+                    if on_progress:
+                        on_progress("Đang phân tích bài hát...")
+                    
+                    import librosa
+                    
+                    audio_data, sr = librosa.load(audio_path, sr=22050, mono=True)
+                    song_duration = len(audio_data) / sr
+                    
+                    print(f"✅ [DÒ TONE] Loaded: {song_duration:.1f}s, sr={sr}")
+                    
+                    # Bước 4a: Phát hiện Key & Scale
+                    if on_progress:
+                        on_progress("Đang phát hiện Key & Scale...")
+                    
+                    tone_result = ToneDetector.detect_key_from_audio(audio_data, sr)
+                    
+                    if not tone_result:
+                        if on_error:
+                            on_error("Không thể phát hiện tone bài hát.")
+                        return
+                    
+                    # Bước 4b: Phát hiện BPM
+                    if on_progress:
+                        on_progress("Đang phát hiện BPM...")
+                    
+                    tempo_result = librosa.beat.tempo(y=audio_data, sr=sr)
+                    bpm = float(tempo_result[0]) if len(tempo_result) > 0 else 0.0
+                    
+                    # Bước 4c: Camelot Wheel
+                    key_idx = tone_result['key_index']
+                    scale = tone_result['scale']
+                    camelot = CAMELOT_MAJOR[key_idx] if scale == "Major" else CAMELOT_MINOR[key_idx]
+                    
+                    # Kết quả
+                    result = {
+                        'key': tone_result.get('key', 'C'),
+                        'key_display': tone_result.get('key_display', 'C'),
+                        'key_index': key_idx,
+                        'scale': scale,
+                        'bpm': round(bpm, 1),
+                        'confidence': tone_result.get('confidence', 0),
+                        'duration': round(song_duration, 1),
+                        'camelot': camelot,
+                        'from_cache': False,
+                        'url': youtube_url,
+                    }
+                    
+                    print(f"🎯 [DÒ TONE] Kết quả:")
+                    print(f"   Key: {result['key_display']}")
+                    print(f"   Scale: {result['scale']}")
+                    print(f"   BPM: {result['bpm']}")
+                    print(f"   Camelot: {result['camelot']}")
+                    print(f"   Confidence: {result['confidence']:.3f}")
+                    print(f"   Duration: {result['duration']}s")
+                    
+                    # Gửi MIDI
+                    self._send_tone_midi(result)
+                    
+                    # Lưu cache
+                    cache_data = {
+                        'primary_key': result['key_display'],
+                        'key_timeline': [{
+                            'time': 0,
+                            'key_display': result['key_display'],
+                            'key_index': key_idx,
+                            'scale': scale,
+                            'confidence': result['confidence'],
+                            'bpm': result['bpm'],
+                            'duration': result['duration'],
+                        }]
+                    }
+                    ToneCacheManager.save_tone(youtube_url, cache_data)
+                    
+                    if on_complete:
+                        on_complete(result)
+                        
+                finally:
+                    scoring_engine.cleanup_temp_file()
+                    
+            except Exception as e:
+                print(f"❌ [DÒ TONE] Lỗi: {e}")
+                import traceback
+                traceback.print_exc()
+                if on_error:
+                    on_error(str(e))
+        
+        threading.Thread(target=_detect, daemon=True).start()
 
     def detect_tone(self, duration=10, on_complete=None, on_error=None, on_progress=None):
         """

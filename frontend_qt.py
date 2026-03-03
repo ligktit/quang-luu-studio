@@ -971,38 +971,154 @@ class MainDashboard(QMainWindow):
 
     # ── Menu Button Callbacks ──
     def _on_do_tone(self):
-        if self.autokey_active:
-            self.autokey_active = False
-            self.engine.stop_autokey()
-            btn = self._func_buttons.get("Dò Tone")
-            if btn:
-                btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
-                btn.setText("Dò Tone")
-            self.autokey_dot.setStyleSheet(f"color: {C['card_hover']}; font-size: 16px;")
-        else:
-            self.autokey_active = True
-            btn = self._func_buttons.get("Dò Tone")
-            if btn:
-                btn.setStyleSheet(pill_btn_qss(C["accent"], _lighten(C["accent"], 0.12), 11, 14))
-                btn.setText("⏹ Dừng")
-            self.autokey_dot.setStyleSheet(f"color: {C['green']}; font-size: 16px;")
-            self.engine.start_autokey(on_key_update=lambda r: self._autokey_signal.emit(r))
+        """
+        Dò Tone: Tự động phát hiện YouTube URL đang mở trên trình duyệt,
+        tải audio, phân tích Key/Scale/BPM/Camelot, và hiển thị kết quả.
+        """
+        from PySide6.QtWidgets import QDialog, QProgressBar
+        
+        btn = self._func_buttons.get("Dò Tone")
+        
+        # Tránh nhấn nhiều lần
+        if getattr(self, '_do_tone_running', False):
+            return
+        self._do_tone_running = True
+        
+        # Cập nhật UI nút
+        if btn:
+            btn.setEnabled(False)
+            btn.setText("⏳ Đang dò...")
+            btn.setStyleSheet(pill_btn_qss(C["accent"], _lighten(C["accent"], 0.12), 11, 14))
+        self.autokey_dot.setStyleSheet(f"color: {C['orange']}; font-size: 16px;")
+        self._marquee_text = "♪ Đang dò tone từ trình duyệt... ♪"
+        
+        def on_progress(text):
+            def _update():
+                self._marquee_text = f"♪ {text} ♪"
+            QTimer.singleShot(0, _update)
+        
+        def on_complete(result):
+            def _show():
+                self._do_tone_running = False
+                if btn:
+                    btn.setEnabled(True)
+                    btn.setText("Dò Tone")
+                    btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
+                self.autokey_dot.setStyleSheet(f"color: {C['green']}; font-size: 16px;")
+                
+                # Cập nhật UI chính
+                key_display = result.get('key_display', 'C')
+                key_root = result.get('key', key_display.replace('m', ''))
+                scale = result.get('scale', 'Major')
+                
+                self.current_tone = key_root
+                self.tone_combo.setCurrentText(key_root)
+                self.current_scale = scale
+                self.scale_combo.setCurrentText(scale)
+                
+                bpm = result.get('bpm', 0)
+                camelot = result.get('camelot', '?')
+                confidence = result.get('confidence', 0)
+                duration = result.get('duration', 0)
+                from_cache = result.get('from_cache', False)
+                
+                cache_tag = "📋 Cache" if from_cache else "🆕 Mới"
+                dur_str = f"{int(duration // 60):02d}:{int(duration % 60):02d}" if duration else "??:??"
+                conf_pct = f"{confidence * 100:.0f}%"
+                
+                self._marquee_text = f"♪ {key_display} | BPM: {bpm} | Camelot: {camelot} ♪"
+                
+                # Hiện dialog kết quả
+                dlg = QDialog(self)
+                dlg.setWindowTitle("🎯 Kết Quả Dò Tone")
+                dlg.setFixedSize(380, 320)
+                dlg.setStyleSheet(f"background-color: {C['card']}; color: {C['text']};")
+                
+                layout = QVBoxLayout(dlg)
+                layout.setSpacing(10)
+                
+                title_lbl = QLabel("🎯 KẾT QUẢ DÒ TONE")
+                title_lbl.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {C['primary']}; font-family: {FONT};")
+                title_lbl.setAlignment(Qt.AlignCenter)
+                layout.addWidget(title_lbl)
+                
+                tag_lbl = QLabel(cache_tag)
+                tag_lbl.setStyleSheet(f"font-size: 11px; color: {C['text_muted']}; font-family: {FONT};")
+                tag_lbl.setAlignment(Qt.AlignCenter)
+                layout.addWidget(tag_lbl)
+                
+                # Grid info
+                info_frame = QFrame()
+                info_frame.setStyleSheet(f"background-color: {C['bg']}; border-radius: 12px; padding: 12px;")
+                info_layout = QVBoxLayout(info_frame)
+                info_layout.setSpacing(8)
+                
+                rows = [
+                    ("🎵 Key",        f"{key_display}",       C['teal']),
+                    ("🎼 Scale",      f"{scale}",             C['primary']),
+                    ("🥁 BPM",        f"{bpm}",               C['orange']),
+                    ("🔄 Camelot",    f"{camelot}",           C['pink']),
+                    ("📊 Confidence", f"{conf_pct}",          C['green'] if confidence >= 0.5 else C['accent']),
+                    ("⏱️ Duration",   f"{dur_str}",           C['text_muted']),
+                ]
+                
+                for label, value, color in rows:
+                    row_layout = QHBoxLayout()
+                    lbl = QLabel(label)
+                    lbl.setStyleSheet(f"font-size: 13px; color: {C['text_muted']}; font-family: {FONT};")
+                    row_layout.addWidget(lbl)
+                    row_layout.addStretch()
+                    val = QLabel(value)
+                    val.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {color}; font-family: Consolas;")
+                    row_layout.addWidget(val)
+                    info_layout.addLayout(row_layout)
+                
+                layout.addWidget(info_frame)
+                
+                # Confidence warning
+                if confidence < 0.5:
+                    warn = QLabel("⚠️ Confidence thấp — bài có thể chuyển giọng hoặc không có giai điệu rõ ràng.")
+                    warn.setWordWrap(True)
+                    warn.setStyleSheet(f"font-size: 11px; color: {C['accent']}; font-family: {FONT}; padding: 4px;")
+                    layout.addWidget(warn)
+                
+                close_btn = QPushButton("Hoàn Tất")
+                close_btn.setCursor(Qt.PointingHandCursor)
+                close_btn.setFixedHeight(38)
+                close_btn.setStyleSheet(pill_btn_qss(C['green'], _lighten(C['green'], 0.1), 13, 18))
+                close_btn.clicked.connect(dlg.accept)
+                layout.addWidget(close_btn)
+                
+                dlg.exec()
+                
+            QTimer.singleShot(0, _show)
+        
+        def on_error(msg):
+            def _err():
+                self._do_tone_running = False
+                if btn:
+                    btn.setEnabled(True)
+                    btn.setText("Dò Tone")
+                    btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
+                self.autokey_dot.setStyleSheet(f"color: {C['card_hover']}; font-size: 16px;")
+                self._marquee_text = "♪ Quang Lưu Studio — Karaoke Pro ♪"
+                self._show_message(f"❌ {msg}", is_error=True)
+            QTimer.singleShot(0, _err)
+        
+        self.engine.detect_tone_from_browser(
+            on_complete=on_complete,
+            on_error=on_error,
+            on_progress=on_progress,
+        )
 
     def _update_autokey_ui(self, result):
-        if not self.autokey_active:
-            return
+        """Cập nhật UI khi AutoKey phát hiện tone mới (nếu dùng AutoKey ở nơi khác)"""
         key = result.get("key", "")
         scale = result.get("scale", "")
         if key:
-            display = f"{key} {scale}"
-            self._marquee_text = f"♪ AutoKey: {display} ♪"
             self.tone_combo.setCurrentText(key)
             if scale:
                 self.scale_combo.setCurrentText(scale)
-            key_index = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"].index(key)
-            self.engine.send_midi(MIDI_CC["key_root"], int((key_index / 11) * 127))
-            scale_val = 0 if scale == "Major" else 127
-            self.engine.send_midi(MIDI_CC["key_scale"], scale_val)
 
     def _on_lay_tone(self):
         """Mở dialog nhập YouTube URL để dò tone tự động toàn bài"""
