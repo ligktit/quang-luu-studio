@@ -1,37 +1,30 @@
+"""
+Waveform Visualizer — Real-time system audio waveform visualization.
+
+Captures audio from system output devices (WASAPI loopback) and renders
+an animated waveform using PyQt5 and librosa analysis.
+"""
+
 import sys
-from PySide6.QtWidgets import QApplication
-import backend
-import frontend_qt as frontend
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtGui import QFont
+from main_window import MainWindow
+
 
 def main():
-    """
-    Hàm chính khởi chạy ứng dụng (PySide6)
-    - Kiểm tra activation trước khi vào app
-    - Cấu hình (settings.json) được giữ nguyên khi kích hoạt lại
-    """
-    # Đảm bảo QApplication tồn tại
-    app = QApplication.instance()
-    if not app:
-        app = QApplication(sys.argv)
+    app = QApplication(sys.argv)
+    app.setApplicationName("Waveform Visualizer")
+    app.setStyle("Fusion")
 
-    # 1. Kiểm tra activation trước
-    if backend.ActivationManager.needs_activation():
-        is_expired = backend.ActivationManager.is_activated() and backend.ActivationManager.is_expired()
-        activation_dialog = frontend.ActivationDialog(callback=main, is_expired=is_expired)
-        activation_dialog.mainloop()
-        return
+    # Set default font
+    font = QFont("Segoe UI", 10)
+    app.setFont(font)
 
-    # 2. Load cấu hình (settings.json)
-    settings = backend.ConfigManager.load()
+    window = MainWindow()
+    window.show()
 
-    # 3. Điều hướng
-    if settings:
-        window = frontend.MainDashboard(settings)
-        window.show()
-        sys.exit(app.exec())
-    else:
-        setup = frontend.SetupView(callback=main)
-        setup.mainloop()
+    sys.exit(app.exec_())
+
 
 if __name__ == "__main__":
     main()
