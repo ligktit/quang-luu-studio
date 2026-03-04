@@ -1,5 +1,28 @@
-PyQt5>=5.15
-soundcard>=0.4.2
+# === Quang Lưu Studio — Dependencies ===
+
+# UI Framework (PySide6, NOT PyQt5)
+PySide6>=6.5
+
+# MIDI
+mido>=1.3
+python-rtmidi>=1.5
+
+# Audio
+pyaudiowpatch>=0.2.12
+sounddevice>=0.4
 librosa>=0.10
 numpy>=1.24
 scipy>=1.10
+
+# YouTube
+yt-dlp>=2024.1
+
+# Windows APIs
+pywin32>=306
+pyautogui>=0.9
+psutil>=5.9
+uiautomation>=2.0
+
+# Windows Media Control (WinRT)
+winrt-Windows.Media.Control>=2.0
+winrt-Windows.Foundation>=2.0

@@ -9,8 +9,8 @@ from PySide6.QtWidgets import (
     QFrame, QSizePolicy, QDialog, QLineEdit, QFileDialog,
     QScrollArea, QSpacerItem, QGraphicsDropShadowEffect
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QPropertyAnimation, QEasingCurve, QSize
-from PySide6.QtGui import QFont, QColor, QIcon, QFontDatabase, QPainter, QPen, QLinearGradient
+from PySide6.QtCore import Qt, QTimer, Signal, QPropertyAnimation, QEasingCurve, QSize, QPointF
+from PySide6.QtGui import QFont, QColor, QIcon, QFontDatabase, QPainter, QPen, QLinearGradient, QPainterPath, QBrush
 import backend
 
 # ─── COLOR PALETTE (IMPROVE_UX_UI V2.0 — Deep Navy) ───
@@ -77,7 +77,7 @@ QComboBox {{
     padding: 4px 10px;
     font-size: 13px;
     font-weight: 600;
-    min-width: 70px;
+    min-width: 10px;
     font-family: {FONT};
 }}
 QComboBox::drop-down {{ border: none; }}
@@ -86,6 +86,8 @@ QComboBox QAbstractItemView {{
     color: {C["text"]};
     selection-background-color: {C["primary"]};
     border: 1px solid {C["border"]};
+    font-size: 13px;
+    font-family: {FONT};
 }}
 QSlider::groove:vertical {{
     background: rgba(51, 65, 85, 0.6);
@@ -162,7 +164,7 @@ def pill_btn_qss(color, hover=None, size=13, radius=12):
     }}
     """
 
-def circle_btn_qss(color, sz=36):
+def circle_btn_qss(color, sz=24):
     """QSS nút tròn — V2.0"""
     return f"""
     QPushButton {{
@@ -209,32 +211,35 @@ def add_shadow(widget, color="#000000", blur=20, offset=(0, 4)):
 
 
 # ══════════════════════════════════════════════════════
-#  WAVEFORM WIDGET
+#  WAVEFORM WIDGET (based on visualizer_widget.py — PySide6)
 # ══════════════════════════════════════════════════════
+import numpy as np
+
 class WaveformWidget(QWidget):
-    """Real-time waveform visualizer — hiển thị sóng âm thanh từ microphone"""
+    """Real-time waveform visualizer — QPainter smooth curves with glow, fill, mirror."""
 
     def __init__(self, parent=None, bar_count=28, color="#6366F1"):
         super().__init__(parent)
-        self.bar_count = bar_count
-        self.color = color
-        self._levels = [0.0] * bar_count
+        self._base_color = QColor(color)
+        self._waveform = np.zeros(400, dtype=np.float32)
+        self._rms = 0.0
         self._active = False
-        self._stream = None
         self._lock = __import__('threading').Lock()
+        self._idle_phase = 0.0
 
-        self.setMinimumHeight(56)
-        self.setMaximumHeight(72)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMinimumHeight(40)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setStyleSheet("background: transparent;")
 
-        # Timer vẽ ~30fps
         self._timer = QTimer(self)
-        self._timer.timeout.connect(self.update)
+        self._timer.timeout.connect(self._tick)
         self._timer.start(33)
 
+    def _tick(self):
+        self._idle_phase += 0.05
+        self.update()
+
     def start(self):
-        """Bắt đầu capture audio từ default input device"""
         if self._active:
             return
         self._active = True
@@ -242,84 +247,197 @@ class WaveformWidget(QWidget):
         threading.Thread(target=self._audio_loop, daemon=True).start()
 
     def stop(self):
-        """Dừng capture"""
         self._active = False
-        if self._stream:
-            try:
-                self._stream.stop()
-                self._stream.close()
-            except Exception:
-                pass
-            self._stream = None
 
     def _audio_loop(self):
         try:
-            import sounddevice as sd
-            import numpy as np
-            chunk = 512
-            with sd.InputStream(channels=1, samplerate=22050, blocksize=chunk) as stream:
-                self._stream = stream
-                while self._active:
-                    data, _ = stream.read(chunk)
-                    data = data[:, 0]  # mono
-                    # Phân chia thành bar_count đoạn, lấy RMS mỗi đoạn
-                    seg = np.array_split(data, self.bar_count)
-                    levels = [float(np.sqrt(np.mean(s**2))) for s in seg]
-                    # Normalize và smooth
-                    peak = max(max(levels), 1e-6)
+            import pyaudiowpatch as pyaudio
+            p = pyaudio.PyAudio()
+            wasapi_info = None
+            for i in range(p.get_host_api_count()):
+                info = p.get_host_api_info_by_index(i)
+                if "wasapi" in info.get("name", "").lower():
+                    wasapi_info = info
+                    break
+            if not wasapi_info:
+                print("⚠️ WaveformWidget: WASAPI not found")
+                self._active = False
+                return
+            default_speakers = p.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
+            loopback_device = None
+            for loopback in p.get_loopback_device_info_generator():
+                if default_speakers["name"] in loopback["name"]:
+                    loopback_device = loopback
+                    break
+            if not loopback_device:
+                print("⚠️ WaveformWidget: Loopback device not found")
+                self._active = False
+                return
+            sample_rate = int(loopback_device["defaultSampleRate"])
+            channels = loopback_device["maxInputChannels"]
+            chunk = 2048
+            stream = p.open(
+                format=pyaudio.paFloat32,
+                channels=channels,
+                rate=sample_rate,
+                input=True,
+                input_device_index=loopback_device["index"],
+                frames_per_buffer=chunk,
+            )
+            history = np.zeros(4096, dtype=np.float32)
+            while self._active:
+                try:
+                    data = stream.read(chunk, exception_on_overflow=False)
+                    audio = np.frombuffer(data, dtype=np.float32)
+                    if channels > 1:
+                        audio = audio.reshape(-1, channels).mean(axis=1)
+                    n = len(audio)
+                    history = np.roll(history, -n)
+                    history[-n:] = audio
+                    rms = float(np.sqrt(np.mean(audio ** 2)))
+                    rms_norm = min(1.0, rms * 5.0)
+                    display_points = 400
+                    step = max(1, len(history) // display_points)
+                    waveform = history[::step][:display_points]
+                    if rms_norm > 0.01:
+                        sc = min(1.0, 0.3 / (rms_norm + 0.001))
+                        waveform = waveform * sc
+                    else:
+                        waveform = waveform * 0.1
                     with self._lock:
-                        for i, lv in enumerate(levels):
-                            target = min(lv / peak, 1.0)
-                            self._levels[i] = self._levels[i] * 0.55 + target * 0.45
+                        self._waveform = waveform.copy()
+                        self._rms = self._rms * 0.7 + rms_norm * 0.3
+                except Exception:
+                    pass
+            stream.stop_stream()
+            stream.close()
+            p.terminate()
         except Exception as e:
             print(f"⚠️ WaveformWidget audio error: {e}")
             self._active = False
 
     def paintEvent(self, event):
-        import math
         w, h = self.width(), self.height()
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        try:
+            if w < 10 or h < 10:
+                return
+            center_y = h / 2.0
+            painter.setRenderHint(QPainter.Antialiasing)
 
-        # Background pill
-        bg_color = QColor(15, 23, 42, 160)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(bg_color)
-        painter.drawRoundedRect(0, 0, w, h, 10, 10)
+            # Background
+            bg_grad = QLinearGradient(0, 0, 0, h)
+            bg_grad.setColorAt(0, QColor(10, 10, 30, 200))
+            bg_grad.setColorAt(1, QColor(5, 5, 20, 200))
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(bg_grad)
+            painter.drawRoundedRect(0, 0, w, h, 8, 8)
 
-        with self._lock:
-            levels = list(self._levels)
+            # Grid
+            painter.setPen(QPen(QColor(30, 30, 60, 80), 1, Qt.DotLine))
+            for i in range(1, 4):
+                painter.drawLine(0, int(h * i / 4), w, int(h * i / 4))
 
-        bar_w = max(2, (w - (self.bar_count + 1) * 3) // self.bar_count)
-        spacing = (w - bar_w * self.bar_count) // (self.bar_count + 1)
-        max_bar_h = h - 16
-        mid_y = h // 2
+            with self._lock:
+                waveform = self._waveform.copy()
+                rms = self._rms
+            n = len(waveform)
+            if n < 2:
+                return
 
-        base_color = QColor(self.color)
-        top_color = QColor(self.color).lighter(160)
+            if not self._active or rms < 0.01:
+                waveform = (np.sin(np.linspace(0, 4 * np.pi, n) + self._idle_phase) * 0.03).astype(np.float32)
 
-        for i, level in enumerate(levels):
-            bar_h = max(4, int(level * max_bar_h))
-            x = spacing + i * (bar_w + spacing)
-            y = mid_y - bar_h // 2
+            amplitude = h * 0.35
+            x_step = w / (n - 1)
+            primary = self._base_color
+            secondary = QColor(primary).lighter(130)
 
-            # Gradient per bar
-            grad = QLinearGradient(x, y, x, y + bar_h)
-            grad.setColorAt(0.0, top_color)
-            grad.setColorAt(1.0, base_color)
+            # Build path
+            path = QPainterPath()
+            pts = [QPointF(i * x_step, center_y - waveform[i] * amplitude) for i in range(n)]
+            path.moveTo(pts[0])
+            for i in range(1, len(pts) - 1, 2):
+                if i + 1 < len(pts):
+                    path.quadTo(pts[i], pts[i + 1])
+                else:
+                    path.lineTo(pts[i])
 
-            painter.setBrush(grad)
-            painter.drawRoundedRect(x, y, bar_w, bar_h, bar_w // 2, bar_w // 2)
+            # Glow
+            if rms > 0.01:
+                gc = QColor(primary)
+                gc.setAlpha(min(80, int(rms * 160)))
+                gp = QPen(gc, 6 + rms * 8)
+                gp.setCapStyle(Qt.RoundCap)
+                gp.setJoinStyle(Qt.RoundJoin)
+                painter.setPen(gp)
+                painter.drawPath(path)
 
-        # Label nhỏ góc phải
-        painter.setPen(QColor(148, 163, 184, 180))
-        fnt = painter.font()
-        fnt.setPointSize(7)
-        fnt.setFamily(FONT)
-        painter.setFont(fnt)
-        painter.drawText(w - 36, h - 3, "LIVE")
+            # Fill
+            fill_path = QPainterPath(path)
+            fill_path.lineTo(w, center_y)
+            fill_path.lineTo(0, center_y)
+            fill_path.closeSubpath()
+            fg = QLinearGradient(0, center_y - amplitude, 0, center_y)
+            fc = QColor(primary); fc.setAlpha(int(20 + rms * 50))
+            fg.setColorAt(0, fc)
+            ft = QColor(primary); ft.setAlpha(3)
+            fg.setColorAt(1, ft)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(fg))
+            painter.drawPath(fill_path)
 
-        painter.end()
+            # Main line
+            lg = QLinearGradient(0, 0, w, 0)
+            lg.setColorAt(0.0, secondary)
+            lg.setColorAt(0.5, primary)
+            lg.setColorAt(1.0, secondary)
+            mp = QPen(QBrush(lg), 1.5 + rms * 1.5)
+            mp.setCapStyle(Qt.RoundCap)
+            mp.setJoinStyle(Qt.RoundJoin)
+            painter.setPen(mp)
+            painter.drawPath(path)
+
+            # Mirror
+            mpath = QPainterPath()
+            mpts = [QPointF(i * x_step, center_y + waveform[i] * amplitude * 0.4) for i in range(n)]
+            mpath.moveTo(mpts[0])
+            for i in range(1, len(mpts) - 1, 2):
+                if i + 1 < len(mpts):
+                    mpath.quadTo(mpts[i], mpts[i + 1])
+                else:
+                    mpath.lineTo(mpts[i])
+            mfp = QPainterPath(mpath)
+            mfp.lineTo(w, center_y)
+            mfp.lineTo(0, center_y)
+            mfp.closeSubpath()
+            mfg = QLinearGradient(0, center_y, 0, center_y + amplitude * 0.4)
+            mc = QColor(primary); mc.setAlpha(8)
+            mfg.setColorAt(0, mc)
+            mt = QColor(primary); mt.setAlpha(0)
+            mfg.setColorAt(1, mt)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(mfg))
+            painter.drawPath(mfp)
+            mc2 = QColor(primary); mc2.setAlpha(40)
+            painter.setPen(QPen(mc2, 0.8 + rms * 0.3))
+            painter.drawPath(mpath)
+
+            # Center line
+            painter.setPen(QPen(QColor(30, 30, 60, 60), 1, Qt.SolidLine))
+            painter.drawLine(0, int(center_y), w, int(center_y))
+
+            # Label
+            painter.setPen(QColor(148, 163, 184, 120))
+            fnt = painter.font()
+            fnt.setPixelSize(10)
+            fnt.setFamily(FONT)
+            painter.setFont(fnt)
+            status = "● LIVE" if self._active and rms > 0.01 else "♪ IDLE"
+            painter.drawText(w - 50, h - 5, status)
+        finally:
+            painter.end()
+
 
 
 # ══════════════════════════════════════════════════════
@@ -334,6 +452,7 @@ class MainDashboard(QMainWindow):
     _midi_cc_signal = Signal(int, int)
 
     def __init__(self, settings=None):
+        self._ensure_app()
         super().__init__()
         # Backend
         self.engine = backend.SystemEngine(settings)
@@ -359,8 +478,8 @@ class MainDashboard(QMainWindow):
         # Window
         self.setWindowTitle("Quang Lưu Studio")
         self.setWindowIcon(QIcon("app_icon.ico"))
-        self.setMinimumSize(960, 500)
-        self.resize(960, 500)
+        self.setMinimumSize(960, 420)
+        self.resize(960, 420)
         # self.setWindowFlag(Qt.WindowStaysOnTopHint)  # Đã tắt always-on-top
         self.setStyleSheet(APP_QSS)
 
@@ -373,7 +492,7 @@ class MainDashboard(QMainWindow):
         root.setSpacing(0)
 
         # Marquee state (must init before _build_header)
-        self._marquee_text = "♪ Quang Lưu Studio — Karaoke Pro ♪"
+        self._marquee_text = "♪ Bản quyền thuộc về Quang Lưu Tuấn Phúc — Karaoke Pro ♪"
         self._marquee_offset = 0
 
         # Build UI — No sidebar (V2.0: loại bỏ Sidebar, mở rộng Mixer + Soundboard)
@@ -387,6 +506,7 @@ class MainDashboard(QMainWindow):
 
         # Signal connections (for thread-safe UI updates)
         self._autokey_signal.connect(self._update_autokey_ui)
+        self._tone_result_signal.connect(self._handle_tone_result)
         
         self.engine.on_midi_cc_callback = lambda cc, v: self._midi_cc_signal.emit(cc, v)
         self._midi_cc_signal.connect(self._on_midi_cc_received)
@@ -419,34 +539,30 @@ class MainDashboard(QMainWindow):
         layout = QHBoxLayout(header)
         layout.setContentsMargins(20, 0, 20, 0)
 
-        # Logo / Title
-        title = QLabel("🎤 Quang Lưu Studio")
-        title.setStyleSheet(f"""
-            font-size: 18px; font-weight: 700; color: {C['text']};
-            font-family: {FONT}; letter-spacing: 1px;
-        """)
-        layout.addWidget(title)
-
-        layout.addStretch()
-
-        # Key combo
-        self.tone_combo = QComboBox()
-        keys = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-        self.tone_combo.addItems(keys)
-        self.tone_combo.setFixedWidth(55)
-        self.tone_combo.currentTextChanged.connect(self._on_tone_selected)
-        layout.addWidget(self.tone_combo)
+        # MIDI status dot (chỉ giữ dot, bỏ text)
+        self._midi_dot = QLabel("●")
+        self._midi_dot.setFixedWidth(12)
+        self._midi_dot.setStyleSheet(f"color: {C['accent']}; font-size: 10px;")
+        layout.addWidget(self._midi_dot)
 
         layout.addSpacing(6)
 
-        # Scale combo
-        self.scale_combo = QComboBox()
-        self.scale_combo.addItems(["Major", "Minor"])
-        self.scale_combo.setFixedWidth(75)
-        self.scale_combo.currentTextChanged.connect(self._on_scale_selected)
-        layout.addWidget(self.scale_combo)
+        # Marquee — thay thế title, cỡ chữ lớn, màu neon cam
+        self.marquee_label = QLabel(self._marquee_text)
+        self.marquee_label.setStyleSheet(f"""
+            font-size: 18px; font-weight: 700;
+            color: #fc8403;
+            font-family: {FONT}; letter-spacing: 1px;
+        """)
+        # Thêm hiệu ứng neon glow
+        neon_glow = QGraphicsDropShadowEffect()
+        neon_glow.setBlurRadius(18)
+        neon_glow.setColor(QColor("#fc8403"))
+        neon_glow.setOffset(0, 0)
+        self.marquee_label.setGraphicsEffect(neon_glow)
+        layout.addWidget(self.marquee_label, 1)
 
-        layout.addSpacing(12)
+        layout.addStretch()
 
         # AutoKey dot
         self.autokey_dot = QLabel("●")
@@ -454,26 +570,33 @@ class MainDashboard(QMainWindow):
         self.autokey_dot.setFixedWidth(16)
         layout.addWidget(self.autokey_dot)
 
-        # Marquee
-        self.marquee_label = QLabel(self._marquee_text)
-        self.marquee_label.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px; font-family: {FONT};")
-        self.marquee_label.setFixedWidth(200)
-        layout.addWidget(self.marquee_label)
+        layout.addSpacing(4)
 
-        layout.addSpacing(12)
+        # Key combo (fit-content)
+        self.tone_combo = QComboBox()
+        keys = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        self.tone_combo.addItems(keys)
+        self.tone_combo.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.tone_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.tone_combo.currentTextChanged.connect(self._on_tone_selected)
+        layout.addWidget(self.tone_combo)
 
-        # MIDI status — 8px dot + text
-        midi_row = QHBoxLayout()
-        midi_row.setSpacing(6)
-        self._midi_dot = QLabel("●")
-        self._midi_dot.setFixedWidth(10)
-        self._midi_dot.setStyleSheet(f"color: {C['accent']}; font-size: 8px;")
-        midi_row.addWidget(self._midi_dot)
+        layout.addSpacing(4)
 
-        self.midi_status = QLabel("Chưa kết nối")
-        self.midi_status.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px; font-weight: 600; font-family: {FONT};")
-        midi_row.addWidget(self.midi_status)
-        layout.addLayout(midi_row)
+        # Scale combo (fit-content)
+        self.scale_combo = QComboBox()
+        self.scale_combo.addItems(["Major", "Minor"])
+        self.scale_combo.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.scale_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.scale_combo.currentTextChanged.connect(self._on_scale_selected)
+        layout.addWidget(self.scale_combo)
+
+        # Giữ title_label ẩn để tương thích code cũ
+        self.title_label = QLabel("")
+        self.title_label.setVisible(False)
+        # Giữ midi_status ẩn để tương thích code cũ
+        self.midi_status = QLabel("")
+        self.midi_status.setVisible(False)
 
         return header
 
@@ -628,10 +751,10 @@ class MainDashboard(QMainWindow):
         }
 
         channels = [
-            {"icon": "♪",  "icon_muted": "✕", "color": C["teal"],         "label": "Nhạc",       "cc": "mix_music",   "range": (0, 100), "default": 70, "unit": ""},
-            {"icon": "☉",  "icon_muted": "✕", "color": C["orange"],       "label": "Mic",          "cc": "mix_mic",     "range": (-10, 10), "default": 0, "unit": " dB"},
-            {"icon": "≡",  "icon_muted": "✕", "color": C["accent"],       "label": "Hiệu Ứng",      "cc": "mix_reverb",  "range": (-10, 10), "default": 0, "unit": " dB"},
-            {"icon": "☖",  "icon_muted": "✕", "color": C["light_purple"], "label": "Khán Giả", "cc": "mix_backing", "range": (0, 100), "default": 70, "unit": ""},
+            {"icon": "♪",  "icon_muted": "✕", "color": C["teal"],         "label": "",       "cc": "mix_music",   "range": (0, 100), "default": 70, "unit": ""},
+            {"icon": "☉",  "icon_muted": "✕", "color": C["orange"],       "label": "",          "cc": "mix_mic",     "range": (-10, 10), "default": 0, "unit": " dB"},
+            {"icon": "≡",  "icon_muted": "✕", "color": C["accent"],       "label": "",      "cc": "mix_reverb",  "range": (-10, 10), "default": 0, "unit": " dB"},
+            {"icon": "☖",  "icon_muted": "✕", "color": C["light_purple"], "label": "", "cc": "mix_backing", "range": (0, 100), "default": 70, "unit": ""},
         ]
 
         self._mixer_sliders = {}
@@ -674,7 +797,7 @@ class MainDashboard(QMainWindow):
         slider = QSlider(Qt.Vertical)
         slider.setMinimum(0)
         slider.setMaximum(100)
-        slider.setMinimumHeight(120)
+        slider.setMinimumHeight(50)
         slider.setFixedWidth(28)  # Đủ rộng cho handle 20px không bị cắt
         slider.setStyleSheet(make_slider_qss(color))
         if unit == " dB":
@@ -763,15 +886,9 @@ class MainDashboard(QMainWindow):
         vlayout.setContentsMargins(0, 0, 0, 0)
         vlayout.setSpacing(5)
 
-
-        # ── Waveform Visualizer ──
-        self.waveform = WaveformWidget(col, bar_count=26, color=C["primary"])
-        vlayout.addWidget(self.waveform)
-        self.waveform.start()  # Bắt đầu nghe mic ngay lập tức
-
-        # ── Grid 2 cột: trái = Mode, phải = SFX ──
+        # ── Grid 2 cột: trái = Mode, phải = SFX (trên cùng) ──
         grid = QGridLayout()
-        grid.setSpacing(5)
+        grid.setSpacing(6)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
 
@@ -793,26 +910,30 @@ class MainDashboard(QMainWindow):
             # Cột 0: Mode
             mbtn = QPushButton(mlabel)
             mbtn.setCursor(Qt.PointingHandCursor)
-            mbtn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            mbtn.setMinimumHeight(26)
-            mbtn.setStyleSheet(pill_btn_qss(mcolor, _lighten(mcolor, 0.15), 10, 10))
+            mbtn.setFixedHeight(32)
+            mbtn.setStyleSheet(pill_btn_qss(mcolor, _lighten(mcolor, 0.15), 11, 14))
             mbtn.clicked.connect(lambda checked, m=mlabel: self._on_mode_selected(m))
-            add_shadow(mbtn, mcolor, 5, (0, 1))
+            add_shadow(mbtn, mcolor, 6, (0, 2))
             grid.addWidget(mbtn, row, 0)
             self._mode_buttons[mlabel] = mbtn
 
             # Cột 1: SFX
             sbtn = QPushButton(slabel)
             sbtn.setCursor(Qt.PointingHandCursor)
-            sbtn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            sbtn.setMinimumHeight(26)
-            sbtn.setStyleSheet(pill_btn_qss(scolor, _lighten(scolor, 0.15), 10, 10))
+            sbtn.setFixedHeight(32)
+            sbtn.setStyleSheet(pill_btn_qss(scolor, _lighten(scolor, 0.15), 11, 14))
             sbtn.clicked.connect(lambda checked, sid=sfx_id: self._on_sfx_play(sid))
-            add_shadow(sbtn, scolor, 5, (0, 1))
+            add_shadow(sbtn, scolor, 6, (0, 2))
             grid.addWidget(sbtn, row, 1)
             self._sfx_buttons[sfx_id] = sbtn
 
-        vlayout.addLayout(grid, 1)
+        vlayout.addLayout(grid)
+
+        # ── Waveform Visualizer (phía dưới, chiếm phần còn lại) ──
+        self.waveform = WaveformWidget(col, bar_count=26, color=C["primary"])
+        vlayout.addWidget(self.waveform, 1)
+        self.waveform.start()
+
         return col
 
     # ─────────────────────────────────────────
@@ -923,19 +1044,13 @@ class MainDashboard(QMainWindow):
             try:
                 name = self.engine.get_midi_port_name()
                 if "QuangLuuMIDI" not in name:
-                    self.midi_status.setText("Chưa kết nối MIDI")
-                    self.midi_status.setStyleSheet(f"color: {C['accent']}; font-size: 12px; font-weight: 600; font-family: {FONT};")
-                    self._midi_dot.setStyleSheet(f"color: {C['accent']}; font-size: 8px;")
+                    self._midi_dot.setStyleSheet(f"color: {C['accent']}; font-size: 10px;")
                 else:
-                    self.midi_status.setText("Đã kết nối QuangLuuMIDI")
-                    self.midi_status.setStyleSheet(f"color: {C['teal']}; font-size: 12px; font-weight: 600; font-family: {FONT};")
-                    self._midi_dot.setStyleSheet(f"color: {C['teal']}; font-size: 8px;")
+                    self._midi_dot.setStyleSheet(f"color: {C['teal']}; font-size: 10px;")
             except:
                 pass
         else:
-            self.midi_status.setText("Đang chờ MIDI...")
-            self.midi_status.setStyleSheet(f"color: {C['accent']}; font-size: 12px; font-weight: 600; font-family: {FONT};")
-            self._midi_dot.setStyleSheet(f"color: {C['accent']}; font-size: 8px;")
+            self._midi_dot.setStyleSheet(f"color: {C['accent']}; font-size: 10px;")
 
     def _on_midi_cc_received(self, cc, value):
         # MIDI_CC đã được define ở đầu file frontend_qt.py
@@ -979,12 +1094,47 @@ class MainDashboard(QMainWindow):
         
         btn = self._func_buttons.get("Dò Tone")
         
-        # Tránh nhấn nhiều lần
+        # Nếu đã dò xong → reset về trạng thái ban đầu, cho phép dò lại
+        if getattr(self, '_do_tone_done', False):
+            self._do_tone_done = False
+            if btn:
+                btn.setText("Dò Tone")
+                btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
+            self._marquee_text = "♪ Bản quyền thuộc về Quang Lưu Tuấn Phúc — Karaoke Pro ♪"
+            self.autokey_dot.setStyleSheet(f"color: {C['card_hover']}; font-size: 16px;")
+            self.setWindowTitle("Quang Lưu Studio")
+            # Reset combobox style về mặc định
+            default_combo_qss = f"""
+                QComboBox {{
+                    background-color: {C['card']};
+                    color: {C['text']};
+                    border: 1px solid {C['border']};
+                    border-radius: 8px;
+                    padding: 4px 10px;
+                    font-size: 13px;
+                    font-weight: 600;
+                    font-family: {FONT};
+                }}
+                QComboBox::drop-down {{ border: none; }}
+                QComboBox QAbstractItemView {{
+                    background-color: {C['card']};
+                    color: {C['text']};
+                    selection-background-color: {C['primary']};
+                    border: 1px solid {C['border']};
+                    font-size: 13px;
+                    font-family: {FONT};
+                }}
+            """
+            self.tone_combo.setStyleSheet(default_combo_qss)
+            self.scale_combo.setStyleSheet(default_combo_qss)
+            return
+        
+        # Tránh nhấn nhiều lần khi đang dò
         if getattr(self, '_do_tone_running', False):
             return
         self._do_tone_running = True
         
-        # Cập nhật UI nút
+        # Cập nhật UI nút → trạng thái "đang dò"
         if btn:
             btn.setEnabled(False)
             btn.setText("⏳ Đang dò...")
@@ -993,123 +1143,23 @@ class MainDashboard(QMainWindow):
         self._marquee_text = "♪ Đang dò tone từ trình duyệt... ♪"
         
         def on_progress(text):
-            def _update():
-                self._marquee_text = f"♪ {text} ♪"
-            QTimer.singleShot(0, _update)
+            # Chỉ set string, không gọi widget method → an toàn từ thread
+            self._marquee_text = f"♪ {text} ♪"
         
         def on_complete(result):
-            def _show():
-                self._do_tone_running = False
-                if btn:
-                    btn.setEnabled(True)
-                    btn.setText("Dò Tone")
-                    btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
-                self.autokey_dot.setStyleSheet(f"color: {C['green']}; font-size: 16px;")
-                
-                # Cập nhật UI chính
-                key_display = result.get('key_display', 'C')
-                key_root = result.get('key', key_display.replace('m', ''))
-                scale = result.get('scale', 'Major')
-                
-                self.current_tone = key_root
-                self.tone_combo.setCurrentText(key_root)
-                self.current_scale = scale
-                self.scale_combo.setCurrentText(scale)
-                
-                bpm = result.get('bpm', 0)
-                camelot = result.get('camelot', '?')
-                confidence = result.get('confidence', 0)
-                duration = result.get('duration', 0)
-                from_cache = result.get('from_cache', False)
-                
-                cache_tag = "📋 Cache" if from_cache else "🆕 Mới"
-                dur_str = f"{int(duration // 60):02d}:{int(duration % 60):02d}" if duration else "??:??"
-                conf_pct = f"{confidence * 100:.0f}%"
-                
-                self._marquee_text = f"♪ {key_display} | BPM: {bpm} | Camelot: {camelot} ♪"
-                
-                # Hiện dialog kết quả
-                dlg = QDialog(self)
-                dlg.setWindowTitle("🎯 Kết Quả Dò Tone")
-                dlg.setFixedSize(380, 320)
-                dlg.setStyleSheet(f"background-color: {C['card']}; color: {C['text']};")
-                
-                layout = QVBoxLayout(dlg)
-                layout.setSpacing(10)
-                
-                title_lbl = QLabel("🎯 KẾT QUẢ DÒ TONE")
-                title_lbl.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {C['primary']}; font-family: {FONT};")
-                title_lbl.setAlignment(Qt.AlignCenter)
-                layout.addWidget(title_lbl)
-                
-                tag_lbl = QLabel(cache_tag)
-                tag_lbl.setStyleSheet(f"font-size: 11px; color: {C['text_muted']}; font-family: {FONT};")
-                tag_lbl.setAlignment(Qt.AlignCenter)
-                layout.addWidget(tag_lbl)
-                
-                # Grid info
-                info_frame = QFrame()
-                info_frame.setStyleSheet(f"background-color: {C['bg']}; border-radius: 12px; padding: 12px;")
-                info_layout = QVBoxLayout(info_frame)
-                info_layout.setSpacing(8)
-                
-                rows = [
-                    ("🎵 Key",        f"{key_display}",       C['teal']),
-                    ("🎼 Scale",      f"{scale}",             C['primary']),
-                    ("🥁 BPM",        f"{bpm}",               C['orange']),
-                    ("🔄 Camelot",    f"{camelot}",           C['pink']),
-                    ("📊 Confidence", f"{conf_pct}",          C['green'] if confidence >= 0.5 else C['accent']),
-                    ("⏱️ Duration",   f"{dur_str}",           C['text_muted']),
-                ]
-                
-                for label, value, color in rows:
-                    row_layout = QHBoxLayout()
-                    lbl = QLabel(label)
-                    lbl.setStyleSheet(f"font-size: 13px; color: {C['text_muted']}; font-family: {FONT};")
-                    row_layout.addWidget(lbl)
-                    row_layout.addStretch()
-                    val = QLabel(value)
-                    val.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {color}; font-family: Consolas;")
-                    row_layout.addWidget(val)
-                    info_layout.addLayout(row_layout)
-                
-                layout.addWidget(info_frame)
-                
-                # Confidence warning
-                if confidence < 0.5:
-                    warn = QLabel("⚠️ Confidence thấp — bài có thể chuyển giọng hoặc không có giai điệu rõ ràng.")
-                    warn.setWordWrap(True)
-                    warn.setStyleSheet(f"font-size: 11px; color: {C['accent']}; font-family: {FONT}; padding: 4px;")
-                    layout.addWidget(warn)
-                
-                close_btn = QPushButton("Hoàn Tất")
-                close_btn.setCursor(Qt.PointingHandCursor)
-                close_btn.setFixedHeight(38)
-                close_btn.setStyleSheet(pill_btn_qss(C['green'], _lighten(C['green'], 0.1), 13, 18))
-                close_btn.clicked.connect(dlg.accept)
-                layout.addWidget(close_btn)
-                
-                dlg.exec()
-                
-            QTimer.singleShot(0, _show)
+            # Emit signal → main thread xử lý UI update (thread-safe)
+            self._tone_result_signal.emit(result)
         
         def on_error(msg):
-            def _err():
-                self._do_tone_running = False
-                if btn:
-                    btn.setEnabled(True)
-                    btn.setText("Dò Tone")
-                    btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
-                self.autokey_dot.setStyleSheet(f"color: {C['card_hover']}; font-size: 16px;")
-                self._marquee_text = "♪ Quang Lưu Studio — Karaoke Pro ♪"
-                self._show_message(f"❌ {msg}", is_error=True)
-            QTimer.singleShot(0, _err)
+            # Emit signal với error flag
+            self._tone_result_signal.emit({'error': msg})
         
         self.engine.detect_tone_from_browser(
             on_complete=on_complete,
             on_error=on_error,
             on_progress=on_progress,
         )
+
 
     def _update_autokey_ui(self, result):
         """Cập nhật UI khi AutoKey phát hiện tone mới (nếu dùng AutoKey ở nơi khác)"""
@@ -1119,6 +1169,115 @@ class MainDashboard(QMainWindow):
             self.tone_combo.setCurrentText(key)
             if scale:
                 self.scale_combo.setCurrentText(scale)
+
+    def _handle_tone_result(self, result):
+        """Slot xử lý kết quả dò tone trên main thread (thread-safe via Signal)"""
+        btn = self._func_buttons.get("Dò Tone")
+        
+        # === Trường hợp LỖI ===
+        if 'error' in result:
+            msg = result['error']
+            self._do_tone_running = False
+            self._do_tone_done = False
+            if btn:
+                btn.setEnabled(True)
+                btn.setText("Dò Tone")
+                btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
+            self.autokey_dot.setStyleSheet(f"color: {C['card_hover']}; font-size: 16px;")
+            self._marquee_text = "♪ Quang Lưu Studio — Karaoke Pro ♪"
+            self._show_message(f"❌ {msg}", is_error=True)
+            return
+        
+        # === Trường hợp THÀNH CÔNG ===
+        self._do_tone_running = False
+        self._do_tone_done = True
+        
+        # === 1. Cập nhật Key/Scale lên UI chính ===
+        key_display = result.get('key_display', 'C')
+        # Trích xuất key root chính xác: "C#m" → "C#", "Am" → "A", "D" → "D"
+        if key_display.endswith('#m'):
+            key_root = key_display[:-1]  # "C#m" → "C#"
+        elif key_display.endswith('m') and len(key_display) >= 2:
+            key_root = key_display[:-1]   # "Am" → "A", "Cm" → "C"
+        else:
+            key_root = key_display         # "D" → "D", "F#" → "F#"
+        key_root = result.get('key', key_root)
+        scale = result.get('scale', 'Major')
+        title = result.get('title', '')
+        
+        # Tránh gửi MIDI trùng lặp khi set combo (backend đã gửi rồi)
+        self._ignore_midi_send = True
+        try:
+            self.current_tone = key_root
+            self.tone_combo.setCurrentText(key_root)
+            self.current_scale = scale
+            self.scale_combo.setCurrentText(scale)
+        finally:
+            self._ignore_midi_send = False
+        
+        # Đổi style combobox → nền trong suốt, text xanh lá, viền trắng
+        detected_combo_qss = f"""
+            QComboBox {{
+                background-color: transparent;
+                color: {C['green']};
+                border: 2px solid rgba(255, 255, 255, 0.85);
+                border-radius: 8px;
+                padding: 4px 10px;
+                font-size: 13px;
+                font-weight: 700;
+                font-family: {FONT};
+            }}
+            QComboBox::drop-down {{ border: none; }}
+            QComboBox QAbstractItemView {{
+                background-color: {C['card']};
+                color: {C['text']};
+                selection-background-color: {C['green']};
+                border: 1px solid rgba(255, 255, 255, 0.5);
+                font-size: 13px;
+                font-family: {FONT};
+            }}
+        """
+        self.tone_combo.setStyleSheet(detected_combo_qss)
+        self.scale_combo.setStyleSheet(detected_combo_qss)
+        
+        bpm = result.get('bpm', 0)
+        camelot = result.get('camelot', '?')
+        confidence = result.get('confidence', 0)
+        
+        # === 2. Cập nhật trạng thái nút "Dò Tone" → hiển thị kết quả ===
+        if btn:
+            btn.setEnabled(True)
+            btn.setText(f"✓ {key_display} {scale}")
+            btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 11, 14))
+        
+        # === 3. Cập nhật dot → xanh (đã phát hiện) ===
+        self.autokey_dot.setStyleSheet(f"color: {C['green']}; font-size: 16px;")
+        
+        # === 4. Đồng bộ nút Major/Minor toggle ===
+        self.scale_is_major = (scale == "Major")
+        scale_btn = self._func_buttons.get("Major") or self._func_buttons.get("Minor")
+        if scale_btn:
+            if self.scale_is_major:
+                scale_btn.setText("Major")
+                scale_btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 11, 14))
+            else:
+                scale_btn.setText("Minor")
+                scale_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
+        
+        # === 5. Hiển thị tên bài hát + kết quả lên Marquee & Window Title ===
+        if title:
+            self._marquee_text = f"🎵 {title}   ★   {key_display} {scale} | BPM: {int(bpm)} | {camelot}"
+            self.setWindowTitle(f"{title} — {key_display} {scale}")
+        else:
+            self._marquee_text = f"🎵 {key_display} {scale} | BPM: {int(bpm)} | Camelot: {camelot}"
+            self.setWindowTitle(f"{key_display} {scale} — Quang Lưu Studio")
+        
+        # === 6. Hiển thị thông báo kết quả ===
+        from_cache = result.get('from_cache', False)
+        cache_tag = "📋" if from_cache else "🆕"
+        conf_pct = f"{confidence * 100:.0f}%"
+        msg_title = f" — {title[:30]}" if title else ""
+        self._show_message(f"{cache_tag} {key_display} {scale}{msg_title} ({conf_pct})")
 
     def _on_lay_tone(self):
         """Mở dialog nhập YouTube URL để dò tone tự động toàn bài"""
@@ -1526,6 +1685,8 @@ class MainDashboard(QMainWindow):
                 try:
                     import yt_dlp
                     ydl_opts = {'quiet': True, 'no_warnings': True, 'skip_download': True}
+                    if backend.FFMPEG_LOCATION:
+                        ydl_opts['ffmpeg_location'] = backend.FFMPEG_LOCATION
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         info = ydl.extract_info(url, download=False)
                         title = info.get('title', title)
@@ -1775,10 +1936,16 @@ class MainDashboard(QMainWindow):
         self.score_label.setText(f"{score:.0f}")
         self.score_label.setStyleSheet(f"font-size:18px; font-weight:bold; color:{color};")
 
+    def _ensure_app(self):
+        if not QApplication.instance():
+            self._app = QApplication(sys.argv)
+
     # mainloop compatibility (CTk → Qt)
     def mainloop(self):
         self.show()
-        # The QApplication event loop is managed externally
+        app = QApplication.instance()
+        if app:
+            app.exec()
 
 
 # ══════════════════════════════════════════════════════

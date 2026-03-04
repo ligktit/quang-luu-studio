@@ -104,6 +104,31 @@ ACTIVATION_FILE = "activation.json"
 MIDI_PORT_NAME = "QuangLuuMIDI"
 MANUAL_TIMELINES_FILE = "manual_timelines.json"
 
+def _find_ffmpeg():
+    """Tự động tìm đường dẫn ffmpeg (WinGet, PATH, hoặc thư mục phổ biến)."""
+    import shutil, glob
+    # 1. Kiểm tra PATH hiện tại
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path:
+        return os.path.dirname(ffmpeg_path)
+    # 2. Tìm trong WinGet packages
+    winget_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Packages")
+    if os.path.isdir(winget_dir):
+        matches = glob.glob(os.path.join(winget_dir, "**", "ffmpeg.exe"), recursive=True)
+        if matches:
+            return os.path.dirname(matches[0])
+    # 3. Các thư mục phổ biến trên Windows
+    for candidate in [r"C:\ffmpeg\bin", r"C:\Program Files\ffmpeg\bin", r"C:\tools\ffmpeg\bin"]:
+        if os.path.isfile(os.path.join(candidate, "ffmpeg.exe")):
+            return candidate
+    return None
+
+FFMPEG_LOCATION = _find_ffmpeg()
+if FFMPEG_LOCATION:
+    print(f"✅ FFmpeg found: {FFMPEG_LOCATION}")
+else:
+    print("⚠️ FFmpeg không tìm thấy! Tính năng tải YouTube audio sẽ không hoạt động.")
+
 
 class ConfigManager:
     @staticmethod
@@ -445,7 +470,7 @@ class ManualToneTimeline:
         return False
 
 class AudioRecorder:
-    """Thu âm loopback (WASAPI) chạy trong subprocess riêng biệt — tránh xung đột COM với PySide6."""
+    """Thu âm MIX: loopback (WASAPI) + microphone — chạy trong subprocess riêng biệt."""
     
     def __init__(self):
         self._process = None
@@ -466,28 +491,57 @@ class AudioRecorder:
         with open(self._stop_flag_path, 'w') as f:
             f.write("recording")
         
-        # Tìm đường dẫn recorder_worker.py cùng thư mục với backend.py
-        worker_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recorder_worker.py")
+        # Tìm đường dẫn recorder_worker.py — hỗ trợ cả dev mode và PyInstaller frozen
+        if getattr(sys, 'frozen', False):
+            # PyInstaller frozen mode: worker nằm trong _MEIPASS
+            base_path = sys._MEIPASS
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+        worker_script = os.path.join(base_path, "recorder_worker.py")
         
-        self._process = subprocess.Popen(
-            [sys.executable, worker_script, self._temp_wav_path, self._stop_flag_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        self._is_recording = True
-        
-        # Đọc stdout trong thread riêng để theo dõi trạng thái
-        def monitor():
-            try:
-                for line in self._process.stdout:
-                    line = line.strip()
-                    if line:
-                        print(f"🎤 [RECORDING] {line}")
-            except:
-                pass
-        threading.Thread(target=monitor, daemon=True).start()
-        print(f"🎤 [RECORDING] Đã khởi chạy subprocess thu âm (PID: {self._process.pid})")
+        if getattr(sys, 'frozen', False):
+            # Frozen: không thể dùng sys.executable (đó là file .exe)
+            # → chạy recorder_worker trực tiếp trong thread riêng (tránh xung đột COM)
+            self._is_recording = True
+            def run_worker_inprocess():
+                try:
+                    # Import và chạy trực tiếp
+                    old_argv = sys.argv
+                    sys.argv = ['recorder_worker', self._temp_wav_path, self._stop_flag_path]
+                    
+                    # Đọc và exec script
+                    with open(worker_script, 'r', encoding='utf-8') as f:
+                        code = f.read()
+                    exec(compile(code, worker_script, 'exec'), {'__name__': '__main__'})
+                    
+                    sys.argv = old_argv
+                except Exception as e:
+                    print(f"⚠️ [RECORDING] Worker error: {e}")
+            
+            self._worker_thread = threading.Thread(target=run_worker_inprocess, daemon=True)
+            self._worker_thread.start()
+            print(f"🎤 [RECORDING] Thu âm trong thread (frozen mode)")
+        else:
+            # Dev mode: chạy subprocess bình thường
+            self._process = subprocess.Popen(
+                [sys.executable, worker_script, self._temp_wav_path, self._stop_flag_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            self._is_recording = True
+            
+            # Đọc stdout trong thread riêng để theo dõi trạng thái
+            def monitor():
+                try:
+                    for line in self._process.stdout:
+                        line = line.strip()
+                        if line:
+                            print(f"🎤 [RECORDING] {line}")
+                except:
+                    pass
+            threading.Thread(target=monitor, daemon=True).start()
+            print(f"🎤 [RECORDING] Đã khởi chạy subprocess thu âm (PID: {self._process.pid})")
 
     def stop_recording(self, save_path=None):
         """Dừng thu âm. Nếu save_path được cung cấp, di chuyển file WAV tạm đến đó."""
@@ -497,18 +551,17 @@ class AudioRecorder:
             return False
         self._is_recording = False
         
-        # Xóa file flag → subprocess sẽ tự dừng (nếu không bị blocking)
+        # Xóa file flag → worker sẽ tự dừng
         if self._stop_flag_path and os.path.exists(self._stop_flag_path):
             try:
                 os.remove(self._stop_flag_path)
             except:
                 pass
         
-        # Đợi 1s, nếu subprocess vẫn chạy (WASAPI block) → kill nó
-        # File WAV vẫn hợp lệ vì worker ghi streaming trực tiếp ra disk
+        # Đợi worker dừng — subprocess (dev mode) hoặc thread (frozen mode)
         if self._process:
             try:
-                self._process.wait(timeout=1.0)
+                self._process.wait(timeout=2.0)
             except:
                 try:
                     self._process.terminate()
@@ -516,6 +569,10 @@ class AudioRecorder:
                 except:
                     self._process.kill()
             self._process = None
+        elif hasattr(self, '_worker_thread') and self._worker_thread:
+            # Frozen mode: đợi thread kết thúc
+            self._worker_thread.join(timeout=2.0)
+            self._worker_thread = None
         
         # Kiểm tra file WAV tạm
         if not self._temp_wav_path or not os.path.exists(self._temp_wav_path):
@@ -872,6 +929,8 @@ class SystemEngine:
                     'quiet': True,
                     'no_warnings': True,
                 }
+                if FFMPEG_LOCATION:
+                    ydl_opts['ffmpeg_location'] = FFMPEG_LOCATION
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(youtube_url, download=False)
                     duration = info.get('duration', 0)  # Duration tính bằng giây
@@ -1166,19 +1225,38 @@ class SystemEngine:
                 
                 self.current_youtube_url = youtube_url
                 
-                # Bước 2: Kiểm tra cache
+                # Bước 2: Kiểm tra cache TRƯỚC (nhanh, không cần gọi yt-dlp)
                 if on_progress:
                     on_progress("Đang kiểm tra cache...")
                 
                 cached = ToneCacheManager.get_cached_tone(youtube_url)
                 if cached:
-                    print(f"✅ [DÒ TONE] Cache hit: {cached.get('primary_key', '?')}")
+                    cached_title = cached.get('title', '')
+                    print(f"✅ [DÒ TONE] Cache hit: {cached.get('primary_key', '?')} | Title: {cached_title or '(chưa có)'}")
                     timeline = cached.get('key_timeline', [])
                     if timeline:
                         entry = timeline[0]
                         key_idx = entry.get('key_index', 0)
                         scale = entry.get('scale', 'Major')
                         camelot = CAMELOT_MAJOR[key_idx] if scale == "Major" else CAMELOT_MINOR[key_idx]
+                        
+                        # Nếu cache chưa có title → lấy nhanh từ yt-dlp
+                        if not cached_title:
+                            try:
+                                import yt_dlp
+                                ydl_opts = {'quiet': True, 'no_warnings': True, 'skip_download': True}
+                                if FFMPEG_LOCATION:
+                                    ydl_opts['ffmpeg_location'] = FFMPEG_LOCATION
+                                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                                    info = ydl.extract_info(youtube_url, download=False)
+                                    cached_title = info.get('title', '')
+                                # Cập nhật title vào cache
+                                if cached_title:
+                                    cached['title'] = cached_title
+                                    ToneCacheManager.save_tone(youtube_url, cached)
+                            except Exception:
+                                pass
+                        
                         result = {
                             'key': entry.get('key_display', 'C').replace('m', ''),
                             'key_display': entry.get('key_display', 'C'),
@@ -1190,11 +1268,25 @@ class SystemEngine:
                             'camelot': camelot,
                             'from_cache': True,
                             'url': youtube_url,
+                            'title': cached_title,
                         }
                         self._send_tone_midi(result)
                         if on_complete:
                             on_complete(result)
                         return
+                
+                # Bước 3: Cache miss → Lấy tiêu đề video
+                video_title = ""
+                try:
+                    import yt_dlp
+                    ydl_opts = {'quiet': True, 'no_warnings': True, 'skip_download': True}
+                    if FFMPEG_LOCATION:
+                        ydl_opts['ffmpeg_location'] = FFMPEG_LOCATION
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(youtube_url, download=False)
+                        video_title = info.get('title', '')
+                except Exception as e:
+                    print(f"⚠️ [DÒ TONE] Không lấy được title: {e}")
                 
                 # Bước 3: Tải audio từ YouTube
                 if on_progress:
@@ -1258,6 +1350,7 @@ class SystemEngine:
                         'camelot': camelot,
                         'from_cache': False,
                         'url': youtube_url,
+                        'title': video_title,
                     }
                     
                     print(f"🎯 [DÒ TONE] Kết quả:")
@@ -1271,9 +1364,10 @@ class SystemEngine:
                     # Gửi MIDI
                     self._send_tone_midi(result)
                     
-                    # Lưu cache
+                    # Lưu cache (bao gồm title)
                     cache_data = {
                         'primary_key': result['key_display'],
+                        'title': video_title,
                         'key_timeline': [{
                             'time': 0,
                             'key_display': result['key_display'],
@@ -1496,6 +1590,8 @@ class SystemEngine:
                 try:
                     import yt_dlp
                     ydl_opts = {'quiet': True, 'no_warnings': True, 'skip_download': True}
+                    if FFMPEG_LOCATION:
+                        ydl_opts['ffmpeg_location'] = FFMPEG_LOCATION
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         info = ydl.extract_info(url, download=False)
                         video_title = info.get('title', video_title)
@@ -1595,21 +1691,22 @@ class SystemEngine:
     def _send_tone_midi(self, result):
         """Gửi MIDI CC cho key/scale đến Auto-Tune
         
-        Key (CC 34): 12 nốt chromatic C..B, ánh xạ đều vào 0-127
-          C=0, C#=10, D=21, D#=32, E=42, F=53, F#=63,
-          G=74, G#=85, A=95, A#=106, B=116
-        Scale (CC 35): Minor=8, Major=14
+        Plugin nhận 0-127 → hiển thị 0-100%. Công thức: round(knob% × 127/100)
+        Key (CC 34): Giá trị knob thực tế trên plugin:
+          C=0%, Db=8.66%, D=18.11%, Eb=26.77%, E=36.22%, F=44.88%, F#=54.33%,
+          G=62.99%, Ab=72.44%, A=81.10%, Bb=90.55%, B=100%
+        Scale (CC 35): Major=10.24%, Minor=14.17%
         """
-        # Bảng ánh xạ Key → MIDI CC value (12 nốt, hỗ trợ cả sharp và flat)
+        # Bảng ánh xạ Key → MIDI CC value (từ knob% thực tế trên plugin)
         KEY_MIDI_MAP = {
-            "C": 0,   "C#": 10, "Db": 10,  "D": 21,  "D#": 32, "Eb": 32,
-            "E": 42,  "F": 53,  "F#": 63,  "G": 74,
-            "G#": 85, "Ab": 85, "A": 95,   "A#": 106, "Bb": 106, "B": 116,
+            "C": 0,   "C#": 11,  "Db": 11,  "D": 23,  "D#": 34,  "Eb": 34,
+            "E": 46,  "F": 57,   "F#": 69,  "G": 80,
+            "G#": 92, "Ab": 92,  "A": 103,  "A#": 115, "Bb": 115, "B": 127,
         }
-        # Scale → MIDI CC value 
+        # Scale → MIDI CC value (từ knob% thực tế trên plugin)
         SCALE_MIDI_MAP = {
-            "Minor": 8,
-            "Major": 14,
+            "Major": 13,
+            "Minor": 18,
         }
         
         # Lấy key_display, bỏ "m" suffix nếu có (Cm → C, Am → A)
@@ -2251,6 +2348,8 @@ class ScoringEngine:
                 'quiet': True,
                 'no_warnings': True,
             }
+            if FFMPEG_LOCATION:
+                ydl_opts['ffmpeg_location'] = FFMPEG_LOCATION
             
             print("⬇️  [DOWNLOAD] Đang tải video từ YouTube...")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
