@@ -33,15 +33,14 @@ C = {
     "border":       "#334155",   # Slate 700
 }
 
-# ─── MIDI CC MAPPING ───
-MIDI_CC = {
-    "tone_music": 10, "tone_voice": 11,
-    "mix_music": 20, "mix_mic": 21, "mix_reverb": 22, "mix_backing": 23,
-    "mode": 30, "autokey": 31, "score_trigger": 32,
-    "key_root": 33, "key_scale": 34, "scale_type": 35,
-    "tune_on_off": 36, "tone_auto": 31, "fix_meo": 36,
-    "mute_music": 50, "mute_mic": 51, "mute_reverb": 52, "mute_backing": 53,
-}
+# ─── MIDI CC MAPPING (đọc từ app_config.json) ───
+try:
+    MIDI_CC = backend.AppConfig.get_midi_cc()
+    SCALE_VALUES = backend.AppConfig.get_scale_values()
+except Exception as e:
+    print(f"⚠️ Không đọc được app_config.json, dùng giá trị mặc định: {e}")
+    MIDI_CC = {}
+    SCALE_VALUES = {}
 
 # ─── FONT FAMILY ───
 FONT = '"Be Vietnam Pro", "Segoe UI", sans-serif'
@@ -202,12 +201,15 @@ def _darken(hex_color, factor=0.2):
     return f"#{r:02x}{g:02x}{b:02x}"
 
 def add_shadow(widget, color="#000000", blur=20, offset=(0, 4)):
-    """Thêm drop-shadow cho widget"""
-    shadow = QGraphicsDropShadowEffect()
-    shadow.setBlurRadius(blur)
-    shadow.setColor(QColor(color))
-    shadow.setOffset(*offset)
-    widget.setGraphicsEffect(shadow)
+    """Thêm drop-shadow cho widget — bỏ qua nếu GPU không hỗ trợ"""
+    try:
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(blur)
+        shadow.setColor(QColor(color))
+        shadow.setOffset(*offset)
+        widget.setGraphicsEffect(shadow)
+    except Exception:
+        pass  # Bỏ qua shadow trên máy yếu để tránh đen màn hình
 
 
 # ══════════════════════════════════════════════════════
@@ -292,7 +294,7 @@ class WaveformWidget(QWidget):
                     if channels > 1:
                         audio = audio.reshape(-1, channels).mean(axis=1)
                     n = len(audio)
-                    history = np.roll(history, -n)
+                    history[:-n] = history[n:]  # In-place shift (không tạo array mới)
                     history[-n:] = audio
                     rms = float(np.sqrt(np.mean(audio ** 2)))
                     rms_norm = min(1.0, rms * 5.0)
@@ -476,11 +478,10 @@ class MainDashboard(QMainWindow):
         self.current_scale = "Major"
 
         # Window
-        self.setWindowTitle("Quang Lưu Studio")
+        self.setWindowTitle("Quang Lưu Tuấn Phúc Studio")
         self.setWindowIcon(QIcon("app_icon.ico"))
         self.setMinimumSize(960, 420)
         self.resize(960, 420)
-        # self.setWindowFlag(Qt.WindowStaysOnTopHint)  # Đã tắt always-on-top
         self.setStyleSheet(APP_QSS)
 
         # Central widget
@@ -521,8 +522,11 @@ class MainDashboard(QMainWindow):
         self._midi_timer.timeout.connect(self._update_midi_status)
         self._midi_timer.start(5000)
 
-        # Auto launch
-        self._auto_launch_studio_one()
+        # Auto launch (Studio One + Browser theo settings)
+        self._auto_launch_apps()
+
+        # YouTube URL Watcher — tự động dò tone khi mở YouTube
+        self._start_youtube_watcher()
 
     # ─────────────────────────────────────────
     #  HEADER (60px — Logo left, Status right)
@@ -597,6 +601,23 @@ class MainDashboard(QMainWindow):
         # Giữ midi_status ẩn để tương thích code cũ
         self.midi_status = QLabel("")
         self.midi_status.setVisible(False)
+
+        # ⚙️ Settings gear button
+        layout.addSpacing(8)
+        gear_btn = QPushButton("⚙️")
+        gear_btn.setFixedSize(32, 32)
+        gear_btn.setCursor(Qt.PointingHandCursor)
+        gear_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {C['text_muted']};
+                border: none;
+                font-size: 18px;
+            }}
+            QPushButton:hover {{ color: {C['teal']}; }}
+        """)
+        gear_btn.clicked.connect(self._show_settings_dialog)
+        layout.addWidget(gear_btn)
 
         return header
 
@@ -862,6 +883,7 @@ class MainDashboard(QMainWindow):
                         QPushButton {{
                             background: transparent; border: none;
                             font-size: 18px; padding: 2px; border-radius: 6px;
+                            color: {C['text_muted']};
                         }}
                         QPushButton:hover {{ background: {C["card_hover"]}; }}
                     """)
@@ -991,11 +1013,11 @@ class MainDashboard(QMainWindow):
 
         bar_layout.addStretch()
 
-        # Right: Open + Folder
+        # Right: Toggle SO + Folder
         right = QHBoxLayout()
         for text, color, cb in [
-            ("Mở File", C["pink"], self._on_open),
-            ("Thư Mục", C["light_purple"], lambda: None),
+            ("Ẩn/Hiện SO", C["pink"], self._on_toggle_studio_one),
+            ("Thư Mục", C["light_purple"], self._on_open_recordings_folder),
         ]:
             btn = QPushButton(text)
             btn.setFixedHeight(34)
@@ -1018,16 +1040,18 @@ class MainDashboard(QMainWindow):
             self.current_tone = value
             return
         self.current_tone = value
-        key_index = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"].index(value)
-        self.engine.send_midi(MIDI_CC["key_root"], int((key_index / 11) * 127))
+        key_midi_map = backend.AppConfig.get_key_midi_map()
+        key_midi = key_midi_map.get(value, 0)
+        self.engine.send_midi(MIDI_CC["key_root"], key_midi)
 
     def _on_scale_selected(self, value):
         if getattr(self, '_ignore_midi_send', False):
             self.current_scale = value
             return
         self.current_scale = value
-        scale_val = 0 if value == "Major" else 127
-        self.engine.send_midi(MIDI_CC["key_scale"], scale_val)
+        scale_midi_map = backend.AppConfig.get_scale_midi_map()
+        scale_midi = scale_midi_map.get(value, 13)
+        self.engine.send_midi(MIDI_CC["key_scale"], scale_midi)
 
     def _animate_marquee(self):
         display = self._marquee_text + "   ★   " + self._marquee_text
@@ -1047,7 +1071,7 @@ class MainDashboard(QMainWindow):
                     self._midi_dot.setStyleSheet(f"color: {C['accent']}; font-size: 10px;")
                 else:
                     self._midi_dot.setStyleSheet(f"color: {C['teal']}; font-size: 10px;")
-            except:
+            except Exception:
                 pass
         else:
             self._midi_dot.setStyleSheet(f"color: {C['accent']}; font-size: 10px;")
@@ -1057,14 +1081,24 @@ class MainDashboard(QMainWindow):
         self._ignore_midi_send = True
         try:
             if cc == int(MIDI_CC.get("key_root", 34)):
-                key_index = round((value / 127) * 11)
+                # Reverse-lookup: tìm key có MIDI value gần nhất trong KEY_MIDI_MAP
                 keys = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
-                if 0 <= key_index < len(keys):
-                    key_str = keys[key_index]
-                    if self.tone_combo.currentText() != key_str:
-                        self.tone_combo.setCurrentText(key_str)
+                best_key = "C"
+                best_diff = 999
+                for k in keys:
+                    midi_val = backend.AppConfig.get_key_midi_map().get(k, 0)
+                    diff = abs(midi_val - value)
+                    if diff < best_diff:
+                        best_diff = diff
+                        best_key = k
+                if self.tone_combo.currentText() != best_key:
+                    self.tone_combo.setCurrentText(best_key)
             elif cc == int(MIDI_CC.get("key_scale", 35)):
-                scale_str = "Minor" if value > 63 else "Major"
+                # Reverse-lookup: tìm scale có MIDI value gần nhất
+                _smap = backend.AppConfig.get_scale_midi_map()
+                major_val = _smap.get("Major", 13)
+                minor_val = _smap.get("Minor", 18)
+                scale_str = "Minor" if abs(value - minor_val) < abs(value - major_val) else "Major"
                 if hasattr(self, 'scale_combo'):
                     if self.scale_combo.currentText() != scale_str:
                         self.scale_combo.setCurrentText(scale_str)
@@ -1076,13 +1110,133 @@ class MainDashboard(QMainWindow):
     def on_midi_status_changed(self, connected, port_name=None):
         QTimer.singleShot(0, self._update_midi_status)
 
-    def _auto_launch_studio_one(self):
-        studio_one_path = self.settings.get("studio_one_path", "")
-        if studio_one_path and os.path.exists(studio_one_path):
-            try:
-                self.engine.launch_app(studio_one_path)
-            except Exception:
-                pass
+    def _auto_launch_apps(self):
+        """Tự động mở Studio One và/hoặc YouTube browser khi khởi động (theo settings)."""
+        # Studio One
+        if self.settings.get("auto_launch_studio_one", False):
+            studio_one_path = self.settings.get("studio_one_path", "")
+            if studio_one_path and os.path.exists(studio_one_path):
+                try:
+                    self.engine.launch_app(studio_one_path)
+                except Exception:
+                    pass
+        # Browser YouTube
+        if self.settings.get("auto_launch_browser", False):
+            browser_path = self.settings.get("browser_path", "")
+            if browser_path and os.path.exists(browser_path):
+                try:
+                    self.engine.launch_app(browser_path, is_web=True)
+                except Exception:
+                    pass
+
+    def _show_settings_dialog(self):
+        """Mở dialog thiết lập Mở/Đóng ứng dụng cùng phần mềm."""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("⚙️ Thiết lập")
+        dlg.setFixedSize(420, 320)
+        dlg.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
+
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(14)
+        layout.setContentsMargins(24, 20, 24, 20)
+
+        title = QLabel("⚙️ Thiết lập khởi động")
+        title.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {C['teal']}; font-family: {FONT};")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        checkbox_qss = f"""
+            QCheckBox {{
+                spacing: 10px;
+                font-size: 14px;
+                font-family: {FONT};
+                color: {C['text']};
+                padding: 8px 4px;
+            }}
+            QCheckBox::indicator {{
+                width: 20px; height: 20px;
+                border-radius: 4px;
+                border: 2px solid {C['border']};
+                background-color: {C['card']};
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {C['teal']};
+                border-color: {C['teal']};
+            }}
+        """
+
+        # --- Checkboxes ---
+        cb_launch_so = QCheckBox("🎹 Mở Studio One khi khởi động")
+        cb_launch_so.setStyleSheet(checkbox_qss)
+        cb_launch_so.setChecked(self.settings.get("auto_launch_studio_one", False))
+        layout.addWidget(cb_launch_so)
+
+        cb_launch_br = QCheckBox("🌐 Mở YouTube (trình duyệt) khi khởi động")
+        cb_launch_br.setStyleSheet(checkbox_qss)
+        cb_launch_br.setChecked(self.settings.get("auto_launch_browser", False))
+        layout.addWidget(cb_launch_br)
+
+        cb_close_so = QCheckBox("🎹 Đóng Studio One khi thoát")
+        cb_close_so.setStyleSheet(checkbox_qss)
+        cb_close_so.setChecked(self.settings.get("auto_close_studio_one", False))
+        layout.addWidget(cb_close_so)
+
+        cb_close_br = QCheckBox("🌐 Đóng trình duyệt khi thoát")
+        cb_close_br.setStyleSheet(checkbox_qss)
+        cb_close_br.setChecked(self.settings.get("auto_close_browser", False))
+        layout.addWidget(cb_close_br)
+
+        layout.addStretch()
+
+        # --- Buttons ---
+        btn_box = QHBoxLayout()
+        save_btn = QPushButton("💾 Lưu")
+        save_btn.setCursor(Qt.PointingHandCursor)
+        save_btn.setFixedHeight(38)
+        save_btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.1), 14, 18))
+
+        cancel_btn = QPushButton("Hủy")
+        cancel_btn.setCursor(Qt.PointingHandCursor)
+        cancel_btn.setFixedHeight(38)
+        cancel_btn.setStyleSheet(pill_btn_qss(C["card_hover"], _lighten(C["card_hover"], 0.1), 14, 18))
+        cancel_btn.clicked.connect(dlg.close)
+
+        def _save():
+            self.settings["auto_launch_studio_one"] = cb_launch_so.isChecked()
+            self.settings["auto_launch_browser"] = cb_launch_br.isChecked()
+            self.settings["auto_close_studio_one"] = cb_close_so.isChecked()
+            self.settings["auto_close_browser"] = cb_close_br.isChecked()
+            backend.ConfigManager.save(self.settings)
+            self._show_message("✅ Đã lưu thiết lập!")
+            dlg.close()
+
+        save_btn.clicked.connect(_save)
+        btn_box.addWidget(save_btn)
+        btn_box.addWidget(cancel_btn)
+        layout.addLayout(btn_box)
+
+        dlg.exec()
+
+    def _start_youtube_watcher(self):
+        """Khởi động YouTube URL Watcher với callbacks thread-safe."""
+        def _auto_on_complete(result):
+            self._tone_result_signal.emit(result)
+        
+        def _auto_on_error(msg):
+            # Lỗi auto-detect → chỉ in log, không hiện popup
+            print(f"⚠️ [YT WATCHER] Auto-detect lỗi: {msg}")
+        
+        def _auto_on_progress(text):
+            # Chỉ hiện "Đang dò..." trên marquee, không hiện chi tiết
+            if not getattr(self, '_do_tone_running', False):
+                self._marquee_text = "♪ Đang dò... ♪"
+        
+        self.engine.on_auto_tone_complete = _auto_on_complete
+        self.engine.on_auto_tone_error = _auto_on_error
+        self.engine.on_auto_tone_progress = _auto_on_progress
+        self.engine.start_youtube_watcher()
 
     # ── Menu Button Callbacks ──
     def _on_do_tone(self):
@@ -1093,41 +1247,6 @@ class MainDashboard(QMainWindow):
         from PySide6.QtWidgets import QDialog, QProgressBar
         
         btn = self._func_buttons.get("Dò Tone")
-        
-        # Nếu đã dò xong → reset về trạng thái ban đầu, cho phép dò lại
-        if getattr(self, '_do_tone_done', False):
-            self._do_tone_done = False
-            if btn:
-                btn.setText("Dò Tone")
-                btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
-            self._marquee_text = "♪ Bản quyền thuộc về Quang Lưu Tuấn Phúc — Karaoke Pro ♪"
-            self.autokey_dot.setStyleSheet(f"color: {C['card_hover']}; font-size: 16px;")
-            self.setWindowTitle("Quang Lưu Studio")
-            # Reset combobox style về mặc định
-            default_combo_qss = f"""
-                QComboBox {{
-                    background-color: {C['card']};
-                    color: {C['text']};
-                    border: 1px solid {C['border']};
-                    border-radius: 8px;
-                    padding: 4px 10px;
-                    font-size: 13px;
-                    font-weight: 600;
-                    font-family: {FONT};
-                }}
-                QComboBox::drop-down {{ border: none; }}
-                QComboBox QAbstractItemView {{
-                    background-color: {C['card']};
-                    color: {C['text']};
-                    selection-background-color: {C['primary']};
-                    border: 1px solid {C['border']};
-                    font-size: 13px;
-                    font-family: {FONT};
-                }}
-            """
-            self.tone_combo.setStyleSheet(default_combo_qss)
-            self.scale_combo.setStyleSheet(default_combo_qss)
-            return
         
         # Tránh nhấn nhiều lần khi đang dò
         if getattr(self, '_do_tone_running', False):
@@ -1140,11 +1259,11 @@ class MainDashboard(QMainWindow):
             btn.setText("⏳ Đang dò...")
             btn.setStyleSheet(pill_btn_qss(C["accent"], _lighten(C["accent"], 0.12), 11, 14))
         self.autokey_dot.setStyleSheet(f"color: {C['orange']}; font-size: 16px;")
-        self._marquee_text = "♪ Đang dò tone từ trình duyệt... ♪"
+        self._marquee_text = "♪ Đang dò... ♪"
         
         def on_progress(text):
-            # Chỉ set string, không gọi widget method → an toàn từ thread
-            self._marquee_text = f"♪ {text} ♪"
+            # Không hiển thị chi tiết quá trình, chỉ giữ "Đang dò..."
+            pass
         
         def on_complete(result):
             # Emit signal → main thread xử lý UI update (thread-safe)
@@ -1190,7 +1309,9 @@ class MainDashboard(QMainWindow):
         
         # === Trường hợp THÀNH CÔNG ===
         self._do_tone_running = False
-        self._do_tone_done = True
+        
+        # Nếu là auto-detect → cập nhật trạng thái nút mà không cần user nhấn trước
+        is_auto = result.get('auto_detected', False)
         
         # === 1. Cập nhật Key/Scale lên UI chính ===
         key_display = result.get('key_display', 'C')
@@ -1244,11 +1365,11 @@ class MainDashboard(QMainWindow):
         camelot = result.get('camelot', '?')
         confidence = result.get('confidence', 0)
         
-        # === 2. Cập nhật trạng thái nút "Dò Tone" → hiển thị kết quả ===
+        # === 2. Reset nút "Dò Tone" về trạng thái ban đầu ===
         if btn:
             btn.setEnabled(True)
-            btn.setText(f"✓ {key_display} {scale}")
-            btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 11, 14))
+            btn.setText("Dò Tone")
+            btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
         
         # === 3. Cập nhật dot → xanh (đã phát hiện) ===
         self.autokey_dot.setStyleSheet(f"color: {C['green']}; font-size: 16px;")
@@ -1264,20 +1385,21 @@ class MainDashboard(QMainWindow):
                 scale_btn.setText("Minor")
                 scale_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
         
-        # === 5. Hiển thị tên bài hát + kết quả lên Marquee & Window Title ===
-        if title:
-            self._marquee_text = f"🎵 {title}   ★   {key_display} {scale} | BPM: {int(bpm)} | {camelot}"
-            self.setWindowTitle(f"{title} — {key_display} {scale}")
+        # === 5. Hiển thị tên bài hát + kết quả lên Marquee (giữ nguyên Window Title) ===
+        timeline = result.get('timeline', [])
+        if timeline and len(timeline) > 1:
+            # Có nhiều đoạn chuyển tone → hiển thị chuỗi tone
+            tone_chain = " → ".join(e.get('key_display', '?') for e in timeline)
+            if title:
+                self._marquee_text = f"🎵 {title}   ★   {tone_chain}"
+            else:
+                self._marquee_text = f"🎵 {tone_chain}"
+        elif title:
+            self._marquee_text = f"🎵 {title}   ★   {key_display} {scale}"
         else:
-            self._marquee_text = f"🎵 {key_display} {scale} | BPM: {int(bpm)} | Camelot: {camelot}"
-            self.setWindowTitle(f"{key_display} {scale} — Quang Lưu Studio")
+            self._marquee_text = f"🎵 {key_display} {scale}"
         
-        # === 6. Hiển thị thông báo kết quả ===
-        from_cache = result.get('from_cache', False)
-        cache_tag = "📋" if from_cache else "🆕"
-        conf_pct = f"{confidence * 100:.0f}%"
-        msg_title = f" — {title[:30]}" if title else ""
-        self._show_message(f"{cache_tag} {key_display} {scale}{msg_title} ({conf_pct})")
+
 
     def _on_lay_tone(self):
         """Mở dialog nhập YouTube URL để dò tone tự động toàn bài"""
@@ -1354,7 +1476,7 @@ class MainDashboard(QMainWindow):
             for e in tl:
                 t_str = f"{int(e['time'] // 60):02d}:{int(e['time'] % 60):02d}"
                 scale_ic = '☀️' if e['scale'] == 'Major' else '☁️'
-                item = QListWidgetItem(f"⏱️ {t_str}   ➜   {e['key_display']} ({scale_ic})  [Conf: {e.get('confidence',0):.2f}]")
+                item = QListWidgetItem(f"⏱️ {t_str}   ➜   {e['key_display']} ({scale_ic})")
                 list_w.addItem(item)
             
             rlayout.addWidget(list_w)
@@ -1448,11 +1570,11 @@ class MainDashboard(QMainWindow):
         """Toggle Major ↔ Minor"""
         self.scale_is_major = not getattr(self, 'scale_is_major', True)
         if self.scale_is_major:
-            self.engine.send_midi(MIDI_CC["scale_type"], 14)  # Major
+            self.engine.send_midi(MIDI_CC["scale_type"], SCALE_VALUES.get("major", 13))
             if hasattr(self, 'scale_combo'):
                 self.scale_combo.setCurrentText("Major")
         else:
-            self.engine.send_midi(MIDI_CC["scale_type"], 8)   # Minor
+            self.engine.send_midi(MIDI_CC["scale_type"], SCALE_VALUES.get("minor", 18))
             if hasattr(self, 'scale_combo'):
                 self.scale_combo.setCurrentText("Minor")
         btn = self._func_buttons.get("Major")
@@ -1690,7 +1812,7 @@ class MainDashboard(QMainWindow):
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         info = ydl.extract_info(url, download=False)
                         title = info.get('title', title)
-                except:
+                except Exception:
                     pass
             
             if backend.SongManager.add_song(title, url, save_tone):
@@ -1700,13 +1822,41 @@ class MainDashboard(QMainWindow):
                 
         threading.Thread(target=_task, daemon=True).start()
 
-    def _on_open(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Mở file Studio One", "", "Studio One (*.song);;All (*)",
-            options=QFileDialog.Option.DontUseNativeDialog
-        )
-        if path:
-            self.engine.open_file(path)
+    def _on_toggle_studio_one(self):
+        """Ẩn/Hiện cửa sổ Studio One"""
+        import win32gui, win32con
+
+        def enum_callback(hwnd, results):
+            if win32gui.IsWindow(hwnd):
+                title = win32gui.GetWindowText(hwnd)
+                if "Studio One" in title:
+                    results.append(hwnd)
+            return True
+
+        hwnds = []
+        win32gui.EnumWindows(enum_callback, hwnds)
+
+        if not hwnds:
+            self._show_message("⚠️ Không tìm thấy Studio One đang chạy", is_error=True)
+            return
+
+        # Toggle: nếu đang visible → hide, nếu đang hidden → show
+        main_hwnd = hwnds[0]
+        if win32gui.IsWindowVisible(main_hwnd):
+            for h in hwnds:
+                win32gui.ShowWindow(h, win32con.SW_HIDE)
+            self._show_message("🙈 Đã ẩn Studio One")
+        else:
+            for h in hwnds:
+                win32gui.ShowWindow(h, win32con.SW_SHOW)
+            win32gui.SetForegroundWindow(main_hwnd)
+            self._show_message("👁️ Đã hiện Studio One")
+
+    def _on_open_recordings_folder(self):
+        """Mở thư mục lưu trữ file ghi âm"""
+        recordings_dir = os.path.join(os.path.expanduser("~"), "Music", "QuangLuuStudio")
+        os.makedirs(recordings_dir, exist_ok=True)
+        os.startfile(recordings_dir)
 
     def _on_record(self):
         import time, os
@@ -1732,7 +1882,9 @@ class MainDashboard(QMainWindow):
             # Dừng ghi âm và lưu file (không blocking UI)
             def handle_save():
                 # Hiện dialog chọn nơi lưu trước
-                default_name = f"QuangLuuStudio_Rec_{time.strftime('%Y%m%d_%H%M%S')}.wav"
+                recordings_dir = os.path.join(os.path.expanduser("~"), "Music", "QuangLuuStudio")
+                os.makedirs(recordings_dir, exist_ok=True)
+                default_name = os.path.join(recordings_dir, f"QuangLuuStudio_Rec_{time.strftime('%Y%m%d_%H%M%S')}.wav")
                 save_path, _ = QFileDialog.getSaveFileName(
                     self, "Lưu bản thu âm", default_name, "Audio Files (*.wav)",
                     options=QFileDialog.Option.DontUseNativeDialog
@@ -1753,13 +1905,13 @@ class MainDashboard(QMainWindow):
             self.record_button.setText("■  DỪNG LẠI")
             self.record_button.setStyleSheet(f"""
                 QPushButton {{
-                    background-color: {C["accent"]};
-                    color: white; border: 2px solid rgba(239, 68, 68, 0.5);
+                    background-color: {C["green"]};
+                    color: white; border: 2px solid rgba(74, 222, 128, 0.5);
                     border-radius: 20px;
                     font-size: 14px; font-weight: 700;
                     font-family: {FONT};
                 }}
-                QPushButton:hover {{ background-color: {_lighten(C["accent"], 0.15)}; }}
+                QPushButton:hover {{ background-color: {_lighten(C["green"], 0.15)}; }}
             """)
             # Start pulse glow animation
             self._pulse_state = True
@@ -1773,15 +1925,44 @@ class MainDashboard(QMainWindow):
             self.engine.recorder.start_recording()
 
     def _pulse_record(self):
-        """Pulse animation cho nút Record"""
+        """Pulse animation cho nút Record — nhấp nháy rõ ràng khi đang ghi âm"""
         if not self.is_recording:
             return
         self._pulse_state = not self._pulse_state
-        blur = 25 if self._pulse_state else 12
-        add_shadow(self.record_button, C["accent"], blur, (0, 0))
+        if self._pulse_state:
+            # Sáng: nền xanh tươi + viền trắng + glow mạnh
+            self.record_button.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: #22C55E;
+                    color: white; border: 2px solid rgba(255, 255, 255, 0.7);
+                    border-radius: 20px;
+                    font-size: 14px; font-weight: 700;
+                    font-family: {FONT};
+                }}
+                QPushButton:hover {{ background-color: #4ADE80; }}
+            """)
+            add_shadow(self.record_button, "#22C55E", 28, (0, 0))
+        else:
+            # Tối: nền xanh đậm + viền mờ + glow nhẹ
+            self.record_button.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: #166534;
+                    color: rgba(255, 255, 255, 0.7); border: 2px solid rgba(34, 197, 94, 0.3);
+                    border-radius: 20px;
+                    font-size: 14px; font-weight: 700;
+                    font-family: {FONT};
+                }}
+                QPushButton:hover {{ background-color: #15803D; }}
+            """)
+            add_shadow(self.record_button, C["green"], 10, (0, 0))
 
     def _on_mode_selected(self, mode):
         self.current_mode = mode
+
+        # Gửi MIDI CC khi chọn mode
+        if mode == "Dân Ca":
+            self.engine.send_midi(MIDI_CC["key_scale"], 36)
+
         # Visual feedback
         original_colors = {
             "Dân Ca": C["accent"],
@@ -1904,10 +2085,22 @@ class MainDashboard(QMainWindow):
                             self._show_songs_list()
                     return _del
                 
+                def make_edit(s):
+                    def _edit():
+                        dlg.close()
+                        self._show_edit_song_dialog(s)
+                    return _edit
+                
                 play_btn = QPushButton("▶️")
                 play_btn.setFixedSize(40, 36)
                 play_btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.1), 14, 8))
                 play_btn.clicked.connect(make_play(song))
+                
+                edit_btn = QPushButton("✏️")
+                edit_btn.setFixedSize(40, 36)
+                edit_btn.setStyleSheet(pill_btn_qss(C["primary"], _lighten(C["primary"], 0.1), 14, 8))
+                edit_btn.setCursor(Qt.PointingHandCursor)
+                edit_btn.clicked.connect(make_edit(song))
                 
                 del_btn = QPushButton("🗑️")
                 del_btn.setFixedSize(40, 36)
@@ -1915,6 +2108,7 @@ class MainDashboard(QMainWindow):
                 del_btn.clicked.connect(make_del(song.get("id")))
                 
                 i_layout.addWidget(play_btn)
+                i_layout.addWidget(edit_btn)
                 i_layout.addWidget(del_btn)
                 c_layout.addWidget(item_card)
         
@@ -1927,6 +2121,294 @@ class MainDashboard(QMainWindow):
         close_btn.setStyleSheet(pill_btn_qss(C["card_hover"], _lighten(C["card_hover"], 0.15), 13, 12))
         close_btn.clicked.connect(dlg.close)
         layout.addWidget(close_btn)
+        
+        dlg.exec()
+
+    def _show_edit_song_dialog(self, song):
+        """Mở dialog chỉnh sửa timeline (thời gian đổi key/scale) cho bài hát"""
+        from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+                                        QPushButton, QScrollArea, QWidget, QFrame,
+                                        QLineEdit, QComboBox, QMessageBox)
+        
+        song_url = song.get("url", "")
+        song_title = song.get("title", "Không có tên")
+        song_id = song.get("id")
+        
+        # Load timeline hiện tại
+        tl_data = None
+        if song_url:
+            tl_data = backend.ManualToneTimeline.load_timeline(song_url)
+        
+        existing_entries = []
+        if tl_data and tl_data.get('timeline'):
+            existing_entries = tl_data['timeline']
+        
+        # Nếu chưa có timeline → tạo entry mặc định từ tone hiện tại
+        if not existing_entries:
+            existing_entries = [{
+                'time': 0.0,
+                'key_display': song.get('tone', 'C'),
+                'key_index': 0,
+                'scale': 'Major'
+            }]
+        
+        # Dialog chỉnh sửa
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"✏️ Chỉnh sửa: {song_title[:40]}")
+        dlg.setFixedSize(580, 520)
+        dlg.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
+        
+        main_layout = QVBoxLayout(dlg)
+        main_layout.setSpacing(10)
+        
+        # Header
+        header = QLabel(f"✏️ Chỉnh sửa chuỗi tone")
+        header.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {C['primary']}; font-family: {FONT};")
+        header.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(header)
+        
+        sub_lbl = QLabel(f"🎵 {song_title[:50]}")
+        sub_lbl.setStyleSheet(f"font-size: 13px; color: {C['text_muted']}; font-family: {FONT};")
+        sub_lbl.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(sub_lbl)
+        
+        # Column headers
+        col_header = QFrame()
+        col_header.setStyleSheet("border: none;")
+        col_h_layout = QHBoxLayout(col_header)
+        col_h_layout.setContentsMargins(12, 0, 12, 0)
+        
+        lbl_time = QLabel("⏱️ Thời gian")
+        lbl_time.setFixedWidth(100)
+        lbl_time.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {C['teal']}; font-family: {FONT}; border: none;")
+        col_h_layout.addWidget(lbl_time)
+        
+        lbl_key = QLabel("🎵 Key / Scale")
+        lbl_key.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {C['teal']}; font-family: {FONT}; border: none;")
+        col_h_layout.addWidget(lbl_key, 1)
+        
+        lbl_action = QLabel("")
+        lbl_action.setFixedWidth(40)
+        col_h_layout.addWidget(lbl_action)
+        
+        main_layout.addWidget(col_header)
+        
+        # Scrollable list of entries
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(f"QScrollArea {{ border: none; background-color: {C['bg']}; }}")
+        
+        entries_container = QWidget()
+        entries_container.setStyleSheet(f"background-color: {C['bg']};")
+        entries_layout = QVBoxLayout(entries_container)
+        entries_layout.setSpacing(6)
+        
+        # Lưu references tới các widget entries
+        entry_widgets = []   # list of (time_input, key_combo, row_frame)
+        
+        all_keys = backend.ManualToneTimeline.ALL_KEYS
+        
+        def add_entry_row(time_val=0.0, key_display="C"):
+            """Thêm 1 row chỉnh sửa entry"""
+            row = QFrame()
+            row.setStyleSheet(f"background-color: {C['card']}; border-radius: 8px; border: 1px solid {C['border']};")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(10, 6, 10, 6)
+            
+            # Time input (MM:SS)
+            time_str = backend.ManualToneTimeline.seconds_to_time_str(time_val)
+            time_input = QLineEdit(time_str)
+            time_input.setFixedWidth(90)
+            time_input.setPlaceholderText("MM:SS")
+            time_input.setStyleSheet(f"""QLineEdit {{
+                background-color: {C['bg']};
+                color: {C['text']};
+                border: 1px solid {C['border']};
+                border-radius: 6px;
+                padding: 6px 8px;
+                font-size: 14px;
+                font-weight: bold;
+                font-family: {FONT};
+            }}
+            QLineEdit:focus {{ border-color: {C['teal']}; }}""")
+            row_layout.addWidget(time_input)
+            
+            # Key/Scale combo
+            key_combo = QComboBox()
+            key_combo.addItems(all_keys)
+            if key_display in all_keys:
+                key_combo.setCurrentText(key_display)
+            key_combo.setStyleSheet(f"""QComboBox {{
+                background-color: {C['bg']};
+                color: {C['green']};
+                border: 1px solid {C['border']};
+                border-radius: 6px;
+                padding: 6px 10px;
+                font-size: 14px;
+                font-weight: bold;
+                font-family: {FONT};
+            }}
+            QComboBox::drop-down {{ border: none; }}
+            QComboBox QAbstractItemView {{
+                background-color: {C['card']};
+                color: {C['text']};
+                selection-background-color: {C['primary']};
+                border: 1px solid {C['border']};
+                font-size: 13px;
+                font-family: {FONT};
+            }}""")
+            row_layout.addWidget(key_combo, 1)
+            
+            # Remove button
+            rm_btn = QPushButton("✕")
+            rm_btn.setFixedSize(32, 32)
+            rm_btn.setCursor(Qt.PointingHandCursor)
+            rm_btn.setStyleSheet(f"""QPushButton {{
+                background-color: transparent;
+                color: {C['accent']};
+                border: 1px solid {C['accent']};
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {C['accent']};
+                color: white;
+            }}""")
+            
+            def remove_this():
+                if len(entry_widgets) <= 1:
+                    QMessageBox.warning(dlg, "Cảnh báo", "Phải có ít nhất 1 entry!")
+                    return
+                # Tìm và xóa entry khỏi danh sách
+                for i, (ti, kc, rf) in enumerate(entry_widgets):
+                    if rf is row:
+                        entry_widgets.pop(i)
+                        break
+                row.setParent(None)
+                row.deleteLater()
+            
+            rm_btn.clicked.connect(remove_this)
+            row_layout.addWidget(rm_btn)
+            
+            entries_layout.addWidget(row)
+            entry_widgets.append((time_input, key_combo, row))
+        
+        # Populate existing entries
+        for entry in existing_entries:
+            add_entry_row(entry.get('time', 0.0), entry.get('key_display', 'C'))
+        
+        entries_layout.addStretch()
+        scroll.setWidget(entries_container)
+        main_layout.addWidget(scroll, 1)
+        
+        # Add entry button
+        add_btn = QPushButton("➕ Thêm mốc thời gian")
+        add_btn.setCursor(Qt.PointingHandCursor)
+        add_btn.setFixedHeight(34)
+        add_btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 12, 14))
+        
+        def on_add_entry():
+            # Tính thời gian mặc định: sau entry cuối 30s
+            last_time = 0
+            if entry_widgets:
+                last_input = entry_widgets[-1][0]
+                parsed = backend.ManualToneTimeline.parse_time_str(last_input.text())
+                if parsed is not None:
+                    last_time = parsed
+            new_time = last_time + 30
+            
+            # Lấy key của entry cuối
+            last_key = "C"
+            if entry_widgets:
+                last_key = entry_widgets[-1][1].currentText()
+            
+            add_entry_row(new_time, last_key)
+            # Scroll xuống cuối
+            QTimer.singleShot(50, lambda: scroll.verticalScrollBar().setValue(
+                scroll.verticalScrollBar().maximum()))
+        
+        add_btn.clicked.connect(on_add_entry)
+        main_layout.addWidget(add_btn)
+        
+        # Bottom buttons
+        btn_box = QHBoxLayout()
+        
+        save_btn = QPushButton("💾 Lưu thay đổi")
+        save_btn.setCursor(Qt.PointingHandCursor)
+        save_btn.setFixedHeight(40)
+        save_btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.1), 14, 18))
+        
+        cancel_btn = QPushButton("Hủy")
+        cancel_btn.setCursor(Qt.PointingHandCursor)
+        cancel_btn.setFixedHeight(40)
+        cancel_btn.setStyleSheet(pill_btn_qss(C["card_hover"], _lighten(C["card_hover"], 0.1), 14, 18))
+        cancel_btn.clicked.connect(dlg.close)
+        
+        def on_save():
+            # Thu thập dữ liệu từ các entry widgets
+            timeline_entries = []
+            has_error = False
+            
+            for i, (time_input, key_combo, _) in enumerate(entry_widgets):
+                time_str = time_input.text().strip()
+                time_seconds = backend.ManualToneTimeline.parse_time_str(time_str)
+                
+                if time_seconds is None:
+                    time_input.setStyleSheet(f"""QLineEdit {{
+                        background-color: {C['bg']};
+                        color: {C['accent']};
+                        border: 2px solid {C['accent']};
+                        border-radius: 6px;
+                        padding: 6px 8px;
+                        font-size: 14px;
+                        font-weight: bold;
+                        font-family: {FONT};
+                    }}""")
+                    has_error = True
+                    continue
+                
+                key_display = key_combo.currentText()
+                timeline_entries.append({
+                    'time': float(time_seconds),
+                    'key_display': key_display
+                })
+            
+            if has_error:
+                self._show_message("⚠️ Vui lòng sửa thời gian không hợp lệ (MM:SS)", is_error=True)
+                return
+            
+            if not timeline_entries:
+                self._show_message("⚠️ Cần ít nhất 1 entry!", is_error=True)
+                return
+            
+            # Sắp xếp theo thời gian
+            timeline_entries.sort(key=lambda x: x['time'])
+            
+            # Lưu timeline
+            if song_url:
+                success = backend.ManualToneTimeline.save_timeline(
+                    song_url, song_title, timeline_entries
+                )
+                if success:
+                    # Cập nhật tone chính của bài hát = tone đầu tiên
+                    first_key = timeline_entries[0]['key_display']
+                    if song_id:
+                        backend.SongManager.update_song(song_id, tone=first_key)
+                    
+                    self._show_message(f"✅ Đã lưu {len(timeline_entries)} mốc thời gian!")
+                    dlg.close()
+                    self._show_songs_list()
+                else:
+                    self._show_message("❌ Lỗi khi lưu timeline!", is_error=True)
+            else:
+                self._show_message("⚠️ Bài hát không có URL!", is_error=True)
+        
+        save_btn.clicked.connect(on_save)
+        
+        btn_box.addWidget(save_btn)
+        btn_box.addWidget(cancel_btn)
+        main_layout.addLayout(btn_box)
         
         dlg.exec()
 
@@ -1947,6 +2429,37 @@ class MainDashboard(QMainWindow):
         if app:
             app.exec()
 
+    def closeEvent(self, event):
+        """Cleanup đầy đủ khi đóng cửa sổ."""
+        # Dừng tất cả background threads và resources
+        self.engine.stop_youtube_watcher()
+        self.engine.stop_autokey()
+        self.engine.stop_tone_detection()
+        self.engine.media_monitor.stop()
+        self.engine.disconnect_midi()
+        # Dừng waveform audio thread
+        if hasattr(self, 'waveform') and self.waveform:
+            self.waveform.stop()
+        # Dừng QTimers
+        self._marquee_timer.stop()
+        self._midi_timer.stop()
+        # Auto-đóng ứng dụng bên ngoài (theo settings)
+        if self.settings.get("auto_close_studio_one", False):
+            try:
+                self.engine.kill_app()
+            except Exception:
+                pass
+        if self.settings.get("auto_close_browser", False):
+            browser_path = self.settings.get("browser_path", "")
+            if browser_path:
+                import os
+                browser_exe = os.path.basename(browser_path)
+                try:
+                    os.system(f'taskkill /F /IM "{browser_exe}"')
+                except Exception:
+                    pass
+        super().closeEvent(event)
+
 
 # ══════════════════════════════════════════════════════
 #  ACTIVATION DIALOG (simplified for now)
@@ -1961,7 +2474,7 @@ class ActivationDialog(QDialog):
         self.activated = False
         self.setWindowTitle("Kích hoạt Quang Lưu Studio")
         self.setWindowIcon(QIcon("app_icon.ico"))
-        self.setFixedSize(500, 400)
+        self.setFixedSize(500, 480)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 
         layout = QVBoxLayout(self)
@@ -2004,6 +2517,36 @@ class ActivationDialog(QDialog):
         activate_btn.clicked.connect(self._activate)
         layout.addWidget(activate_btn)
 
+        # ── Phân cách ──
+        separator = QLabel("─── hoặc ───")
+        separator.setAlignment(Qt.AlignCenter)
+        separator.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px;")
+        layout.addWidget(separator)
+
+        # ── Nút dùng thử ──
+        trial_expired = backend.ActivationManager.is_trial_expired()
+        if trial_expired:
+            # Trial đã hết hạn → disable nút, hiển thị thông báo
+            trial_btn = QPushButton("⏰ Đã hết hạn dùng thử")
+            trial_btn.setFixedHeight(40)
+            trial_btn.setEnabled(False)
+            trial_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {C['card_hover']};
+                    color: {C['text_muted']};
+                    border: 1px solid {C['border']};
+                    border-radius: 10px;
+                    font-size: 14px;
+                }}
+            """)
+        else:
+            trial_btn = QPushButton("🎁 Dùng thử miễn phí 3 ngày")
+            trial_btn.setFixedHeight(40)
+            trial_btn.setCursor(Qt.PointingHandCursor)
+            trial_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.1), 14, 18))
+            trial_btn.clicked.connect(self._start_trial)
+        layout.addWidget(trial_btn)
+
         self.status_label = QLabel("")
         self.status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.status_label)
@@ -2028,17 +2571,33 @@ class ActivationDialog(QDialog):
         else:
             self.status_label.setText(f"❌ {result.get('error', 'Mã không hợp lệ')}")
             self.status_label.setStyleSheet(f"color: {C['accent']}; font-size:13px;")
+    
+    def _start_trial(self):
+        """Bắt đầu dùng thử 3 ngày"""
+        result = backend.ActivationManager.start_trial()
+        if result.get("success"):
+            self.activated = True
+            days = result.get("days_remaining", 3)
+            self.status_label.setText(f"🎉 Bắt đầu dùng thử! Còn {days:.0f} ngày")
+            self.status_label.setStyleSheet(f"color: {C['green']}; font-size:13px;")
+            QTimer.singleShot(1200, self._close_and_continue)
+        else:
+            self.status_label.setText("⚠️ Thời gian dùng thử đã hết. Vui lòng nhập mã kích hoạt.")
+            self.status_label.setStyleSheet(f"color: {C['accent']}; font-size:13px;")
 
     def _close_and_continue(self):
         self.close()
-        if self.callback:
-            self.callback()
+        # Không gọi callback ở đây — callback sẽ được gọi sau khi app.exec() kết thúc
+        # trong mainloop() để tránh nested event loop
 
     def mainloop(self):
         self.show()
         app = QApplication.instance()
         if app:
             app.exec()
+        # Sau khi dialog đóng và event loop kết thúc, gọi callback nếu đã kích hoạt
+        if self.activated and self.callback:
+            self.callback()
 
 
 # ══════════════════════════════════════════════════════
@@ -2139,15 +2698,18 @@ class SetupView(QDialog):
             "browser_path": self.browser_input.text().strip(),
         }
         backend.ConfigManager.save(settings)
+        self._saved = True
         self.close()
-        if self.callback:
-            self.callback()
 
     def mainloop(self):
+        self._saved = False
         self.show()
         app = QApplication.instance()
         if app:
             app.exec()
+        # Sau khi dialog đóng, gọi callback nếu đã lưu settings
+        if self._saved and self.callback:
+            self.callback()
 
 
 # ─── DEBUG ───

@@ -178,7 +178,7 @@ def process_song(url, index, total):
     try:
         os.remove(audio_path)
         print(f"  🗑️  Đã xóa file tạm")
-    except:
+    except Exception:
         pass
 
     return {

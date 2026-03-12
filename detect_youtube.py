@@ -124,6 +124,30 @@ def get_url_from_browser(hwnd):
             if value and ("youtube.com" in value or "youtu.be" in value):
                 return _normalize_url(value)
 
+        # Phương pháp 3: Tìm EditControl theo Name (Brave/Chromium-based)
+        try:
+            edit = control.EditControl(
+                searchDepth=15,
+                Name="Address and search bar"
+            )
+            if edit and edit.Exists(0.5):
+                value = ""
+                try:
+                    pattern = edit.GetValuePattern()
+                    if pattern:
+                        value = pattern.Value
+                except Exception:
+                    pass
+                if not value:
+                    try:
+                        value = edit.GetWindowText() or ""
+                    except Exception:
+                        pass
+                if value and ("youtube.com" in value or "youtu.be" in value):
+                    return _normalize_url(value)
+        except Exception:
+            pass
+
     except Exception:
         pass
 
@@ -179,6 +203,26 @@ def detect_youtube_url():
 # Audio download
 # ──────────────────────────────────────────────────────────────
 
+def _find_ffmpeg_location():
+    """Tìm FFmpeg từ nhiều vị trí: PATH, %LOCALAPPDATA%\\FFmpeg, cùng thư mục app."""
+    import shutil
+    # 1. PATH
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path:
+        return os.path.dirname(ffmpeg_path)
+    # 2. %LOCALAPPDATA%\FFmpeg (nơi setup_all.bat cài)
+    local_appdata = os.environ.get("LOCALAPPDATA", "")
+    if local_appdata:
+        local_ffmpeg = os.path.join(local_appdata, "FFmpeg")
+        if os.path.isfile(os.path.join(local_ffmpeg, "ffmpeg.exe")):
+            return local_ffmpeg
+    # 3. Cùng thư mục app
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    if os.path.isfile(os.path.join(app_dir, "ffmpeg.exe")):
+        return app_dir
+    return None
+
+
 def download_audio(url, output_dir):
     """Download audio from YouTube URL using yt-dlp."""
     import yt_dlp
@@ -186,14 +230,16 @@ def download_audio(url, output_dir):
 
     output_path = os.path.join(output_dir, "audio.%(ext)s")
 
-    # Try with ffmpeg conversion first, fall back to raw download
-    has_ffmpeg = shutil.which("ffmpeg") is not None
+    # Tìm ffmpeg: PATH → %LOCALAPPDATA%\FFmpeg → cùng thư mục app
+    ffmpeg_location = _find_ffmpeg_location()
+    has_ffmpeg = ffmpeg_location is not None
 
     if has_ffmpeg:
         ydl_opts = {
             "format": "bestaudio/best",
             "outtmpl": output_path,
             "noplaylist": True,
+            "ffmpeg_location": ffmpeg_location,
             "postprocessors": [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "wav",

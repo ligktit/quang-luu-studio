@@ -15,6 +15,64 @@ import queue
 import re
 import win32process
 
+# ===== MEMORY PROFILER (DEBUG) =====
+class MemoryProfiler:
+    """Công cụ theo dõi RAM để xác định vị trí tràn bộ nhớ.
+    
+    Sử dụng:
+        mem = MemoryProfiler("TenModule")
+        # trong vòng lặp:
+        mem.checkpoint("sau khi xử lý audio")  # In RAM nếu tăng > 1MB
+        mem.summary()  # In tổng kết
+    """
+    _process = psutil.Process(os.getpid())
+    
+    def __init__(self, name, threshold_mb=1.0):
+        self.name = name
+        self.threshold_bytes = int(threshold_mb * 1024 * 1024)
+        self._start_rss = self._get_rss()
+        self._last_rss = self._start_rss
+        self._peak_rss = self._start_rss
+        self._count = 0
+    
+    @classmethod
+    def _get_rss(cls):
+        """Lấy RSS (Resident Set Size) hiện tại (bytes)"""
+        return cls._process.memory_info().rss
+    
+    def checkpoint(self, label=""):
+        """Ghi nhận checkpoint. Chỉ in khi RAM thay đổi > threshold."""
+        self._count += 1
+        current = self._get_rss()
+        delta = current - self._last_rss
+        total_delta = current - self._start_rss
+        
+        if current > self._peak_rss:
+            self._peak_rss = current
+        
+        if abs(delta) >= self.threshold_bytes:
+            direction = "📈" if delta > 0 else "📉"
+            print(f"🔍 [MEM {self.name}] #{self._count} {label}: "
+                  f"{current / 1024 / 1024:.1f}MB "
+                  f"({direction} {delta / 1024 / 1024:+.1f}MB, "
+                  f"tổng: {total_delta / 1024 / 1024:+.1f}MB)")
+        
+        self._last_rss = current
+    
+    def summary(self):
+        """In tổng kết RAM usage"""
+        current = self._get_rss()
+        total_delta = current - self._start_rss
+        peak_delta = self._peak_rss - self._start_rss
+        print(f"📊 [MEM {self.name}] TỔNG KẾT: "
+              f"bắt đầu={self._start_rss / 1024 / 1024:.1f}MB, "
+              f"hiện tại={current / 1024 / 1024:.1f}MB, "
+              f"peak={self._peak_rss / 1024 / 1024:.1f}MB, "
+              f"tăng={total_delta / 1024 / 1024:+.1f}MB, "
+              f"peak tăng={peak_delta / 1024 / 1024:+.1f}MB, "
+              f"checkpoints={self._count}")
+
+
 # ===== TÍCH HỢP WINDOWS MEDIA API =====
 try:
     import asyncio
@@ -101,31 +159,161 @@ class WindowsMediaMonitor:
 SETTINGS_FILE = "settings.json"
 SONGS_FILE = "saved_songs.json"
 ACTIVATION_FILE = "activation.json"
-MIDI_PORT_NAME = "QuangLuuMIDI"
 MANUAL_TIMELINES_FILE = "manual_timelines.json"
 
+# --- APP CONFIG (đọc từ file ngoài, không cần build lại exe) ---
+APP_CONFIG_FILE = "app_config.json"
+
+# Defaults nếu file không tồn tại hoặc thiếu field
+_DEFAULT_APP_CONFIG = {
+    "midi_port_name": "QuangLuuMIDI",
+    "midi_cc": {
+        "tone_music": 10, "tone_voice": 11,
+        "mix_music": 20, "mix_mic": 21, "mix_reverb": 22, "mix_backing": 23,
+        "mode": 30, "autokey": 31, "score_trigger": 32,
+        "key_root": 33, "key_scale": 34, "scale_type": 35,
+        "tune_on_off": 36, "tone_auto": 31, "fix_meo": 36,
+        "mute_music": 50, "mute_mic": 51, "mute_reverb": 52, "mute_backing": 53,
+    },
+    "scale_values": {
+        "major": 13,
+        "minor": 18
+    },
+    "key_midi_map": {
+        "C": 0, "C#": 11, "Db": 11, "D": 23, "D#": 34, "Eb": 34,
+        "E": 46, "F": 57, "F#": 69, "G": 80,
+        "G#": 92, "Ab": 92, "A": 103, "A#": 115, "Bb": 115, "B": 127,
+    },
+    "scale_midi_map": {
+        "Major": 13,
+        "Minor": 18
+    }
+}
+
+class AppConfig:
+    """
+    Singleton đọc app_config.json từ thư mục chứa exe (frozen) hoặc source (dev).
+    Sửa file JSON bằng Notepad → restart app → có hiệu lực, KHÔNG cần build lại exe.
+    """
+    _instance = None
+    _data = None
+
+    @classmethod
+    def _get_config_path(cls):
+        """Tìm đường dẫn app_config.json — ưu tiên thư mục chứa exe"""
+        if getattr(sys, 'frozen', False):
+            # PyInstaller frozen: file nằm cạnh exe
+            exe_dir = os.path.dirname(sys.executable)
+        else:
+            # Dev mode: file nằm cạnh source
+            exe_dir = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(exe_dir, APP_CONFIG_FILE)
+
+    @classmethod
+    def load(cls):
+        """Load config từ file, merge với defaults"""
+        if cls._data is not None:
+            return cls._data
+
+        import copy
+        cls._data = copy.deepcopy(_DEFAULT_APP_CONFIG)
+        config_path = cls._get_config_path()
+
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    user_config = json.load(f)
+
+                # Merge: user config ghi đè defaults
+                for key, value in user_config.items():
+                    if isinstance(value, dict) and key in cls._data and isinstance(cls._data[key], dict):
+                        cls._data[key].update(value)
+                    else:
+                        cls._data[key] = value
+
+                print(f"✅ App config loaded: {config_path}")
+            except Exception as e:
+                print(f"⚠️ Lỗi đọc {APP_CONFIG_FILE}: {e} — dùng giá trị mặc định")
+        else:
+            print(f"ℹ️ {APP_CONFIG_FILE} không tìm thấy — dùng giá trị mặc định")
+
+        return cls._data
+
+    @classmethod
+    def get(cls, key, default=None):
+        """Lấy giá trị config theo key"""
+        data = cls.load()
+        return data.get(key, default)
+
+    @classmethod
+    def get_midi_cc(cls):
+        """Lấy MIDI CC mapping dict"""
+        return cls.load().get("midi_cc", _DEFAULT_APP_CONFIG["midi_cc"])
+
+    @classmethod
+    def get_scale_values(cls):
+        """Lấy scale values dict"""
+        return cls.load().get("scale_values", _DEFAULT_APP_CONFIG["scale_values"])
+
+    @classmethod
+    def get_key_midi_map(cls):
+        """Lấy Key → MIDI CC value mapping (cho Auto-Tune plugin)"""
+        return cls.load().get("key_midi_map", _DEFAULT_APP_CONFIG["key_midi_map"])
+
+    @classmethod
+    def get_scale_midi_map(cls):
+        """Lấy Scale → MIDI CC value mapping (cho Auto-Tune plugin)"""
+        return cls.load().get("scale_midi_map", _DEFAULT_APP_CONFIG["scale_midi_map"])
+
+    @classmethod
+    def reload(cls):
+        """Force reload config từ file (VD: sau khi user sửa file)"""
+        cls._data = None
+        return cls.load()
+
+# Load config ngay khi import module
+AppConfig.load()
+MIDI_PORT_NAME = AppConfig.get("midi_port_name", "QuangLuuMIDI")
+
 def _find_ffmpeg():
-    """Tự động tìm đường dẫn ffmpeg (WinGet, PATH, hoặc thư mục phổ biến)."""
+    """Tự động tìm đường dẫn ffmpeg (setup_all.bat, WinGet, PATH, hoặc thư mục phổ biến)."""
     import shutil, glob
     # 1. Kiểm tra PATH hiện tại
     ffmpeg_path = shutil.which("ffmpeg")
     if ffmpeg_path:
         return os.path.dirname(ffmpeg_path)
-    # 2. Tìm trong WinGet packages
-    winget_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Packages")
+    # 2. Tìm trong %LOCALAPPDATA%\FFmpeg (nơi setup_all.bat cài đặt)
+    local_appdata = os.environ.get("LOCALAPPDATA", "")
+    if local_appdata:
+        local_ffmpeg = os.path.join(local_appdata, "FFmpeg")
+        if os.path.isfile(os.path.join(local_ffmpeg, "ffmpeg.exe")):
+            return local_ffmpeg
+    # 3. Tìm trong WinGet packages
+    winget_dir = os.path.join(local_appdata, "Microsoft", "WinGet", "Packages")
     if os.path.isdir(winget_dir):
         matches = glob.glob(os.path.join(winget_dir, "**", "ffmpeg.exe"), recursive=True)
         if matches:
             return os.path.dirname(matches[0])
-    # 3. Các thư mục phổ biến trên Windows
-    for candidate in [r"C:\ffmpeg\bin", r"C:\Program Files\ffmpeg\bin", r"C:\tools\ffmpeg\bin"]:
-        if os.path.isfile(os.path.join(candidate, "ffmpeg.exe")):
+    # 4. Các thư mục phổ biến trên Windows
+    for candidate in [r"C:\ffmpeg\bin", r"C:\Program Files\ffmpeg\bin", r"C:\tools\ffmpeg\bin",
+                      os.path.join(local_appdata, "Programs", "FFmpeg", "bin") if local_appdata else ""]:
+        if candidate and os.path.isfile(os.path.join(candidate, "ffmpeg.exe")):
             return candidate
+    # 5. Tìm ffmpeg.exe cùng thư mục với app (PyInstaller bundle)
+    if getattr(sys, 'frozen', False):
+        app_dir = os.path.dirname(sys.executable)
+    else:
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+    if os.path.isfile(os.path.join(app_dir, "ffmpeg.exe")):
+        return app_dir
     return None
 
 FFMPEG_LOCATION = _find_ffmpeg()
 if FFMPEG_LOCATION:
     print(f"✅ FFmpeg found: {FFMPEG_LOCATION}")
+    # Thêm vào PATH để yt-dlp download_ranges có thể tìm ffmpeg
+    if FFMPEG_LOCATION not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = FFMPEG_LOCATION + os.pathsep + os.environ.get("PATH", "")
 else:
     print("⚠️ FFmpeg không tìm thấy! Tính năng tải YouTube audio sẽ không hoạt động.")
 
@@ -136,7 +324,7 @@ class ConfigManager:
         if os.path.exists(SETTINGS_FILE):
             try:
                 with open(SETTINGS_FILE, "r", encoding="utf-8") as f: return json.load(f)
-            except: return None
+            except Exception: return None
         return None
 
     @staticmethod
@@ -258,7 +446,7 @@ class ToneCacheManager:
             try:
                 with open(TONE_CACHE_FILE, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except:
+            except Exception:
                 return {}
         return {}
     
@@ -268,7 +456,7 @@ class ToneCacheManager:
             with open(TONE_CACHE_FILE, "w", encoding="utf-8") as f:
                 json.dump(cache, f, ensure_ascii=False, indent=2)
             return True
-        except:
+        except Exception:
             return False
     
     # Cache TTL: 30 ngày
@@ -378,7 +566,7 @@ class ManualToneTimeline:
             try:
                 with open(MANUAL_TIMELINES_FILE, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except:
+            except Exception:
                 return {}
         return {}
     
@@ -538,7 +726,7 @@ class AudioRecorder:
                         line = line.strip()
                         if line:
                             print(f"🎤 [RECORDING] {line}")
-                except:
+                except Exception:
                     pass
             threading.Thread(target=monitor, daemon=True).start()
             print(f"🎤 [RECORDING] Đã khởi chạy subprocess thu âm (PID: {self._process.pid})")
@@ -555,18 +743,18 @@ class AudioRecorder:
         if self._stop_flag_path and os.path.exists(self._stop_flag_path):
             try:
                 os.remove(self._stop_flag_path)
-            except:
+            except Exception:
                 pass
         
         # Đợi worker dừng — subprocess (dev mode) hoặc thread (frozen mode)
         if self._process:
             try:
                 self._process.wait(timeout=2.0)
-            except:
+            except Exception:
                 try:
                     self._process.terminate()
                     self._process.wait(timeout=0.5)
-                except:
+                except Exception:
                     self._process.kill()
             self._process = None
         elif hasattr(self, '_worker_thread') and self._worker_thread:
@@ -583,12 +771,12 @@ class AudioRecorder:
         if file_size < 100:  # WAV header ~44 bytes, nếu chỉ có header = rỗng
             print("⚠️ [RECORDING] File thu âm rỗng (không thu được âm thanh).")
             try: os.remove(self._temp_wav_path)
-            except: pass
+            except Exception: pass
             return False 
         
         if not save_path:
             try: os.remove(self._temp_wav_path)
-            except: pass
+            except Exception: pass
             return False
         
         try:
@@ -629,6 +817,20 @@ class SystemEngine:
         # Callback nhận MIDI CC
         self.on_midi_cc_callback = None
         self.midi_handler.on_cc_received = self._handle_midi_in
+        
+        # YouTube URL Watcher (auto dò tone khi mở YouTube)
+        self._youtube_watcher_active = False
+        self._youtube_watcher_thread = None
+        self._last_watched_url = None
+        self._auto_tone_running = False  # tránh dò chồng chéo
+        self.on_auto_tone_complete = None  # Callback(result_dict)
+        self.on_auto_tone_error = None     # Callback(error_msg)
+        self.on_auto_tone_progress = None  # Callback(status_text)
+        
+        # Tối ưu YT WATCHER: 2-tier title check + PWA cache + adaptive polling
+        self._prev_browser_titles = None   # Cache titles để so sánh thay đổi (str hash)
+        self._pwa_title_cache = {}          # Cache PWA title → URL (tránh gọi yt-dlp search lặp lại)
+        self._no_browser_count = 0          # Đếm số lần poll không thấy browser (adaptive interval)
 
     def _handle_midi_in(self, cc, value):
         if self.on_midi_cc_callback:
@@ -688,12 +890,12 @@ class SystemEngine:
         if result and on_connected:
             try:
                 on_connected(self.midi_handler.outport.name if self.midi_handler.outport else None)
-            except:
+            except Exception:
                 pass
         elif not result and on_failed:
             try:
                 on_failed()
-            except:
+            except Exception:
                 pass
         return result
 
@@ -766,7 +968,7 @@ class SystemEngine:
                     win32gui.SetForegroundWindow(hwnd)
                     if len(keys) == 1: pyautogui.press(keys[0])
                     else: pyautogui.hotkey(*keys)
-                except: pass
+                except Exception: pass
         threading.Thread(target=run, daemon=True).start()
 
     def launch_app(self, path, is_web=False):
@@ -778,7 +980,7 @@ class SystemEngine:
             # Logic mở file .song hoặc .exe
             if path.lower().endswith(".song"):
                 try: os.startfile(path)
-                except: pass
+                except Exception: pass
             else:
                 running = False
                 for p in psutil.process_iter(['name']):
@@ -788,7 +990,7 @@ class SystemEngine:
 
     def kill_app(self):
         try: os.system('taskkill /F /IM "Studio One.exe"')
-        except: pass
+        except Exception: pass
     
     def open_youtube_url(self, url, on_video_end_callback=None, on_tone_detected=None, manual_timeline=None):
         """
@@ -862,12 +1064,12 @@ class SystemEngine:
                     print(f"⚠️ Lỗi mở browser: {e}")
                     try:
                         os.startfile(url)
-                    except:
+                    except Exception:
                         print(f"⚠️ Không thể mở URL: {url}")
             else:
                 try:
                     os.startfile(url)
-                except:
+                except Exception:
                     print(f"⚠️ Không thể mở URL: {url}")
         
         threading.Thread(target=open_browser, daemon=True).start()
@@ -1060,29 +1262,16 @@ class SystemEngine:
 
     # ── Dò Tone: Phát hiện YouTube URL từ trình duyệt ──
     # Logic lấy từ detect_youtube.py (đã kiểm chứng hoạt động)
+    
     @staticmethod
-    def detect_youtube_url_from_browser():
+    def _enum_all_visible_windows():
         """
-        Phát hiện YouTube URL đang mở trên trình duyệt (Windows).
-        Sử dụng ctypes.windll.user32.EnumWindows + uiautomation.
+        Liệt kê tất cả cửa sổ visible trên Windows (1 lần EnumWindows duy nhất).
+        Được dùng chung bởi detect_youtube_url_from_browser() và _detect_youtube_from_pwa().
         
         Returns:
-            str: YouTube URL sạch (chỉ chứa video ID), hoặc None nếu không tìm thấy.
+            list[tuple[int, str]]: Danh sách (hwnd, title) của tất cả cửa sổ visible.
         """
-        try:
-            import uiautomation as auto
-        except ImportError:
-            print("❌ [DÒ TONE] Thư viện 'uiautomation' chưa được cài đặt.")
-            print("   Chạy: pip install uiautomation")
-            return None
-        
-        # Bao gồm "Microsoft​ Edge" (có U+200B) + "Edge" ngắn gọn để khớp mọi trường hợp
-        browser_keywords = [
-            "Google Chrome", "Microsoft\u200b Edge", "Microsoft Edge",
-            "Mozilla Firefox", "Brave", "Opera", "Vivaldi", "Edge",
-        ]
-        
-        # ── Bước 1: Liệt kê tất cả cửa sổ trình duyệt ──
         all_windows = []
         
         def enum_callback(hwnd, _):
@@ -1096,6 +1285,39 @@ class SystemEngine:
         
         WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
         ctypes.windll.user32.EnumWindows(WNDENUMPROC(enum_callback), 0)
+        return all_windows
+    
+    @staticmethod
+    def detect_youtube_url_from_browser(quiet=False, all_windows=None, pwa_title_cache=None):
+        """
+        Phát hiện YouTube URL đang mở trên trình duyệt (Windows).
+        Sử dụng ctypes.windll.user32.EnumWindows + uiautomation.
+        
+        Args:
+            quiet: Tắt log output
+            all_windows: Danh sách (hwnd, title) đã được enum sẵn (tối ưu: tránh gọi EnumWindows lặp lại)
+            pwa_title_cache: Dict {title → url} cache kết quả PWA yt-dlp search
+        
+        Returns:
+            str: YouTube URL sạch (chỉ chứa video ID), hoặc None nếu không tìm thấy.
+        """
+        try:
+            import uiautomation as auto
+        except ImportError:
+            if not quiet:
+                print("❌ [DÒ TONE] Thư viện 'uiautomation' chưa được cài đặt.")
+                print("   Chạy: pip install uiautomation")
+            return None
+        
+        # Bao gồm "Microsoft​ Edge" (có U+200B) + "Edge" ngắn gọn để khớp mọi trường hợp
+        browser_keywords = [
+            "Google Chrome", "Microsoft\u200b Edge", "Microsoft Edge",
+            "Mozilla Firefox", "Brave", "Opera", "Vivaldi", "Edge",
+        ]
+        
+        # ── Bước 1: Liệt kê tất cả cửa sổ trình duyệt ──
+        if all_windows is None:
+            all_windows = SystemEngine._enum_all_visible_windows()
         
         # Lọc cửa sổ trình duyệt
         browser_windows = []
@@ -1105,7 +1327,8 @@ class SystemEngine:
                     browser_windows.append({"hwnd": hwnd, "title": title, "browser": keyword})
                     break
         
-        print(f"🔍 [DÒ TONE] Tìm thấy {len(browser_windows)} cửa sổ trình duyệt")
+        if not quiet:
+            print(f"🔍 [DÒ TONE] Tìm thấy {len(browser_windows)} cửa sổ trình duyệt")
         
         # ── Bước 2: Đọc URL từ thanh địa chỉ ──
         for bw in browser_windows:
@@ -1164,11 +1387,46 @@ class SystemEngine:
                             print(f"   ✅ YouTube URL: {clean}")
                             return clean
                 
+                # Phương pháp 3: Tìm EditControl theo Name (Brave/Chromium-based)
+                # Brave address bar có Name="Address and search bar" nhưng nằm sâu hơn
+                try:
+                    edit = control.EditControl(
+                        searchDepth=15,
+                        Name="Address and search bar"
+                    )
+                    if edit and edit.Exists(0.5):
+                        value = ""
+                        try:
+                            pattern = edit.GetValuePattern()
+                            if pattern:
+                                value = pattern.Value
+                        except Exception:
+                            pass
+                        if not value:
+                            try:
+                                value = edit.GetWindowText() or ""
+                            except Exception:
+                                pass
+                        if value and ("youtube.com" in value or "youtu.be" in value):
+                            url = SystemEngine._normalize_url(value)
+                            clean = SystemEngine._clean_youtube_url(url)
+                            if clean:
+                                print(f"   ✅ YouTube URL (Brave): {clean}")
+                                return clean
+                except Exception:
+                    pass
+                
             except Exception as e:
                 print(f"   ⚠️ Lỗi đọc cửa sổ {bw['browser']}: {e}")
                 continue
         
-        print("⚠️ [DÒ TONE] Không tìm thấy YouTube URL trên trình duyệt.")
+        # ── Bước 3: Fallback — tìm từ PWA YouTube (dùng lại all_windows + pwa_title_cache) ──
+        pwa_url = SystemEngine._detect_youtube_from_pwa(quiet, all_windows=all_windows, pwa_title_cache=pwa_title_cache)
+        if pwa_url:
+            return pwa_url
+        
+        if not quiet:
+            print("⚠️ [DÒ TONE] Không tìm thấy YouTube URL trên trình duyệt hoặc PWA.")
         return None
     
     @staticmethod
@@ -1194,15 +1452,143 @@ class SystemEngine:
                 return f"https://www.youtube.com/watch?v={m.group(1)}"
         return None
     
-    def detect_tone_from_browser(self, on_complete=None, on_error=None, on_progress=None):
+    @staticmethod
+    def _detect_youtube_from_pwa(quiet=False, all_windows=None, pwa_title_cache=None):
+        """
+        Phát hiện YouTube URL từ PWA YouTube (cài từ Chrome/Edge).
+        PWA không có thanh địa chỉ → dùng tiêu đề cửa sổ + yt-dlp search.
+        
+        Args:
+            quiet: Tắt log output
+            all_windows: Danh sách (hwnd, title) đã enum sẵn (tránh gọi EnumWindows lặp lại)
+            pwa_title_cache: Dict {title → url} cache kết quả yt-dlp search trước đó
+        
+        Returns:
+            str: YouTube URL sạch, hoặc None nếu không tìm thấy.
+        """
+        # Tên process của trình duyệt hỗ trợ PWA
+        pwa_browsers = {"chrome.exe", "msedge.exe"}
+        
+        # ── Bước 1: Dùng all_windows đã enum sẵn hoặc enum mới ──
+        if all_windows is None:
+            all_windows = SystemEngine._enum_all_visible_windows()
+        
+        # ── Bước 2: Tìm cửa sổ PWA YouTube ──
+        # PWA YouTube có tiêu đề dạng: "Video Title - YouTube"
+        # Nhưng KHÔNG chứa tên trình duyệt (Google Chrome, Microsoft Edge...)
+        browser_keywords_lower = [
+            "google chrome", "microsoft edge", "mozilla firefox",
+            "brave", "opera", "vivaldi",
+        ]
+        
+        pwa_candidates = []
+        for hwnd, title in all_windows:
+            title_lower = title.lower().strip()
+            
+            # Phải chứa "- youtube" (tiêu đề PWA YouTube)
+            if "- youtube" not in title_lower:
+                continue
+            
+            # Loại trừ cửa sổ trình duyệt thông thường
+            is_browser = False
+            for kw in browser_keywords_lower:
+                if kw in title_lower:
+                    is_browser = True
+                    break
+            if is_browser:
+                continue
+            
+            # Xác nhận process là chrome.exe hoặc msedge.exe
+            try:
+                _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                proc = psutil.Process(pid)
+                proc_name = proc.name().lower()
+                if proc_name not in pwa_browsers:
+                    continue
+            except Exception:
+                continue
+            
+            pwa_candidates.append({"hwnd": hwnd, "title": title})
+        
+        if not pwa_candidates:
+            return None
+        
+        if not quiet:
+            print(f"📱 [DÒ TONE] Tìm thấy {len(pwa_candidates)} cửa sổ PWA YouTube")
+        
+        # ── Bước 3: Trích xuất tên video từ tiêu đề ──
+        # Tiêu đề PWA: "Song Name - Artist - YouTube" → tên video = "Song Name - Artist"
+        for candidate in pwa_candidates:
+            title = candidate["title"]
+            
+            # Tách phần " - YouTube" cuối cùng
+            yt_suffix_idx = title.rfind(" - YouTube")
+            if yt_suffix_idx <= 0:
+                continue
+            
+            video_title = title[:yt_suffix_idx].strip()
+            if not video_title:
+                continue
+            
+            if not quiet:
+                print(f"📱 [DÒ TONE] PWA YouTube: \"{video_title}\"")
+            
+            # ── Bước 4A: Kiểm tra PWA title cache trước ──
+            if pwa_title_cache is not None and video_title in pwa_title_cache:
+                cached_url = pwa_title_cache[video_title]
+                if not quiet:
+                    print(f"   ✅ PWA cache hit: {cached_url}")
+                return cached_url
+            
+            # ── Bước 4B: Cache miss → Tìm YouTube URL bằng yt-dlp search ──
+            try:
+                import yt_dlp
+                ydl_opts = {
+                    'quiet': True,
+                    'no_warnings': True,
+                    'skip_download': True,
+                    'default_search': 'ytsearch',
+                    'noplaylist': True,
+                }
+                if FFMPEG_LOCATION:
+                    ydl_opts['ffmpeg_location'] = FFMPEG_LOCATION
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(f"ytsearch:{video_title}", download=False)
+                    
+                    if not info:
+                        continue
+                    
+                    # ytsearch trả về entries list
+                    entries = info.get('entries', [])
+                    if entries:
+                        first = entries[0]
+                        video_id = first.get('id', '')
+                        if video_id:
+                            found_url = f"https://www.youtube.com/watch?v={video_id}"
+                            print(f"   ✅ PWA YouTube URL: {found_url}")
+                            # Lưu vào cache
+                            if pwa_title_cache is not None:
+                                pwa_title_cache[video_title] = found_url
+                            return found_url
+                            
+            except Exception as e:
+                if not quiet:
+                    print(f"   ⚠️ [DÒ TONE] PWA search lỗi: {e}")
+                continue
+        
+        return None
+    
+    def detect_tone_from_browser(self, on_complete=None, on_error=None, on_progress=None, url=None):
         """
         Dò Tone từ YouTube đang mở trên trình duyệt.
-        Luồng: Phát hiện URL → Tải audio → Phân tích Key/Scale/BPM/Camelot → Trả kết quả.
+        Luồng: Phát hiện URL → Tải audio (45s) → detect_key_from_audio → Trả kết quả.
         
         Args:
             on_complete: Callback(result_dict) khi hoàn thành
             on_error: Callback(error_msg) khi lỗi
             on_progress: Callback(status_text) cập nhật trạng thái
+            url: YouTube URL (nếu đã biết trước, bỏ qua bước phát hiện từ browser)
         """
         import numpy as np
         
@@ -1212,16 +1598,19 @@ class SystemEngine:
         
         def _detect():
             try:
-                # Bước 1: Phát hiện YouTube URL từ browser
-                if on_progress:
-                    on_progress("Đang tìm YouTube URL trên trình duyệt...")
-                
-                youtube_url = SystemEngine.detect_youtube_url_from_browser()
-                
-                if not youtube_url:
-                    if on_error:
-                        on_error("Không tìm thấy YouTube URL trên trình duyệt.\nHãy mở YouTube trên Chrome/Edge/Firefox.")
-                    return
+                # Bước 1: Lấy YouTube URL (dùng url truyền vào hoặc phát hiện từ browser)
+                if url:
+                    youtube_url = url
+                else:
+                    if on_progress:
+                        on_progress("Đang tìm YouTube URL trên trình duyệt...")
+                    
+                    youtube_url = SystemEngine.detect_youtube_url_from_browser()
+                    
+                    if not youtube_url:
+                        if on_error:
+                            on_error("Không tìm thấy YouTube URL trên trình duyệt.\nHãy mở YouTube trên Chrome/Edge/Firefox.")
+                        return
                 
                 self.current_youtube_url = youtube_url
                 
@@ -1269,26 +1658,14 @@ class SystemEngine:
                             'from_cache': True,
                             'url': youtube_url,
                             'title': cached_title,
+                            'timeline': timeline,
                         }
                         self._send_tone_midi(result)
                         if on_complete:
                             on_complete(result)
                         return
                 
-                # Bước 3: Cache miss → Lấy tiêu đề video
-                video_title = ""
-                try:
-                    import yt_dlp
-                    ydl_opts = {'quiet': True, 'no_warnings': True, 'skip_download': True}
-                    if FFMPEG_LOCATION:
-                        ydl_opts['ffmpeg_location'] = FFMPEG_LOCATION
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(youtube_url, download=False)
-                        video_title = info.get('title', '')
-                except Exception as e:
-                    print(f"⚠️ [DÒ TONE] Không lấy được title: {e}")
-                
-                # Bước 3: Tải audio từ YouTube
+                # Bước 3+4 tối ưu: Cache miss → Tải audio + lấy title trong 1 lần gọi yt-dlp
                 if on_progress:
                     on_progress("Đang tải audio từ YouTube...")
                 
@@ -1296,7 +1673,7 @@ class SystemEngine:
                 print(f"🔗 URL: {youtube_url}")
                 
                 scoring_engine = ScoringEngine()
-                audio_path = scoring_engine.download_youtube_audio(youtube_url)
+                audio_path, video_title = scoring_engine.download_youtube_audio_with_info(youtube_url)
                 
                 if not audio_path:
                     if on_error:
@@ -1304,18 +1681,19 @@ class SystemEngine:
                     return
                 
                 try:
-                    # Bước 4: Load audio bằng librosa
+                    # Bước 5: Load audio bằng librosa (45s đầu — ưu tiên tốc độ)
                     if on_progress:
                         on_progress("Đang phân tích bài hát...")
                     
                     import librosa
                     
-                    audio_data, sr = librosa.load(audio_path, sr=22050, mono=True)
+                    # Chỉ load 45 giây đầu — đủ để phát hiện key, nhanh hơn nhiều
+                    audio_data, sr = librosa.load(audio_path, sr=22050, mono=True, duration=45)
                     song_duration = len(audio_data) / sr
                     
                     print(f"✅ [DÒ TONE] Loaded: {song_duration:.1f}s, sr={sr}")
                     
-                    # Bước 4a: Phát hiện Key & Scale
+                    # Bước 6: Phát hiện Key & Scale
                     if on_progress:
                         on_progress("Đang phát hiện Key & Scale...")
                     
@@ -1326,17 +1704,11 @@ class SystemEngine:
                             on_error("Không thể phát hiện tone bài hát.")
                         return
                     
-                    # Bước 4b: Phát hiện BPM
-                    if on_progress:
-                        on_progress("Đang phát hiện BPM...")
-                    
-                    tempo_result = librosa.beat.tempo(y=audio_data, sr=sr)
-                    bpm = float(tempo_result[0]) if len(tempo_result) > 0 else 0.0
-                    
-                    # Bước 4c: Camelot Wheel
+                    # BPM & Camelot — tạm bỏ qua để trả kết quả nhanh hơn
                     key_idx = tone_result['key_index']
                     scale = tone_result['scale']
-                    camelot = CAMELOT_MAJOR[key_idx] if scale == "Major" else CAMELOT_MINOR[key_idx]
+                    bpm = 0.0
+                    camelot = ''
                     
                     # Kết quả
                     result = {
@@ -1356,29 +1728,14 @@ class SystemEngine:
                     print(f"🎯 [DÒ TONE] Kết quả:")
                     print(f"   Key: {result['key_display']}")
                     print(f"   Scale: {result['scale']}")
-                    print(f"   BPM: {result['bpm']}")
-                    print(f"   Camelot: {result['camelot']}")
                     print(f"   Confidence: {result['confidence']:.3f}")
                     print(f"   Duration: {result['duration']}s")
                     
                     # Gửi MIDI
                     self._send_tone_midi(result)
                     
-                    # Lưu cache (bao gồm title)
-                    cache_data = {
-                        'primary_key': result['key_display'],
-                        'title': video_title,
-                        'key_timeline': [{
-                            'time': 0,
-                            'key_display': result['key_display'],
-                            'key_index': key_idx,
-                            'scale': scale,
-                            'confidence': result['confidence'],
-                            'bpm': result['bpm'],
-                            'duration': result['duration'],
-                        }]
-                    }
-                    ToneCacheManager.save_tone(youtube_url, cache_data)
+                    # Lưu cache (dùng DRY helper)
+                    SystemEngine._save_tone_to_cache(youtube_url, result, title=video_title)
                     
                     if on_complete:
                         on_complete(result)
@@ -1395,6 +1752,175 @@ class SystemEngine:
         
         threading.Thread(target=_detect, daemon=True).start()
 
+    # ── YouTube URL Watcher — Tự động dò tone khi mở YouTube ──
+    def start_youtube_watcher(self, poll_interval=1.5):
+        """
+        Bắt đầu theo dõi trình duyệt liên tục.
+        Khi phát hiện YouTube URL mới → tự động dò tone.
+        
+        Args:
+            poll_interval: Khoảng thời gian poll (giây), mặc định 1.5s
+        """
+        if self._youtube_watcher_active:
+            return  # Đã chạy rồi
+        
+        self._youtube_watcher_active = True
+        self._youtube_watcher_thread = threading.Thread(
+            target=self._youtube_watcher_loop,
+            args=(poll_interval,),
+            daemon=True
+        )
+        self._youtube_watcher_thread.start()
+        print("👁️ [YT WATCHER] Đã bắt đầu theo dõi trình duyệt...")
+    
+    def stop_youtube_watcher(self):
+        """Dừng theo dõi trình duyệt."""
+        self._youtube_watcher_active = False
+        print("👁️ [YT WATCHER] Đã dừng theo dõi trình duyệt.")
+    
+    def _youtube_watcher_loop(self, poll_interval):
+        """
+        Thread loop: poll trình duyệt mỗi N giây, phát hiện YouTube URL mới.
+        
+        Tối ưu tài nguyên:
+        - 2-Tier Strategy: Kiểm tra title (rất nhanh) trước, chỉ gọi UIAutomation khi title thay đổi
+        - Adaptive Polling: Tăng interval khi đang dò tone hoặc không có browser
+        - Shared EnumWindows: Gọi 1 lần duy nhất, dùng chung cho browser + PWA
+        - PWA Cache: Cache kết quả yt-dlp search theo title
+        """
+        mem = MemoryProfiler("YT_WATCHER")
+        while self._youtube_watcher_active:
+            try:
+                # ── Adaptive Polling: Tính interval phù hợp ──
+                if self._auto_tone_running:
+                    current_interval = 5.0  # Đang dò tone → poll chậm lại
+                elif self._no_browser_count > 5:
+                    current_interval = 5.0  # Không thấy browser lâu → poll chậm
+                else:
+                    current_interval = poll_interval  # Mặc định: 1.5s
+                
+                # ── Tầng 1 (nhẹ): EnumWindows + GetWindowText — so sánh title ──
+                all_windows = SystemEngine._enum_all_visible_windows()
+                
+                # Tạo fingerprint từ tất cả title (hash nhanh để so sánh)
+                titles_fingerprint = hash(tuple(title for _, title in all_windows))
+                
+                if titles_fingerprint == self._prev_browser_titles:
+                    # Title không đổi → skip UIAutomation (tiết kiệm ~90% CPU)
+                    pass
+                else:
+                    # ── Tầng 2 (nặng): Title thay đổi → đọc URL qua UIAutomation ──
+                    self._prev_browser_titles = titles_fingerprint
+                    
+                    url = SystemEngine.detect_youtube_url_from_browser(
+                        quiet=True,
+                        all_windows=all_windows,
+                        pwa_title_cache=self._pwa_title_cache,
+                    )
+                    
+                    if url:
+                        self._no_browser_count = 0  # Reset counter
+                        
+                        if url != self._last_watched_url and not self._auto_tone_running:
+                            # Phát hiện URL mới → tự động dò tone
+                            print(f"👁️ [YT WATCHER] Phát hiện YouTube mới: {url}")
+                            self._last_watched_url = url
+                            self._auto_tone_running = True
+                            
+                            def _on_complete(result):
+                                self._auto_tone_running = False
+                                result['auto_detected'] = True
+                                if self.on_auto_tone_complete:
+                                    self.on_auto_tone_complete(result)
+                            
+                            def _on_error(msg):
+                                self._auto_tone_running = False
+                                if self.on_auto_tone_error:
+                                    self.on_auto_tone_error(msg)
+                            
+                            def _on_progress(text):
+                                if self.on_auto_tone_progress:
+                                    self.on_auto_tone_progress(text)
+                            
+                            self.detect_tone_from_browser(
+                                on_complete=_on_complete,
+                                on_error=_on_error,
+                                on_progress=_on_progress,
+                                url=url,
+                            )
+                    else:
+                        self._no_browser_count += 1
+                    
+            except Exception as e:
+                print(f"⚠️ [YT WATCHER] Lỗi poll: {e}")
+            
+            mem.checkpoint("poll")
+            
+            # Chờ trước khi poll lại (dùng adaptive interval)
+            for _ in range(int(current_interval * 10)):
+                if not self._youtube_watcher_active:
+                    mem.summary()
+                    return
+                time.sleep(0.1)
+
+    # ── DRY Helpers: Cache kiểm tra/lưu tone (dùng chung nhiều hàm) ──
+    
+    def _check_tone_cache(self, url):
+        """
+        Kiểm tra cache tone cho YouTube URL. Nếu có, gửi MIDI và trả về result dict.
+        
+        Returns:
+            dict: result dict (from_cache=True, key_timeline, ...) nếu cache hit
+            None: nếu cache miss
+        """
+        cached = ToneCacheManager.get_cached_tone(url)
+        if not cached:
+            return None
+        
+        timeline = cached.get('key_timeline', [])
+        if not timeline:
+            return None
+        
+        print(f"✅ [CACHE] Hit: {cached.get('primary_key', '?')}")
+        
+        latest = timeline[-1]
+        result = {
+            'key_display': cached.get('primary_key', latest.get('key_display', 'C')),
+            'key_index': latest.get('key_index', 0),
+            'scale': latest.get('scale', 'Major'),
+            'confidence': latest.get('confidence', 0),
+            'from_cache': True,
+            'key_timeline': timeline,
+            'title': cached.get('title', ''),
+        }
+        self._send_tone_midi(result)
+        return result
+    
+    @staticmethod
+    def _save_tone_to_cache(url, result, title=""):
+        """
+        Lưu kết quả dò tone vào cache (format chuẩn).
+        
+        Args:
+            url: YouTube URL
+            result: dict chứa key_display, key_index, scale, confidence, ...
+            title: Video title (optional)
+        """
+        cache_data = {
+            'primary_key': result['key_display'],
+            'title': title,
+            'key_timeline': [{
+                'time': 0,
+                'key_display': result['key_display'],
+                'key_index': result['key_index'],
+                'scale': result['scale'],
+                'confidence': result.get('confidence', 0),
+                'bpm': result.get('bpm', 0),
+                'duration': result.get('duration', 0),
+            }]
+        }
+        ToneCacheManager.save_tone(url, cache_data)
+
     def detect_tone(self, duration=10, on_complete=None, on_error=None, on_progress=None):
         """
         Dò tone bài hát đang phát (single-shot). Kiểm tra cache trước.
@@ -1402,27 +1928,13 @@ class SystemEngine:
         def _detect():
             try:
 
-                # Kiểm tra cache nếu có YouTube URL
+                # Kiểm tra cache nếu có YouTube URL (dùng DRY helper)
                 if self.current_youtube_url:
-                    cached = ToneCacheManager.get_cached_tone(self.current_youtube_url)
-                    if cached:
-                        print(f"✅ [DÒ TONE] Cache hit: {cached.get('primary_key', '?')}")
-                        # Trả về primary key từ cache
-                        timeline = cached.get('key_timeline', [])
-                        if timeline:
-                            latest = timeline[-1] if timeline else timeline[0]
-                            result = {
-                                'key_display': cached.get('primary_key', latest.get('key_display', 'C')),
-                                'key_index': latest.get('key_index', 0),
-                                'scale': latest.get('scale', 'Major'),
-                                'confidence': latest.get('confidence', 0),
-                                'from_cache': True,
-                                'key_timeline': timeline
-                            }
-                            self._send_tone_midi(result)
-                            if on_complete:
-                                on_complete(result)
-                            return
+                    cached_result = self._check_tone_cache(self.current_youtube_url)
+                    if cached_result:
+                        if on_complete:
+                            on_complete(cached_result)
+                        return
                 
                 # Dò tone: ưu tiên YouTube download (audio sạch) > loopback
                 result = None
@@ -1448,19 +1960,9 @@ class SystemEngine:
                 if result:
                     self._send_tone_midi(result)
                     
-                    # Lưu cache nếu có YouTube URL (confidence check nằm trong save_tone)
+                    # Lưu cache nếu có YouTube URL (dùng DRY helper)
                     if self.current_youtube_url:
-                        cache_data = {
-                            'primary_key': result['key_display'],
-                            'key_timeline': [{
-                                'time': 0,
-                                'key_display': result['key_display'],
-                                'key_index': result['key_index'],
-                                'scale': result['scale'],
-                                'confidence': result.get('confidence', 0)
-                            }]
-                        }
-                        ToneCacheManager.save_tone(self.current_youtube_url, cache_data)
+                        SystemEngine._save_tone_to_cache(self.current_youtube_url, result)
                     
                     if on_complete:
                         on_complete(result)
@@ -1492,28 +1994,15 @@ class SystemEngine:
         
         def _detect():
             try:
-                # 1. Kiểm tra cache trước
+                # 1. Kiểm tra cache trước (dùng DRY helper)
                 if on_progress:
                     on_progress("Đang kiểm tra cache...")
                 
-                cached = ToneCacheManager.get_cached_tone(youtube_url)
-                if cached:
-                    print(f"✅ [LẤY TONE YT] Cache hit: {cached.get('primary_key', '?')}")
-                    timeline = cached.get('key_timeline', [])
-                    if timeline:
-                        latest = timeline[-1] if timeline else timeline[0]
-                        result = {
-                            'key_display': cached.get('primary_key', latest.get('key_display', 'C')),
-                            'key_index': latest.get('key_index', 0),
-                            'scale': latest.get('scale', 'Major'),
-                            'confidence': latest.get('confidence', 0),
-                            'from_cache': True,
-                            'key_timeline': timeline
-                        }
-                        self._send_tone_midi(result)
-                        if on_complete:
-                            on_complete(result)
-                        return
+                cached_result = self._check_tone_cache(youtube_url)
+                if cached_result:
+                    if on_complete:
+                        on_complete(cached_result)
+                    return
                 
                 # 2. Tải audio từ YouTube
                 if on_progress:
@@ -1528,18 +2017,8 @@ class SystemEngine:
                     # 3. Gửi MIDI
                     self._send_tone_midi(result)
                     
-                    # 4. Lưu cache
-                    cache_data = {
-                        'primary_key': result['key_display'],
-                        'key_timeline': [{
-                            'time': 0,
-                            'key_display': result['key_display'],
-                            'key_index': result['key_index'],
-                            'scale': result['scale'],
-                            'confidence': result.get('confidence', 0)
-                        }]
-                    }
-                    ToneCacheManager.save_tone(youtube_url, cache_data)
+                    # 4. Lưu cache (dùng DRY helper)
+                    SystemEngine._save_tone_to_cache(youtube_url, result)
                     
                     if on_complete:
                         on_complete(result)
@@ -1690,39 +2169,31 @@ class SystemEngine:
 
     def _send_tone_midi(self, result):
         """Gửi MIDI CC cho key/scale đến Auto-Tune
-        
-        Plugin nhận 0-127 → hiển thị 0-100%. Công thức: round(knob% × 127/100)
-        Key (CC 34): Giá trị knob thực tế trên plugin:
-          C=0%, Db=8.66%, D=18.11%, Eb=26.77%, E=36.22%, F=44.88%, F#=54.33%,
-          G=62.99%, Ab=72.44%, A=81.10%, Bb=90.55%, B=100%
-        Scale (CC 35): Major=10.24%, Minor=14.17%
+
+        Đọc key_midi_map + scale_midi_map từ app_config.json.
+        Sửa file config → restart app để điều chỉnh giá trị MIDI gửi đến plugin.
         """
-        # Bảng ánh xạ Key → MIDI CC value (từ knob% thực tế trên plugin)
-        KEY_MIDI_MAP = {
-            "C": 0,   "C#": 11,  "Db": 11,  "D": 23,  "D#": 34,  "Eb": 34,
-            "E": 46,  "F": 57,   "F#": 69,  "G": 80,
-            "G#": 92, "Ab": 92,  "A": 103,  "A#": 115, "Bb": 115, "B": 127,
-        }
-        # Scale → MIDI CC value (từ knob% thực tế trên plugin)
-        SCALE_MIDI_MAP = {
-            "Major": 13,
-            "Minor": 18,
-        }
-        
         # Lấy key_display, bỏ "m" suffix nếu có (Cm → C, Am → A)
         key_display = result.get("key_display", "C")
         key_root = key_display.replace("m", "") if key_display.endswith("m") and not key_display.endswith("#m") else key_display
         if key_display.endswith("#m"):
             key_root = key_display[:-1]  # "C#m" → "C#"
-        
-        key_midi = KEY_MIDI_MAP.get(key_root, 0)
+
+        key_midi_map = AppConfig.get_key_midi_map()
+        scale_midi_map = AppConfig.get_scale_midi_map()
+
+        key_midi = key_midi_map.get(key_root, 0)
         scale = result.get("scale", "Major")
-        scale_midi = SCALE_MIDI_MAP.get(scale, 14)
-        
-        self.send_midi(34, key_midi)
+        scale_midi = scale_midi_map.get(scale, 13)
+
+        midi_cc = AppConfig.get_midi_cc()
+        cc_key_root = midi_cc.get("key_root", 34)
+        cc_key_scale = midi_cc.get("key_scale", 35)
+
+        self.send_midi(cc_key_root, key_midi)
         time.sleep(0.05)
-        self.send_midi(35, scale_midi)
-        print(f"📤 [TONE] MIDI → CC34={key_midi} (Key={key_root}), CC35={scale_midi} (Scale={scale})")
+        self.send_midi(cc_key_scale, scale_midi)
+        print(f"📤 [TONE] MIDI → CC{cc_key_root}={key_midi} (Key={key_root}), CC{cc_key_scale}={scale_midi} (Scale={scale})")
     
     def stop_tone_detection(self):
         """Dừng dò tone liên tục"""
@@ -1765,7 +2236,7 @@ class SystemEngine:
             try:
                 hr = ctypes.windll.ole32.CoInitializeEx(None, 0)
                 com_initialized = (hr == 0)
-            except:
+            except Exception:
                 pass
             
             try:
@@ -1814,13 +2285,15 @@ class SystemEngine:
                 print("=" * 60)
                 print(f"🎹 [AUTOKEY] Bắt đầu — segment={segment_duration}s, device={loopback_dev['name']}")
                 
-                # ROLLING AUDIO BUFFER: tích lũy audio, phân tích toàn bộ
+                # ROLLING AUDIO BUFFER: pre-allocated ring buffer (tránh tạo array mới mỗi iteration)
                 RECORD_CHUNK = segment_duration
                 MAX_BUFFER_SEC = 30
                 MAX_BUFFER_FRAMES = MAX_BUFFER_SEC * SAMPLE_RATE
-                audio_buffer = np.array([], dtype=np.float32)
+                audio_buffer = np.zeros(MAX_BUFFER_FRAMES, dtype=np.float32)
+                write_pos = 0  # Vị trí ghi hiện tại trong ring buffer
                 
                 print(f"🎹 [AUTOKEY] Rolling buffer: chunk={RECORD_CHUNK}s, max={MAX_BUFFER_SEC}s")
+                mem = MemoryProfiler("AUTOKEY")
                 
                 stream = pa.open(
                     format=pyaudio.paFloat32,
@@ -1848,6 +2321,7 @@ class SystemEngine:
                                 break
                             
                             chunk = np.concatenate(chunks)
+                            del chunks  # Giải phóng list chunks ngay lập tức
                             chunk = np.nan_to_num(chunk, nan=0.0, posinf=0.0, neginf=0.0)
                             
                             # Kiểm tra im lặng
@@ -1861,22 +2335,30 @@ class SystemEngine:
                                             'confidence': 0,
                                             'message': 'Đang lắng nghe...'
                                         })
-                                    except:
+                                    except Exception:
                                         pass
                                 continue
                             
-                            # Thêm vào rolling buffer
-                            audio_buffer = np.concatenate([audio_buffer, chunk])
+                            # Thêm vào rolling buffer (in-place, không tạo array mới)
+                            chunk_len = len(chunk)
+                            if write_pos + chunk_len <= MAX_BUFFER_FRAMES:
+                                # Còn chỗ: ghi trực tiếp
+                                audio_buffer[write_pos:write_pos + chunk_len] = chunk
+                                write_pos += chunk_len
+                            else:
+                                # Đầy: shift buffer sang trái, ghi chunk vào cuối
+                                keep = MAX_BUFFER_FRAMES - chunk_len
+                                audio_buffer[:keep] = audio_buffer[write_pos - keep:write_pos]
+                                audio_buffer[keep:keep + chunk_len] = chunk
+                                write_pos = MAX_BUFFER_FRAMES
+                            del chunk  # Giải phóng chunk tạm
                             
-                            # Cắt giữ tối đa MAX_BUFFER_SEC
-                            if len(audio_buffer) > MAX_BUFFER_FRAMES:
-                                audio_buffer = audio_buffer[-MAX_BUFFER_FRAMES:]
-                            
-                            buffer_sec = len(audio_buffer) / SAMPLE_RATE
+                            buffer_sec = write_pos / SAMPLE_RATE
                             print(f"📦 [AUTOKEY] Buffer: {buffer_sec:.1f}s")
+                            mem.checkpoint(f"buffer={buffer_sec:.0f}s")
                             
-                            # Phân tích TOÀN BỘ buffer
-                            result = ToneDetector.detect_key_from_audio(audio_buffer, SAMPLE_RATE)
+                            # Phân tích phần buffer đã ghi
+                            result = ToneDetector.detect_key_from_audio(audio_buffer[:write_pos], SAMPLE_RATE)
                             
                             if not result:
                                 continue
@@ -1926,13 +2408,14 @@ class SystemEngine:
                                         'voted_key': voted_key,
                                         'key_changed': key_changed
                                     })
-                                except:
+                                except Exception:
                                     pass
                             
                         except Exception as e:
                             print(f"❌ [AUTOKEY] Lỗi segment: {e}")
                             time.sleep(1)
                 finally:
+                    mem.summary()
                     stream.stop_stream()
                     stream.close()
                     pa.terminate()
@@ -1945,7 +2428,7 @@ class SystemEngine:
                 if com_initialized:
                     try:
                         ctypes.windll.ole32.CoUninitialize()
-                    except:
+                    except Exception:
                         pass
                 self.autokey_active = False
                 print("🏁 [AUTOKEY] Đã dừng")
@@ -1954,7 +2437,7 @@ class SystemEngine:
                 if on_key_update:
                     try:
                         on_key_update({'status': 'stopped'})
-                    except:
+                    except Exception:
                         pass
         
         self._autokey_thread = threading.Thread(target=_autokey_loop, daemon=True)
@@ -2017,6 +2500,9 @@ class SystemEngine:
                         'confidence': round(confidence, 3)
                     }
                     key_timeline.append(entry)
+                    # Giữ tối đa 500 entries gần nhất (~ 40 phút ở 5s/segment)
+                    if len(key_timeline) > 500:
+                        key_timeline = key_timeline[-500:]
                     
                     # Phát hiện chuyển tone với temporal smoothing + confidence threshold
                     should_change = False
@@ -2048,7 +2534,7 @@ class SystemEngine:
                         if self.on_tone_detected_callback:
                             try:
                                 self.on_tone_detected_callback(result)
-                            except:
+                            except Exception:
                                 pass
                     elif voted_key == current_key:
                         print(f"   🎵 [TONE] t={elapsed}s: {voted_key} (stable, conf={confidence:.2f})")
@@ -2145,7 +2631,7 @@ class SystemEngine:
                         if self.on_tone_detected_callback:
                             try:
                                 self.on_tone_detected_callback(entry)
-                            except:
+                            except Exception:
                                 pass
                                 
                     last_idx = target_idx
@@ -2217,7 +2703,7 @@ class SystemEngine:
                         if self.on_tone_detected_callback:
                             try:
                                 self.on_tone_detected_callback(entry)
-                            except:
+                            except Exception:
                                 pass
                                 
                     last_idx = target_idx
@@ -2237,7 +2723,7 @@ class SongManager:
             try:
                 with open(SONGS_FILE, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except:
+            except Exception:
                 return []
         return []
     
@@ -2283,6 +2769,17 @@ class SongManager:
         songs = SongManager.load_songs()
         songs = [s for s in songs if s.get("id") != song_id]
         return SongManager.save_songs(songs)
+    
+    @staticmethod
+    def update_song(song_id, **kwargs):
+        """Cập nhật thông tin bài hát theo ID. kwargs có thể chứa title, tone, url..."""
+        songs = SongManager.load_songs()
+        for song in songs:
+            if song.get("id") == song_id:
+                for key, value in kwargs.items():
+                    song[key] = value
+                return SongManager.save_songs(songs)
+        return False
     
     @staticmethod
     def get_song_by_id(song_id):
@@ -2336,7 +2833,7 @@ class ScoringEngine:
             temp_file.close()
             print(f"📄 [DOWNLOAD] Tạo file tạm: {temp_path}")
             
-            # Cấu hình yt-dlp
+            # Cấu hình yt-dlp — chỉ tải 60 giây đầu để tăng tốc dò tone
             ydl_opts = {
                 'format': 'bestaudio/best',
                 'outtmpl': temp_path.replace('.wav', '.%(ext)s'),
@@ -2352,8 +2849,19 @@ class ScoringEngine:
                 ydl_opts['ffmpeg_location'] = FFMPEG_LOCATION
             
             print("⬇️  [DOWNLOAD] Đang tải video từ YouTube...")
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([youtube_url])
+            
+            # Thử tải 60s đầu (cần ffmpeg trong PATH cho download_ranges)
+            try:
+                ydl_opts_partial = dict(ydl_opts)
+                ydl_opts_partial['download_ranges'] = lambda info, ydl: [{'start_time': 0, 'end_time': 60}]
+                with yt_dlp.YoutubeDL(ydl_opts_partial) as ydl:
+                    ydl.download([youtube_url])
+            except Exception as e_partial:
+                # Fallback: tải toàn bộ audio nếu download_ranges thất bại
+                print(f"⚠️ [DOWNLOAD] Không thể tải 60s đầu ({e_partial.__class__.__name__}), tải toàn bộ...")
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([youtube_url])
+            
             print("✅ [DOWNLOAD] Đã tải video thành công")
             
             # Tìm file đã tải (có thể có extension khác)
@@ -2376,13 +2884,89 @@ class ScoringEngine:
             print(traceback.format_exc())
             return None
     
+    def download_youtube_audio_with_info(self, youtube_url, output_dir="temp_audio"):
+        """
+        Tải audio + lấy title video trong 1 lần gọi yt-dlp duy nhất (tối ưu: giảm 1 network request).
+        
+        Returns:
+            tuple[str|None, str]: (audio_path, video_title) — audio_path=None nếu lỗi
+        """
+        try:
+            print(f"📥 [DOWNLOAD+INFO] Bắt đầu tải audio + info: {youtube_url}")
+            try:
+                import yt_dlp
+            except ImportError:
+                raise ImportError("Thư viện 'yt-dlp' chưa được cài đặt. Vui lòng chạy: pip install yt-dlp")
+            
+            import os
+            import tempfile
+            
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            
+            temp_file = tempfile.NamedTemporaryFile(
+                delete=False, suffix='.wav', dir=output_dir
+            )
+            temp_path = temp_file.name
+            temp_file.close()
+            
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': temp_path.replace('.wav', '.%(ext)s'),
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'wav',
+                    'preferredquality': '192',
+                }],
+                'quiet': True,
+                'no_warnings': True,
+            }
+            if FFMPEG_LOCATION:
+                ydl_opts['ffmpeg_location'] = FFMPEG_LOCATION
+            
+            video_title = ""
+            
+            # Thử tải 60s đầu + lấy info trong 1 lần
+            try:
+                ydl_opts_partial = dict(ydl_opts)
+                ydl_opts_partial['download_ranges'] = lambda info, ydl: [{'start_time': 0, 'end_time': 60}]
+                with yt_dlp.YoutubeDL(ydl_opts_partial) as ydl:
+                    info = ydl.extract_info(youtube_url, download=True)
+                    video_title = info.get('title', '') if info else ""
+            except Exception as e_partial:
+                print(f"⚠️ [DOWNLOAD+INFO] Partial download failed ({e_partial.__class__.__name__}), tải toàn bộ...")
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(youtube_url, download=True)
+                    video_title = info.get('title', '') if info else ""
+            
+            print(f"✅ [DOWNLOAD+INFO] Tải thành công | Title: {video_title}")
+            
+            # Tìm file đã tải
+            base_path = temp_path.replace('.wav', '')
+            for ext in ['.wav', '.mp3', '.m4a', '.webm']:
+                if os.path.exists(base_path + ext):
+                    self.temp_audio_path = base_path + ext
+                    file_size = os.path.getsize(self.temp_audio_path) / (1024 * 1024)
+                    print(f"✅ [DOWNLOAD+INFO] File: {self.temp_audio_path} ({file_size:.2f} MB)")
+                    return self.temp_audio_path, video_title
+            
+            raise Exception("Không tìm thấy file audio đã tải")
+            
+        except ImportError as e:
+            raise e
+        except Exception as e:
+            print(f"❌ [DOWNLOAD+INFO] Lỗi: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return None, ""
+    
     def cleanup_temp_file(self):
         """Xóa file tạm nếu có"""
         import os
         if self.temp_audio_path and os.path.exists(self.temp_audio_path):
             try:
                 os.remove(self.temp_audio_path)
-            except:
+            except Exception:
                 pass
             self.temp_audio_path = None
     
@@ -2696,6 +3280,19 @@ class ToneDetector:
     # Voting window: số segments cần đồng thuận trước khi chuyển tone
     VOTING_WINDOW = 3
     
+    # Bảng ánh xạ Key → MIDI CC value (từ knob% thực tế trên plugin Auto-Tune)
+    # Plugin nhận 0-127 → hiển thị 0-100%. Công thức: round(knob% × 127/100)
+    KEY_MIDI_MAP = {
+        "C": 0,   "C#": 11,  "Db": 11,  "D": 23,  "D#": 34,  "Eb": 34,
+        "E": 46,  "F": 57,   "F#": 69,  "G": 80,
+        "G#": 92, "Ab": 92,  "A": 103,  "A#": 115, "Bb": 115, "B": 127,
+    }
+    # Scale → MIDI CC value (từ knob% thực tế trên plugin)
+    SCALE_MIDI_MAP = {
+        "Major": 13,
+        "Minor": 18,
+    }
+    
     @staticmethod
     def _correlate_profiles(chroma_avg, major_profile, minor_profile):
         """
@@ -3007,7 +3604,7 @@ class ToneDetector:
         try:
             hr = ctypes.windll.ole32.CoInitializeEx(None, 0)  # COINIT_MULTITHREADED
             com_initialized = (hr == 0)  # Chỉ tính khi S_OK
-        except:
+        except Exception:
             pass
         
         pa = None
@@ -3072,13 +3669,14 @@ class ToneDetector:
                 if on_progress:
                     try:
                         on_progress(remaining)
-                    except:
+                    except Exception:
                         pass
                 
                 print(f"   ⏱️  Còn {remaining}s...")
             
             # Ghép các chunks
             audio_data = np.concatenate(audio_chunks)
+            del audio_chunks  # Giải phóng list chunks ngay lập tức
             audio_data = np.nan_to_num(audio_data, nan=0.0, posinf=0.0, neginf=0.0)
             
             actual_duration = len(audio_data) / device_sr
@@ -3107,17 +3705,17 @@ class ToneDetector:
                 try:
                     stream.stop_stream()
                     stream.close()
-                except:
+                except Exception:
                     pass
             if pa:
                 try:
                     pa.terminate()
-                except:
+                except Exception:
                     pass
             if com_initialized:
                 try:
                     ctypes.windll.ole32.CoUninitialize()
-                except:
+                except Exception:
                     pass
     
     @staticmethod
@@ -3337,10 +3935,13 @@ class ToneDetector:
         return 127 if scale == "Minor" else 0
 
 class ActivationManager:
-    """Quản lý activation code và thời hạn sử dụng"""
+    """Quản lý activation code, thời hạn sử dụng, và bản dùng thử"""
     
     # Thời hạn sử dụng: 1 năm (365 ngày)
     LICENSE_DURATION_DAYS = 365
+    
+    # Thời hạn dùng thử: 3 ngày
+    TRIAL_DURATION_DAYS = 3
     
     # Secret key - PHẢI GIỐNG VỚI generate_code.py
     SECRET_KEY = "QUANGLUU_STUDIO_2026_SECRET_KEY_CHANGE_THIS"
@@ -3412,7 +4013,7 @@ class ActivationManager:
             try:
                 with open(ACTIVATION_FILE, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except:
+            except Exception:
                 return None
         return None
     
@@ -3463,7 +4064,7 @@ class ActivationManager:
                     activation["activation_date"], 
                     "%Y-%m-%d %H:%M:%S"
                 ).timestamp()
-            except:
+            except Exception:
                 return True  # Lỗi parse = hết hạn
         else:
             return True  # Không có thông tin = hết hạn
@@ -3491,7 +4092,7 @@ class ActivationManager:
                     activation["activation_date"], 
                     "%Y-%m-%d %H:%M:%S"
                 ).timestamp()
-            except:
+            except Exception:
                 return 0
         else:
             return 0
@@ -3504,18 +4105,97 @@ class ActivationManager:
     
     @staticmethod
     def activate(code):
-        """Kích hoạt app với code được cung cấp"""
+        """Kích hoạt app với code được cung cấp. Returns dict: {success: bool, error: str}"""
         if not ActivationManager._validate_code(code):
-            return False, "Mã kích hoạt không hợp lệ. Vui lòng kiểm tra lại."
+            return {"success": False, "error": "Mã kích hoạt không hợp lệ. Vui lòng kiểm tra lại."}
         
         # Lưu activation
         if ActivationManager.save_activation(code):
-            return True, "Kích hoạt thành công!"
+            return {"success": True, "error": ""}
         else:
-            return False, "Lỗi khi lưu thông tin kích hoạt."
+            return {"success": False, "error": "Lỗi khi lưu thông tin kích hoạt."}
     
     @staticmethod
     def needs_activation():
-        """Kiểm tra xem app có cần kích hoạt không"""
-        # Chưa kích hoạt hoặc đã hết hạn
-        return not ActivationManager.is_activated() or ActivationManager.is_expired()
+        """Kiểm tra xem app có cần kích hoạt không (cho phép trial qua)"""
+        # Đã kích hoạt bằng code và chưa hết hạn
+        if ActivationManager.is_activated() and not ActivationManager.is_expired():
+            return False
+        
+        # Đang trong thời gian dùng thử
+        if ActivationManager.is_trial_active():
+            return False
+        
+        return True
+    
+    # ── Trial (Dùng thử) ──
+    
+    @staticmethod
+    def start_trial():
+        """
+        Bắt đầu dùng thử 3 ngày. Lưu timestamp lần đầu mở app.
+        Nếu đã có trial trước đó → không reset (chống gian lận).
+        Returns: dict {success: bool, days_remaining: int}
+        """
+        activation = ActivationManager.load_activation() or {}
+        
+        # Nếu đã có trial_start → không cho bắt đầu lại
+        if "trial_start" in activation:
+            remaining = ActivationManager.get_trial_days_remaining()
+            if remaining > 0:
+                return {"success": True, "days_remaining": remaining}
+            else:
+                return {"success": False, "days_remaining": 0}
+        
+        # Lần đầu → ghi trial_start
+        activation["trial_start"] = time.time()
+        try:
+            with open(ACTIVATION_FILE, "w", encoding="utf-8") as f:
+                json.dump(activation, f, indent=4)
+            return {"success": True, "days_remaining": ActivationManager.TRIAL_DURATION_DAYS}
+        except Exception as e:
+            print(f"Lỗi lưu trial: {e}")
+            return {"success": False, "days_remaining": 0}
+    
+    @staticmethod
+    def is_trial_active():
+        """Kiểm tra xem đang trong thời gian dùng thử hay không"""
+        activation = ActivationManager.load_activation()
+        if not activation:
+            return False
+        
+        trial_start = activation.get("trial_start")
+        if not trial_start:
+            return False
+        
+        days_passed = (time.time() - trial_start) / (24 * 60 * 60)
+        return days_passed < ActivationManager.TRIAL_DURATION_DAYS
+    
+    @staticmethod
+    def get_trial_days_remaining():
+        """Lấy số ngày dùng thử còn lại"""
+        activation = ActivationManager.load_activation()
+        if not activation:
+            return 0
+        
+        trial_start = activation.get("trial_start")
+        if not trial_start:
+            return 0
+        
+        days_passed = (time.time() - trial_start) / (24 * 60 * 60)
+        remaining = ActivationManager.TRIAL_DURATION_DAYS - days_passed
+        return max(0, remaining)
+    
+    @staticmethod
+    def is_trial_expired():
+        """Kiểm tra xem trial đã hết hạn chưa"""
+        activation = ActivationManager.load_activation()
+        if not activation:
+            return False  # Chưa bắt đầu trial
+        
+        trial_start = activation.get("trial_start")
+        if not trial_start:
+            return False  # Chưa bắt đầu trial
+        
+        days_passed = (time.time() - trial_start) / (24 * 60 * 60)
+        return days_passed >= ActivationManager.TRIAL_DURATION_DAYS

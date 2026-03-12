@@ -1105,6 +1105,35 @@ class SystemEngine:
                             print(f"   ✅ YouTube URL: {clean}")
                             return clean
                 
+                # Phương pháp 3: Tìm EditControl theo Name (Brave/Chromium-based)
+                # Brave address bar có Name="Address and search bar" nhưng nằm sâu hơn
+                try:
+                    edit = control.EditControl(
+                        searchDepth=15,
+                        Name="Address and search bar"
+                    )
+                    if edit and edit.Exists(0.5):
+                        value = ""
+                        try:
+                            pattern = edit.GetValuePattern()
+                            if pattern:
+                                value = pattern.Value
+                        except Exception:
+                            pass
+                        if not value:
+                            try:
+                                value = edit.GetWindowText() or ""
+                            except Exception:
+                                pass
+                        if value and ("youtube.com" in value or "youtu.be" in value):
+                            url = SystemEngine._normalize_url(value)
+                            clean = SystemEngine._clean_youtube_url(url)
+                            if clean:
+                                print(f"   ✅ YouTube URL (Brave): {clean}")
+                                return clean
+                except Exception:
+                    pass
+                
             except Exception as e:
                 print(f"   ⚠️ Lỗi đọc cửa sổ {bw['browser']}: {e}")
                 continue
@@ -1234,17 +1263,11 @@ class SystemEngine:
                             on_error("Không thể phát hiện tone bài hát.")
                         return
                     
-                    # Bước 4b: Phát hiện BPM
-                    if on_progress:
-                        on_progress("Đang phát hiện BPM...")
-                    
-                    tempo_result = librosa.beat.tempo(y=audio_data, sr=sr)
-                    bpm = float(tempo_result[0]) if len(tempo_result) > 0 else 0.0
-                    
-                    # Bước 4c: Camelot Wheel
+                    # Bước 4b: BPM & Camelot — tạm bỏ qua để trả kết quả nhanh hơn
                     key_idx = tone_result['key_index']
                     scale = tone_result['scale']
-                    camelot = CAMELOT_MAJOR[key_idx] if scale == "Major" else CAMELOT_MINOR[key_idx]
+                    bpm = 0.0
+                    camelot = ''
                     
                     # Kết quả
                     result = {

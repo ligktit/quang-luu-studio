@@ -78,7 +78,7 @@ def main():
     if len(sys.argv) > 1:
         try:
             count = int(sys.argv[1])
-        except:
+        except Exception:
             print("⚠️  Số lượng không hợp lệ, tạo 1 code mặc định")
     
     print(f"📝 Đang tạo {count} activation code(s)...\n")
