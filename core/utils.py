@@ -1,0 +1,65 @@
+"""
+Quang Lưu Studio — Shared Utilities
+Consolidated: find_ffmpeg(), extract_video_id()
+"""
+import os
+import sys
+import re
+
+
+def find_ffmpeg():
+    """Tự động tìm đường dẫn ffmpeg (setup_all.bat, WinGet, PATH, hoặc thư mục phổ biến)."""
+    import shutil, glob
+    # 1. Kiểm tra PATH hiện tại
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path:
+        return os.path.dirname(ffmpeg_path)
+    # 2. Tìm trong %LOCALAPPDATA%\FFmpeg (nơi setup_all.bat cài đặt)
+    local_appdata = os.environ.get("LOCALAPPDATA", "")
+    if local_appdata:
+        local_ffmpeg = os.path.join(local_appdata, "FFmpeg")
+        if os.path.isfile(os.path.join(local_ffmpeg, "ffmpeg.exe")):
+            return local_ffmpeg
+    # 3. Tìm trong WinGet packages
+    winget_dir = os.path.join(local_appdata, "Microsoft", "WinGet", "Packages")
+    if os.path.isdir(winget_dir):
+        matches = glob.glob(os.path.join(winget_dir, "**", "ffmpeg.exe"), recursive=True)
+        if matches:
+            return os.path.dirname(matches[0])
+    # 4. Các thư mục phổ biến trên Windows
+    for candidate in [r"C:\ffmpeg\bin", r"C:\Program Files\ffmpeg\bin", r"C:\tools\ffmpeg\bin",
+                      os.path.join(local_appdata, "Programs", "FFmpeg", "bin") if local_appdata else ""]:
+        if candidate and os.path.isfile(os.path.join(candidate, "ffmpeg.exe")):
+            return candidate
+    # 5. Tìm ffmpeg.exe cùng thư mục với app (PyInstaller bundle)
+    if getattr(sys, 'frozen', False):
+        app_dir = os.path.dirname(sys.executable)
+    else:
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        # Also check parent directory (project root) when running from core/
+        parent_dir = os.path.dirname(app_dir)
+        if os.path.isfile(os.path.join(parent_dir, "ffmpeg.exe")):
+            return parent_dir
+    if os.path.isfile(os.path.join(app_dir, "ffmpeg.exe")):
+        return app_dir
+    return None
+
+
+def extract_video_id(url):
+    """Trích xuất YouTube Video ID từ URL (11 ký tự).
+    
+    Hỗ trợ: youtube.com/watch?v=, youtu.be/, youtube.com/embed/, youtube.com/shorts/
+    """
+    if not url:
+        return None
+    patterns = [
+        r'(?:youtube\.com/watch\?.*v=)([a-zA-Z0-9_-]{11})',
+        r'(?:youtu\.be/)([a-zA-Z0-9_-]{11})',
+        r'(?:youtube\.com/embed/)([a-zA-Z0-9_-]{11})',
+        r'(?:youtube\.com/shorts/)([a-zA-Z0-9_-]{11})',
+    ]
+    for pat in patterns:
+        m = re.search(pat, url)
+        if m:
+            return m.group(1)
+    return None

@@ -81,6 +81,10 @@ Source: "app_config.json"; DestDir: "{app}"; Flags: onlyifdoesntexist
 Source: "studio_one\QuangLuuMIDI.surface.xml"; DestDir: "{app}\studio_one"; Flags: ignoreversion
 Source: "studio_one\deviceinfo.xml"; DestDir: "{app}\studio_one"; Flags: ignoreversion
 
+; SFX (sound effects)
+Source: "sfx\*.MP3"; DestDir: "{app}\sfx"; Flags: ignoreversion
+Source: "sfx\*.mp3"; DestDir: "{app}\sfx"; Flags: ignoreversion skipifsourcedoesntexist
+
 [Dirs]
 ; Tạo thư mục cho dữ liệu
 Name: "{app}\temp_audio"; Permissions: users-full
@@ -142,5 +146,7 @@ Type: files; Name: "{app}\saved_songs.json"
 Type: files; Name: "{app}\tone_cache.json"
 Type: files; Name: "{app}\manual_timelines.json"
 Type: files; Name: "{app}\app_config.json"
-Type: dirifempty; Name: "{app}\temp_audio"
+Type: filesandordirs; Name: "{app}\temp_audio"
+Type: filesandordirs; Name: "{app}\sfx"
+Type: filesandordirs; Name: "{app}\studio_one"
 Type: dirifempty; Name: "{app}"

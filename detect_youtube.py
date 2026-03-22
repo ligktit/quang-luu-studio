@@ -16,6 +16,9 @@ import warnings
 import uiautomation as auto
 import numpy as np
 
+# Shared utilities (consolidated from core.utils)
+from core.utils import extract_video_id as _extract_video_id, find_ffmpeg
+
 warnings.filterwarnings("ignore")
 
 # Ensure ffmpeg is available (downloads a static binary if needed)
@@ -162,18 +165,8 @@ def _normalize_url(url):
 
 
 def extract_video_id(url):
-    """Extract the YouTube video ID from a URL."""
-    patterns = [
-        r'(?:youtube\.com/watch\?.*v=)([a-zA-Z0-9_-]{11})',
-        r'(?:youtu\.be/)([a-zA-Z0-9_-]{11})',
-        r'(?:youtube\.com/embed/)([a-zA-Z0-9_-]{11})',
-        r'(?:youtube\.com/shorts/)([a-zA-Z0-9_-]{11})',
-    ]
-    for pat in patterns:
-        m = re.search(pat, url)
-        if m:
-            return m.group(1)
-    return None
+    """Extract the YouTube video ID from a URL. (delegates to core.utils)"""
+    return _extract_video_id(url)
 
 
 def clean_video_url(url):
@@ -204,23 +197,8 @@ def detect_youtube_url():
 # ──────────────────────────────────────────────────────────────
 
 def _find_ffmpeg_location():
-    """Tìm FFmpeg từ nhiều vị trí: PATH, %LOCALAPPDATA%\\FFmpeg, cùng thư mục app."""
-    import shutil
-    # 1. PATH
-    ffmpeg_path = shutil.which("ffmpeg")
-    if ffmpeg_path:
-        return os.path.dirname(ffmpeg_path)
-    # 2. %LOCALAPPDATA%\FFmpeg (nơi setup_all.bat cài)
-    local_appdata = os.environ.get("LOCALAPPDATA", "")
-    if local_appdata:
-        local_ffmpeg = os.path.join(local_appdata, "FFmpeg")
-        if os.path.isfile(os.path.join(local_ffmpeg, "ffmpeg.exe")):
-            return local_ffmpeg
-    # 3. Cùng thư mục app
-    app_dir = os.path.dirname(os.path.abspath(__file__))
-    if os.path.isfile(os.path.join(app_dir, "ffmpeg.exe")):
-        return app_dir
-    return None
+    """Tìm FFmpeg (delegates to core.utils.find_ffmpeg)."""
+    return find_ffmpeg()
 
 
 def download_audio(url, output_dir):

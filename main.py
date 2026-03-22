@@ -1,4 +1,37 @@
 import os
+import sys
+import ctypes
+import atexit
+import shutil
+
+# ── PyInstaller _MEI cleanup ──────────────────────────
+# Khi build --onefile, PyInstaller giải nén vào thư mục tạm _MEIxxxxx.
+# Nếu daemon threads/subprocesses vẫn giữ file handles khi thoát,
+# Windows không thể xóa thư mục → báo lỗi "Failed to remove temporary directory".
+# Giải pháp: đăng ký atexit handler để force cleanup.
+
+def _cleanup_mei():
+    """Xóa thư mục tạm _MEI khi app thoát (chỉ chạy trong PyInstaller frozen mode)."""
+    if not getattr(sys, 'frozen', False):
+        return
+    mei_dir = getattr(sys, '_MEIPASS', None)
+    if mei_dir and os.path.isdir(mei_dir):
+        try:
+            shutil.rmtree(mei_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+atexit.register(_cleanup_mei)
+
+# Set DPI awareness TRƯỚC khi import Qt (tránh "SetProcessDpiAwarenessContext() failed" trong PyInstaller)
+try:
+    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_ssize_t(-4))  # PER_MONITOR_AWARE_V2
+except Exception:
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Fallback cho Windows 8.1
+    except Exception:
+        pass
+
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
 os.environ["QT_OPENGL"] = "angle"                # Dùng ANGLE thay vì native OpenGL — tương thích tốt hơn
 os.environ["QT_QUICK_BACKEND"] = "software"       # Fallback software rendering cho QtQuick
@@ -31,7 +64,7 @@ def main():
         print(f"🎁 [TRIAL] Đang dùng thử — Còn {days:.1f} ngày")
     
     # 2. Load cấu hình (settings.json) - không bị ảnh hưởng bởi activation
-    settings = backend.ConfigManager.load()
+    settings = backend.ConfigManager.load_settings()
     
     # 3. Điều hướng
     if settings:
@@ -43,3 +76,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # Force terminate process sau khi Qt event loop kết thúc.
+    # Daemon threads (MIDI, media monitor, memory guard, etc.) vẫn có thể
+    # đang chạy → giữ lock trên files trong _MEI → os._exit() buộc OS
+    # giải phóng tất cả handles ngay lập tức.
+    os._exit(0)

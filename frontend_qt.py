@@ -252,6 +252,8 @@ class WaveformWidget(QWidget):
         self._active = False
 
     def _audio_loop(self):
+        p = None
+        stream = None
         try:
             import pyaudiowpatch as pyaudio
             p = pyaudio.PyAudio()
@@ -311,12 +313,22 @@ class WaveformWidget(QWidget):
                         self._rms = self._rms * 0.7 + rms_norm * 0.3
                 except Exception:
                     pass
-            stream.stop_stream()
-            stream.close()
-            p.terminate()
         except Exception as e:
             print(f"⚠️ WaveformWidget audio error: {e}")
             self._active = False
+        finally:
+            # Đảm bảo LUÔN giải phóng PyAudio (fix: trước đây bị leak khi early return)
+            if stream:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except Exception:
+                    pass
+            if p:
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
 
     def paintEvent(self, event):
         w, h = self.width(), self.height()
@@ -838,6 +850,9 @@ class MainDashboard(QMainWindow):
                     label_w.setText(f"{int(value)}{u}")
                     midi = int((value / 100) * 127)
                 self.engine.send_midi(MIDI_CC[cc_key], midi)
+                # Dual Path: slider Mix Nhạc cũng điều khiển volume YouTube
+                if cc_key == "mix_music":
+                    self.engine.set_browser_volume(int(value))
             return cb
 
         slider.valueChanged.connect(make_cb(val_label, cc, min_v, max_v, unit))
@@ -1208,7 +1223,7 @@ class MainDashboard(QMainWindow):
             self.settings["auto_launch_browser"] = cb_launch_br.isChecked()
             self.settings["auto_close_studio_one"] = cb_close_so.isChecked()
             self.settings["auto_close_browser"] = cb_close_br.isChecked()
-            backend.ConfigManager.save(self.settings)
+            backend.ConfigManager.save_settings(self.settings)
             self._show_message("✅ Đã lưu thiết lập!")
             dlg.close()
 
@@ -1637,6 +1652,7 @@ class MainDashboard(QMainWindow):
         progress.show()
         
         def _task():
+            engine = None
             try:
                 engine = backend.ScoringEngine()
                 if is_youtube:
@@ -1658,8 +1674,6 @@ class MainDashboard(QMainWindow):
                 
                 QTimer.singleShot(0, lambda: progress.setLabelText("Đang tính điểm (cần thời gian)..."))
                 result = engine.calculate_score(quick=True)
-                if is_youtube:
-                    engine.cleanup_temp_file()
                 
                 QTimer.singleShot(0, progress.close)
                 if result:
@@ -1669,6 +1683,9 @@ class MainDashboard(QMainWindow):
             except Exception as e:
                 QTimer.singleShot(0, progress.close)
                 self._show_message(f"❌ Lỗi: {str(e)[:50]}", is_error=True)
+            finally:
+                if engine:
+                    engine.cleanup_temp_file()  # Luôn cleanup: giải phóng audio_data + file tạm
                 
         threading.Thread(target=_task, daemon=True).start()
 
@@ -2436,7 +2453,18 @@ class MainDashboard(QMainWindow):
         self.engine.stop_autokey()
         self.engine.stop_tone_detection()
         self.engine.media_monitor.stop()
+        self.engine.restore_browser_volume()  # Khôi phục volume trình duyệt về mức ban đầu
         self.engine.disconnect_midi()
+        # Dừng recording subprocess nếu đang thu
+        if self.is_recording:
+            try:
+                self.engine.recorder.stop_recording(save_path=None)
+            except Exception:
+                pass
+            self.is_recording = False
+        # Dừng MemoryGuard
+        if hasattr(self.engine, '_memory_guard'):
+            self.engine._memory_guard.stop()
         # Dừng waveform audio thread
         if hasattr(self, 'waveform') and self.waveform:
             self.waveform.stop()
@@ -2458,6 +2486,9 @@ class MainDashboard(QMainWindow):
                     os.system(f'taskkill /F /IM "{browser_exe}"')
                 except Exception:
                     pass
+        # Final cleanup — giải phóng objects đang chờ trong GC
+        import gc
+        gc.collect()
         super().closeEvent(event)
 
 
@@ -2608,7 +2639,7 @@ class SetupView(QDialog):
         self._ensure_app()
         super().__init__()
         self.callback = callback
-        existing = backend.ConfigManager.load() or {}
+        existing = backend.ConfigManager.load_settings() or {}
 
         self.setWindowTitle("Cài đặt Quang Lưu Studio")
         self.setWindowIcon(QIcon("app_icon.ico"))
@@ -2697,7 +2728,7 @@ class SetupView(QDialog):
             "studio_one_path": self.studio_one_input.text().strip(),
             "browser_path": self.browser_input.text().strip(),
         }
-        backend.ConfigManager.save(settings)
+        backend.ConfigManager.save_settings(settings)
         self._saved = True
         self.close()
 

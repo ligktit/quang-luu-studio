@@ -159,6 +159,7 @@ def main():
     print("STARTED", flush=True)
     
     frames_written = 0
+    frame_count = 0
     
     try:
         while os.path.exists(stop_flag):
@@ -250,6 +251,15 @@ def main():
             # ── Ghi ra file ──
             wf.writeframes(mixed.tobytes())
             frames_written += mixed.shape[0]
+            
+            # Cleanup intermediate arrays — tránh tích lũy objects trong GC gen-0
+            del lb_chunks, mc_chunks, lb_stereo, mc_stereo, mixed
+            
+            # Periodic GC mỗi 250 frames (~5s) — chỉ gen 0, rất nhẹ
+            frame_count += 1
+            if frame_count % 250 == 0:
+                import gc
+                gc.collect(0)
             
     except KeyboardInterrupt:
         pass
