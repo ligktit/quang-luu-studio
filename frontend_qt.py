@@ -212,245 +212,7 @@ def add_shadow(widget, color="#000000", blur=20, offset=(0, 4)):
         pass  # Bỏ qua shadow trên máy yếu để tránh đen màn hình
 
 
-# ══════════════════════════════════════════════════════
-#  WAVEFORM WIDGET (based on visualizer_widget.py — PySide6)
-# ══════════════════════════════════════════════════════
-import numpy as np
 
-class WaveformWidget(QWidget):
-    """Real-time waveform visualizer — QPainter smooth curves with glow, fill, mirror."""
-
-    def __init__(self, parent=None, bar_count=28, color="#6366F1"):
-        super().__init__(parent)
-        self._base_color = QColor(color)
-        self._waveform = np.zeros(400, dtype=np.float32)
-        self._rms = 0.0
-        self._active = False
-        self._lock = __import__('threading').Lock()
-        self._idle_phase = 0.0
-
-        self.setMinimumHeight(40)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setStyleSheet("background: transparent;")
-
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._tick)
-        self._timer.start(33)
-
-    def _tick(self):
-        self._idle_phase += 0.05
-        self.update()
-
-    def start(self):
-        if self._active:
-            return
-        self._active = True
-        import threading
-        threading.Thread(target=self._audio_loop, daemon=True).start()
-
-    def stop(self):
-        self._active = False
-
-    def _audio_loop(self):
-        p = None
-        stream = None
-        try:
-            import pyaudiowpatch as pyaudio
-            p = pyaudio.PyAudio()
-            wasapi_info = None
-            for i in range(p.get_host_api_count()):
-                info = p.get_host_api_info_by_index(i)
-                if "wasapi" in info.get("name", "").lower():
-                    wasapi_info = info
-                    break
-            if not wasapi_info:
-                print("⚠️ WaveformWidget: WASAPI not found")
-                self._active = False
-                return
-            default_speakers = p.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
-            loopback_device = None
-            for loopback in p.get_loopback_device_info_generator():
-                if default_speakers["name"] in loopback["name"]:
-                    loopback_device = loopback
-                    break
-            if not loopback_device:
-                print("⚠️ WaveformWidget: Loopback device not found")
-                self._active = False
-                return
-            sample_rate = int(loopback_device["defaultSampleRate"])
-            channels = loopback_device["maxInputChannels"]
-            chunk = 2048
-            stream = p.open(
-                format=pyaudio.paFloat32,
-                channels=channels,
-                rate=sample_rate,
-                input=True,
-                input_device_index=loopback_device["index"],
-                frames_per_buffer=chunk,
-            )
-            history = np.zeros(4096, dtype=np.float32)
-            while self._active:
-                try:
-                    data = stream.read(chunk, exception_on_overflow=False)
-                    audio = np.frombuffer(data, dtype=np.float32)
-                    if channels > 1:
-                        audio = audio.reshape(-1, channels).mean(axis=1)
-                    n = len(audio)
-                    history[:-n] = history[n:]  # In-place shift (không tạo array mới)
-                    history[-n:] = audio
-                    rms = float(np.sqrt(np.mean(audio ** 2)))
-                    rms_norm = min(1.0, rms * 5.0)
-                    display_points = 400
-                    step = max(1, len(history) // display_points)
-                    waveform = history[::step][:display_points]
-                    if rms_norm > 0.01:
-                        sc = min(1.0, 0.3 / (rms_norm + 0.001))
-                        waveform = waveform * sc
-                    else:
-                        waveform = waveform * 0.1
-                    with self._lock:
-                        self._waveform = waveform.copy()
-                        self._rms = self._rms * 0.7 + rms_norm * 0.3
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f"⚠️ WaveformWidget audio error: {e}")
-            self._active = False
-        finally:
-            # Đảm bảo LUÔN giải phóng PyAudio (fix: trước đây bị leak khi early return)
-            if stream:
-                try:
-                    stream.stop_stream()
-                    stream.close()
-                except Exception:
-                    pass
-            if p:
-                try:
-                    p.terminate()
-                except Exception:
-                    pass
-
-    def paintEvent(self, event):
-        w, h = self.width(), self.height()
-        painter = QPainter(self)
-        try:
-            if w < 10 or h < 10:
-                return
-            center_y = h / 2.0
-            painter.setRenderHint(QPainter.Antialiasing)
-
-            # Background
-            bg_grad = QLinearGradient(0, 0, 0, h)
-            bg_grad.setColorAt(0, QColor(10, 10, 30, 200))
-            bg_grad.setColorAt(1, QColor(5, 5, 20, 200))
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(bg_grad)
-            painter.drawRoundedRect(0, 0, w, h, 8, 8)
-
-            # Grid
-            painter.setPen(QPen(QColor(30, 30, 60, 80), 1, Qt.DotLine))
-            for i in range(1, 4):
-                painter.drawLine(0, int(h * i / 4), w, int(h * i / 4))
-
-            with self._lock:
-                waveform = self._waveform.copy()
-                rms = self._rms
-            n = len(waveform)
-            if n < 2:
-                return
-
-            if not self._active or rms < 0.01:
-                waveform = (np.sin(np.linspace(0, 4 * np.pi, n) + self._idle_phase) * 0.03).astype(np.float32)
-
-            amplitude = h * 0.35
-            x_step = w / (n - 1)
-            primary = self._base_color
-            secondary = QColor(primary).lighter(130)
-
-            # Build path
-            path = QPainterPath()
-            pts = [QPointF(i * x_step, center_y - waveform[i] * amplitude) for i in range(n)]
-            path.moveTo(pts[0])
-            for i in range(1, len(pts) - 1, 2):
-                if i + 1 < len(pts):
-                    path.quadTo(pts[i], pts[i + 1])
-                else:
-                    path.lineTo(pts[i])
-
-            # Glow
-            if rms > 0.01:
-                gc = QColor(primary)
-                gc.setAlpha(min(80, int(rms * 160)))
-                gp = QPen(gc, 6 + rms * 8)
-                gp.setCapStyle(Qt.RoundCap)
-                gp.setJoinStyle(Qt.RoundJoin)
-                painter.setPen(gp)
-                painter.drawPath(path)
-
-            # Fill
-            fill_path = QPainterPath(path)
-            fill_path.lineTo(w, center_y)
-            fill_path.lineTo(0, center_y)
-            fill_path.closeSubpath()
-            fg = QLinearGradient(0, center_y - amplitude, 0, center_y)
-            fc = QColor(primary); fc.setAlpha(int(20 + rms * 50))
-            fg.setColorAt(0, fc)
-            ft = QColor(primary); ft.setAlpha(3)
-            fg.setColorAt(1, ft)
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QBrush(fg))
-            painter.drawPath(fill_path)
-
-            # Main line
-            lg = QLinearGradient(0, 0, w, 0)
-            lg.setColorAt(0.0, secondary)
-            lg.setColorAt(0.5, primary)
-            lg.setColorAt(1.0, secondary)
-            mp = QPen(QBrush(lg), 1.5 + rms * 1.5)
-            mp.setCapStyle(Qt.RoundCap)
-            mp.setJoinStyle(Qt.RoundJoin)
-            painter.setPen(mp)
-            painter.drawPath(path)
-
-            # Mirror
-            mpath = QPainterPath()
-            mpts = [QPointF(i * x_step, center_y + waveform[i] * amplitude * 0.4) for i in range(n)]
-            mpath.moveTo(mpts[0])
-            for i in range(1, len(mpts) - 1, 2):
-                if i + 1 < len(mpts):
-                    mpath.quadTo(mpts[i], mpts[i + 1])
-                else:
-                    mpath.lineTo(mpts[i])
-            mfp = QPainterPath(mpath)
-            mfp.lineTo(w, center_y)
-            mfp.lineTo(0, center_y)
-            mfp.closeSubpath()
-            mfg = QLinearGradient(0, center_y, 0, center_y + amplitude * 0.4)
-            mc = QColor(primary); mc.setAlpha(8)
-            mfg.setColorAt(0, mc)
-            mt = QColor(primary); mt.setAlpha(0)
-            mfg.setColorAt(1, mt)
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QBrush(mfg))
-            painter.drawPath(mfp)
-            mc2 = QColor(primary); mc2.setAlpha(40)
-            painter.setPen(QPen(mc2, 0.8 + rms * 0.3))
-            painter.drawPath(mpath)
-
-            # Center line
-            painter.setPen(QPen(QColor(30, 30, 60, 60), 1, Qt.SolidLine))
-            painter.drawLine(0, int(center_y), w, int(center_y))
-
-            # Label
-            painter.setPen(QColor(148, 163, 184, 120))
-            fnt = painter.font()
-            fnt.setPixelSize(10)
-            fnt.setFamily(FONT)
-            painter.setFont(fnt)
-            status = "● LIVE" if self._active and rms > 0.01 else "♪ IDLE"
-            painter.drawText(w - 50, h - 5, status)
-        finally:
-            painter.end()
 
 
 
@@ -966,10 +728,7 @@ class MainDashboard(QMainWindow):
 
         vlayout.addLayout(grid)
 
-        # ── Waveform Visualizer (phía dưới, chiếm phần còn lại) ──
-        self.waveform = WaveformWidget(col, bar_count=26, color=C["primary"])
-        vlayout.addWidget(self.waveform, 1)
-        self.waveform.start()
+        vlayout.addStretch(1)
 
         return col
 
@@ -1150,7 +909,7 @@ class MainDashboard(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle("⚙️ Thiết lập")
-        dlg.setFixedSize(420, 320)
+        dlg.setFixedSize(420, 400)
         dlg.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 
         layout = QVBoxLayout(dlg)
@@ -1203,6 +962,15 @@ class MainDashboard(QMainWindow):
         cb_close_br.setChecked(self.settings.get("auto_close_browser", False))
         layout.addWidget(cb_close_br)
 
+        # --- Calibrate Auto-Tune button ---
+        calibrate_btn = QPushButton("🎛️ Calibrate Auto-Tune")
+        calibrate_btn.setCursor(Qt.PointingHandCursor)
+        calibrate_btn.setFixedHeight(38)
+        calibrate_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.1), 14, 18))
+        calibrate_btn.clicked.connect(lambda: (dlg.close(), self._show_calibration_wizard()))
+        add_shadow(calibrate_btn, C["orange"], 8, (0, 2))
+        layout.addWidget(calibrate_btn)
+
         layout.addStretch()
 
         # --- Buttons ---
@@ -1231,6 +999,468 @@ class MainDashboard(QMainWindow):
         btn_box.addWidget(save_btn)
         btn_box.addWidget(cancel_btn)
         layout.addLayout(btn_box)
+
+        dlg.exec()
+
+    def _show_calibration_wizard(self):
+        """
+        Calibration Wizard cho Auto-Tune.
+        Tab 1: Quét Scale Type (Major/Minor)
+        Tab 2: Quét Key Root (C, C#, D, ... B)
+        Quét MIDI CC từ 0→127, user xem plugin và nhấn nút khi thấy đúng giá trị.
+        Lưu kết quả vào app_config.json.
+        """
+        from PySide6.QtWidgets import (
+            QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+            QProgressBar, QFrame, QTabWidget, QGridLayout, QWidget
+        )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🎛️ Calibrate Auto-Tune")
+        dlg.setFixedSize(560, 620)
+        dlg.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
+
+        main_layout = QVBoxLayout(dlg)
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(24, 20, 24, 16)
+
+        # Title
+        title = QLabel("🎛️ Calibrate Auto-Tune Plugin")
+        title.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {C['orange']}; font-family: {FONT};")
+        title.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(title)
+
+        subtitle = QLabel("Quét MIDI CC 0→127, nhấn nút tương ứng khi thấy đúng giá trị trên plugin")
+        subtitle.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: {FONT};")
+        subtitle.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(subtitle)
+
+        # ── Shared scan controls (trên cùng, dùng chung cho cả 2 tab) ──
+        scan_frame = QFrame()
+        scan_frame.setStyleSheet(f"background-color: {C['card']}; border-radius: 12px; border: 1px solid {C['border']};")
+        sf_layout = QVBoxLayout(scan_frame)
+        sf_layout.setContentsMargins(16, 10, 16, 10)
+        sf_layout.setSpacing(8)
+
+        # Value + Progress
+        value_label = QLabel("CC Value: ---")
+        value_label.setStyleSheet(f"font-size: 26px; font-weight: bold; color: {C['primary']}; font-family: Consolas;")
+        value_label.setAlignment(Qt.AlignCenter)
+        sf_layout.addWidget(value_label)
+
+        progress = QProgressBar()
+        progress.setRange(0, 127)
+        progress.setValue(0)
+        progress.setStyleSheet(f"""
+            QProgressBar {{
+                border: none; background-color: {C['bg']};
+                border-radius: 4px; max-height: 8px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {C['primary']}; border-radius: 4px;
+            }}
+        """)
+        sf_layout.addWidget(progress)
+
+        # Start / Stop buttons
+        scan_row = QHBoxLayout()
+        start_btn = QPushButton("▶ Bắt đầu quét")
+        start_btn.setCursor(Qt.PointingHandCursor)
+        start_btn.setFixedHeight(36)
+        start_btn.setStyleSheet(pill_btn_qss(C["primary"], _lighten(C["primary"], 0.12), 13, 18))
+        add_shadow(start_btn, C["primary"], 6, (0, 2))
+        scan_row.addWidget(start_btn)
+
+        stop_btn = QPushButton("⏹ Dừng")
+        stop_btn.setCursor(Qt.PointingHandCursor)
+        stop_btn.setFixedHeight(36)
+        stop_btn.setStyleSheet(pill_btn_qss(C["card_hover"], _lighten(C["card_hover"], 0.1), 13, 18))
+        stop_btn.setEnabled(False)
+        scan_row.addWidget(stop_btn)
+
+        reset_btn = QPushButton("↺ Reset 0")
+        reset_btn.setCursor(Qt.PointingHandCursor)
+        reset_btn.setFixedHeight(36)
+        reset_btn.setStyleSheet(pill_btn_qss(C["card_hover"], _lighten(C["card_hover"], 0.1), 13, 18))
+        scan_row.addWidget(reset_btn)
+
+        sf_layout.addLayout(scan_row)
+        main_layout.addWidget(scan_frame)
+
+        # ── State ──
+        ALL_KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+        state = {
+            "scanning": False,
+            "current_value": 0,
+            "timer": None,
+            # Scale calibration
+            "major_value": None,
+            "minor_value": None,
+            # Key calibration
+            "key_values": {},  # {"C": 0, "C#": 11, ...}
+        }
+
+        # ── Tab Widget ──
+        tab_qss = f"""
+            QTabWidget::pane {{
+                border: 1px solid {C['border']};
+                border-radius: 8px;
+                background-color: {C['card']};
+            }}
+            QTabBar::tab {{
+                background-color: {C['card_hover']};
+                color: {C['text_muted']};
+                border: none;
+                padding: 8px 20px;
+                font-size: 13px;
+                font-weight: 600;
+                font-family: {FONT};
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                margin-right: 2px;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {C['card']};
+                color: {C['primary']};
+                border-bottom: 2px solid {C['primary']};
+            }}
+            QTabBar::tab:hover {{
+                background-color: {C['card']};
+                color: {C['text']};
+            }}
+        """
+        tabs = QTabWidget()
+        tabs.setStyleSheet(tab_qss)
+
+        # ═══════════════════════════════════════
+        #  TAB 1: Scale Type (Major / Minor)
+        # ═══════════════════════════════════════
+        scale_tab = QWidget()
+        scale_layout = QVBoxLayout(scale_tab)
+        scale_layout.setSpacing(10)
+        scale_layout.setContentsMargins(12, 12, 12, 12)
+
+        scale_instr = QLabel(
+            "Quan sát dải Scale Type trên Auto-Tune.\n"
+            "Nhấn nút tương ứng khi thấy Major hoặc Minor."
+        )
+        scale_instr.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: {FONT};")
+        scale_instr.setWordWrap(True)
+        scale_layout.addWidget(scale_instr)
+
+        # Capture buttons
+        scale_btn_row = QHBoxLayout()
+
+        major_btn = QPushButton("🟢 Đây là Major")
+        major_btn.setCursor(Qt.PointingHandCursor)
+        major_btn.setFixedHeight(44)
+        major_btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 14, 16))
+        major_btn.setEnabled(False)
+        add_shadow(major_btn, C["green"], 6, (0, 2))
+        scale_btn_row.addWidget(major_btn)
+
+        minor_btn = QPushButton("🟠 Đây là Minor")
+        minor_btn.setCursor(Qt.PointingHandCursor)
+        minor_btn.setFixedHeight(44)
+        minor_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 14, 16))
+        minor_btn.setEnabled(False)
+        add_shadow(minor_btn, C["orange"], 6, (0, 2))
+        scale_btn_row.addWidget(minor_btn)
+
+        scale_layout.addLayout(scale_btn_row)
+
+        # Result display
+        scale_result_frame = QFrame()
+        scale_result_frame.setStyleSheet(f"background-color: {C['bg']}; border-radius: 8px; padding: 6px;")
+        srf_layout = QHBoxLayout(scale_result_frame)
+        srf_layout.setContentsMargins(12, 8, 12, 8)
+
+        major_result = QLabel("Major: —")
+        major_result.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {C['green']}; font-family: Consolas;")
+        major_result.setAlignment(Qt.AlignCenter)
+        srf_layout.addWidget(major_result)
+
+        minor_result = QLabel("Minor: —")
+        minor_result.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {C['orange']}; font-family: Consolas;")
+        minor_result.setAlignment(Qt.AlignCenter)
+        srf_layout.addWidget(minor_result)
+
+        scale_layout.addWidget(scale_result_frame)
+        scale_layout.addStretch()
+
+        tabs.addTab(scale_tab, "🎵 Scale Type")
+
+        # ═══════════════════════════════════════
+        #  TAB 2: Key Root (12 keys)
+        # ═══════════════════════════════════════
+        key_tab = QWidget()
+        key_layout = QVBoxLayout(key_tab)
+        key_layout.setSpacing(8)
+        key_layout.setContentsMargins(12, 12, 12, 12)
+
+        key_instr = QLabel(
+            "Quan sát dải Key Root trên Auto-Tune.\n"
+            "Nhấn nút tương ứng khi thấy đúng nốt."
+        )
+        key_instr.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: {FONT};")
+        key_instr.setWordWrap(True)
+        key_layout.addWidget(key_instr)
+
+        # Grid 4 cột × 3 hàng cho 12 keys
+        key_grid = QGridLayout()
+        key_grid.setSpacing(6)
+
+        key_buttons = {}
+        key_result_labels = {}
+
+        # Màu xen kẽ cho key trắng/đen (piano)
+        black_keys = {"C#", "D#", "F#", "G#", "A#"}
+
+        for idx, key_name in enumerate(ALL_KEYS):
+            row = idx // 4
+            col = idx % 4
+
+            is_black = key_name in black_keys
+            btn_color = C["deep_purple"] if is_black else C["primary"]
+
+            # Container cho mỗi key
+            key_widget = QWidget()
+            kw_layout = QVBoxLayout(key_widget)
+            kw_layout.setContentsMargins(0, 0, 0, 0)
+            kw_layout.setSpacing(2)
+
+            # Capture button
+            kbtn = QPushButton(key_name)
+            kbtn.setCursor(Qt.PointingHandCursor)
+            kbtn.setFixedHeight(38)
+            kbtn.setStyleSheet(pill_btn_qss(btn_color, _lighten(btn_color, 0.12), 13, 8))
+            kbtn.setEnabled(False)
+            kw_layout.addWidget(kbtn)
+
+            # Result label
+            klbl = QLabel("—")
+            klbl.setStyleSheet(f"font-size: 11px; color: {C['text_muted']}; font-family: Consolas;")
+            klbl.setAlignment(Qt.AlignCenter)
+            kw_layout.addWidget(klbl)
+
+            key_grid.addWidget(key_widget, row, col)
+            key_buttons[key_name] = kbtn
+            key_result_labels[key_name] = klbl
+
+        key_layout.addLayout(key_grid)
+
+        # Counter: bao nhiêu key đã capture
+        key_counter = QLabel("Đã capture: 0 / 12 keys")
+        key_counter.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: {FONT};")
+        key_counter.setAlignment(Qt.AlignCenter)
+        key_layout.addWidget(key_counter)
+
+        key_layout.addStretch()
+        tabs.addTab(key_tab, "🎹 Key Root")
+
+        main_layout.addWidget(tabs, 1)
+
+        # ── Bottom: Save + Close ──
+        bottom_row = QHBoxLayout()
+
+        save_btn = QPushButton("💾 Lưu tất cả")
+        save_btn.setCursor(Qt.PointingHandCursor)
+        save_btn.setFixedHeight(40)
+        save_btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.1), 14, 18))
+        save_btn.setEnabled(False)
+        add_shadow(save_btn, C["green"], 8, (0, 2))
+        bottom_row.addWidget(save_btn)
+
+        close_btn = QPushButton("Đóng")
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setFixedHeight(40)
+        close_btn.setStyleSheet(pill_btn_qss(C["card_hover"], _lighten(C["card_hover"], 0.1), 14, 18))
+        close_btn.clicked.connect(dlg.close)
+        bottom_row.addWidget(close_btn)
+
+        main_layout.addLayout(bottom_row)
+
+        # ═══════════════════════════════════════
+        #  SCAN LOGIC
+        # ═══════════════════════════════════════
+        cc_scale_type = int(MIDI_CC.get("scale_type", 35))
+        cc_key_root = int(MIDI_CC.get("key_root", 33))
+
+        def _get_active_cc():
+            """Trả về CC number tùy tab đang active"""
+            return cc_key_root if tabs.currentIndex() == 1 else cc_scale_type
+
+        def _stop_scan():
+            state["scanning"] = False
+            if state["timer"]:
+                state["timer"].stop()
+                state["timer"] = None
+            start_btn.setEnabled(True)
+            stop_btn.setEnabled(False)
+            start_btn.setText("▶ Tiếp tục quét")
+
+        def _step_scan():
+            if not state["scanning"]:
+                return
+            v = state["current_value"]
+            if v > 127:
+                _stop_scan()
+                value_label.setText("✅ Quét xong! (0→127)")
+                return
+
+            # Gửi MIDI CC value hiện tại
+            active_cc = _get_active_cc()
+            self.engine.send_midi(active_cc, v)
+            value_label.setText(f"CC {active_cc}  Value: {v}")
+            progress.setValue(v)
+            state["current_value"] = v + 1
+
+        def _start_scan():
+            state["scanning"] = True
+            if state["current_value"] > 127:
+                state["current_value"] = 0
+            start_btn.setEnabled(False)
+            stop_btn.setEnabled(True)
+            # Enable capture buttons
+            major_btn.setEnabled(True)
+            minor_btn.setEnabled(True)
+            for kbtn in key_buttons.values():
+                kbtn.setEnabled(True)
+
+            timer = QTimer(dlg)
+            timer.timeout.connect(_step_scan)
+            timer.start(300)
+            state["timer"] = timer
+
+        def _reset_scan():
+            _stop_scan()
+            state["current_value"] = 0
+            value_label.setText("CC Value: ---")
+            progress.setValue(0)
+            start_btn.setText("▶ Bắt đầu quét")
+
+        def _check_save_enabled():
+            """Enable nút Save khi đã capture đủ dữ liệu (ít nhất scale HOẶC key)"""
+            has_scale = state["major_value"] is not None and state["minor_value"] is not None
+            has_keys = len(state["key_values"]) > 0
+            save_btn.setEnabled(has_scale or has_keys)
+
+        # ── Scale capture ──
+        def _capture_major():
+            captured = max(0, state["current_value"] - 1)
+            state["major_value"] = captured
+            major_result.setText(f"Major: {captured}")
+            major_result.setStyleSheet(
+                f"font-size: 15px; font-weight: bold; color: {C['green']}; font-family: Consolas;"
+                f" background-color: rgba(16, 185, 129, 0.15); border-radius: 6px; padding: 4px;"
+            )
+            _check_save_enabled()
+
+        def _capture_minor():
+            captured = max(0, state["current_value"] - 1)
+            state["minor_value"] = captured
+            minor_result.setText(f"Minor: {captured}")
+            minor_result.setStyleSheet(
+                f"font-size: 15px; font-weight: bold; color: {C['orange']}; font-family: Consolas;"
+                f" background-color: rgba(245, 158, 11, 0.15); border-radius: 6px; padding: 4px;"
+            )
+            _check_save_enabled()
+
+        # ── Key capture ──
+        def _make_key_capture(key_name):
+            def _capture():
+                captured = max(0, state["current_value"] - 1)
+                state["key_values"][key_name] = captured
+                # Update label
+                key_result_labels[key_name].setText(f"{captured}")
+                key_result_labels[key_name].setStyleSheet(
+                    f"font-size: 11px; font-weight: bold; color: {C['green']}; font-family: Consolas;"
+                )
+                # Update button style → "captured"
+                key_buttons[key_name].setStyleSheet(pill_btn_qss(
+                    C["green"], _lighten(C["green"], 0.12), 13, 8
+                ))
+                key_buttons[key_name].setText(f"✓ {key_name}")
+                # Update counter
+                n = len(state["key_values"])
+                key_counter.setText(f"Đã capture: {n} / 12 keys")
+                if n == 12:
+                    key_counter.setStyleSheet(f"font-size: 12px; color: {C['green']}; font-weight: bold; font-family: {FONT};")
+                _check_save_enabled()
+            return _capture
+
+        # ── Save ──
+        def _save_calibration():
+            _stop_scan()
+
+            # Save scale values nếu đã capture
+            if state["major_value"] is not None and state["minor_value"] is not None:
+                maj = state["major_value"]
+                mno = state["minor_value"]
+                backend.AppConfig.update("scale_values", {"major": maj, "minor": mno})
+                backend.AppConfig.update("scale_midi_map", {"Major": maj, "Minor": mno})
+
+            # Save key values nếu đã capture
+            if state["key_values"]:
+                # Merge với key_midi_map hiện tại (chỉ override keys đã capture)
+                current_map = dict(backend.AppConfig.get_key_midi_map())
+                for key_name, midi_val in state["key_values"].items():
+                    current_map[key_name] = midi_val
+                    # Cập nhật cả enharmonic equivalents
+                    enharmonics = {
+                        "C#": "Db", "Db": "C#",
+                        "D#": "Eb", "Eb": "D#",
+                        "F#": "Gb", "Gb": "F#",
+                        "G#": "Ab", "Ab": "G#",
+                        "A#": "Bb", "Bb": "A#",
+                    }
+                    if key_name in enharmonics:
+                        current_map[enharmonics[key_name]] = midi_val
+                backend.AppConfig.update("key_midi_map", current_map)
+
+            backend.AppConfig.save()
+
+            # Reload globals
+            global SCALE_VALUES
+            SCALE_VALUES = backend.AppConfig.get_scale_values()
+
+            # Summary message
+            parts = []
+            if state["major_value"] is not None and state["minor_value"] is not None:
+                parts.append(f"Scale: Maj={state['major_value']}, Min={state['minor_value']}")
+            if state["key_values"]:
+                parts.append(f"Keys: {len(state['key_values'])}/12")
+
+            self._show_message(f"✅ Đã lưu! {' | '.join(parts)}")
+            dlg.close()
+
+        # ── Connect signals ──
+        start_btn.clicked.connect(_start_scan)
+        stop_btn.clicked.connect(_stop_scan)
+        reset_btn.clicked.connect(_reset_scan)
+        major_btn.clicked.connect(_capture_major)
+        minor_btn.clicked.connect(_capture_minor)
+        save_btn.clicked.connect(_save_calibration)
+
+        for key_name in ALL_KEYS:
+            key_buttons[key_name].clicked.connect(_make_key_capture(key_name))
+
+        # Khi đổi tab → reset scan position nếu đang chạy
+        def _on_tab_changed(index):
+            if state["scanning"]:
+                _stop_scan()
+                state["current_value"] = 0
+                value_label.setText("CC Value: ---")
+                progress.setValue(0)
+                start_btn.setText("▶ Bắt đầu quét")
+        tabs.currentChanged.connect(_on_tab_changed)
+
+        # Cleanup khi đóng dialog
+        def _on_close(event):
+            _stop_scan()
+            event.accept()
+        dlg.closeEvent = _on_close
 
         dlg.exec()
 
@@ -2465,9 +2695,7 @@ class MainDashboard(QMainWindow):
         # Dừng MemoryGuard
         if hasattr(self.engine, '_memory_guard'):
             self.engine._memory_guard.stop()
-        # Dừng waveform audio thread
-        if hasattr(self, 'waveform') and self.waveform:
-            self.waveform.stop()
+
         # Dừng QTimers
         self._marquee_timer.stop()
         self._midi_timer.stop()

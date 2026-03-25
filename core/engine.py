@@ -928,7 +928,12 @@ class SystemEngine:
             print(f"📱 [DÒ TONE] Tìm thấy {len(pwa_candidates)} cửa sổ PWA YouTube")
         
         # ── Bước 3: Trích xuất tên video từ tiêu đề ──
-        # Tiêu đề PWA: "Song Name - Artist - YouTube" → tên video = "Song Name - Artist"
+        # Tiêu đề PWA YouTube (Edge/Chrome) có các dạng:
+        #   - Đang phát:  "YouTube - (N) Video Title - YouTube"  (N = notification count)
+        #   - Đang phát:  "Video Title - YouTube"                (Chrome PWA, không prefix)
+        #   - Trang chủ:  "YouTube - (N) YouTube"                (không có video)
+        #   - Trang chủ:  "YouTube"                               (không có video)
+        import re as _re
         for candidate in pwa_candidates:
             title = candidate["title"]
             
@@ -940,6 +945,15 @@ class SystemEngine:
             video_title = title[:yt_suffix_idx].strip()
             if not video_title:
                 continue
+            
+            # Strip prefix "YouTube - (N) " nếu có (Edge PWA format)
+            video_title = _re.sub(r'^YouTube\s*-\s*(\(\d+\)\s*)?', '', video_title).strip()
+            
+            # Xóa Unicode directional markers (U+202A, U+202C) mà Edge inject vào @mentions
+            video_title = video_title.replace('\u202a', '').replace('\u202c', '')
+            
+            if not video_title or video_title.lower() == "youtube":
+                continue  # Trang chủ YouTube, không có video
             
             if not quiet:
                 print(f"📱 [DÒ TONE] PWA YouTube: \"{video_title}\"")

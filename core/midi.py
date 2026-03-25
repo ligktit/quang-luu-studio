@@ -23,6 +23,8 @@ class MidiHandler:
         self._is_listening = False
         self._listen_thread = None
         self.on_cc_received = None  # Callback(cc, value)
+        self._connect_out_warned = False  # Chỉ cảnh báo 1 lần
+        self._connect_in_warned = False
     
     def connect(self):
         """Kết nối tới MIDI output port (loopMIDI)"""
@@ -32,12 +34,17 @@ class MidiHandler:
             for name in available:
                 if MIDI_PORT_NAME in name:
                     self.outport = mido.open_output(name)
+                    self._connect_out_warned = False  # Reset khi kết nối thành công
                     print(f"✅ MIDI Out connected: {name}")
                     return True
-            print(f"⚠️ Không tìm thấy MIDI port '{MIDI_PORT_NAME}'. Available: {available}")
+            if not self._connect_out_warned:
+                print(f"⚠️ Không tìm thấy MIDI port '{MIDI_PORT_NAME}'. Available: {available}")
+                self._connect_out_warned = True
             return False
         except Exception as e:
-            print(f"❌ Lỗi kết nối MIDI: {e}")
+            if not self._connect_out_warned:
+                print(f"❌ Lỗi kết nối MIDI: {e}")
+                self._connect_out_warned = True
             return False
     
     def send_cc(self, cc, value, channel=0):
@@ -58,16 +65,21 @@ class MidiHandler:
                 if MIDI_PORT_NAME in name:
                     self.inport = mido.open_input(name)
                     self._is_listening = True
+                    self._connect_in_warned = False
                     self._listen_thread = threading.Thread(
                         target=self._listen_loop, daemon=True
                     )
                     self._listen_thread.start()
                     print(f"✅ MIDI In connected: {name}")
                     return True
-            print(f"⚠️ Không tìm thấy MIDI input port '{MIDI_PORT_NAME}'")
+            if not self._connect_in_warned:
+                print(f"⚠️ Không tìm thấy MIDI input port '{MIDI_PORT_NAME}'")
+                self._connect_in_warned = True
             return False
         except Exception as e:
-            print(f"❌ Lỗi kết nối MIDI In: {e}")
+            if not self._connect_in_warned:
+                print(f"❌ Lỗi kết nối MIDI In: {e}")
+                self._connect_in_warned = True
             return False
     
     def _listen_loop(self):
@@ -81,3 +93,4 @@ class MidiHandler:
                 pass
             import time
             time.sleep(0.01)  # 10ms polling
+

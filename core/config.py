@@ -126,6 +126,30 @@ class AppConfig:
         cls._data = None
         return cls.load()
 
+    @classmethod
+    def update(cls, key, value):
+        """Cập nhật một key trong config (merge nếu là dict)"""
+        data = cls.load()
+        if isinstance(value, dict) and key in data and isinstance(data[key], dict):
+            data[key].update(value)
+        else:
+            data[key] = value
+
+    @classmethod
+    def save(cls):
+        """Ghi config hiện tại ra file app_config.json"""
+        if cls._data is None:
+            return False
+        config_path = cls._get_config_path()
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(cls._data, f, indent=4, ensure_ascii=False)
+            print(f"✅ App config saved: {config_path}")
+            return True
+        except Exception as e:
+            print(f"❌ Lỗi ghi {APP_CONFIG_FILE}: {e}")
+            return False
+
 
 # Load config ngay khi import module
 AppConfig.load()
