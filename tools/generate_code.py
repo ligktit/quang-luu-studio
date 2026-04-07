@@ -7,8 +7,10 @@ import random
 import string
 import sys
 
+import os
+
 # Secret key - NÊN THAY ĐỔI TRONG MÔI TRƯỜNG THỰC TẾ
-SECRET_KEY = "QUANGLUU_STUDIO_2026_SECRET_KEY_CHANGE_THIS"
+SECRET_KEY = os.environ.get("QUANGLUU_STUDIO_SECRET_KEY", "QUANGLUU_STUDIO_2026_SECRET_KEY_CHANGE_THIS")
 
 def generate_activation_code():
     """

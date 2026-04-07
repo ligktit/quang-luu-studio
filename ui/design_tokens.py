@@ -79,6 +79,21 @@ PAINTER = {
     "header_top":      "#12162a",
     "header_bot":      "#0d1020",
     "header_line":     "rgba(56, 189, 248, 40)",
+    # Waveform hero
+    "waveform_bg":     "rgba(10, 14, 30, 200)",
+    "waveform_grad_1": "#38BDF8",   # teal
+    "waveform_grad_2": "#A855F7",   # purple
+    "waveform_grad_3": "#EC4899",   # pink
+    "waveform_grid":   "rgba(56, 189, 248, 12)",
+    "waveform_reflect":"rgba(56, 189, 248, 25)",
+    # Tab dock
+    "tab_active":      "#38BDF8",
+    "tab_inactive":    "#64748B",
+    "tab_bar_bg":      "rgba(15, 20, 38, 240)",
+    "tab_indicator":   "#38BDF8",
+    # Transport
+    "transport_bg":    "rgba(15, 23, 42, 200)",
+    "transport_btn":   "rgba(100, 116, 139, 120)",
 }
 
 

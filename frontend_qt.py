@@ -27,6 +27,9 @@ from ui.components.painter_panel import GlassPanel
 from ui.components.painter_record import PainterRecordButton
 from ui.components.painter_header import PaintedHeaderBar, PaintedMidiDot
 from ui.components.painter_fader import PainterFader
+from ui.components.waveform_hero import WaveformHeroPanel
+from ui.components.painter_hslider import PainterHSlider
+from ui.components.hmixer_channel import HMixerChannel
 
 # ─── MIDI CC MAPPING (đọc từ app_config.json) ───
 try:
@@ -110,11 +113,12 @@ class MainDashboard(QMainWindow):
         self.tune_state = True
         self.current_scale = "Major"
 
-        # Window — QPainter Premium: 940×520
+        # Window — Performance Stage: 1100×650
         self.setWindowTitle("Quang Lưu Studio")
         self.setWindowIcon(QIcon("app_icon.ico"))
-        self.setMinimumSize(780, 470)
-        self.resize(940, 520)
+        self.setMinimumSize(900, 550)
+        self.resize(1100, 650)
+        self._autotune_on = False
         self.setStyleSheet(APP_QSS)
 
         # Central widget
@@ -128,7 +132,7 @@ class MainDashboard(QMainWindow):
         # Marquee text (used by SmoothMarqueeLabel component)
         self._marquee_text = "♪ Bản quyền thuộc về Quang Lưu Studio — Karaoke Pro ♪"
 
-        # Build UI — V3.0: Golden Ratio 3-column layout
+        # Build UI — V5.0: Performance Stage (waveform hero + tabbed dock)
         root.addWidget(self._build_header())
         root.addWidget(self._build_body(), 1)
         root.addWidget(self._build_bottom_bar())
@@ -202,17 +206,12 @@ class MainDashboard(QMainWindow):
         self.scale_combo.currentTextChanged.connect(self._on_scale_selected)
         layout.addWidget(self.scale_combo)
 
-        # Hidden compat labels
-        self.title_label = QLabel("")
-        self.title_label.setVisible(False)
-        self.midi_status = QLabel("")
-        self.midi_status.setVisible(False)
-
         # ⚙️ Settings gear
         layout.addSpacing(SP.SM)
         gear_btn = QPushButton("⚙️")
         gear_btn.setFixedSize(28, 28)
         gear_btn.setCursor(Qt.PointingHandCursor)
+        gear_btn.setToolTip("Cài đặt")
         gear_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: transparent;
@@ -228,89 +227,118 @@ class MainDashboard(QMainWindow):
         return header
 
     # ─────────────────────────────────────────
-    #  BODY — Golden Ratio 3-col (250px : 120px : 250px)
+    #  BODY — Performance Stage (Waveform Hero + 4-Panel Dock)
     # ─────────────────────────────────────────
     def _build_body(self):
         wrapper = QWidget()
         wrapper.setStyleSheet(f"background-color: {C['bg']};")
         wl = QVBoxLayout(wrapper)
-        wl.setContentsMargins(SP.MD, SP.SM, SP.MD, SP.SM)
+        wl.setContentsMargins(SP.SM, SP.XS, SP.SM, SP.XS)
+        wl.setSpacing(SP.XS)
 
-        # Main card — QPainter-drawn glassmorphism
-        card = GlassPanel("")
-        card_body = card.body_layout
+        # ── 2. FOUR-PANEL CONTROL DOCK ─────────
+        dock = QHBoxLayout()
+        dock.setSpacing(SP.XS)
 
-        inner = QHBoxLayout()
-        inner.setContentsMargins(0, 0, 0, 0)
-        inner.setSpacing(SP.MD)
+        dock.addWidget(self._build_panel_mixer(), 25)
+        dock.addWidget(self._build_panel_tone(), 25)
+        dock.addWidget(self._build_panel_mode(), 25)
+        dock.addWidget(self._build_panel_tools(), 25)
 
-        inner.addWidget(self._build_left_col(), 30)
-        inner.addWidget(self._build_center_col(), 40)
-        inner.addWidget(self._build_right_col(), 30)
+        wl.addLayout(dock)
 
-        card_body.addLayout(inner)
-        wl.addWidget(card, 1)
         return wrapper
 
-    # ── Left Column ──
-    def _build_left_col(self):
-        col = QWidget()
-        vlayout = QVBoxLayout(col)
-        vlayout.setContentsMargins(0, 0, 0, 0)
-        vlayout.setSpacing(SP.LG)
+    # ── Panel 1: MIXER ────────────────────────────────────
+    def _build_panel_mixer(self):
+        panel = GlassPanel("MIXER")
+        vl = panel.body_layout
+        vl.setSpacing(2)
 
-        # 1. Panel: CHỨC NĂNG — GlassPanel
-        p_func = GlassPanel("🎙️ CHỨC NĂNG")
-        grid = QGridLayout()
-        grid.setSpacing(SP.SM)
+        mute_cc_map = {
+            "mix_music": "mute_music", "mix_mic": "mute_mic",
+            "mix_reverb": "mute_reverb", "mix_backing": "mute_backing"
+        }
 
-        func_btns = [
-            ("Dò Nhanh",      C["orange"],       self._on_do_tone),
-            ("Dò Full",        C["teal"],         self._on_lay_tone),
-            ("Auto-Tune",       C["pink"],         self._on_tone_auto),
-            ("Fix Méo",        C["deep_purple"],  self._on_fix_meo),
-            ("Major",          C["green"],        self._on_scale_toggle),
-            ("Chấm điểm",    C["light_purple"], self._on_score),
+        channels = [
+            {"label": "Nhạc",    "icon": "♪", "color": C["teal"],         "cc": "mix_music",   "range": (0, 100), "default": 70, "unit": ""},
+            {"label": "Mic",     "icon": "☉", "color": C["orange"],       "cc": "mix_mic",     "range": (-10, 10), "default": 0, "unit": " dB"},
+            {"label": "Vang",    "icon": "≡", "color": C["accent"],       "cc": "mix_reverb",  "range": (-10, 10), "default": 0, "unit": " dB"},
+            {"label": "B.Track", "icon": "☖", "color": C["light_purple"], "cc": "mix_backing", "range": (0, 100), "default": 70, "unit": ""},
         ]
-        self._func_buttons = {}
-        for i, (text, color, cb) in enumerate(func_btns):
-            btn = PainterButton(text, color=color, height=30, radius=8, font_size=11)
-            btn.clicked.connect(cb)
-            grid.addWidget(btn, i // 2, i % 2)
-            self._func_buttons[text] = btn
 
-        p_func.body_layout.addLayout(grid)
-        vlayout.addWidget(p_func)
+        self._mixer_sliders = {}
+        self._mixer_val_labels = {}
+        self._mixer_icon_btns = {}
 
-        # 2. Panel: SET TONE — GlassPanel with Rotary Knobs
-        p_tone = GlassPanel("🎛️ SET TONE")
-        p_tone.body_layout.addWidget(self._build_tone_knob("Tone Nhạc", "tone_music", C["teal"]))
-        p_tone.body_layout.addWidget(self._build_tone_knob("Tone Giọng", "tone_voice", C["accent"]))
-        vlayout.addWidget(p_tone)
+        for ch in channels:
+            ch_view = HMixerChannel(
+                icon=ch["icon"],
+                label=ch["label"],
+                color=ch["color"],
+                cc_key=ch["cc"],
+                val_range=ch["range"],
+                default=ch["default"],
+                unit=ch["unit"],
+            )
 
-        vlayout.addStretch()
-        return col
+            def _bind_mute(cc_key=ch["cc"], c_view=ch_view):
+                def _do_toggle():
+                    curr = not self.mute_states.get(cc_key, False)
+                    self._make_mute_callback(cc_key, mute_cc_map, c_view)(curr)
+                return _do_toggle
+
+            ch_view.mute_btn.clicked.connect(_bind_mute())
+            ch_view.slider.valueChanged.connect(
+                self._make_value_changed_callback(ch["cc"], ch["range"], ch["unit"])
+            )
+
+            vl.addWidget(ch_view)
+
+            self._mixer_sliders[ch["cc"]] = ch_view.slider
+            self._mixer_val_labels[ch["cc"]] = ch_view.val_label
+            self._mixer_icon_btns[ch["cc"]] = ch_view.mute_btn
+
+        vl.addStretch()
+        return panel
+
+    # ── Panel 2: TONE ─────────────────────────────────────
+    def _build_panel_tone(self):
+        panel = GlassPanel("TONE")
+        hl = QHBoxLayout()
+        hl.setContentsMargins(4, 0, 4, 0)
+        hl.setSpacing(SP.SM)
+
+        hl.addWidget(self._build_tone_knob("Tone Nhạc", "tone_music", C["teal"]))
+        hl.addWidget(self._build_tone_knob("Tone Giọng", "tone_voice", C["accent"]))
+
+        panel.body_layout.addLayout(hl)
+        panel.body_layout.addStretch()
+        return panel
 
     def _build_tone_knob(self, label, cc_key, color):
         """Tone Nhạc / Tone Giọng — Rotary Knob (QPainter)"""
         wrapper = QWidget()
-        row = QHBoxLayout(wrapper)
-        row.setContentsMargins(0, 4, 0, 4)
-        row.setSpacing(SP.MD)
-
-        lbl = QLabel(label)
-        lbl.setStyleSheet(f"font-size:12px; color:{C['text_muted']}; font-weight:600; font-family: {FONT};")
-        lbl.setFixedWidth(75)
-        row.addWidget(lbl)
-
-        row.addStretch()
+        vl = QVBoxLayout(wrapper)
+        vl.setContentsMargins(0, 2, 0, 2)
+        vl.setSpacing(SP.XS)
+        vl.setAlignment(Qt.AlignCenter)
 
         # Rotary Knob
         knob = PainterKnob(label=label, minimum=-12, maximum=12,
                            value=0, color=color, size=56)
-        row.addWidget(knob)
+        vl.addWidget(knob, 0, Qt.AlignCenter)
 
-        row.addStretch()
+        lbl = QLabel(label)
+        lbl.setStyleSheet(f"font-size:10px; color:{C['text_muted']}; font-weight:600; font-family: {FONT}; background:transparent;")
+        lbl.setAlignment(Qt.AlignCenter)
+        vl.addWidget(lbl)
+
+        # Semitone value label
+        val_lbl = QLabel("+0")
+        val_lbl.setStyleSheet(f"font-size:11px; font-weight:700; color:{color}; font-family: {FONT_MONO}; background:transparent;")
+        val_lbl.setAlignment(Qt.AlignCenter)
+        vl.addWidget(val_lbl)
 
         # Chromatic scale (12 half-steps)
         _CHROMATIC = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
@@ -339,6 +367,8 @@ class MainDashboard(QMainWindow):
             print(f"🎹 [KEY] {label} -> {base} -> {new_key} (MIDI {key_midi})")
 
         def _on_knob_changed(new_val):
+            # Update semitone display
+            val_lbl.setText(f"{new_val:+d}")
             # Send MIDI CC for tone shift
             midi_value = int(((new_val + 12) / 24) * 127)
             self.engine.send_midi(MIDI_CC[cc_key], midi_value)
@@ -356,74 +386,88 @@ class MainDashboard(QMainWindow):
 
         return wrapper
 
-    # ── Center Column: Mixer ──
-    def _build_center_col(self):
-        col = QWidget()
-        vlayout = QVBoxLayout(col)
-        vlayout.setContentsMargins(0, 0, 0, 0)
+    # ── Panel 3: MODE & SFX ───────────────────────────────
+    def _build_panel_mode(self):
+        panel = GlassPanel("MODE")
+        vl = panel.body_layout
+        vl.setSpacing(SP.SM)
 
-        p_mixer = GlassPanel("🎚️ MIXER")
+        # Mode label
+        mode_title = QLabel("Mode")
+        mode_title.setStyleSheet(f"font-size:10px; font-weight:700; color:{C['text_muted']}; font-family:{FONT}; background:transparent;")
+        mode_title.setAlignment(Qt.AlignCenter)
+        vl.addWidget(mode_title)
 
-        slider_row = QHBoxLayout()
-        slider_row.setSpacing(SP.LG)
-
-        mute_cc_map = {
-            "mix_music": "mute_music", "mix_mic": "mute_mic",
-            "mix_reverb": "mute_reverb", "mix_backing": "mute_backing"
-        }
-
-        channels = [
-            {"label": "Nhạc",    "icon": "♪", "color": C["teal"],         "cc": "mix_music",   "range": (0, 100), "default": 70, "unit": ""},
-            {"label": "Mic",     "icon": "☉", "color": C["orange"],       "cc": "mix_mic",     "range": (-10, 10), "default": 0, "unit": " dB"},
-            {"label": "Vang",    "icon": "≡", "color": C["accent"],       "cc": "mix_reverb",  "range": (-10, 10), "default": 0, "unit": " dB"},
-            {"label": "B.Track", "icon": "☖", "color": C["light_purple"], "cc": "mix_backing", "range": (0, 100), "default": 70, "unit": ""},
+        # Mode segmented row
+        mode_config = [
+            ("Dân Ca", C["accent"]),
+            ("Lofi",   C["light_purple"]),
+            ("Remix",  C["blue"]),
+            ("Đa Thể Loại", C["teal"]),
         ]
+        self._mode_buttons = {}
 
-        self._mixer_sliders = {}
-        self._mixer_val_labels = {}
-        self._mixer_icon_btns = {}
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(3)
+        for mlabel, mcolor in mode_config:
+            mbtn = PainterButton(mlabel, color=mcolor, height=26, radius=8, font_size=9)
+            mbtn.clicked.connect(lambda m=mlabel: self._on_mode_selected(m))
+            mode_row.addWidget(mbtn)
+            self._mode_buttons[mlabel] = mbtn
+        vl.addLayout(mode_row)
 
-        for ch in channels:
-            wrap = QWidget()
-            wrap_l = QVBoxLayout(wrap)
-            wrap_l.setContentsMargins(0, 0, 0, 0)
-            wrap_l.setSpacing(2)
+        # SFX label
+        sfx_title = QLabel("SFX")
+        sfx_title.setStyleSheet(f"font-size:10px; font-weight:700; color:{C['text_muted']}; font-family:{FONT}; background:transparent;")
+        sfx_title.setAlignment(Qt.AlignCenter)
+        vl.addWidget(sfx_title)
 
-            ch_view = MixerChannel(
-                icon=ch["icon"],
-                color=ch["color"],
-                cc_key=ch["cc"],
-                val_range=ch["range"],
-                default=ch["default"],
-                unit=ch["unit"],
-            )
-            wrap_l.addWidget(ch_view)
+        # SFX row
+        sfx_config = [
+            ("😂", "laugh",    C["orange"]),
+            ("👏", "applause", C["teal"]),
+            ("🎉", "cheer",    C["pink"]),
+        ]
+        self._sfx_buttons = {}
 
-            lbl = QLabel(ch["label"])
-            lbl.setStyleSheet(f"font-size:10px; color:{C['text_muted']}; font-family: {FONT};")
-            lbl.setAlignment(Qt.AlignCenter)
-            wrap_l.addWidget(lbl)
+        sfx_row = QHBoxLayout()
+        sfx_row.setSpacing(3)
+        for slabel, sfx_id, scolor in sfx_config:
+            sbtn = PainterButton(slabel, color=scolor, height=26, radius=8, font_size=12)
+            sbtn.clicked.connect(lambda sid=sfx_id: self._on_sfx_play(sid))
+            sfx_row.addWidget(sbtn)
+            self._sfx_buttons[sfx_id] = sbtn
+        vl.addLayout(sfx_row)
 
-            def _bind_mute(cc_key=ch["cc"], c_view=ch_view):
-                def _do_toggle():
-                    curr = not self.mute_states.get(cc_key, False)
-                    self._make_mute_callback(cc_key, mute_cc_map, c_view)(curr)
-                return _do_toggle
+        vl.addStretch()
+        return panel
 
-            ch_view.mute_btn.clicked.connect(_bind_mute())
-            ch_view.slider.valueChanged.connect(self._make_value_changed_callback(ch["cc"], ch["range"], ch["unit"]))
+    # ── Panel 4: TOOLS ────────────────────────────────────
+    def _build_panel_tools(self):
+        panel = GlassPanel("TOOLS")
+        grid = QGridLayout()
+        grid.setSpacing(3)
 
-            slider_row.addWidget(wrap, 1)
+        func_btns = [
+            ("Dò Nhanh",    C["orange"],       self._on_do_tone),
+            ("Dò Full",      C["teal"],         self._on_lay_tone),
+            ("Auto-Tune",     C["pink"],         self._on_tone_auto),
+            ("Fix Méo",      C["deep_purple"],  self._on_fix_meo),
+            ("Chấm điểm",  C["light_purple"], self._on_score),
+            ("💾 Lưu",       C["teal"],         self._on_save),
+            ("Danh sách",   C["orange"],       self._show_songs_list),
+            ("Thư Mục",     C["light_purple"], self._on_open_recordings_folder),
+        ]
+        self._func_buttons = {}
+        for i, (text, color, cb) in enumerate(func_btns):
+            btn = PainterButton(text, color=color, height=26, radius=8, font_size=9)
+            btn.clicked.connect(cb)
+            grid.addWidget(btn, i // 2, i % 2)
+            self._func_buttons[text] = btn
 
-            self._mixer_sliders[ch["cc"]] = ch_view.slider
-            self._mixer_val_labels[ch["cc"]] = ch_view.val_label
-            self._mixer_icon_btns[ch["cc"]] = ch_view.mute_btn
-
-        p_mixer.body_layout.addLayout(slider_row)
-        vlayout.addWidget(p_mixer)
-
-        vlayout.addStretch()
-        return col
+        panel.body_layout.addLayout(grid)
+        panel.body_layout.addStretch()
+        return panel
 
     def _make_mute_callback(self, cc_key, mute_cc_map, ch_view):
         def toggle(is_muted):
@@ -436,7 +480,6 @@ class MainDashboard(QMainWindow):
         min_v, max_v = range_tuple
         def cb(raw_value):
             if unit == " dB":
-                # Convert 0-100 linear back to correct scale
                 db = min_v + ((max_v - min_v) * (raw_value / 100.0))
                 midi = int(((db - min_v) / (max_v - min_v)) * 127)
                 midi = max(0, min(127, midi))
@@ -448,107 +491,39 @@ class MainDashboard(QMainWindow):
                 self.engine.set_browser_volume(int(raw_value))
         return cb
 
-    # ── Right Column: Mode & SFX ──
-    def _build_right_col(self):
-        col = QWidget()
-        vlayout = QVBoxLayout(col)
-        vlayout.setContentsMargins(0, 0, 0, 0)
-        vlayout.setSpacing(SP.LG)
-
-        p_board = GlassPanel("🎹 CHẾ ĐỘ & HIỆU ỨNG")
-
-        grid = QGridLayout()
-        grid.setSpacing(SP.SM)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-
-        sfx_config = [
-            ("😂 Cười",   "laugh",    C["orange"]),
-            ("👏 Vỗ tay", "applause", C["teal"]),
-            ("🎉 Hò reo", "cheer",    C["pink"]),
-        ]
-        mode_config = [
-            ("Dân Ca", C["accent"]),
-            ("Lofi",   C["light_purple"]),
-            ("Remix",  C["blue"]),
-        ]
-
-        self._sfx_buttons = {}
-        self._mode_buttons = {}
-
-        for row, ((slabel, sfx_id, scolor), (mlabel, mcolor)) in enumerate(zip(sfx_config, mode_config)):
-            # Cột 0: Mode — PainterButton
-            mbtn = PainterButton(mlabel, color=mcolor, height=32, radius=8, font_size=11)
-            mbtn.clicked.connect(lambda m=mlabel: self._on_mode_selected(m))
-            grid.addWidget(mbtn, row, 0)
-            self._mode_buttons[mlabel] = mbtn
-
-            # Cột 1: SFX — PainterButton
-            sbtn = PainterButton(slabel, color=scolor, height=32, radius=8, font_size=11)
-            sbtn.clicked.connect(lambda sid=sfx_id: self._on_sfx_play(sid))
-            grid.addWidget(sbtn, row, 1)
-            self._sfx_buttons[sfx_id] = sbtn
-
-        p_board.body_layout.addLayout(grid)
-        vlayout.addWidget(p_board)
-
-        vlayout.addStretch(1)
-
-        return col
-
     # ─────────────────────────────────────────
-    #  BOTTOM BAR
+    #  BOTTOM BAR — Record button
     # ─────────────────────────────────────────
     def _build_bottom_bar(self):
+        from PySide6.QtWidgets import QGraphicsDropShadowEffect
+        
         wrapper = QWidget()
         wrapper.setStyleSheet(f"background-color: {C['bg']};")
         wrapper_layout = QHBoxLayout(wrapper)
-        wrapper_layout.setContentsMargins(SP.LG, SP.SM, SP.LG, SP.MD)
+        wrapper_layout.setContentsMargins(SP.LG, SP.XS, SP.LG, SP.SM)
 
         bar = QFrame()
-        bar.setObjectName("bottomBar")
         bar.setStyleSheet(f"""
-            QFrame#bottomBar {{
-                background-color: rgba(30, 41, 59, 230);
-                border-radius: 26px;
-                border: 1px solid rgba(51, 65, 85, 0.4);
-            }}
+            background-color: rgba(30, 41, 59, 230);
+            border-radius: 22px;
+            border: 1px solid rgba(51, 65, 85, 0.4);
         """)
-        add_shadow(bar, "#000000", 20, (0, -2))
+        
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setColor(QColor("#000000"))
+        shadow.setBlurRadius(15)
+        shadow.setOffset(0, -2)
+        bar.setGraphicsEffect(shadow)
+        
         bar_layout = QHBoxLayout(bar)
-        bar_layout.setContentsMargins(SP.MD, 5, SP.MD, 5)
-
-        # Left: Save + List — PainterButton
-        left = QHBoxLayout()
-        for text, color, cb in [
-            ("💾 Lưu", C["teal"], self._on_save),
-            ("📋 Danh sách", C["orange"], self._show_songs_list),
-        ]:
-            btn = PainterButton(text, color=color, height=36, radius=18, font_size=12)
-            btn.clicked.connect(cb)
-            left.addWidget(btn)
-        bar_layout.addLayout(left)
-
+        bar_layout.setContentsMargins(SP.MD, 4, SP.MD, 4)
         bar_layout.addStretch()
 
-        # Center: RECORD — QPainter animated button
         self.record_button = PainterRecordButton()
         self.record_button.clicked.connect(self._on_record)
         bar_layout.addWidget(self.record_button)
 
         bar_layout.addStretch()
-
-        # Right: Toggle SO + Folder — PainterButton
-        right = QHBoxLayout()
-        for text, color, cb in [
-            ("Ẩn/Hiện SO", C["pink"], self._on_toggle_studio_one),
-            ("Thư Mục", C["light_purple"], self._on_open_recordings_folder),
-        ]:
-            btn = PainterButton(text, color=color, height=36, radius=18, font_size=12)
-            btn.clicked.connect(cb)
-            right.addWidget(btn)
-        bar_layout.addLayout(right)
-
         wrapper_layout.addWidget(bar)
         return wrapper
 
@@ -590,6 +565,9 @@ class MainDashboard(QMainWindow):
                 pass
         else:
             self._midi_dot.setStyleSheet(f"color: {C['accent']}; font-size: 10px;")
+        # Sync waveform hero MIDI status
+        if hasattr(self, '_waveform'):
+            self._waveform.set_midi_status(connected)
 
     def _on_midi_cc_received(self, cc, value):
         # MIDI_CC đã được define ở đầu file frontend_qt.py
@@ -1391,7 +1369,7 @@ class MainDashboard(QMainWindow):
         """
         from PySide6.QtWidgets import QDialog, QProgressBar
         
-        btn = self._func_buttons.get("Dò Tone")
+        btn = self._func_buttons.get("Dò Nhanh")
         
         # Tránh nhấn nhiều lần khi đang dò
         if getattr(self, '_do_tone_running', False):
@@ -1436,7 +1414,7 @@ class MainDashboard(QMainWindow):
 
     def _handle_tone_result(self, result):
         """Slot xử lý kết quả dò tone trên main thread (thread-safe via Signal)"""
-        btn = self._func_buttons.get("Dò Tone")
+        btn = self._func_buttons.get("Dò Nhanh")
         
         # === Trường hợp LỖI ===
         if 'error' in result:
@@ -1445,7 +1423,7 @@ class MainDashboard(QMainWindow):
             self._do_tone_done = False
             if btn:
                 btn.setEnabled(True)
-                btn.setText("Dò Tone")
+                btn.setText("Dò Nhanh")
                 btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
             self.autokey_dot.setStyleSheet(f"color: {C['card_hover']}; font-size: 16px;")
             self._marquee_text = "♪ Quang Lưu Studio — Karaoke Pro ♪"
@@ -1510,14 +1488,18 @@ class MainDashboard(QMainWindow):
         camelot = result.get('camelot', '?')
         confidence = result.get('confidence', 0)
         
-        # === 2. Reset nút "Dò Tone" về trạng thái ban đầu ===
+        # === 2. Reset nút "Dò Nhanh" về trạng thái ban đầu ===
         if btn:
             btn.setEnabled(True)
-            btn.setText("Dò Tone")
+            btn.setText("Dò Nhanh")
             btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
         
         # === 3. Cập nhật dot → xanh (đã phát hiện) ===
         self.autokey_dot.setStyleSheet(f"color: {C['green']}; font-size: 16px;")
+        
+        # === Sync waveform hero ===
+        if hasattr(self, '_waveform'):
+            self._waveform.set_song_info(title, key_root, scale, bpm)
         
         # === 4. Đồng bộ nút Major/Minor toggle ===
         self.scale_is_major = (scale == "Major")
@@ -2012,10 +1994,6 @@ class MainDashboard(QMainWindow):
         if self.is_recording:
             self.is_recording = False
             self.record_button.set_recording(False)
-            
-            # Stop pulse timer
-            if hasattr(self, '_pulse_timer'):
-                self._pulse_timer.stop()
             self.engine.send_midi(MIDI_CC["score_trigger"], 0)
             
             # Dừng ghi âm và lưu file (không blocking UI)
@@ -2043,14 +2021,6 @@ class MainDashboard(QMainWindow):
         else:
             self.is_recording = True
             self.record_button.set_recording(True)
-            self.record_button.setText("■  DỪNG LẠI")
-            
-            # Start pulse glow animation
-            self._pulse_state = True
-            if not hasattr(self, '_pulse_timer'):
-                self._pulse_timer = QTimer(self)
-                self._pulse_timer.timeout.connect(self._pulse_record)
-            self._pulse_timer.start(800)
             self.engine.send_midi(MIDI_CC["score_trigger"], 127)
             
             # Bắt đầu ghi soundcard (loopback)
@@ -2061,30 +2031,12 @@ class MainDashboard(QMainWindow):
                 mic_device_index=mic_idx
             )
             if not ok:
-                # Rollback UI về trạng thái ban đầu
+                # Rollback UI
                 self.is_recording = False
                 self.record_button.set_recording(False)
-                self.record_button.setText("🔴  GHI ÂM")
-                if hasattr(self, '_pulse_timer'):
-                    self._pulse_timer.stop()
                 self.engine.send_midi(MIDI_CC["score_trigger"], 0)
-                # Hiện lỗi cụ thể
                 err = getattr(self.engine.recorder, 'last_error', None) or "Không tìm thấy thiết bị WASAPI Loopback"
                 self._show_message(f"❌ Không thể ghi âm: {err[:80]}", is_error=True)
-
-    def _pulse_record(self):
-        """Pulse animation cho nút Record — nhấp nháy rõ ràng khi đang ghi âm"""
-        if not self.is_recording:
-            return
-        self._pulse_state = not self._pulse_state
-        if self._pulse_state:
-            # Sáng: nền xanh tươi + glow mạnh
-            self.record_button.setStyleSheet(_make_pill_qss("#22C55E", "#4ADE80", 13, 17))
-            add_shadow(self.record_button, "#22C55E", 28, (0, 0))
-        else:
-            # Tối: nền xanh đậm + glow nhẹ
-            self.record_button.setStyleSheet(_make_pill_qss("#166534", "#15803D", 13, 17))
-            add_shadow(self.record_button, C["green"], 10, (0, 0))
 
     def _on_mode_selected(self, mode):
         self.current_mode = mode
@@ -2544,9 +2496,9 @@ class MainDashboard(QMainWindow):
 
     def update_score_display(self, score):
         self.current_score = score
-        color = C["green"] if score >= 80 else C["orange"] if score >= 60 else C["accent"]
-        self.score_label.setText(f"{score:.0f}")
-        self.score_label.setStyleSheet(f"font-size:18px; font-weight:bold; color:{color};")
+        # Sync waveform hero score ring
+        if hasattr(self, '_waveform'):
+            self._waveform.set_score(score)
 
     def _ensure_app(self):
         if not QApplication.instance():
@@ -2566,8 +2518,11 @@ class MainDashboard(QMainWindow):
         self.engine.stop_autokey()
         self.engine.stop_tone_detection()
         self.engine.media_monitor.stop()
-        self.engine.restore_browser_volume()  # Khôi phục volume trình duyệt về mức ban đầu
+        self.engine.restore_browser_volume()
         self.engine.disconnect_midi()
+        # Dừng waveform audio capture
+        if hasattr(self, '_waveform'):
+            self._waveform.stop()
         # Dừng recording subprocess nếu đang thu
         if self.is_recording:
             try:
