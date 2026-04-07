@@ -8,6 +8,8 @@ import subprocess
 import threading
 import tempfile
 
+from core.config import RECORDINGS_DIR
+
 
 class AudioRecorder:
     """
@@ -27,13 +29,15 @@ class AudioRecorder:
         self._started_event = threading.Event()
         self._worker_error = None  # Lỗi từ thread worker
     
-    def start_recording(self, output_dir="temp_audio",
+    def start_recording(self, output_dir=None,
                          loopback_device_index: int = -1,
                          mic_device_index: int = -1):
         """Bắt đầu thu âm"""
         if self.recording:
             return False
         
+        if output_dir is None:
+            output_dir = RECORDINGS_DIR
         os.makedirs(output_dir, exist_ok=True)
         
         # Tạo file output

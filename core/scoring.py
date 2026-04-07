@@ -5,7 +5,7 @@ Class: ScoringEngine
 import os
 import time
 
-from core.config import FFMPEG_LOCATION
+from core.config import FFMPEG_LOCATION, RECORDINGS_DIR
 
 
 class ScoringEngine:
@@ -24,9 +24,11 @@ class ScoringEngine:
         print(f"✅ [LOAD AUDIO] Loaded from memory: {duration:.1f}s, {len(self.audio_data)} samples")
         return True
     
-    def download_youtube_audio(self, youtube_url, output_dir="temp_audio"):
+    def download_youtube_audio(self, youtube_url, output_dir=None):
         """Tải audio từ YouTube URL"""
         try:
+            if output_dir is None:
+                output_dir = RECORDINGS_DIR
             print(f"📥 [DOWNLOAD] Bắt đầu tải audio từ YouTube: {youtube_url}")
             try:
                 import yt_dlp
@@ -101,7 +103,7 @@ class ScoringEngine:
             print(traceback.format_exc())
             return None
     
-    def download_youtube_audio_with_info(self, youtube_url, output_dir="temp_audio"):
+    def download_youtube_audio_with_info(self, youtube_url, output_dir=None):
         """
         Tải audio + lấy title video trong 1 lần gọi yt-dlp duy nhất (tối ưu: giảm 1 network request).
         
@@ -109,6 +111,8 @@ class ScoringEngine:
             tuple[str|None, str]: (audio_path, video_title) — audio_path=None nếu lỗi
         """
         try:
+            if output_dir is None:
+                output_dir = RECORDINGS_DIR
             print(f"📥 [DOWNLOAD+INFO] Bắt đầu tải audio + info: {youtube_url}")
             try:
                 import yt_dlp

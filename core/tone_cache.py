@@ -8,13 +8,13 @@ import time
 import re
 
 from core.utils import extract_video_id
-from core.config import MANUAL_TIMELINES_FILE
+from core.config import MANUAL_TIMELINES_FILE, TONE_CACHE_FILE
 
 
 class ToneCacheManager:
     """Quản lý cache kết quả dò tone YouTube — tránh dò lại bài đã biết"""
     
-    CACHE_FILE = "tone_cache.json"
+    CACHE_FILE = TONE_CACHE_FILE
     CACHE_TTL_DAYS = 30  # Hết hạn sau 30 ngày
     
     @staticmethod

@@ -2,6 +2,14 @@
 Quang Lưu Studio — Configuration Management
 Classes: AppConfig, ConfigManager
 Constants: SETTINGS_FILE, SONGS_FILE, ACTIVATION_FILE, etc.
+
+File path convention:
+  - USER DATA (writable): %APPDATA%/QuangLuuStudio/
+    → settings.json, saved_songs.json, activation.json,
+      tone_cache.json, manual_timelines.json
+  - APP CONFIG (read-only, admin editable): next to EXE
+    → app_config.json
+  - RECORDINGS: Documents/QuangLuuStudio/
 """
 import os
 import sys
@@ -10,13 +18,59 @@ import copy
 
 from core.utils import find_ffmpeg
 
-# --- CẤU HÌNH CỐT LÕI ---
-SETTINGS_FILE = "settings.json"
-SONGS_FILE = "saved_songs.json"
-ACTIVATION_FILE = "activation.json"
-MANUAL_TIMELINES_FILE = "manual_timelines.json"
 
-# --- APP CONFIG (đọc từ file ngoài, không cần build lại exe) ---
+# ── Path Helpers ─────────────────────────────────────────
+
+def _get_app_dir():
+    """Thư mục chứa EXE (frozen) hoặc project root (dev).
+    Dùng cho file read-only: app_config.json, sfx/, studio_one/"""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _get_data_dir():
+    """Thư mục dữ liệu user: %APPDATA%/QuangLuuStudio/ (frozen)
+    hoặc project root (dev). Tự tạo nếu chưa có.
+    Dùng cho: settings, songs, activation, tone_cache, timelines"""
+    if getattr(sys, 'frozen', False):
+        base = os.environ.get('APPDATA', os.path.expanduser('~'))
+        data_dir = os.path.join(base, 'QuangLuuStudio')
+    else:
+        # Dev mode: giữ nguyên cạnh source code để tiện debug
+        data_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    os.makedirs(data_dir, exist_ok=True)
+    return data_dir
+
+
+def _get_recordings_dir():
+    """Thư mục recordings: Documents/QuangLuuStudio/ (frozen)
+    hoặc temp_audio/ (dev). Tự tạo nếu chưa có."""
+    if getattr(sys, 'frozen', False):
+        docs = os.path.join(os.path.expanduser('~'), 'Documents')
+        rec_dir = os.path.join(docs, 'QuangLuuStudio')
+    else:
+        rec_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'temp_audio'
+        )
+    os.makedirs(rec_dir, exist_ok=True)
+    return rec_dir
+
+
+# ── Derived Paths ────────────────────────────────────────
+APP_DIR = _get_app_dir()
+DATA_DIR = _get_data_dir()
+RECORDINGS_DIR = _get_recordings_dir()
+
+# --- CẤU HÌNH CỐT LÕI (user-writable → DATA_DIR) ---
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
+SONGS_FILE = os.path.join(DATA_DIR, "saved_songs.json")
+ACTIVATION_FILE = os.path.join(DATA_DIR, "activation.json")
+MANUAL_TIMELINES_FILE = os.path.join(DATA_DIR, "manual_timelines.json")
+TONE_CACHE_FILE = os.path.join(DATA_DIR, "tone_cache.json")
+
+# --- APP CONFIG (read-only, nằm cạnh exe → APP_DIR) ---
 APP_CONFIG_FILE = "app_config.json"
 
 # Defaults nếu file không tồn tại hoặc thiếu field
@@ -56,14 +110,8 @@ class AppConfig:
 
     @classmethod
     def _get_config_path(cls):
-        """Tìm đường dẫn app_config.json — ưu tiên thư mục chứa exe"""
-        if getattr(sys, 'frozen', False):
-            # PyInstaller frozen: file nằm cạnh exe
-            exe_dir = os.path.dirname(sys.executable)
-        else:
-            # Dev mode: file nằm cạnh source (project root, not core/)
-            exe_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        return os.path.join(exe_dir, APP_CONFIG_FILE)
+        """Tìm đường dẫn app_config.json — nằm cạnh exe (read-only)"""
+        return os.path.join(APP_DIR, APP_CONFIG_FILE)
 
     @classmethod
     def load(cls):

@@ -216,8 +216,9 @@ class MemoryGuard:
             pass
     
     def _cleanup_temp_files(self):
-        """Xóa file tạm cũ trong temp_audio/"""
-        temp_dir = "temp_audio"
+        """Xóa file tạm cũ trong thư mục recordings"""
+        from core.config import RECORDINGS_DIR
+        temp_dir = RECORDINGS_DIR
         if not os.path.isdir(temp_dir):
             return
         try:

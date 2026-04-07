@@ -16,9 +16,14 @@ from core.config import (
     SONGS_FILE,
     ACTIVATION_FILE,
     MANUAL_TIMELINES_FILE,
+    TONE_CACHE_FILE,
     APP_CONFIG_FILE,
     MIDI_PORT_NAME,
     FFMPEG_LOCATION,
+    # Path helpers
+    APP_DIR,
+    DATA_DIR,
+    RECORDINGS_DIR,
 )
 
 # ── Classes ──
@@ -42,8 +47,10 @@ _find_ffmpeg = find_ffmpeg
 __all__ = [
     # Constants
     "SETTINGS_FILE", "SONGS_FILE", "ACTIVATION_FILE",
-    "MANUAL_TIMELINES_FILE", "APP_CONFIG_FILE",
+    "MANUAL_TIMELINES_FILE", "TONE_CACHE_FILE", "APP_CONFIG_FILE",
     "MIDI_PORT_NAME", "FFMPEG_LOCATION",
+    # Path helpers
+    "APP_DIR", "DATA_DIR", "RECORDINGS_DIR",
     # Classes
     "AppConfig", "ConfigManager",
     "MemoryProfiler", "MemoryGuard",

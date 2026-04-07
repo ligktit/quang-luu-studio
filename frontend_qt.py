@@ -1983,7 +1983,7 @@ class MainDashboard(QMainWindow):
 
     def _on_open_recordings_folder(self):
         """Mở thư mục lưu trữ file ghi âm"""
-        recordings_dir = os.path.join(os.path.expanduser("~"), "Music", "QuangLuuStudio")
+        recordings_dir = backend.RECORDINGS_DIR
         os.makedirs(recordings_dir, exist_ok=True)
         os.startfile(recordings_dir)
 
@@ -1999,7 +1999,7 @@ class MainDashboard(QMainWindow):
             # Dừng ghi âm và lưu file (không blocking UI)
             def handle_save():
                 # Hiện dialog chọn nơi lưu trước
-                recordings_dir = os.path.join(os.path.expanduser("~"), "Music", "QuangLuuStudio")
+                recordings_dir = backend.RECORDINGS_DIR
                 os.makedirs(recordings_dir, exist_ok=True)
                 default_name = os.path.join(recordings_dir, f"QuangLuuStudio_Rec_{time.strftime('%Y%m%d_%H%M%S')}.wav")
                 save_path, _ = QFileDialog.getSaveFileName(
