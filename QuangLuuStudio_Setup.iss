@@ -91,8 +91,7 @@ Source: "studio_one\QuangLuuMIDI.surface.xml"; DestDir: "{app}\studio_one"; Flag
 Source: "studio_one\deviceinfo.xml"; DestDir: "{app}\studio_one"; Flags: ignoreversion
 
 ; SFX (sound effects)
-Source: "sfx\*.MP3"; DestDir: "{app}\sfx"; Flags: ignoreversion
-Source: "sfx\*.mp3"; DestDir: "{app}\sfx"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "sfx\*.wav"; DestDir: "{app}\sfx"; Flags: ignoreversion
 
 [Dirs]
 ; Tạo thư mục cho dữ liệu user (writable)
