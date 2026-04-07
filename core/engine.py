@@ -344,14 +344,20 @@ class SystemEngine:
                 except Exception: pass
         threading.Thread(target=run, daemon=True).start()
 
+    # Các file mở rộng của Studio One — mở bằng os.startfile() (để OS route đến Studio One)
+    STUDIO_ONE_EXTENSIONS = (
+        ".song", ".songversion", ".soundset", ".instrument",
+        ".multiinstrument", ".pedalboard", ".channel", ".macro", ".fxchain",
+    )
+
     def launch_app(self, path, is_web=False):
         if not path or not os.path.exists(path): return
         
         if is_web:
              threading.Thread(target=lambda: subprocess.Popen([path, "youtube.com"]), daemon=True).start()
         else:
-            # Logic mở file .song hoặc .exe
-            if path.lower().endswith(".song"):
+            # Logic mở file Studio One (.song, .soundset, ...) hoặc .exe
+            if path.lower().endswith(self.STUDIO_ONE_EXTENSIONS):
                 try: os.startfile(path)
                 except Exception: pass
             else:
@@ -1159,6 +1165,9 @@ class SystemEngine:
                     print(f"   Confidence: {result['confidence']:.3f}")
                     print(f"   Duration: {result['duration']}s")
                     
+                    # Stop active manual replay
+                    self.tone_detection_active = False
+                    
                     # Gửi MIDI
                     self._send_tone_midi(result)
                     
@@ -1294,17 +1303,30 @@ class SystemEngine:
                                 if eng.on_auto_tone_error:
                                     eng.on_auto_tone_error(msg)
                             
+                            
                             def _on_progress(text):
                                 eng = engine_ref()
                                 if eng and eng.on_auto_tone_progress:
                                     eng.on_auto_tone_progress(text)
                             
-                            self.detect_tone_from_browser(
-                                on_complete=_on_complete,
-                                on_error=_on_error,
-                                on_progress=_on_progress,
-                                url=url,
-                            )
+                            scan_mode = getattr(self, 'tone_scan_mode', 'fast')
+                            if scan_mode == 'fast':
+                                self.detect_tone_from_browser(
+                                    on_complete=_on_complete,
+                                    on_error=_on_error,
+                                    on_progress=_on_progress,
+                                    url=url,
+                                )
+                            else:
+                                def _on_full_scan_complete(data):
+                                    _on_complete({'full_scan': True, 'data': data})
+                                
+                                self.auto_detect_youtube_timeline(
+                                    url=url,
+                                    on_complete=_on_full_scan_complete,
+                                    on_error=_on_error,
+                                    on_progress=_on_progress
+                                )
                     else:
                         self._no_browser_count += 1
                 
@@ -1522,6 +1544,7 @@ class SystemEngine:
             return
         
         def _detect_full():
+            self._auto_tone_running = True
             try:
                 import librosa
                 import numpy as np
@@ -1606,13 +1629,17 @@ class SystemEngine:
                     }
                     ToneCacheManager.save_tone(url, cache_data)
                     
-                    # 8. Gửi MIDI cho key đầu tiên
+                    # 8. Gửi MIDI cho key đầu tiên và bật replay
                     first_key = timeline_entries[0]
                     self._send_tone_midi({
                         'key_display': first_key['key_display'],
                         'key_index': first_key['key_index'],
                         'scale': first_key['scale']
                     })
+                    
+                    self.tone_detection_active = False
+                    time.sleep(0.2)
+                    self._replay_manual_timeline(timeline_entries)
                     
                     # 9. Callback
                     timeline_data = {
@@ -1636,6 +1663,8 @@ class SystemEngine:
                 traceback.print_exc()
                 if on_error:
                     on_error(str(e))
+            finally:
+                self._auto_tone_running = False
         
         threading.Thread(target=_detect_full, daemon=True).start()
 

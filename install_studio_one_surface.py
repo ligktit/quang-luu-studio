@@ -712,14 +712,20 @@ class SystemEngine:
                 except: pass
         threading.Thread(target=run, daemon=True).start()
 
+    # Các file mở rộng của Studio One
+    STUDIO_ONE_EXTENSIONS = (
+        ".song", ".songversion", ".soundset", ".instrument",
+        ".multiinstrument", ".pedalboard", ".channel", ".macro", ".fxchain",
+    )
+
     def launch_app(self, path, is_web=False):
         if not path or not os.path.exists(path): return
         
         if is_web:
              threading.Thread(target=lambda: subprocess.Popen([path, "youtube.com"]), daemon=True).start()
         else:
-            # Logic mở file .song hoặc .exe
-            if path.lower().endswith(".song"):
+            # Logic mở file Studio One (.song, .soundset, ...) hoặc .exe
+            if path.lower().endswith(self.STUDIO_ONE_EXTENSIONS):
                 try: os.startfile(path)
                 except: pass
             else:

@@ -1,0 +1,126 @@
+/* ═══════════════════════════════════════════════════════════
+   Quang Lưu Studio — Global QSS Design System v3.0
+   Deep Navy x Glassmorphism
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Tokens (defined via Python f-string injection) ── */
+
+/* ── Base ── */
+QMainWindow,
+QWidget#central {
+    background-color: %(bg)s;
+}
+
+/* ── Typography ── */
+QLabel {
+    color: %(text)s;
+    font-size: 13px;
+    font-family: %(font)s;
+    background: transparent;
+}
+QLabel#muted {
+    color: %(text_muted)s;
+}
+QLabel#panelTitle {
+    color: %(text_muted)s;
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 1px;
+    background: transparent;
+    border: none;
+}
+QLabel#sectionTitle {
+    color: %(primary)s;
+    font-weight: 700;
+    font-size: 13px;
+    background: transparent;
+}
+
+/* ── Card (Level 1 panel) ── */
+QFrame#card {
+    background-color: rgba(30, 41, 59, 220);
+    border-radius: 12px;
+    border: 1px solid rgba(51, 65, 85, 0.5);
+}
+
+/* ── Panel (Level 2 section) ── */
+QFrame#panel {
+    background-color: rgba(15, 23, 42, 0.55);
+    border-radius: 8px;
+    border: 1px solid rgba(51, 65, 85, 0.4);
+}
+
+/* ── Header ── */
+QFrame#header {
+    background-color: %(bg)s;
+    border-bottom: 1px solid rgba(51, 65, 85, 0.3);
+}
+
+/* ── ComboBox ── */
+QComboBox {
+    background-color: %(card)s;
+    color: %(text)s;
+    border: 1px solid %(border)s;
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-size: 13px;
+    font-weight: 600;
+    min-width: 10px;
+    font-family: %(font)s;
+}
+QComboBox::drop-down { border: none; }
+QComboBox QAbstractItemView {
+    background-color: %(card)s;
+    color: %(text)s;
+    selection-background-color: %(primary)s;
+    border: 1px solid %(border)s;
+    font-size: 13px;
+    font-family: %(font)s;
+}
+
+/* ── Vertical Slider (Mixer) ── */
+QSlider::groove:vertical {
+    background: rgba(51, 65, 85, 0.6);
+    width: 6px;
+    border-radius: 3px;
+}
+QSlider::handle:vertical {
+    width: 20px;
+    height: 20px;
+    margin: 0 -7px;
+    border-radius: 10px;
+    border: 2px solid rgba(255, 255, 255, 0.9);
+}
+QSlider::add-page:vertical {
+    border-radius: 3px;
+}
+QSlider::sub-page:vertical {
+    background: rgba(51, 65, 85, 0.4);
+    border-radius: 3px;
+}
+
+/* ── ToolTip ── */
+QToolTip {
+    background-color: %(card)s;
+    color: %(text)s;
+    border: 1px solid %(border)s;
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: %(font)s;
+}
+
+/* ── ScrollBar (minimal) ── */
+QScrollBar:vertical {
+    border: none;
+    background: rgba(51, 65, 85, 0.3);
+    width: 6px;
+    border-radius: 3px;
+}
+QScrollBar::handle:vertical {
+    background: rgba(148, 163, 184, 0.4);
+    border-radius: 3px;
+    min-height: 20px;
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical { height: 0px; }

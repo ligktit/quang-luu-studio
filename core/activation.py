@@ -17,7 +17,7 @@ class ActivationManager:
     LICENSE_DURATION_DAYS = 365
     
     # Thời hạn dùng thử: 3 ngày
-    TRIAL_DURATION_DAYS = 3
+    TRIAL_DURATION_DAYS = 7
     
     # Secret key - PHẢI GIỐNG VỚI generate_code.py
     SECRET_KEY = "QUANGLUU_STUDIO_2026_SECRET_KEY_CHANGE_THIS"
