@@ -449,8 +449,8 @@ class MainDashboard(QMainWindow):
         grid.setSpacing(3)
 
         func_btns = [
-            ("Dò Nhanh",    C["orange"],       self._on_do_tone),
-            ("Dò Full",      C["teal"],         self._on_lay_tone),
+            ("Chế độ: Nhanh",  C["orange"],       self._on_toggle_scan_mode),
+            ("🔄 Dò Lại",      C["teal"],         self._on_force_rescan),
             ("Auto-Tune",     C["pink"],         self._on_tone_auto),
             ("Fix Méo",      C["deep_purple"],  self._on_fix_meo),
             ("Chấm điểm",  C["light_purple"], self._on_score),
@@ -1357,50 +1357,67 @@ class MainDashboard(QMainWindow):
                 self._marquee_text = "♪ Đang dò... ♪"
         
         self.engine.on_auto_tone_complete = _auto_on_complete
+        self.engine.on_tone_detected_callback = _auto_on_complete
         self.engine.on_auto_tone_error = _auto_on_error
         self.engine.on_auto_tone_progress = _auto_on_progress
         self.engine.start_youtube_watcher()
 
     # ── Menu Button Callbacks ──
-    def _on_do_tone(self):
-        """
-        Dò Tone: Tự động phát hiện YouTube URL đang mở trên trình duyệt,
-        tải audio, phân tích Key/Scale/BPM/Camelot, và hiển thị kết quả.
-        """
-        from PySide6.QtWidgets import QDialog, QProgressBar
-        
-        btn = self._func_buttons.get("Dò Nhanh")
-        
-        # Tránh nhấn nhiều lần khi đang dò
+    def _on_toggle_scan_mode(self):
+        btn = self._func_buttons.get("Chế độ: Nhanh") or self._func_buttons.get("Chế độ: Full")
+        current_mode = getattr(self.engine, 'tone_scan_mode', 'fast')
+        if current_mode == 'fast':
+            self.engine.tone_scan_mode = 'full'
+            if btn:
+                old_key = btn.text()
+                btn.setText("Chế độ: Full")
+                btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 11, 14))
+                if old_key in self._func_buttons:
+                    self._func_buttons["Chế độ: Full"] = self._func_buttons.pop(old_key)
+            self._show_message("Đã chọn Chế độ Dò: Full (Mất thời gian tải nhưng dò chính xác timeline)")
+        else:
+            self.engine.tone_scan_mode = 'fast'
+            if btn:
+                old_key = btn.text()
+                btn.setText("Chế độ: Nhanh")
+                btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
+                if old_key in self._func_buttons:
+                    self._func_buttons["Chế độ: Nhanh"] = self._func_buttons.pop(old_key)
+            self._show_message("Đã chọn Chế độ Dò: Nhanh (Chỉ dò 45s đầu tiên)")
+
+    def _on_force_rescan(self):
+        btn = self._func_buttons.get("🔄 Dò Lại") or self._func_buttons.get("⏳ Đang dò...")
         if getattr(self, '_do_tone_running', False):
             return
         self._do_tone_running = True
         
-        # Cập nhật UI nút → trạng thái "đang dò"
         if btn:
             btn.setEnabled(False)
             btn.setText("⏳ Đang dò...")
             btn.setStyleSheet(pill_btn_qss(C["accent"], _lighten(C["accent"], 0.12), 11, 14))
         self.autokey_dot.setStyleSheet(f"color: {C['orange']}; font-size: 16px;")
-        self._marquee_text = "♪ Đang dò... ♪"
-        
-        def on_progress(text):
-            # Không hiển thị chi tiết quá trình, chỉ giữ "Đang dò..."
-            pass
-        
-        def on_complete(result):
-            # Emit signal → main thread xử lý UI update (thread-safe)
-            self._tone_result_signal.emit(result)
-        
-        def on_error(msg):
-            # Emit signal với error flag
-            self._tone_result_signal.emit({'error': msg})
-        
-        self.engine.detect_tone_from_browser(
-            on_complete=on_complete,
-            on_error=on_error,
-            on_progress=on_progress,
-        )
+        self._marquee_text = "♪ Đang dò lại... ♪"
+
+        import weakref
+        url = getattr(self.engine, 'current_youtube_url', None)
+        if url:
+            self._show_message(f"Bắt đầu ép dò lại URL...")
+            self.engine._tone_session.stop()
+            self.engine._dispatch_auto_detect(url, weakref.ref(self.engine))
+        else:
+            self._show_message(f"Bắt đầu tự động quét trình duyệt...")
+            self.engine._tone_session.stop()
+            
+            def _on_complete(result):
+                self._tone_result_signal.emit(result)
+            def _on_error(msg):
+                self._tone_result_signal.emit({'error': msg})
+                
+            self.engine.detect_tone_from_browser(
+                on_complete=_on_complete,
+                on_error=_on_error,
+                on_progress=lambda x: None
+            )
 
 
     def _update_autokey_ui(self, result):
@@ -1414,17 +1431,19 @@ class MainDashboard(QMainWindow):
 
     def _handle_tone_result(self, result):
         """Slot xử lý kết quả dò tone trên main thread (thread-safe via Signal)"""
-        btn = self._func_buttons.get("Dò Nhanh")
         
         # === Trường hợp LỖI ===
         if 'error' in result:
             msg = result['error']
             self._do_tone_running = False
             self._do_tone_done = False
+            btn = self._func_buttons.get("⏳ Đang dò...") or self._func_buttons.get("🔄 Dò Lại")
             if btn:
                 btn.setEnabled(True)
-                btn.setText("Dò Nhanh")
-                btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
+                btn.setText("🔄 Dò Lại")
+                btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 11, 14))
+                if btn.text() == "⏳ Đang dò..." and "⏳ Đang dò..." in self._func_buttons:
+                    self._func_buttons["🔄 Dò Lại"] = self._func_buttons.pop("⏳ Đang dò...")
             self.autokey_dot.setStyleSheet(f"color: {C['card_hover']}; font-size: 16px;")
             self._marquee_text = "♪ Quang Lưu Studio — Karaoke Pro ♪"
             self._show_message(f"❌ {msg}", is_error=True)
@@ -1488,11 +1507,14 @@ class MainDashboard(QMainWindow):
         camelot = result.get('camelot', '?')
         confidence = result.get('confidence', 0)
         
-        # === 2. Reset nút "Dò Nhanh" về trạng thái ban đầu ===
+        # === 2. Reset nút "Dò Lại" về trạng thái ban đầu ===
+        btn = self._func_buttons.get("⏳ Đang dò...") or self._func_buttons.get("🔄 Dò Lại")
         if btn:
             btn.setEnabled(True)
-            btn.setText("Dò Nhanh")
-            btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
+            btn.setText("🔄 Dò Lại")
+            btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 11, 14))
+            if "⏳ Đang dò..." in self._func_buttons:
+                self._func_buttons["🔄 Dò Lại"] = self._func_buttons.pop("⏳ Đang dò...")
         
         # === 3. Cập nhật dot → xanh (đã phát hiện) ===
         self.autokey_dot.setStyleSheet(f"color: {C['green']}; font-size: 16px;")
@@ -1513,179 +1535,28 @@ class MainDashboard(QMainWindow):
                 scale_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
         
         # === 5. Hiển thị tên bài hát + kết quả lên Marquee (giữ nguyên Window Title) ===
-        timeline = result.get('timeline', [])
-        if timeline and len(timeline) > 1:
-            # Có nhiều đoạn chuyển tone → hiển thị chuỗi tone
-            tone_chain = " → ".join(e.get('key_display', '?') for e in timeline)
-            if title:
-                self._marquee_text = f"🎵 {title}   ★   {tone_chain}"
+        # Chỉ cập nhật nội dung marquee nếu đây là kết quả dò toàn bài (không phải sự kiện chuyển timeline)
+        if 'time' not in result:
+            timeline = result.get('timeline', [])
+            if timeline and len(timeline) > 1:
+                # Có nhiều đoạn chuyển tone → hiển thị chuỗi tone
+                tone_chain = " → ".join(e.get('key_display', '?') for e in timeline)
+                if title:
+                    self._marquee_text = f"🎵 {title}   ★   {tone_chain}"
+                else:
+                    self._marquee_text = f"🎵 {tone_chain}"
+            elif title:
+                self._marquee_text = f"🎵 {title}   ★   {key_display} {scale}"
             else:
-                self._marquee_text = f"🎵 {tone_chain}"
-        elif title:
-            self._marquee_text = f"🎵 {title}   ★   {key_display} {scale}"
-        else:
-            self._marquee_text = f"🎵 {key_display} {scale}"
+                self._marquee_text = f"🎵 {key_display} {scale}"
         
-
-
-    def _on_lay_tone(self):
-        """Mở dialog nhập YouTube URL để dò tone tự động toàn bài"""
-        from PySide6.QtWidgets import QDialog, QLineEdit, QProgressBar, QListWidget, QListWidgetItem
-        
-        dlg = QDialog(self)
-        dlg.setWindowTitle("🎵 Lấy Tone từ YouTube")
-        dlg.setFixedSize(520, 220)
-        dlg.setStyleSheet(f"background-color: {C['card']}; color: {C['text']};")
-        
-        layout = QVBoxLayout(dlg)
-        layout.setSpacing(12)
-        
-        title_lbl = QLabel("🎵 Nhập YouTube URL để dò tone toàn bài")
-        title_lbl.setStyleSheet(f"font-size:16px; font-weight:700; color:{C['teal']}; font-family: {FONT};")
-        title_lbl.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title_lbl)
-        
-        url_input = QLineEdit()
-        url_input.setPlaceholderText("https://www.youtube.com/watch?v=...")
-        url_input.setStyleSheet(f"QLineEdit {{ background-color: {C['bg']}; color: {C['text']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 8px 12px; font-size: 13px; font-family: {FONT}; }}")
-        
-        current_url = getattr(self.engine, 'current_youtube_url', '') or ''
-        if current_url:
-            url_input.setText(current_url)
-        layout.addWidget(url_input)
-        
-        status_lbl = QLabel("")
-        status_lbl.setAlignment(Qt.AlignCenter)
-        status_lbl.setStyleSheet(f"font-size:13px; color:{C['text_muted']}; font-family: {FONT};")
-        
-        progress_bar = QProgressBar()
-        progress_bar.setStyleSheet(f"QProgressBar {{ border: none; background-color: {C['bg']}; color: transparent; border-radius: 4px; max-height: 8px; }} QProgressBar::chunk {{ background-color: {C['teal']}; border-radius: 4px; }}")
-        progress_bar.setRange(0, 100)
-        progress_bar.setValue(0)
-        progress_bar.hide()
-        
-        layout.addWidget(status_lbl)
-        layout.addWidget(progress_bar)
-        
-        btn_box = QHBoxLayout()
-        detect_btn = QPushButton("🤖 Dò Tự Động")
-        detect_btn.setCursor(Qt.PointingHandCursor)
-        detect_btn.setStyleSheet(pill_btn_qss(C['teal'], _lighten(C['teal'], 0.12), 13, 18))
-        detect_btn.setFixedHeight(36)
-        
-        cancel_btn = QPushButton("Đóng")
-        cancel_btn.setCursor(Qt.PointingHandCursor)
-        cancel_btn.setStyleSheet(pill_btn_qss(C['card_hover'], _lighten(C['card_hover'], 0.1), 13, 18))
-        cancel_btn.setFixedHeight(36)
-        cancel_btn.clicked.connect(dlg.close)
-        
-        def show_result_dialog(data):
-            dlg.close()
-            res_dlg = QDialog(self)
-            res_dlg.setWindowTitle("✅ Kết Quả Dò Tone")
-            res_dlg.setFixedSize(450, 500)
-            res_dlg.setStyleSheet(f"background-color: {C['card']}; color: {C['text']};")
-            
-            rlayout = QVBoxLayout(res_dlg)
-            rtitle = QLabel("📊 CHUỖI TONE ĐÃ DÒ")
-            rtitle.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {C['primary']}; font-family: {FONT};")
-            rtitle.setAlignment(Qt.AlignCenter)
-            rlayout.addWidget(rtitle)
-            
-            sub = QLabel(f"🎵 Bài hát: {data.get('title', 'Unknown')[:40]}")
-            sub.setStyleSheet(f"font-size: 13px; color: {C['text_muted']}; font-family: {FONT};")
-            rlayout.addWidget(sub)
-            
-            list_w = QListWidget()
-            list_w.setStyleSheet(f"QListWidget {{ background-color: {C['bg']}; border: none; border-radius: 8px; padding: 10px; font-family: {FONT}; font-size: 14px; outline: none; }} QListWidget::item {{ padding: 8px; border-bottom: 1px solid {C['border']}; }}")
-            
-            tl = data.get('timeline', [])
-            for e in tl:
-                t_str = f"{int(e['time'] // 60):02d}:{int(e['time'] % 60):02d}"
-                scale_ic = '☀️' if e['scale'] == 'Major' else '☁️'
-                item = QListWidgetItem(f"⏱️ {t_str}   ➜   {e['key_display']} ({scale_ic})")
-                list_w.addItem(item)
-            
-            rlayout.addWidget(list_w)
-            
-            cbtn = QPushButton("Hoàn Tất")
-            cbtn.setCursor(Qt.PointingHandCursor)
-            cbtn.setFixedHeight(40)
-            cbtn.setStyleSheet(pill_btn_qss(C['green'], _lighten(C['green'], 0.1), 14, 18))
-            cbtn.clicked.connect(res_dlg.accept)
-            rlayout.addWidget(cbtn)
-            
-            if tl:
-                self.current_tone = tl[0].get('key_display', 'C')
-                self.tone_combo.setCurrentText(self.current_tone)
-                self.current_scale = tl[0].get('scale', 'Major')
-                self.scale_combo.setCurrentText(self.current_scale)
-                
-                u = data.get('url', '')
-                t = data.get('title', 'YouTube Song')
-                if u:
-                    import backend
-                    backend.SongManager.add_song(t, u, self.current_tone)
-                    self._show_message(f"💾 Đã lưu bổ sung bài hát vào Danh sách!")
-                
-            res_dlg.exec()
-        
-        def start_detect():
-            url = url_input.text().strip()
-            if not url or ("youtube.com" not in url and "youtu.be" not in url):
-                status_lbl.setText("⚠️ Vui lòng nhập URL YouTube hợp lệ")
-                status_lbl.setStyleSheet(f"font-size:13px; color:{C['accent']}; font-family: {FONT};")
-                return
-                
-            detect_btn.setEnabled(False)
-            url_input.setEnabled(False)
-            
-            status_lbl.setText("🎵 Đang khởi tạo bộ phân tích...")
-            status_lbl.setStyleSheet(f"font-size:13px; color:{C['teal']}; font-family: {FONT};")
-            progress_bar.show()
-            progress_bar.setValue(0)
-            
-            def on_progress(text):
-                def _update():
-                    import re
-                    match = re.search(r'\((\d+)%\)', text)
-                    if match:
-                        progress_bar.setValue(int(match.group(1)))
-                    elif "Đang tải audio" in text:
-                        progress_bar.setValue(5)
-                    elif "Đang load file" in text:
-                        progress_bar.setValue(15)
-                    elif "Đang lưu" in text:
-                        progress_bar.setValue(95)
-                        
-                    status_lbl.setText(f"🔄 {text}")
-                QTimer.singleShot(0, dlg, _update)
-                
-            def on_complete(data):
-                QTimer.singleShot(0, dlg, lambda: show_result_dialog(data))
-                
-            def on_error(msg):
-                def _err():
-                    detect_btn.setEnabled(True)
-                    url_input.setEnabled(True)
-                    progress_bar.hide()
-                    status_lbl.setText(f"❌ {msg}")
-                    status_lbl.setStyleSheet(f"font-size:13px; color:{C['accent']}; font-family: {FONT};")
-                QTimer.singleShot(0, dlg, _err)
-            
-            self.engine.auto_detect_youtube_timeline(
-                url=url, on_complete=on_complete,
-                on_error=on_error, on_progress=on_progress
-            )
-        
-        detect_btn.clicked.connect(start_detect)
-        url_input.returnPressed.connect(start_detect)
-        
-        btn_box.addWidget(detect_btn)
-        btn_box.addWidget(cancel_btn)
-        layout.addLayout(btn_box)
-        
-        dlg.exec()
+        # === 6. Auto-save vào Danh sách bài hát ===
+        url = result.get('url', '')
+        if url and title and key_root:
+            import backend
+            def _auto_save():
+                backend.SongManager.add_song(title, url, key_root)
+            threading.Thread(target=_auto_save, daemon=True).start()
 
     def _on_tone_auto(self):
         self.engine.send_midi(MIDI_CC["tone_auto"], 127)
@@ -2288,7 +2159,10 @@ class MainDashboard(QMainWindow):
         # Lưu references tới các widget entries
         entry_widgets = []   # list of (time_input, key_combo, row_frame)
         
-        all_keys = backend.ManualToneTimeline.ALL_KEYS
+        all_keys = [
+            'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B',
+            'Cm', 'C#m', 'Dm', 'D#m', 'Em', 'Fm', 'F#m', 'Gm', 'G#m', 'Am', 'A#m', 'Bm'
+        ]
         
         def add_entry_row(time_val=0.0, key_display="C"):
             """Thêm 1 row chỉnh sửa entry"""

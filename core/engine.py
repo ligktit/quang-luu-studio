@@ -37,6 +37,82 @@ from core.scoring import ScoringEngine
 from core.tone_detector import ToneDetector
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Tone Session State Machine
+# Quản lý trạng thái dò tone tập trung — thay thế 3 flag rời rạc cũ.
+# ──────────────────────────────────────────────────────────────────────────────
+
+class ToneState:
+    IDLE       = "idle"       # Không dò gì
+    SCANNING   = "scanning"   # Đang phân tích audio (fast hoặc full)
+    REPLAYING  = "replaying"  # Đang replay timeline theo vị trí YouTube
+
+
+class ToneSession:
+    """
+    Đại diện cho 1 phiên dò tone duy nhất.
+    Mỗi URL mới hoặc mỗi lần gọi detect là 1 session mới.
+    Sử dụng threading.Event để cancel thread cũ một cách sạch sẽ.
+    """
+    def __init__(self):
+        self._lock         = threading.Lock()
+        self.state         = ToneState.IDLE
+        self.url           = None
+        self._cancel       = threading.Event()
+        self._cancel.set()  # Bắt đầu ở trạng thái cancelled (IDLE)
+
+    # ── Public API ──────────────────────────────────────────────────────────
+
+    def start_scanning(self, url):
+        """Bắt đầu session SCANNING mới. Trả về cancel_event cho thread con check."""
+        with self._lock:
+            self._cancel.set()             # Hủy session cũ nếu còn
+            self._cancel = threading.Event()  # Event mới cho session này
+            self.state = ToneState.SCANNING
+            self.url   = url
+            return self._cancel
+
+    def transition_to_replaying(self):
+        """Chuyển từ SCANNING → REPLAYING (sau khi phân tích xong). Trả về cancel_event mới."""
+        with self._lock:
+            if self.state != ToneState.SCANNING:
+                # Session đã bị hủy (URL mới đến) → không replay
+                return None
+            self._cancel.set()               # Kết thúc phase SCANNING
+            self._cancel = threading.Event()  # Event mới cho phase REPLAYING
+            self.state = ToneState.REPLAYING
+            return self._cancel
+
+    def stop(self):
+        """Dừng bất kỳ phase nào đang chạy, về IDLE."""
+        with self._lock:
+            self._cancel.set()
+            self.state = ToneState.IDLE
+            self.url   = None
+
+    # ── Read-only properties (backward compat) ──────────────────────────────
+
+    @property
+    def is_active(self):
+        """True khi đang SCANNING hoặc REPLAYING."""
+        with self._lock:
+            return self.state != ToneState.IDLE
+
+    @property
+    def is_replaying(self):
+        return self.state == ToneState.REPLAYING
+
+    @property
+    def is_scanning(self):
+        return self.state == ToneState.SCANNING
+
+    @property
+    def cancel_event(self):
+        """Event hiện tại để thread con check."""
+        with self._lock:
+            return self._cancel
+
+
 class SystemEngine:
     # Cache WNDENUMPROC type ở class-level (tránh re-create mỗi lần poll → leak ctypes refs)
     _WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
@@ -57,42 +133,71 @@ class SystemEngine:
         self.current_youtube_url = None
         self.youtube_monitoring_active = False
         self.on_video_end_callback = None
-        
-        # Trạng thái dò tone liên tục
-        self.tone_detection_active = False
+
+        # ── Tone Session State Machine (thay thế tone_detection_active + _auto_tone_running) ──
+        self._tone_session = ToneSession()
         self.on_tone_detected_callback = None
-        
+
+        # Backward-compat: code cũ check/set tone_detection_active trực tiếp
+        # → delegate sang _tone_session
+
         # Trạng thái AutoKey (dò tone liên tục toàn bài)
         self.autokey_active = False
         self._autokey_thread = None
-        
+
         # Callback nhận MIDI CC
         self.on_midi_cc_callback = None
         self.midi_handler.on_cc_received = self._handle_midi_in
-        
+
         # YouTube URL Watcher (auto dò tone khi mở YouTube)
         self._youtube_watcher_active = False
         self._youtube_watcher_thread = None
         self._last_watched_url = None
-        self._auto_tone_running = False  # tránh dò chồng chéo
+        # Hàng đợi URL chờ xử lý: khi Dò Full đang chạy và Watcher phát hiện URL mới
+        # → URL mới sẽ được enqueue để xử lý sau khi Dò Full hoàn thành.
+        self._pending_url_queue = []          # list of (url,) tuples
+        self._pending_url_lock  = threading.Lock()
         self.on_auto_tone_complete = None  # Callback(result_dict)
-        self.on_auto_tone_error = None     # Callback(error_msg)
+        self.on_auto_tone_error    = None  # Callback(error_msg)
         self.on_auto_tone_progress = None  # Callback(status_text)
-        
+
         # Tối ưu YT WATCHER: 2-tier title check + PWA cache + adaptive polling
-        self._prev_browser_titles = None   # Cache titles để so sánh thay đổi (str hash)
-        self._pwa_title_cache = {}          # Cache PWA title → URL (tránh gọi yt-dlp search lặp lại)
-        self._no_browser_count = 0          # Đếm số lần poll không thấy browser (adaptive interval)
+        self._prev_browser_titles = None  # Cache titles để so sánh thay đổi (str hash)
+        self._pwa_title_cache     = {}    # Cache PWA title → URL (tránh gọi yt-dlp search lặp lại)
+        self._no_browser_count    = 0     # Đếm số lần poll không thấy browser (adaptive interval)
         
         # ===== MEMORY GUARD: Tự động giải phóng RAM =====
         self._memory_guard = MemoryGuard(
             engine=self,
-            interval=30,              # Kiểm tra mỗi 30 giây (giảm từ 60s)
-            gc_threshold_mb=50,       # GC khi RAM tăng > 50MB
-            cache_ttl_seconds=600,    # Xóa cache cũ hơn 10 phút
-            emergency_threshold_mb=500  # Emergency cleanup khi > 500MB
+            interval=30,
+            gc_threshold_mb=50,
+            cache_ttl_seconds=600,
+            emergency_threshold_mb=500
         )
         self._memory_guard.start()
+
+    # ── Backward-compat property ─────────────────────────────────────────────────
+    # Code cũ ở frontend_qt.py / detect_tone_continuous check/set `tone_detection_active`.
+    # Property này delegate sang ToneSession để không phải sửa frontend.
+
+    @property
+    def tone_detection_active(self):
+        return self._tone_session.is_active
+
+    @tone_detection_active.setter
+    def tone_detection_active(self, val):
+        """Set False → dừng session. Set True → không làm gì (dùng start_scanning)."""
+        if not val:
+            self._tone_session.stop()
+
+    @property
+    def _auto_tone_running(self):
+        return self._tone_session.is_scanning
+
+    @_auto_tone_running.setter
+    def _auto_tone_running(self, val):
+        """No-op: trạng thái được quản lý bởi ToneSession."""
+        pass
 
     def _handle_midi_in(self, cc, value):
         if self.on_midi_cc_callback:
@@ -1094,6 +1199,13 @@ class SystemEngine:
                             'timeline': timeline,
                         }
                         self._send_tone_midi(result)
+                        
+                        # Bắt đầu Replay cho timeline lấy từ cache
+                        self._tone_session.start_scanning(youtube_url)
+                        replay_cancel = self._tone_session.transition_to_replaying()
+                        if replay_cancel is not None:
+                            self._replay_cached_timeline(cached, cancel_event=replay_cancel)
+                            
                         if on_complete:
                             on_complete(result)
                         return
@@ -1165,8 +1277,8 @@ class SystemEngine:
                     print(f"   Confidence: {result['confidence']:.3f}")
                     print(f"   Duration: {result['duration']}s")
                     
-                    # Stop active manual replay
-                    self.tone_detection_active = False
+                    # Dò Nhanh xong → trạng thái về IDLE (replay không áp dụng cho fast mode)
+                    self._tone_session.stop()
                     
                     # Gửi MIDI
                     self._send_tone_midi(result)
@@ -1219,6 +1331,9 @@ class SystemEngine:
         if self._youtube_watcher_thread:
             self._youtube_watcher_thread.join(timeout=3.0)
             self._youtube_watcher_thread = None
+        # Xóa hàng đợi URL đang chờ
+        with self._pending_url_lock:
+            self._pending_url_queue.clear()
         print("👁️ [YT WATCHER] Đã dừng theo dõi trình duyệt.")
     
     def _youtube_watcher_loop(self, poll_interval):
@@ -1243,8 +1358,8 @@ class SystemEngine:
         while self._youtube_watcher_active:
             try:
                 # ── Adaptive Polling: Tính interval phù hợp ──
-                if self._auto_tone_running:
-                    current_interval = 5.0  # Đang dò tone → poll chậm lại
+                if self._tone_session.is_active:
+                    current_interval = 5.0  # Đang dò/replay → poll chậm lại
                 elif self._no_browser_count > 5:
                     current_interval = 5.0  # Không thấy browser lâu → poll chậm
                 else:
@@ -1279,75 +1394,106 @@ class SystemEngine:
                     
                     if url:
                         self._no_browser_count = 0  # Reset counter
-                        
-                        if url != self._last_watched_url and not self._auto_tone_running:
-                            # Phát hiện URL mới → tự động dò tone
-                            print(f"👁️ [YT WATCHER] Phát hiện YouTube mới: {url}")
-                            self._last_watched_url = url
-                            self._auto_tone_running = True
-                            
-                            def _on_complete(result):
-                                eng = engine_ref()
-                                if eng is None:
-                                    return
-                                eng._auto_tone_running = False
-                                result['auto_detected'] = True
-                                if eng.on_auto_tone_complete:
-                                    eng.on_auto_tone_complete(result)
-                            
-                            def _on_error(msg):
-                                eng = engine_ref()
-                                if eng is None:
-                                    return
-                                eng._auto_tone_running = False
-                                if eng.on_auto_tone_error:
-                                    eng.on_auto_tone_error(msg)
-                            
-                            
-                            def _on_progress(text):
-                                eng = engine_ref()
-                                if eng and eng.on_auto_tone_progress:
-                                    eng.on_auto_tone_progress(text)
-                            
-                            scan_mode = getattr(self, 'tone_scan_mode', 'fast')
-                            if scan_mode == 'fast':
-                                self.detect_tone_from_browser(
-                                    on_complete=_on_complete,
-                                    on_error=_on_error,
-                                    on_progress=_on_progress,
-                                    url=url,
-                                )
-                            else:
-                                def _on_full_scan_complete(data):
-                                    _on_complete({'full_scan': True, 'data': data})
-                                
-                                self.auto_detect_youtube_timeline(
-                                    url=url,
-                                    on_complete=_on_full_scan_complete,
-                                    on_error=_on_error,
-                                    on_progress=_on_progress
-                                )
+
+                        if url != self._last_watched_url:
+                            if not self._tone_session.is_active:
+                                # IDLE → bắt đầu dò ngay
+                                self._dispatch_auto_detect(url, engine_ref)
+                                self._last_watched_url = url
+                            elif self._tone_session.is_scanning:
+                                # Đang Dò Full → enqueue URL mới, xử lý sau khi xong
+                                with self._pending_url_lock:
+                                    # Chỉ giữ URL mới nhất (không cần queue dài)
+                                    self._pending_url_queue = [url]
+                                print(f"👁️ [YT WATCHER] {url[:60]}... sẽ được dò sau khi Dò Full hiện tại xong")
+                            # Đang REPLAYING → URL mới quan trọng hơn, hủy replay và dò ngay
+                            elif self._tone_session.is_replaying:
+                                print(f"👁️ [YT WATCHER] URL mới trong lúc replay → hủy replay, dò URL mới")
+                                self._tone_session.stop()
+                                self._dispatch_auto_detect(url, engine_ref)
+                                self._last_watched_url = url
                     else:
                         self._no_browser_count += 1
                 
                 del all_windows  # Giải phóng list (hwnd, title) ngay sau khi dùng
-                    
+
             except Exception as e:
                 print(f"⚠️ [YT WATCHER] Lỗi poll: {e}")
-            
+
+            # ── Kiểm tra hàng đợi URL: nếu Dò Full vừa xong → xử lý URL pending ──
+            if not self._tone_session.is_active:
+                pending_url = None  # khoi tao mac dinh truoc khi lock
+                with self._pending_url_lock:
+                    if self._pending_url_queue:
+                        pending_url = self._pending_url_queue.pop(0)
+                        self._pending_url_queue.clear()
+                if pending_url and pending_url != self._last_watched_url:
+                    print(f"👁️ [YT WATCHER] Đang xử lý URL đang chờ: {pending_url[:60]}...")
+                    self._dispatch_auto_detect(pending_url, engine_ref)
+                    self._last_watched_url = pending_url
+
             # Periodic GC: mỗi 20 lần poll (~30s) — full cleanup
             poll_count += 1
             if poll_count % 20 == 0:
                 MemoryGuard.force_cleanup()  # gc(2) + clear librosa cache + trim RAM
-            
+
             mem.checkpoint("poll")
-            
+
             # Chờ trước khi poll lại (dùng adaptive interval)
             for _ in range(int(current_interval * 10)):
                 if not self._youtube_watcher_active:
                     mem.summary()
                     return
                 time.sleep(0.1)
+
+    # ── Dispatch Helper: Watcher tự động chọn fast / full detect ──
+
+    def _dispatch_auto_detect(self, url, engine_ref):
+        """
+        Dispatch auto-detect (fast hoặc full) cho URL mới phát hiện bởi Watcher.
+        Dùng chung bởi _youtube_watcher_loop. engine_ref là weakref để tránh giữ obj.
+        """
+        print(f"👁️ [YT WATCHER] Phát hiện YouTube mới: {url}")
+
+        def _on_complete(result):
+            eng = engine_ref()
+            if eng is None:
+                return
+            result['auto_detected'] = True
+            if eng.on_auto_tone_complete:
+                eng.on_auto_tone_complete(result)
+
+        def _on_error(msg):
+            eng = engine_ref()
+            if eng is None:
+                return
+            eng._tone_session.stop()
+            if eng.on_auto_tone_error:
+                eng.on_auto_tone_error(msg)
+
+        def _on_progress(text):
+            eng = engine_ref()
+            if eng and eng.on_auto_tone_progress:
+                eng.on_auto_tone_progress(text)
+
+        scan_mode = getattr(self, 'tone_scan_mode', 'fast')
+        if scan_mode == 'fast':
+            self.detect_tone_from_browser(
+                on_complete=_on_complete,
+                on_error=_on_error,
+                on_progress=_on_progress,
+                url=url,
+            )
+        else:
+            def _on_full_scan_complete(data):
+                _on_complete({'full_scan': True, 'data': data})
+
+            self.auto_detect_youtube_timeline(
+                url=url,
+                on_complete=_on_full_scan_complete,
+                on_error=_on_error,
+                on_progress=_on_progress,
+            )
 
     # ── DRY Helpers: Cache kiểm tra/lưu tone (dùng chung nhiều hàm) ──
     
@@ -1527,35 +1673,38 @@ class SystemEngine:
     def auto_detect_youtube_timeline(self, url, on_complete=None, on_error=None, on_progress=None):
         """
         Tự động dò tone toàn bài YouTube → lưu timeline chuyển tone vào manual_timelines.json.
-        
-        Tải toàn bộ audio → chia segment 10s → dò tone mỗi segment → voting window →
+
+        Tải toàn bộ audio → chia segment 15s → dò tone mỗi segment → voting window →
         phát hiện chuyển tone → lưu thành timeline (giống nhập thủ công).
-        
-        Args:
-            url: YouTube URL
-            on_complete: Callback(timeline_data) khi hoàn thành
-                         timeline_data = {url, title, timeline: [{time, key_display, key_index, scale}, ...]}
-            on_error: Callback(error_msg) khi lỗi
-            on_progress: Callback(status_text) cập nhật trạng thái
+
+        Sau khi phân tích xong:
+        - Lưu cache URL này
+        - Chuyển sang REPLAYING (dùng media_monitor.current_position để đồng bộ)
+        - Gọi on_complete callback
+        - Nếu có URL pending trong hàng đợi → bắt đầu phân tích tiếp
         """
         if not url:
             if on_error:
                 on_error("Không có YouTube URL.")
             return
-        
+
+        # Bắt đầu session SCANNING mới cho URL này
+        cancel = self._tone_session.start_scanning(url)
+
         def _detect_full():
-            self._auto_tone_running = True
+            scoring_engine = None
+            audio_data     = None
             try:
                 import librosa
                 import numpy as np
-                from PySide6.QtCore import QTimer
-                
-                SEGMENT_DURATION = 15  # giây per segment (15s như batch_detect_tone.py)
-                
+                import math
+
+                SEGMENT_DURATION = 15  # giây per segment
+
                 # 1. Lấy title video
                 if on_progress:
                     on_progress("Đang lấy thông tin video...")
-                
+
                 video_title = "Bài hát không tên"
                 try:
                     import yt_dlp
@@ -1565,98 +1714,102 @@ class SystemEngine:
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         info = ydl.extract_info(url, download=False)
                         video_title = info.get('title', video_title)
+                        del info
+                        gc.collect()
                 except Exception as e:
                     print(f"⚠️ [AUTO TIMELINE] Không lấy được title: {e}")
-                
+
+                if cancel.is_set():
+                    print("⚠️ [AUTO TIMELINE] Session bị hủy trước khi tải audio.")
+                    return
+
                 # 2. Tải audio
                 if on_progress:
-                    on_progress(f"Đang tải audio...")
-                
+                    on_progress("Đang tải audio...")
+
                 print(f"🎵 [AUTO TIMELINE] Bắt đầu dò tone toàn bài: {video_title}")
                 print(f"🔗 URL: {url}")
-                
+
                 scoring_engine = ScoringEngine()
                 audio_path = scoring_engine.download_youtube_audio(url)
-                
+
                 if not audio_path:
                     if on_error:
                         on_error("Không thể tải audio từ YouTube.")
                     return
-                
-                try:
-                    # 3. Load toàn bộ audio
-                    if on_progress:
-                        on_progress("Đang load file âm thanh...")
-                    
-                    audio_data, sr = librosa.load(audio_path, sr=22050, mono=True)
-                    total_seconds = len(audio_data) / sr
-                    
-                    segment_samples = int(SEGMENT_DURATION * sr)
-                    num_segments = int(np.ceil(total_seconds / SEGMENT_DURATION))
-                    
-                    print(f"✅ [AUTO TIMELINE] Audio: {total_seconds:.1f}s, {num_segments} segments (15s/segment)")
-                    
-                    # 4. Phân tích dò tone từ ToneDetector
-                    timeline_entries = ToneDetector.detect_timeline_advanced(audio_data, sr, on_progress)
-                    del audio_data  # Giải phóng audio data (~vài chục MB)
-                    gc.collect()
-                    
-                    if not timeline_entries:
-                        if on_error:
-                            on_error("Không phát hiện được tone nào trong bài hát.")
-                        return
-                    
-                    # 6. Lưu timeline
-                    if on_progress:
-                        on_progress("Đang lưu kết quả...")
-                    
-                    success = ManualToneTimeline.save_timeline(url, video_title, timeline_entries)
-                    
-                    if success:
-                        print(f"✅ [AUTO TIMELINE] Đã lưu: {video_title} ({len(timeline_entries)} entries)")
-                    
-                    # 7. Lưu vào ToneCacheManager
-                    cache_timeline = []
-                    for e in timeline_entries:
-                        cache_entry = dict(e)
-                        if 'confidence' not in cache_entry:
-                            cache_entry['confidence'] = 0.8
-                        cache_timeline.append(cache_entry)
-                    
-                    cache_data = {
-                        'primary_key': timeline_entries[0]['key_display'],
-                        'key_timeline': cache_timeline
-                    }
-                    ToneCacheManager.save_tone(url, cache_data)
-                    
-                    # 8. Gửi MIDI cho key đầu tiên và bật replay
-                    first_key = timeline_entries[0]
-                    self._send_tone_midi({
-                        'key_display': first_key['key_display'],
-                        'key_index': first_key['key_index'],
-                        'scale': first_key['scale']
-                    })
-                    
-                    self.tone_detection_active = False
-                    time.sleep(0.2)
-                    self._replay_manual_timeline(timeline_entries)
-                    
-                    # 9. Callback
-                    timeline_data = {
-                        'url': url,
-                        'title': video_title,
-                        'timeline': timeline_entries,
-                        'total_duration': total_seconds
-                    }
-                    
-                    if on_complete:
-                        on_complete(timeline_data)
-                    
-                finally:
-                    scoring_engine.cleanup_temp_file()
-                    del scoring_engine
-                    MemoryGuard.force_cleanup()  # gc + clear librosa cache + trim RAM
-                    
+
+                if cancel.is_set():
+                    print("⚠️ [AUTO TIMELINE] Session bị hủy sau khi tải audio.")
+                    return
+
+                # 3. Load toàn bộ audio
+                if on_progress:
+                    on_progress("Đang load file âm thanh...")
+
+                audio_data, sr = librosa.load(audio_path, sr=22050, mono=True)
+                total_seconds  = len(audio_data) / sr
+                num_segments   = math.ceil(total_seconds / SEGMENT_DURATION)
+
+                print(f"✅ [AUTO TIMELINE] Audio: {total_seconds:.1f}s, {num_segments} segments (15s/segment)")
+
+                # 4. Phân tích dò tone từ ToneDetector (có thể mất 30-120s)
+                timeline_entries = ToneDetector.detect_timeline_advanced(audio_data, sr, on_progress)
+
+                # Giải phóng audio ngay sau khi phân tích xong
+                del audio_data
+                audio_data = None
+                gc.collect()
+                MemoryGuard.force_cleanup()  # trim working set
+
+                if cancel.is_set():
+                    print("⚠️ [AUTO TIMELINE] Session bị hủy sau khi phân tích.")
+                    return
+
+                if not timeline_entries:
+                    if on_error:
+                        on_error("Không phát hiện được tone nào trong bài hát.")
+                    return
+
+                # 5. Lưu timeline vào JSON
+                if on_progress:
+                    on_progress("Đang lưu kết quả...")
+
+                ManualToneTimeline.save_timeline(url, video_title, timeline_entries)
+                print(f"✅ [AUTO TIMELINE] Đã lưu: {video_title} ({len(timeline_entries)} entries)")
+
+                # 6. Lưu vào ToneCacheManager
+                cache_timeline = []
+                for e in timeline_entries:
+                    ce = dict(e)
+                    ce.setdefault('confidence', 0.8)
+                    cache_timeline.append(ce)
+
+                ToneCacheManager.save_tone(url, {
+                    'primary_key':  timeline_entries[0]['key_display'],
+                    'key_timeline': cache_timeline
+                })
+
+                # 7. Gửi MIDI key đầu tiên ngay
+                first_key = timeline_entries[0]
+                self._send_tone_midi(first_key)
+
+                # 8. Chuyển session sang REPLAYING (không phải IDLE)
+                replay_cancel = self._tone_session.transition_to_replaying()
+                if replay_cancel is not None:
+                    # Session vẫn còn hiệu lực → bắt đầu replay
+                    self._replay_manual_timeline(timeline_entries, cancel_event=replay_cancel)
+                # Nếu replay_cancel is None → session bị hủy (URL mới đến), không replay
+
+                # 9. Callback
+                timeline_data = {
+                    'url':            url,
+                    'title':          video_title,
+                    'timeline':       timeline_entries,
+                    'total_duration': total_seconds
+                }
+                if on_complete:
+                    on_complete(timeline_data)
+
             except Exception as e:
                 print(f"❌ [AUTO TIMELINE] Lỗi: {e}")
                 import traceback
@@ -1664,9 +1817,23 @@ class SystemEngine:
                 if on_error:
                     on_error(str(e))
             finally:
-                self._auto_tone_running = False
-        
+                # ── Cleanup RAM triệt để ──
+                if audio_data is not None:
+                    del audio_data
+                if scoring_engine is not None:
+                    try:
+                        scoring_engine.cleanup_temp_file()
+                    except Exception:
+                        pass
+                    del scoring_engine
+                MemoryGuard.force_cleanup()  # gc(2) + clear librosa + trim working set
+
+                # Nếu session vẫn đang SCANNING (replay không được start), về IDLE
+                if self._tone_session.is_scanning and self._tone_session.url == url:
+                    self._tone_session.stop()
+
         threading.Thread(target=_detect_full, daemon=True).start()
+
 
     def _send_tone_midi(self, result):
         """Gửi MIDI CC cho key/scale đến Auto-Tune
@@ -1697,10 +1864,10 @@ class SystemEngine:
         print(f"📤 [TONE] MIDI → CC{cc_key_root}={key_midi} (Key={key_root}), CC{cc_key_scale}={scale_midi} (Scale={scale})")
     
     def stop_tone_detection(self):
-        """Dừng dò tone liên tục"""
-        if self.tone_detection_active:
-            print("⏹️ [TONE] Dừng dò tone liên tục")
-        self.tone_detection_active = False
+        """Dừng bất kỳ phiên dò/replay nào đang chạy."""
+        if self._tone_session.is_active:
+            print("⏹️ [TONE] Dừng phiên dò tone")
+        self._tone_session.stop()
     
     # ============================================================
     # AutoKey: Dò tone liên tục toàn bài hát (tương tự Auto-Key)
@@ -1971,7 +2138,9 @@ class SystemEngine:
         """
         from collections import Counter
         import numpy as np
-        self.tone_detection_active = True
+        import math
+        # Bắt đầu session SCANNING mới cho luồng loopback này
+        cancel = self._tone_session.start_scanning(url or "loopback")
         current_key = None
         current_confidence = 0
         key_timeline = []
@@ -2026,7 +2195,7 @@ class SystemEngine:
             
             if not loopback_dev:
                 print("❌ [TONE CONTINUOUS] Không tìm thấy thiết bị loopback!")
-                self.tone_detection_active = False
+                self._tone_session.stop()
                 return
             
             device_sr = int(loopback_dev["defaultSampleRate"])
@@ -2045,19 +2214,19 @@ class SystemEngine:
             
             # ── Vòng lặp chính: thu âm + dò tone per segment ──
             _seg_count = 0
-            while self.tone_detection_active and self.youtube_monitoring_active:
+            while not cancel.is_set() and self.youtube_monitoring_active:
                 try:
                     # Thu âm segment_duration giây qua stream đã mở
                     audio_chunks = []
                     frames_needed = segment_duration * device_sr
                     frames_read = 0
-                    while frames_read < frames_needed and self.tone_detection_active:
+                    while frames_read < frames_needed and not cancel.is_set():
                         data = stream.read(chunk_size, exception_on_overflow=False)
                         chunk_np = np.frombuffer(data, dtype=np.float32)
                         audio_chunks.append(chunk_np)
                         frames_read += len(chunk_np)
-                    
-                    if not self.tone_detection_active:
+
+                    if cancel.is_set():
                         break
                     
                     audio_data = np.concatenate(audio_chunks)
@@ -2168,8 +2337,8 @@ class SystemEngine:
                 except Exception:
                     pass
         
-        # Kết thúc → lưu cache
-        self.tone_detection_active = False
+        # Kết thúc → lưu cache và trả RAM
+        self._tone_session.stop()
         
         if key_timeline and url:
             from collections import Counter
@@ -2186,163 +2355,158 @@ class SystemEngine:
         print("🏁 [TONE CONTINUOUS] Kết thúc dò tone liên tục")
         MemoryGuard.force_cleanup()
     
-    def _replay_cached_timeline(self, cached_data):
+    def _replay_cached_timeline(self, cached_data, cancel_event=None):
         """
-        Replay timeline tone từ cache: gửi MIDI đúng thời điểm.
-        Sử dụng Windows Media Control API để đồng bộ hoàn hảo với Browser Play/Pause/Seek.
+        Replay timeline tone từ cache: gửi MIDI đúng thời điểm theo vị trí thực của YouTube.
+        Yêu cầu winrt (Windows Media API) để đọc current_position.
         Chạy trong thread riêng.
         """
         timeline = cached_data.get('key_timeline', [])
         if not timeline:
             return
-        
-        self.tone_detection_active = True
+
+        if not _WIN_MEDIA_AVAILABLE:
+            print("❌ [REPLAY] Cần cài winrt để replay timeline theo timeline YouTube.")
+            print("   Chạy: pip install winrt-Windows.Media.Control winrt-Windows.Foundation")
+            return
+
+        # Nếu không được truyền cancel_event → lấy từ ToneSession hiện tại
+        if cancel_event is None:
+            cancel_event = self._tone_session.cancel_event
+
         primary_key = cached_data.get('primary_key', timeline[0]['key_display'])
-        print(f"▶️ [TONE REPLAY] Replay từ cache: primary={primary_key}, {len(timeline)} segments")
-        
-        # Sắp xếp timeline để chắc chắn
+        print(f"▶️ [CACHE REPLAY] Replay từ cache: primary={primary_key}, {len(timeline)} segments")
+
+        # Sắp xếp timeline để đảm bảo thứ tự
         timeline = sorted(timeline, key=lambda x: x['time'])
-        
+
         def _replay():
-            current_key = None
-            last_idx = -1
-            _gc_counter = 0  # Periodic GC counter
-            
-            # Nếu win_media_available thì đồng bộ 100%, nếu không fallback absolute time
-            fallback_enabled = not _WIN_MEDIA_AVAILABLE
-            if fallback_enabled:
-                print("⚠️ [REPLAY] Không có winrt, dùng fallback absolute time")
-                start_mono = time.monotonic()
-                paused_total = 0
-            
-            while self.tone_detection_active:
-                if fallback_enabled:
-                    # Logic Fallback
-                    elapsed = (time.monotonic() - start_mono) - paused_total
-                    if not self.media_monitor.is_playing:
-                        # Nếu module MediaMonitor giả lập pause hoặc có trạng thái
-                        paused_total += 0.1
-                else:
-                    # Lấy vị trí từ Browser
-                    if not self.media_monitor.is_playing:
-                        time.sleep(0.1)
-                        continue
-                        
-                    elapsed = self.media_monitor.current_position
-                    
-                # Tìm entry cuối cùng LỚN HƠN elapsed (logic áp dụng cho cả seek tua tới tua lui)
-                # Ta muốn key hiện tại là key có thời gian <= elapsed gần nhất
+            current_key  = None
+            last_idx     = -1
+            _gc_counter  = 0
+
+            while not cancel_event.is_set():
+                # Đợi nhạc phát (không bận-wait)
+                if not self.media_monitor.is_playing:
+                    cancel_event.wait(0.1)  # Ngủ 100ms, có thể bị cancel
+                    continue
+
+                elapsed = self.media_monitor.current_position
+
+                # Tìm entry có time <= elapsed (lớn nhất thỏa mãn)
                 target_idx = -1
-                for i in range(len(timeline)):
-                    if timeline[i]['time'] <= elapsed:
+                for i, entry in enumerate(timeline):
+                    if entry['time'] <= elapsed:
                         target_idx = i
                     else:
                         break
-                
-                # Cập nhật MIDI nếu index thay đổi (và index >= 0)
+
                 if target_idx >= 0 and target_idx != last_idx:
-                    entry = timeline[target_idx]
+                    entry   = timeline[target_idx]
                     new_key = entry['key_display']
-                    
+
                     if new_key != current_key or last_idx == -1:
                         current_key = new_key
                         self._send_tone_midi(entry)
-                        print(f"▶️ [REPLAY] t={elapsed:.1f}s (target={entry['time']}s): {new_key}")
-                        
+                        print(f"▶️ [CACHE REPLAY] t={elapsed:.1f}s (trigger={entry['time']}s): {new_key}")
+
                         if self.on_tone_detected_callback:
                             try:
                                 self.on_tone_detected_callback(entry)
                             except Exception:
                                 pass
-                                
+
                     last_idx = target_idx
-                
-                # Periodic GC: mỗi 300 iterations (~30s) thu hồi COM/WinRT refs
+
+                # Periodic GC: mỗi 300 iterations (~30s)
                 _gc_counter += 1
                 if _gc_counter % 300 == 0:
                     gc.collect(0)
-                
-                time.sleep(0.1) # Loop cực nhẹ
-            
-            print(f"🏁 [TONE REPLAY] Kết thúc replay")
-        
+
+                cancel_event.wait(0.1)  # Cancelable lightweight sleep
+
+            print("🏁 [CACHE REPLAY] Kết thúc replay")
+            # Không cần cleanup RAM — replay loop không giữ data lớn
+
         threading.Thread(target=_replay, daemon=True).start()
     
-    def _replay_manual_timeline(self, timeline):
+    def _replay_manual_timeline(self, timeline, cancel_event=None):
         """
-        Replay timeline tone thủ công: gửi MIDI đúng thời điểm.
-        Sử dụng Windows Media Control API để đồng bộ cực kỳ chính xác.
+        Replay timeline tone thủ công: gửi MIDI đúng thời điểm theo vị trí thực của YouTube.
+        Yêu cầu winrt (Windows Media API) để đọc current_position.
         Chạy trong thread riêng.
-        
+
         Args:
-            timeline: list of {time, key_display, key_index, scale}
+            timeline:     list of {time, key_display, key_index, scale}
+            cancel_event: threading.Event để dừng loop từ bên ngoài.
+                          Nếu None → dùng ToneSession.cancel_event hiện tại.
         """
         if not timeline:
             return
-        
-        self.tone_detection_active = True
-        print(f"▶️ [MANUAL REPLAY] Bắt đầu replay thủ công: {len(timeline)} entries")
-        
-        # Phải sort timeline để logic chạy seek cho chuẩn
+
+        if not _WIN_MEDIA_AVAILABLE:
+            print("❌ [MANUAL REPLAY] Cần cài winrt để replay timeline theo YouTube.")
+            print("   Chạy: pip install winrt-Windows.Media.Control winrt-Windows.Foundation")
+            return
+
+        # Nếu không được truyền cancel_event → lấy từ ToneSession hiện tại
+        if cancel_event is None:
+            cancel_event = self._tone_session.cancel_event
+
+        # Sắp xếp để seek/rewind hoạt động đúng
         timeline = sorted(timeline, key=lambda x: x['time'])
-        
+        print(f"▶️ [MANUAL REPLAY] Bắt đầu replay: {len(timeline)} entries")
+
         def _replay():
             current_key = None
-            last_idx = -1
-            _gc_counter = 0  # Periodic GC counter
-            
-            fallback_enabled = not _WIN_MEDIA_AVAILABLE
-            if fallback_enabled:
-                print("⚠️ [MANUAL REPLAY] Không có winrt, dùng fallback absolute time")
-                start_mono = time.monotonic()
-                paused_total = 0
-            
-            while self.tone_detection_active:
-                if fallback_enabled:
-                    elapsed = (time.monotonic() - start_mono) - paused_total
-                    if not self.media_monitor.is_playing:
-                        paused_total += 0.1
-                else:
-                    if not self.media_monitor.is_playing:
-                        time.sleep(0.1)
-                        continue
-                    
-                    elapsed = self.media_monitor.current_position
-                
-                # Tìm Tone ứng với elapsed
+            last_idx    = -1
+            _gc_counter = 0
+
+            while not cancel_event.is_set():
+                # Đợi nhạc phát (cancelable wait)
+                if not self.media_monitor.is_playing:
+                    cancel_event.wait(0.1)
+                    continue
+
+                elapsed = self.media_monitor.current_position
+
+                # Tìm entry có time <= elapsed (lớn nhất thỏa mãn)
                 target_idx = -1
-                for i in range(len(timeline)):
-                    if timeline[i]['time'] <= elapsed:
+                for i, entry in enumerate(timeline):
+                    if entry['time'] <= elapsed:
                         target_idx = i
                     else:
                         break
-                        
+
                 if target_idx >= 0 and target_idx != last_idx:
-                    entry = timeline[target_idx]
+                    entry   = timeline[target_idx]
                     new_key = entry['key_display']
-                    
+
                     if new_key != current_key or last_idx == -1:
                         current_key = new_key
                         self._send_tone_midi(entry)
                         time_str = ManualToneTimeline.seconds_to_time_str(entry['time'])
                         print(f"▶️ [MANUAL REPLAY] t={elapsed:.1f}s (trigger={time_str}): {new_key}")
-                        
+
                         if self.on_tone_detected_callback:
                             try:
                                 self.on_tone_detected_callback(entry)
                             except Exception:
                                 pass
-                                
+
                     last_idx = target_idx
-                
-                # Periodic GC: mỗi 300 iterations (~30s) thu hồi COM/WinRT refs
+
+                # Periodic GC: mỗi 300 iterations (~30s)
                 _gc_counter += 1
                 if _gc_counter % 300 == 0:
                     gc.collect(0)
-                
-                time.sleep(0.1)
-            
-            print(f"🏁 [MANUAL REPLAY] Kết thúc replay thủ công")
-        
+
+                cancel_event.wait(0.1)  # Cancelable lightweight sleep
+
+            print("🏁 [MANUAL REPLAY] Kết thúc replay thủ công")
+            # Nếu đây là phase cuối → session về IDLE
+            if self._tone_session.is_replaying:
+                self._tone_session.stop()
+
         threading.Thread(target=_replay, daemon=True).start()
 
