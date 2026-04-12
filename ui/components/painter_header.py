@@ -1,30 +1,19 @@
 """
 ui.components.painter_header
-===============================
-Custom header bar with painted gradient background and glow line.
-
-Features:
-  - Gradient background (dark → slightly lighter)
-  - Bottom edge glow line
-  - MIDI status dot with radial gradient glow
-  - Holds child widgets via layout
+=============================
+Custom-painted top bar primitives.
 """
 from PySide6.QtWidgets import QFrame, QHBoxLayout
 from PySide6.QtCore import Qt, QRectF
-from PySide6.QtGui import (
-    QPainter, QPen, QColor, QLinearGradient,
-    QRadialGradient, QPainterPath
-)
-from ui.design_tokens import C, SP, PAINTER
+from PySide6.QtGui import QLinearGradient, QPainter, QPainterPath, QPen, QColor, QRadialGradient
+
+from ui.design_tokens import C, SP
 
 
 class PaintedHeaderBar(QFrame):
-    """
-    Custom-painted header bar.
-    Children are placed via self.layout().
-    """
+    """Painted top bar container."""
 
-    def __init__(self, height=55, parent=None):
+    def __init__(self, height=58, parent=None):
         super().__init__(parent)
         self.setObjectName("paintedHeader")
         self.setFixedHeight(height)
@@ -32,58 +21,72 @@ class PaintedHeaderBar(QFrame):
         self.setStyleSheet("QFrame#paintedHeader { background: transparent; border: none; }")
 
         self._layout = QHBoxLayout(self)
-        self._layout.setContentsMargins(SP.MD, 0, SP.MD, 0)
+        self._layout.setContentsMargins(SP.MD, 6, SP.MD, 6)
+        self._layout.setSpacing(SP.SM)
 
     def layout(self):
         return self._layout
 
     def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
 
         w, h = self.width(), self.height()
 
-        # ── Gradient background ──────────────────────────────
         bg_grad = QLinearGradient(0, 0, 0, h)
-        bg_grad.setColorAt(0.0, QColor(PAINTER["header_top"]))
-        bg_grad.setColorAt(1.0, QColor(PAINTER["header_bot"]))
-        p.setPen(Qt.NoPen)
-        p.setBrush(bg_grad)
-        p.drawRect(0, 0, w, h)
+        bg_grad.setColorAt(0.0, QColor(14, 19, 34))
+        bg_grad.setColorAt(1.0, QColor(10, 14, 26))
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(bg_grad)
+        painter.drawRect(0, 0, w, h)
 
-        # ── Bottom glow line ─────────────────────────────────
-        line_grad = QLinearGradient(0, 0, w, 0)
-        line_grad.setColorAt(0.0, QColor(56, 189, 248, 0))
-        line_grad.setColorAt(0.3, QColor(56, 189, 248, 40))
-        line_grad.setColorAt(0.5, QColor(56, 189, 248, 60))
-        line_grad.setColorAt(0.7, QColor(56, 189, 248, 40))
-        line_grad.setColorAt(1.0, QColor(56, 189, 248, 0))
+        tray = QRectF(6.5, 4.5, w - 13, h - 9)
+        tray_path = QPainterPath()
+        tray_path.addRoundedRect(tray, 16, 16)
 
-        p.setPen(QPen(QColor(56, 189, 248, 60), 1))
-        p.drawLine(0, h - 1, w, h - 1)
+        tray_grad = QLinearGradient(0, tray.top(), 0, tray.bottom())
+        tray_grad.setColorAt(0.0, QColor(18, 26, 44, 236))
+        tray_grad.setColorAt(1.0, QColor(12, 18, 32, 242))
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(tray_grad)
+        painter.drawPath(tray_path)
 
-        # Glow above the line
-        glow_grad = QLinearGradient(0, h - 4, 0, h)
-        glow_grad.setColorAt(0, QColor(56, 189, 248, 0))
-        glow_grad.setColorAt(1, QColor(56, 189, 248, 20))
-        p.setPen(Qt.NoPen)
-        p.setBrush(glow_grad)
-        p.drawRect(0, h - 4, w, 4)
+        painter.setPen(QPen(QColor(148, 163, 184, 42), 1))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(tray_path)
 
-        p.end()
+        hi_grad = QLinearGradient(0, tray.top(), 0, tray.top() + tray.height() * 0.34)
+        hi_grad.setColorAt(0.0, QColor(255, 255, 255, 16))
+        hi_grad.setColorAt(1.0, QColor(255, 255, 255, 0))
+        hi_path = QPainterPath()
+        hi_path.addRoundedRect(
+            QRectF(tray.left() + 1, tray.top() + 1, tray.width() - 2, tray.height() * 0.45),
+            15,
+            15,
+        )
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(hi_grad)
+        painter.drawPath(hi_path)
+
+        accent = QLinearGradient(tray.left(), tray.bottom() - 1, tray.right(), tray.bottom() - 1)
+        accent.setColorAt(0.0, QColor(56, 189, 248, 0))
+        accent.setColorAt(0.45, QColor(56, 189, 248, 34))
+        accent.setColorAt(1.0, QColor(56, 189, 248, 0))
+        painter.setPen(QPen(accent, 1))
+        painter.drawLine(tray.bottomLeft().toPoint(), tray.bottomRight().toPoint())
+
+        painter.end()
         super().paintEvent(event)
 
 
 class PaintedMidiDot(QFrame):
-    """
-    MIDI status dot with radial glow — painted via QPainter.
-    """
+    """MIDI status dot with radial glow."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(16, 16)
         self._connected = False
-        self._color = QColor(C["accent"])  # red = disconnected
+        self._color = QColor(C["accent"])
 
     def set_connected(self, connected, is_correct_port=True):
         self._connected = connected
@@ -96,41 +99,39 @@ class PaintedMidiDot(QFrame):
         self.update()
 
     def setStyleSheet(self, qss):
-        """Backward compat — extract color from QSS."""
         import re
-        m = re.search(r'color:\s*(#[0-9a-fA-F]{6})', qss)
-        if m:
-            self._color = QColor(m.group(1))
-            self._connected = (m.group(1).lower() != C["accent"].lower())
+
+        match = re.search(r"color:\s*(#[0-9a-fA-F]{6})", qss)
+        if match:
+            self._color = QColor(match.group(1))
+            self._connected = match.group(1).lower() != C["accent"].lower()
             self.update()
 
     def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
 
         cx, cy = self.width() / 2, self.height() / 2
-        r = 4
+        radius = 4
 
-        # Outer glow
-        glow = QRadialGradient(cx, cy, r * 3)
-        glow_c = QColor(self._color)
-        glow_c.setAlpha(60 if self._connected else 20)
-        glow.setColorAt(0, glow_c)
+        glow = QRadialGradient(cx, cy, radius * 3)
+        glow_color = QColor(self._color)
+        glow_color.setAlpha(60 if self._connected else 20)
+        glow.setColorAt(0, glow_color)
         glow.setColorAt(1, QColor(0, 0, 0, 0))
-        p.setPen(Qt.NoPen)
-        p.setBrush(glow)
-        p.drawEllipse(QRectF(cx - r * 3, cy - r * 3, r * 6, r * 6))
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(glow)
+        painter.drawEllipse(QRectF(cx - radius * 3, cy - radius * 3, radius * 6, radius * 6))
 
-        # Core dot
-        core_grad = QRadialGradient(cx - 1, cy - 1, r)
+        core_grad = QRadialGradient(cx - 1, cy - 1, radius)
         lighter = QColor(self._color)
         lighter.setAlpha(255)
-        core_grad.setColorAt(0, lighter)
         darker = QColor(self._color)
         darker.setAlpha(200)
+        core_grad.setColorAt(0, lighter)
         core_grad.setColorAt(1, darker)
-        p.setBrush(core_grad)
-        p.setPen(Qt.NoPen)
-        p.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2))
+        painter.setBrush(core_grad)
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(QRectF(cx - radius, cy - radius, radius * 2, radius * 2))
 
-        p.end()
+        painter.end()

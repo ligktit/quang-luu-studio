@@ -285,6 +285,8 @@ class AudioRecorder:
         Set _started_event khi worker print "STARTED".
         """
         import sys as _sys
+        import builtins
+        import threading as _threading
 
         old_argv = _sys.argv[:]
         _sys.argv = [
@@ -295,22 +297,26 @@ class AudioRecorder:
             str(self._mic_idx),
         ]
 
-        # Monkey-patch print để bắt "STARTED" / "ERROR"
-        import builtins
+        # FIX: Monkey-patch print để bắt "STARTED" / "ERROR".
+        # Dùng lock để tránh race condition khi nhiều thread in cùng lúc.
+        # QUAN TRỌNG: phải restore _orig_print trong finally — bản cũ bị quên.
         _orig_print = builtins.print
+        _patch_lock = _threading.Lock()
 
         def _patched_print(*args, **kwargs):
             _orig_print(*args, **kwargs)
             msg = ' '.join(str(a) for a in args)
-            if msg.strip() == 'STARTED':
-                self._started_event.set()
-            elif msg.strip().startswith('ERROR:'):
-                self._worker_error = msg.strip()
+            clean = msg.strip()
+            with _patch_lock:
+                if clean == 'STARTED':
+                    self._started_event.set()
+                elif clean.startswith('ERROR:') and not self._worker_error:
+                    self._worker_error = clean
 
         builtins.print = _patched_print
 
         try:
-            print(f"🎙️ [RECORDER] Exec worker: {worker_path}", flush=True)
+            _orig_print(f"🎙️ [RECORDER] Exec worker: {worker_path}", flush=True)
             with open(worker_path, 'r', encoding='utf-8') as f:
                 code = f.read()
 
@@ -322,10 +328,13 @@ class AudioRecorder:
             exec(compile(code, worker_path, 'exec'), ns)
 
         except Exception as e:
-            print(f"❌ [RECORDER] Inline worker error: {e}", flush=True)
+            _orig_print(f"❌ [RECORDER] Inline worker error: {e}", flush=True)
             import traceback
             traceback.print_exc()
         finally:
+            # FIX: Restore builtins.print — nếu bỏ qua, mọi print sau này
+            # trong app vẫn dùng patched version → side-effect ngầm.
+            builtins.print = _orig_print
             _sys.argv = old_argv
 
     

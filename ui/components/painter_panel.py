@@ -26,7 +26,7 @@ class GlassPanel(QFrame):
     Content goes into self.body_layout.
     """
 
-    HEADER_H = 24   # height reserved for title
+    HEADER_H = 20   # height reserved for title
     RADIUS = 10
 
     def __init__(self, title="", parent=None):
@@ -39,13 +39,13 @@ class GlassPanel(QFrame):
         self.setStyleSheet("QFrame#glassPanel { background: transparent; border: none; }")
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(SP.MD, self.HEADER_H + SP.XS, SP.MD, SP.SM)
-        root.setSpacing(SP.SM)
+        root.setContentsMargins(SP.MD, self.HEADER_H + 2, SP.MD, 6)
+        root.setSpacing(6)
 
         # Body — caller populates this
         self.body_layout = QVBoxLayout()
         self.body_layout.setContentsMargins(0, 0, 0, 0)
-        self.body_layout.setSpacing(SP.SM)
+        self.body_layout.setSpacing(6)
         root.addLayout(self.body_layout)
 
     def set_title(self, title):

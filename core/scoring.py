@@ -408,48 +408,70 @@ class ScoringEngine:
     
     def _generate_feedback(self, total_score, pitch_accuracy, pitch_stability,
                            volume_consistency=0, timing_accuracy=0):
-        """Tạo feedback + gợi ý cải thiện dựa trên điểm số"""
-        # Main feedback
+        """Tạo feedback + gợi ý cải thiện dựa trên điểm số (phiên bản UI cao cấp)"""
+        import random
+        
+        # Rank titles & Main Feedback pools
         if total_score >= 95:
-            main = "🏆 Tuyệt vời! Giọng hát cực kỳ ấn tượng!"
+            rank = "Siêu Sao"
+            icon = "👑"
+            mains = [
+                "Tuyệt vời quá! Giọng hát cực kỳ ấn tượng, bùng nổ cảm xúc!",
+                "10 điểm không có nhưng! Giọng hát có thể đi diễn được rồi!",
+                "Hoàn hảo! Rất mượt mà và đầy nội lực!"
+            ]
         elif total_score >= 90:
-            main = "🎉 Xuất sắc! Bạn hát rất tốt!"
+            rank = "Ca Sĩ Pro"
+            icon = "🏆"
+            mains = [
+                "Xuất sắc! Bạn hát rất tốt và bắt tai!",
+                "Giọng hát rất chuyên nghiệp, xử lý mượt mà!",
+                "Rất cuốn hút! Hãy tiếp tục phát huy nhẹ!"
+            ]
         elif total_score >= 85:
-            main = "👍 Rất tốt! Gần hoàn hảo rồi!"
+            rank = "Ngôi Sao Sáng"
+            icon = "⭐"
+            mains = [
+                "Rất hay! Gần chạm mốc hoàn hảo rồi đó!",
+                "Phong độ rất tuyệt, nghe rất phiêu!",
+                "Hát mượt lắm! Ghi chú lại bài này làm 'bài tủ' nhé!"
+            ]
         elif total_score >= 80:
-            main = "👌 Tốt! Hãy tiếp tục luyện tập!"
+            rank = "Giọng Ca Triển Vọng"
+            icon = "🎤"
+            mains = [
+                "Tốt lắm! Bạn có chất giọng rất bắt mic!",
+                "Thể hiện trọn vẹn cảm xúc! Luyện thêm xíu nữa là đỉnh!",
+                "Rất ổn định! Có thể tự tin khoe khoang được rồi!"
+            ]
         else:
-            main = "💪 Ổn! Hãy luyện tập thêm nhé!"
+            rank = "Tập Sự Đầy Tiềm Năng"
+            icon = "💪"
+            mains = [
+                "Không sao! Mỗi lần hát là một lần tuyệt vời bản thân!",
+                "Có cố gắng rất nhiều! Tập luyện thêm sẽ rất bùng nổ!",
+                "Hơi fail xíu nhưng đam mê là trên hết! Thử lại nha!"
+            ]
+            
+        main = random.choice(mains)
         
-        # Gợi ý cải thiện dựa trên từng chỉ số
         tips = []
-        
-        if pitch_accuracy > 0 and pitch_accuracy < 85:
-            tips.append("🎵 Hãy nghe kỹ beat và cố gắng hát đúng cao độ hơn. Luyện từng đoạn ngắn trước.")
-        
-        if pitch_stability > 0 and pitch_stability < 85:
-            tips.append("📈 Giữ hơi đều hơn để giọng không bị rung. Tập thở bụng sẽ giúp ổn định giọng.")
-        
-        if volume_consistency > 0 and volume_consistency < 80:
-            tips.append("🔊 Giữ khoảng cách với micro ổn định hơn để âm lượng đều hơn.")
+        # Điểm Quick (Volume) thường dao động 80-100,
+        if volume_consistency > 0 and volume_consistency < 85:
+            tips.append("🔊 Cố gắng giữ khoảng cách với míc đều đặn nhé, đừng lúc xa lúc gần.")
         elif volume_consistency >= 90:
-            tips.append("🔊 Âm lượng rất ổn định, tuyệt vời!")
-        
-        if timing_accuracy > 0 and timing_accuracy < 85:
-            tips.append("⏱️ Cố gắng vào nhịp chính xác hơn. Nghe nhạc nền nhiều lần để quen beat.")
-        
-        # Thêm gợi ý chung nếu điểm cao
-        if total_score >= 90 and len(tips) == 0:
-            tips.append("⭐ Tiếp tục duy trì phong độ này! Thử thách với bài khó hơn nhé.")
-            tips.append("🎤 Thử thêm cảm xúc và kỹ thuật vocal để nâng tầm giọng hát.")
-        elif total_score >= 85 and len(tips) == 0:
-            tips.append("🎯 Còn chút nữa là hoàn hảo! Chú ý những nốt cao và nốt dài.")
-            tips.append("💡 Nghe lại bản thu và so sánh với bài gốc để tìm điểm cần cải thiện.")
-        elif len(tips) == 0:
-            tips.append("💡 Luyện tập đều đặn mỗi ngày sẽ giúp bạn tiến bộ nhanh chóng.")
-            tips.append("🎧 Nghe và hát theo bài gốc nhiều lần trước khi thu âm.")
-        
+            tips.append("🔊 Khả năng kiểm soát hơi thở và míc hơi bị đỉnh nha!")
+            
+        if total_score >= 90 and len(tips) < 2:
+            tips.append("⭐ Bạn hát hay quá, thử thêm cảm xúc tinh tế vào các đoạn luyến/ngân nha.")
+        elif total_score >= 85 and len(tips) < 2:
+            tips.append("💡 Lần tới hãy để ý thêm các nốt cao nhất của bài để không bị hụt hơi.")
+        elif len(tips) < 2:
+            tips.append("💡 Luyện tập mỗi ngày sẽ lên thần nhanh lắm đấy!")
+            
         return {
+            "rank": rank,
+            "icon": icon,
             "main": main,
-            "tips": tips[:3]  # Tối đa 3 gợi ý
+            "tips": tips[:3]
         }

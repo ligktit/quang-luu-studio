@@ -160,14 +160,26 @@ class ManualToneTimeline:
     
     @staticmethod
     def time_str_to_seconds(time_str):
-        """Chuyển 'MM:SS' hoặc 'HH:MM:SS' thành giây (float)"""
-        parts = time_str.strip().split(":")
-        if len(parts) == 2:
-            return int(parts[0]) * 60 + float(parts[1])
-        elif len(parts) == 3:
-            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
-        return float(time_str)
-    
+        """Chuyển 'MM:SS' hoặc 'HH:MM:SS' thành giây (float). Trả None nếu không hợp lệ."""
+        try:
+            parts = time_str.strip().split(":")
+            if len(parts) == 2:
+                return int(parts[0]) * 60 + float(parts[1])
+            elif len(parts) == 3:
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+            # Thử parse số thuần (giây)
+            val = float(time_str.strip())
+            if val >= 0:
+                return val
+        except (ValueError, IndexError):
+            pass
+        return None
+
+    @staticmethod
+    def parse_time_str(time_str):
+        """Alias của time_str_to_seconds — dùng bởi frontend_qt.py."""
+        return ManualToneTimeline.time_str_to_seconds(time_str)
+
     @staticmethod
     def seconds_to_time_str(seconds):
         """Chuyển giây thành 'MM:SS'"""

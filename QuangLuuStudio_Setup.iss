@@ -1,4 +1,4 @@
-; ============================================================
+﻿; ============================================================
 ; Quang Lưu Studio - Inno Setup Installer Script
 ; ============================================================
 ; Build: Mở file này bằng Inno Setup Compiler → Compile (Ctrl+F9)
@@ -12,7 +12,7 @@
 ; ============================================================
 
 #define MyAppName "Quang Luu Studio"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.2.0"
 #define MyAppPublisher "Quang Luu"
 #define MyAppExeName "QuangLuuStudio.exe"
 #define MyAppURL "https://github.com/quang-luu-studio"
@@ -218,10 +218,8 @@ begin
     if DirExists(DataDir) then
     begin
       if MsgBox(
-        'Bạn có muốn xóa dữ liệu cá nhân (settings, danh sách bài hát, cache)?' + #13#10 +
-        #13#10 +
-        'Thư mục: ' + DataDir + #13#10 +
-        #13#10 +
+        'Bạn có muốn xóa dữ liệu cá nhân (settings, danh sách bài hát, cache)?' + #13#10 + #13#10 +
+        'Thư mục: ' + DataDir + #13#10 + #13#10 +
         'Nhấn "Có" để xóa hoàn toàn.' + #13#10 +
         'Nhấn "Không" để giữ lại (có thể dùng lại khi cài lại).',
         mbConfirmation, MB_YESNO) = IDYES then
@@ -233,10 +231,8 @@ begin
     if DirExists(DocsDir) then
     begin
       if MsgBox(
-        'Bạn có muốn xóa thư mục Recordings?' + #13#10 +
-        #13#10 +
-        'Thư mục: ' + DocsDir + #13#10 +
-        #13#10 +
+        'Bạn có muốn xóa thư mục Recordings?' + #13#10 + #13#10 +
+        'Thư mục: ' + DocsDir + #13#10 + #13#10 +
         'Nhấn "Có" để xóa tất cả file ghi âm.' + #13#10 +
         'Nhấn "Không" để giữ lại.',
         mbConfirmation, MB_YESNO) = IDYES then

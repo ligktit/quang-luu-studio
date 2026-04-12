@@ -55,7 +55,7 @@ class TestWindow(QMainWindow):
             "♪ Quang Lưu Studio — Performance Stage ♪",
             color="#fc8403"
         )
-        marquee.setFixedHeight(30)
+        marquee.setFixedHeight(38)
         hl.addWidget(marquee, 1)
         hl.addStretch()
 

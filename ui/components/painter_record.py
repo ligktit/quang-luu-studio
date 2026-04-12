@@ -37,7 +37,7 @@ class PainterRecordButton(QWidget):
         self._pulse_timer.timeout.connect(self._pulse_tick)
         self._pulse_phase = 0.0
 
-        self.setFixedSize(160, 38)
+        self.setFixedSize(148, 34)
         self.setCursor(Qt.PointingHandCursor)
 
     # ── Public API ───────────────────────────────────────────

@@ -6,19 +6,18 @@ Rotary knob widget for tone control (-12 to +12).
 Features:
   - Arc indicator with color gradient
   - Metallic knob body with radial gradient + pointer
-  - Value label on/below knob
   - Mouse drag (vertical) + wheel support
   - Center detent at 0
+  - Value label rendered by parent (no duplicate)
 """
 import math
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt, Signal, QRectF, QPointF
 from PySide6.QtGui import (
-    QPainter, QPen, QColor, QFont, QFontMetrics,
-    QLinearGradient, QRadialGradient, QConicalGradient,
-    QPainterPath
+    QPainter, QPen, QColor,
+    QRadialGradient, QPainterPath
 )
-from ui.design_tokens import C, PAINTER, FONT_MONO
+from ui.design_tokens import C, PAINTER
 
 
 class PainterKnob(QWidget):
@@ -46,7 +45,7 @@ class PainterKnob(QWidget):
         self._drag_start_y = 0
         self._drag_start_val = 0
 
-        self.setFixedSize(size + 4, size + 22)  # extra space for label
+        self.setFixedSize(size + 4, size + 4)   # no inline label — parent renders it
         self.setCursor(Qt.PointingHandCursor)
         self.setMouseTracking(True)
 
@@ -152,19 +151,6 @@ class PainterKnob(QWidget):
             p.setPen(Qt.NoPen)
             p.setBrush(glow_c)
             p.drawEllipse(knob_rect.adjusted(-5, -5, 5, 5))
-
-        # ── Value label below ────────────────────────────────────
-        font = QFont()
-        font.setFamily("Consolas")
-        font.setPixelSize(11)  # pixel size — no scaling issue
-        font.setBold(True)
-        p.setFont(font)
-
-        val_text = f"{self._val:+d}"
-        val_color = QColor(self._color) if self._val != 0 else QColor(C["text_muted"])
-        p.setPen(val_color)
-        text_rect = QRectF(0, sz + 2, w, 16)
-        p.drawText(text_rect, Qt.AlignCenter, val_text)
 
         p.end()
 

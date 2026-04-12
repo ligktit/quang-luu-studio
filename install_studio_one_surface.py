@@ -1644,12 +1644,17 @@ class SystemEngine:
         
         # Lấy key_display, bỏ "m" suffix nếu có (Cm → C, Am → A)
         key_display = result.get("key_display", "C")
-        key_root = key_display.replace("m", "") if key_display.endswith("m") and not key_display.endswith("#m") else key_display
-        if key_display.endswith("#m"):
-            key_root = key_display[:-1]  # "C#m" → "C#"
+        is_minor = key_display.endswith("m")
+        
+        if is_minor:
+            key_root = key_display[:-1] if key_display.endswith("#m") else key_display.replace("m", "")
+            default_scale = "Minor"
+        else:
+            key_root = key_display
+            default_scale = "Major"
         
         key_midi = KEY_MIDI_MAP.get(key_root, 0)
-        scale = result.get("scale", "Major")
+        scale = result.get("scale", default_scale)
         scale_midi = SCALE_MIDI_MAP.get(scale, 14)
         
         self.send_midi(34, key_midi)

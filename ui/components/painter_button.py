@@ -27,7 +27,7 @@ class PainterButton(QWidget):
     clicked = Signal()
 
     def __init__(self, text="", color="#38BDF8", height=30,
-                 radius=8, font_size=11, parent=None):
+                 radius=8, font_size=11, svg_content=None, svg_size=18, fixed_width=None, parent=None):
         super().__init__(parent)
         self._text = text
         self._color = QColor(color)
@@ -38,10 +38,27 @@ class PainterButton(QWidget):
         self._pressed = False
         self._enabled = True
         self._active = False  # for toggle states
+        self._svg_content = svg_content
+        self._svg_size = svg_size
+        self._svg_renderer = None
+        
+        if self._svg_content:
+            try:
+                from PySide6.QtSvg import QSvgRenderer
+                from PySide6.QtCore import QByteArray
+                self._svg_renderer = QSvgRenderer()
+                self._svg_renderer.load(QByteArray(self._svg_content.encode('utf-8')))
+            except Exception as e:
+                print(f"Failed to load SVG in PainterButton: {e}")
 
         self.setFixedHeight(height)
-        self.setMinimumWidth(50)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        if fixed_width:
+            self.setFixedWidth(fixed_width)
+            self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        else:
+            self.setMinimumWidth(50 if not self._svg_content else height)
+            self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
         self.setCursor(Qt.PointingHandCursor)
 
     # ── Public API ───────────────────────────────────────────
@@ -53,6 +70,19 @@ class PainterButton(QWidget):
         self.update()
     def isEnabled(self): return self._enabled
     def setActive(self, a): self._active = a; self.update()
+
+    def setSvg(self, svg_content: str):
+        """Thay thế SVG icon tại runtime và repaint."""
+        self._svg_content = svg_content
+        try:
+            from PySide6.QtSvg import QSvgRenderer
+            from PySide6.QtCore import QByteArray
+            if self._svg_renderer is None:
+                self._svg_renderer = QSvgRenderer()
+            self._svg_renderer.load(QByteArray(svg_content.encode('utf-8')))
+        except Exception as e:
+            print(f"setSvg failed: {e}")
+        self.update()
 
     def setStyleSheet(self, qss):
         """Accept but ignore QSS - we paint ourselves. Parse color if present."""
@@ -123,25 +153,40 @@ class PainterButton(QWidget):
             hi_rect = QRectF(2, 1, w - 4, h * 0.4)
             p.drawRoundedRect(hi_rect, r - 1, r - 1)
 
-        # ── Text ─────────────────────────────────────────────
-        font = QFont()
-        font.setFamily("Segoe UI")
-        font.setPixelSize(self._font_size)
-        font.setBold(True)
-        p.setFont(font)
-
+        # ── Text or SVG ─────────────────────────────────────────────
         text_color = QColor("#FFFFFF") if self._enabled else QColor(C["text_muted"])
-        if self._pressed:
-            # Slight offset for pressed feel
-            p.setPen(text_color)
-            p.drawText(QRectF(1, 1, w, h), Qt.AlignCenter, self._text)
+        
+        if self._svg_renderer:
+            # Draw SVG
+            size = self._svg_size
+            cx, cy = w / 2, h / 2
+            svg_rect = QRectF(cx - size / 2, cy - size / 2, size, size)
+            if self._pressed:
+                svg_rect.translate(1, 1)
+                
+            if not self._enabled:
+                p.setOpacity(0.5)
+            self._svg_renderer.render(p, svg_rect)
+            if not self._enabled:
+                p.setOpacity(1.0)
         else:
-            # Text shadow
-            shadow_c = QColor(0, 0, 0, 60)
-            p.setPen(shadow_c)
-            p.drawText(QRectF(1, 1, w, h), Qt.AlignCenter, self._text)
-            p.setPen(text_color)
-            p.drawText(QRectF(0, 0, w, h), Qt.AlignCenter, self._text)
+            font = QFont()
+            font.setFamily("Segoe UI")
+            font.setPixelSize(self._font_size)
+            font.setBold(True)
+            p.setFont(font)
+    
+            if self._pressed:
+                # Slight offset for pressed feel
+                p.setPen(text_color)
+                p.drawText(QRectF(1, 1, w, h), Qt.AlignCenter, self._text)
+            else:
+                # Text shadow
+                shadow_c = QColor(0, 0, 0, 60)
+                p.setPen(shadow_c)
+                p.drawText(QRectF(1, 1, w, h), Qt.AlignCenter, self._text)
+                p.setPen(text_color)
+                p.drawText(QRectF(0, 0, w, h), Qt.AlignCenter, self._text)
 
         p.end()
 

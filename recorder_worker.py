@@ -14,7 +14,7 @@ import sys
 import wave
 import os
 import time
-import threading
+import queue
 import numpy as np
 
 
@@ -222,40 +222,69 @@ def main():
 
     out_rate = lb_rate
     out_channels = 2
-    chunk_size = 512
+
+    # Chunk size loopback: 1024 frames (~21ms @ 48kHz) — ổn định.
+    CHUNK_SIZE = 1024
 
     print(f"LOOPBACK: {loopback_dev['name']}", flush=True)
     print(f"RATE: {out_rate}", flush=True)
     print(f"CHANNELS: {out_channels}", flush=True)
+    print(f"CHUNK_SIZE: {CHUNK_SIZE}", flush=True)
+
+    mic_rate = lb_rate  # default
+    mic_channels = 2
+    actual_mic_channels = 2
+    # Tính resample ratio 1 lần duy nhất (cố định).
+    mic_resample_ratio = 1.0
+    # Mic chunk size tỉ lệ theo rate — đảm bảo callback mic kích hoạt
+    # đúng nhịp tương đương loopback (~21ms), tránh lệch pha → giật.
+    mic_chunk_size = CHUNK_SIZE  # sẽ tính lại sau khi biết mic_rate
 
     if mic_dev:
         mic_rate = int(mic_dev["defaultSampleRate"])
         mic_channels = mic_dev["maxInputChannels"]
         if mic_channels == 0:
             mic_channels = 2
-        print(f"MIC: {mic_dev['name']} (rate={mic_rate}, ch={mic_channels})", flush=True)
+        mic_resample_ratio = lb_rate / mic_rate
+        # Chunk size tương đương ~21ms tại mic rate
+        mic_chunk_size = max(256, int(round(CHUNK_SIZE * mic_rate / lb_rate)))
+        print(
+            f"MIC: {mic_dev['name']} "
+            f"(rate={mic_rate}, ch={mic_channels}, "
+            f"chunk={mic_chunk_size}, resample={mic_resample_ratio:.4f}x)",
+            flush=True
+        )
     else:
         print("WARNING: No microphone, recording loopback only", flush=True)
 
-    # ── Buffers thread-safe ─────────────────────────────────────────
-    lock = threading.Lock()
-    loopback_buffer = []
-    mic_buffer = []
+    # FIX 3: queue.Queue thay lock+list.
+    # put_nowait() trong ASIO callback KHÔNG bao giờ block → không làm trễ
+    # real-time thread của driver → không bị overrun/xif buffer.
+    LB_QUEUE_MAXSIZE = 200   # ~4s buffer @ 1024 frames / 48kHz
+    MC_QUEUE_MAXSIZE = 200
+
+    lb_queue = queue.Queue(maxsize=LB_QUEUE_MAXSIZE)
+    mc_queue = queue.Queue(maxsize=MC_QUEUE_MAXSIZE)
+    overflow_count = [0]
 
     def loopback_callback(in_data, frame_count, time_info, status):
-        with lock:
-            loopback_buffer.append(in_data)
+        try:
+            lb_queue.put_nowait(in_data)
+        except queue.Full:
+            overflow_count[0] += 1  # Drop thay vì block callback
         return (None, pyaudio.paContinue)
 
     def mic_callback(in_data, frame_count, time_info, status):
-        with lock:
-            mic_buffer.append(in_data)
+        try:
+            mc_queue.put_nowait(in_data)
+        except queue.Full:
+            overflow_count[0] += 1
         return (None, pyaudio.paContinue)
 
     # ── Mở loopback stream ──────────────────────────────────────────
     try:
         lb_stream, lb_channels = open_input_stream(
-            pa, loopback_dev, lb_channels, lb_rate, chunk_size, loopback_callback
+            pa, loopback_dev, lb_channels, lb_rate, CHUNK_SIZE, loopback_callback
         )
     except Exception as e:
         print(f"ERROR: Cannot open loopback stream: {e}", file=sys.stderr, flush=True)
@@ -264,11 +293,10 @@ def main():
 
     # ── Mở mic stream ───────────────────────────────────────────────
     mic_stream = None
-    actual_mic_channels = 2
     if mic_dev:
         try:
             mic_stream, actual_mic_channels = open_input_stream(
-                pa, mic_dev, mic_channels, mic_rate, chunk_size, mic_callback
+                pa, mic_dev, mic_channels, mic_rate, mic_chunk_size, mic_callback
             )
         except Exception as e:
             print(f"WARNING: Cannot open mic stream: {e}", flush=True)
@@ -289,94 +317,107 @@ def main():
     print("STARTED", flush=True)
 
     frames_written = 0
-    frame_count = 0
+
+    # FIX 4: Sleep interval đồng bộ với chunk duration thực tế.
+    # Cũ: 20ms cứng → lệch pha với chunk 10.67ms → burst write không đều.
+    # Mới: 1 chunk duration = 1024/48000 ≈ 21.3ms → xử lý đúng nhịp.
+    sleep_interval = CHUNK_SIZE / lb_rate
 
     try:
         while os.path.exists(stop_flag):
-            time.sleep(0.02)
+            time.sleep(sleep_interval)
 
-            with lock:
-                lb_chunks = list(loopback_buffer)
-                loopback_buffer.clear()
-                mc_chunks = list(mic_buffer)
-                mic_buffer.clear()
+            # Drain tất cả chunks tích lũy trong queue (không block)
+            lb_chunks = []
+            while True:
+                try:
+                    lb_chunks.append(lb_queue.get_nowait())
+                except queue.Empty:
+                    break
 
+            mc_chunks = []
+            if mic_stream:
+                while True:
+                    try:
+                        mc_chunks.append(mc_queue.get_nowait())
+                    except queue.Empty:
+                        break
+
+            # Nếu cả hai queue đều rỗng → chờ vòng tiếp theo
             if not lb_chunks and not mc_chunks:
                 continue
 
-            # ── Chuyển loopback data → numpy stereo ──
+            # Nếu CHỈ có mic data (loopback chưa kịp fill) → KHÔNG bỏ qua!
+            # Mic chunks sẽ được xử lý và mix với silence loopback.
+
+            # ── Chuyển loopback data → numpy float32 stereo ──
             if lb_chunks:
                 lb_raw = b"".join(lb_chunks)
                 lb_arr = np.frombuffer(lb_raw, dtype=np.int16)
                 if lb_channels == 1:
-                    lb_stereo = np.column_stack([lb_arr, lb_arr])
+                    lb_stereo = np.column_stack([lb_arr, lb_arr]).astype(np.float32)
                 elif lb_channels == 2:
-                    lb_stereo = lb_arr.reshape(-1, 2)
+                    lb_stereo = lb_arr.reshape(-1, 2).astype(np.float32)
                 else:
-                    lb_arr = lb_arr.reshape(-1, lb_channels)
-                    lb_stereo = lb_arr[:, :2].copy()
+                    lb_arr2 = lb_arr.reshape(-1, lb_channels)
+                    lb_stereo = lb_arr2[:, :2].astype(np.float32)
             else:
                 lb_stereo = None
 
-            # ── Chuyển mic data → numpy stereo ──
+            # ── Chuyển mic data → numpy float32 stereo + resample ratio cố định ──
+            mc_stereo = None
             if mc_chunks and mic_stream:
                 mc_raw = b"".join(mc_chunks)
                 mc_arr = np.frombuffer(mc_raw, dtype=np.int16)
                 if actual_mic_channels == 1:
-                    mc_stereo = np.column_stack([mc_arr, mc_arr])
+                    mc_float = np.column_stack([mc_arr, mc_arr]).astype(np.float32)
                 else:
-                    mc_stereo = mc_arr.reshape(-1, actual_mic_channels)[:, :2].copy()
+                    mc_float = mc_arr.reshape(-1, actual_mic_channels)[:, :2].astype(np.float32)
 
-                # Resample nếu mic rate khác loopback rate
-                if mic_rate != lb_rate and mc_stereo.shape[0] > 0:
-                    if lb_stereo is not None:
-                        target_len = lb_stereo.shape[0]
-                    else:
-                        ratio = out_rate / mic_rate
-                        target_len = int(mc_stereo.shape[0] * ratio)
-
-                    if target_len > 0 and mc_stereo.shape[0] > 0:
-                        indices = np.linspace(0, mc_stereo.shape[0] - 1, target_len)
-                        src_idx = np.arange(mc_stereo.shape[0])
-                        mc_left = np.interp(indices, src_idx, mc_stereo[:, 0].astype(np.float32))
-                        mc_right = np.interp(indices, src_idx, mc_stereo[:, 1].astype(np.float32))
-                        mc_stereo = np.column_stack([mc_left, mc_right]).astype(np.int16)
-            else:
-                mc_stereo = None
+                if mic_resample_ratio != 1.0 and mc_float.shape[0] > 0:
+                    src_len = mc_float.shape[0]
+                    dst_len = max(1, int(round(src_len * mic_resample_ratio)))
+                    src_idx = np.arange(src_len, dtype=np.float32)
+                    dst_idx = np.linspace(0.0, src_len - 1, dst_len, dtype=np.float32)
+                    left  = np.interp(dst_idx, src_idx, mc_float[:, 0])
+                    right = np.interp(dst_idx, src_idx, mc_float[:, 1])
+                    mc_stereo = np.column_stack([left, right]).astype(np.float32)
+                else:
+                    mc_stereo = mc_float
 
             # ── Mix 2 nguồn ──
             if lb_stereo is not None and mc_stereo is not None:
                 min_len = min(lb_stereo.shape[0], mc_stereo.shape[0])
                 mixed = np.clip(
-                    lb_stereo[:min_len].astype(np.float32) + mc_stereo[:min_len].astype(np.float32),
-                    -32768, 32767
+                    lb_stereo[:min_len] + mc_stereo[:min_len],
+                    -32768.0, 32767.0
                 ).astype(np.int16)
-                # Append phần còn lại
+                # Append phần dư của nguồn dài hơn (không bị cắt)
                 if lb_stereo.shape[0] > min_len:
-                    mixed = np.vstack([mixed, lb_stereo[min_len:]])
+                    mixed = np.vstack([mixed, lb_stereo[min_len:].astype(np.int16)])
                 elif mc_stereo.shape[0] > min_len:
-                    mixed = np.vstack([mixed, mc_stereo[min_len:]])
+                    mixed = np.vstack([mixed, mc_stereo[min_len:].astype(np.int16)])
             elif lb_stereo is not None:
-                mixed = lb_stereo
+                mixed = lb_stereo.astype(np.int16)
             elif mc_stereo is not None:
-                mixed = mc_stereo
+                mixed = mc_stereo.astype(np.int16)
             else:
                 continue
 
             wf.writeframes(mixed.tobytes())
             frames_written += mixed.shape[0]
 
-            del lb_chunks, mc_chunks, lb_stereo, mc_stereo, mixed
-
-            frame_count += 1
-            if frame_count % 250 == 0:
-                import gc
-                gc.collect(0)
-
     except KeyboardInterrupt:
         pass
 
     # ── Cleanup ─────────────────────────────────────────────────────
+    if overflow_count[0] > 0:
+        print(
+            f"WARNING: {overflow_count[0]} audio chunks dropped (queue overflow — "
+            f"CPU quá tải hoặc write WAV quá chậm)",
+            flush=True
+        )
+
     for s in [mic_stream, lb_stream]:
         if s:
             try:
