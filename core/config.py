@@ -213,6 +213,11 @@ if FFMPEG_LOCATION:
 else:
     print("⚠️ FFmpeg không tìm thấy! Tính năng tải YouTube audio sẽ không hoạt động.")
 
+# --- CDP (Chrome DevTools Protocol) Constants ---
+CDP_DEBUG_PORT = AppConfig.get("cdp_debug_port", 9222)
+CDP_CONNECT_TIMEOUT = float(AppConfig.get("cdp_connect_timeout", 5.0))
+CDP_POLL_INTERVAL = float(AppConfig.get("cdp_poll_interval", 0.1))
+
 
 class ConfigManager:
     """Quản lý file settings.json"""

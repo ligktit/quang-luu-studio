@@ -318,97 +318,151 @@ def main():
 
     frames_written = 0
 
-    # FIX 4: Sleep interval đồng bộ với chunk duration thực tế.
-    # Cũ: 20ms cứng → lệch pha với chunk 10.67ms → burst write không đều.
-    # Mới: 1 chunk duration = 1024/48000 ≈ 21.3ms → xử lý đúng nhịp.
+    # Sleep interval đồng bộ với chunk duration thực tế (~21.3ms @ 1024/48k).
     sleep_interval = CHUNK_SIZE / lb_rate
+
+    # ── Residual buffers (sample-accurate sync) ─────────────────────────
+    # Giữ phần dư giữa các iteration → không bao giờ ghi "solo mid-stream"
+    # khi lb/mc lệch nhau. Chỉ emit số frame cả hai đều có → mix chuẩn.
+    # Shape: (N, 2) float32 stereo ở out_rate (=lb_rate).
+    lb_resid = np.zeros((0, 2), dtype=np.float32)
+    mc_resid = np.zeros((0, 2), dtype=np.float32)
+
+    # Grace period cho mic "lên trễ" ngay đầu (ASIO init chậm hơn WASAPI).
+    # Trong khoảng này: nếu chỉ có lb và chưa có mic nào → buffer lb, chờ.
+    # Sau khoảng này: mic được coi là đã ổn định, nếu vẫn không có mc data
+    # → coi như mic im lặng (tránh block vô hạn khi mic chết giữa chừng).
+    MIC_GRACE_SEC = 1.0
+    mic_grace_deadline = time.time() + MIC_GRACE_SEC
+    mic_ever_received = False
+
+    def _drain_queue(q):
+        chunks = []
+        while True:
+            try:
+                chunks.append(q.get_nowait())
+            except queue.Empty:
+                break
+        return chunks
+
+    def _lb_to_stereo(chunks):
+        if not chunks:
+            return np.zeros((0, 2), dtype=np.float32)
+        arr = np.frombuffer(b"".join(chunks), dtype=np.int16)
+        if lb_channels == 1:
+            return np.column_stack([arr, arr]).astype(np.float32)
+        if lb_channels == 2:
+            return arr.reshape(-1, 2).astype(np.float32)
+        return arr.reshape(-1, lb_channels)[:, :2].astype(np.float32)
+
+    def _mc_to_stereo(chunks):
+        if not chunks or not mic_stream:
+            return np.zeros((0, 2), dtype=np.float32)
+        arr = np.frombuffer(b"".join(chunks), dtype=np.int16)
+        if actual_mic_channels == 1:
+            mc = np.column_stack([arr, arr]).astype(np.float32)
+        else:
+            mc = arr.reshape(-1, actual_mic_channels)[:, :2].astype(np.float32)
+
+        if mic_resample_ratio != 1.0 and mc.shape[0] > 0:
+            src_len = mc.shape[0]
+            dst_len = max(1, int(round(src_len * mic_resample_ratio)))
+            src_idx = np.arange(src_len, dtype=np.float32)
+            dst_idx = np.linspace(0.0, src_len - 1, dst_len, dtype=np.float32)
+            left  = np.interp(dst_idx, src_idx, mc[:, 0])
+            right = np.interp(dst_idx, src_idx, mc[:, 1])
+            mc = np.column_stack([left, right]).astype(np.float32)
+        return mc
+
+    def _write_mix(lb_seg, mc_seg):
+        """Mix sample-accurate 2 segment cùng độ dài → WAV."""
+        nonlocal frames_written
+        if lb_seg.shape[0] == 0 and mc_seg.shape[0] == 0:
+            return
+        if lb_seg.shape[0] == 0:
+            mixed = np.clip(mc_seg, -32768.0, 32767.0).astype(np.int16)
+        elif mc_seg.shape[0] == 0:
+            mixed = np.clip(lb_seg, -32768.0, 32767.0).astype(np.int16)
+        else:
+            mixed = np.clip(lb_seg + mc_seg, -32768.0, 32767.0).astype(np.int16)
+        wf.writeframes(mixed.tobytes())
+        frames_written += mixed.shape[0]
 
     try:
         while os.path.exists(stop_flag):
             time.sleep(sleep_interval)
 
-            # Drain tất cả chunks tích lũy trong queue (không block)
-            lb_chunks = []
-            while True:
-                try:
-                    lb_chunks.append(lb_queue.get_nowait())
-                except queue.Empty:
-                    break
+            lb_new = _lb_to_stereo(_drain_queue(lb_queue))
+            mc_new = _mc_to_stereo(_drain_queue(mc_queue)) if mic_stream else np.zeros((0, 2), dtype=np.float32)
 
-            mc_chunks = []
-            if mic_stream:
-                while True:
-                    try:
-                        mc_chunks.append(mc_queue.get_nowait())
-                    except queue.Empty:
-                        break
+            if lb_new.shape[0]:
+                lb_resid = np.concatenate([lb_resid, lb_new], axis=0) if lb_resid.shape[0] else lb_new
+            if mc_new.shape[0]:
+                mc_resid = np.concatenate([mc_resid, mc_new], axis=0) if mc_resid.shape[0] else mc_new
+                mic_ever_received = True
 
-            # Nếu cả hai queue đều rỗng → chờ vòng tiếp theo
-            if not lb_chunks and not mc_chunks:
+            if not mic_stream:
+                # Chế độ loopback-only: ghi thẳng, không cần sync.
+                if lb_resid.shape[0]:
+                    _write_mix(lb_resid, np.zeros((0, 2), dtype=np.float32))
+                    lb_resid = np.zeros((0, 2), dtype=np.float32)
                 continue
 
-            # Nếu CHỈ có mic data (loopback chưa kịp fill) → KHÔNG bỏ qua!
-            # Mic chunks sẽ được xử lý và mix với silence loopback.
-
-            # ── Chuyển loopback data → numpy float32 stereo ──
-            if lb_chunks:
-                lb_raw = b"".join(lb_chunks)
-                lb_arr = np.frombuffer(lb_raw, dtype=np.int16)
-                if lb_channels == 1:
-                    lb_stereo = np.column_stack([lb_arr, lb_arr]).astype(np.float32)
-                elif lb_channels == 2:
-                    lb_stereo = lb_arr.reshape(-1, 2).astype(np.float32)
-                else:
-                    lb_arr2 = lb_arr.reshape(-1, lb_channels)
-                    lb_stereo = lb_arr2[:, :2].astype(np.float32)
-            else:
-                lb_stereo = None
-
-            # ── Chuyển mic data → numpy float32 stereo + resample ratio cố định ──
-            mc_stereo = None
-            if mc_chunks and mic_stream:
-                mc_raw = b"".join(mc_chunks)
-                mc_arr = np.frombuffer(mc_raw, dtype=np.int16)
-                if actual_mic_channels == 1:
-                    mc_float = np.column_stack([mc_arr, mc_arr]).astype(np.float32)
-                else:
-                    mc_float = mc_arr.reshape(-1, actual_mic_channels)[:, :2].astype(np.float32)
-
-                if mic_resample_ratio != 1.0 and mc_float.shape[0] > 0:
-                    src_len = mc_float.shape[0]
-                    dst_len = max(1, int(round(src_len * mic_resample_ratio)))
-                    src_idx = np.arange(src_len, dtype=np.float32)
-                    dst_idx = np.linspace(0.0, src_len - 1, dst_len, dtype=np.float32)
-                    left  = np.interp(dst_idx, src_idx, mc_float[:, 0])
-                    right = np.interp(dst_idx, src_idx, mc_float[:, 1])
-                    mc_stereo = np.column_stack([left, right]).astype(np.float32)
-                else:
-                    mc_stereo = mc_float
-
-            # ── Mix 2 nguồn ──
-            if lb_stereo is not None and mc_stereo is not None:
-                min_len = min(lb_stereo.shape[0], mc_stereo.shape[0])
-                mixed = np.clip(
-                    lb_stereo[:min_len] + mc_stereo[:min_len],
-                    -32768.0, 32767.0
-                ).astype(np.int16)
-                # Append phần dư của nguồn dài hơn (không bị cắt)
-                if lb_stereo.shape[0] > min_len:
-                    mixed = np.vstack([mixed, lb_stereo[min_len:].astype(np.int16)])
-                elif mc_stereo.shape[0] > min_len:
-                    mixed = np.vstack([mixed, mc_stereo[min_len:].astype(np.int16)])
-            elif lb_stereo is not None:
-                mixed = lb_stereo.astype(np.int16)
-            elif mc_stereo is not None:
-                mixed = mc_stereo.astype(np.int16)
-            else:
+            # Grace period: chờ mic lên trước khi phát lb đơn độc.
+            in_grace = (not mic_ever_received) and (time.time() < mic_grace_deadline)
+            if in_grace:
                 continue
 
-            wf.writeframes(mixed.tobytes())
-            frames_written += mixed.shape[0]
+            # Sau grace: nếu mic vẫn chưa có dữ liệu NÀO suốt 1s → coi mic silent,
+            # fill zeros cho mc_resid bằng độ dài lb_resid để không kẹt.
+            if not mic_ever_received and lb_resid.shape[0] > 0:
+                mc_resid = np.zeros((lb_resid.shape[0], 2), dtype=np.float32)
+
+            # Emit sample-accurate: min(len_lb, len_mc) frames đã mix chuẩn.
+            n = min(lb_resid.shape[0], mc_resid.shape[0])
+            if n == 0:
+                # Chống bloat: giới hạn buffer ở một giá trị hợp lý (~2s).
+                MAX_RESID = lb_rate * 2
+                if lb_resid.shape[0] > MAX_RESID:
+                    # Mic đã chết giữa chừng → xả lb kèm silence để không drift.
+                    pad = np.zeros((lb_resid.shape[0], 2), dtype=np.float32)
+                    _write_mix(lb_resid, pad)
+                    lb_resid = np.zeros((0, 2), dtype=np.float32)
+                if mc_resid.shape[0] > MAX_RESID:
+                    pad = np.zeros((mc_resid.shape[0], 2), dtype=np.float32)
+                    _write_mix(pad, mc_resid)
+                    mc_resid = np.zeros((0, 2), dtype=np.float32)
+                continue
+
+            _write_mix(lb_resid[:n], mc_resid[:n])
+            lb_resid = lb_resid[n:]
+            mc_resid = mc_resid[n:]
 
     except KeyboardInterrupt:
         pass
+
+    # ── Flush cuối: xả phần dư còn lại (mix nếu có thể, else silence-pad) ──
+    try:
+        # Drain lần cuối
+        lb_last = _lb_to_stereo(_drain_queue(lb_queue))
+        mc_last = _mc_to_stereo(_drain_queue(mc_queue)) if mic_stream else np.zeros((0, 2), dtype=np.float32)
+        if lb_last.shape[0]:
+            lb_resid = np.concatenate([lb_resid, lb_last], axis=0) if lb_resid.shape[0] else lb_last
+        if mc_last.shape[0]:
+            mc_resid = np.concatenate([mc_resid, mc_last], axis=0) if mc_resid.shape[0] else mc_last
+
+        n = min(lb_resid.shape[0], mc_resid.shape[0])
+        if n > 0:
+            _write_mix(lb_resid[:n], mc_resid[:n])
+            lb_resid = lb_resid[n:]
+            mc_resid = mc_resid[n:]
+        # Phần còn dư: pad silence để giữ đúng thời lượng.
+        if lb_resid.shape[0] > 0:
+            _write_mix(lb_resid, np.zeros((lb_resid.shape[0], 2), dtype=np.float32))
+        if mc_resid.shape[0] > 0:
+            _write_mix(np.zeros((mc_resid.shape[0], 2), dtype=np.float32), mc_resid)
+    except Exception as e:
+        print(f"WARNING: Flush cuối lỗi: {e}", flush=True)
 
     # ── Cleanup ─────────────────────────────────────────────────────
     if overflow_count[0] > 0:

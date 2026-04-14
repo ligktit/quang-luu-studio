@@ -677,11 +677,14 @@ class MainDashboard(QMainWindow):
         # Browser YouTube
         if self.settings.get("auto_launch_browser", False):
             browser_path = self.settings.get("browser_path", "")
-            if browser_path and os.path.exists(browser_path):
-                try:
-                    self.engine.launch_app(browser_path, is_web=True)
-                except Exception:
-                    pass
+            if browser_path:
+                # Extract exe path (may have extra args like PWA --app-id=...)
+                _exe = backend.Engine._parse_browser_path(browser_path)[0]
+                if os.path.exists(_exe):
+                    try:
+                        self.engine.launch_app(browser_path, is_web=True)
+                    except Exception:
+                        pass
 
     def _show_settings_dialog(self):
         """Mở dialog thiết lập Mở/Đóng ứng dụng cùng phần mềm."""
@@ -2158,6 +2161,8 @@ class MainDashboard(QMainWindow):
             else:
                 btn.setStyleSheet(pill_btn_qss(base, _lighten(base, 0.15), 10, 10))
 
+
+
     def _on_sfx_play(self, file_path: str):
         """Phát sound effect theo đường dẫn file trực tiếp."""
         if not file_path:
@@ -2246,9 +2251,27 @@ class MainDashboard(QMainWindow):
                     def _play():
                         url = s.get("url")
                         tone = s.get("tone", "C")
+                        title = s.get("title", "")
                         if url:
-                            self.engine.open_youtube_url(url, on_video_end_callback=lambda res: None)
+                            # Tải manual timeline nếu có
+                            tl_data = backend.ManualToneTimeline.load_timeline(url)
+                            manual_tl = None
+                            if tl_data and tl_data.get('timeline'):
+                                manual_tl = tl_data['timeline']
+                            
+                            self.engine.open_youtube_url(
+                                url,
+                                on_video_end_callback=lambda res: None,
+                                on_tone_detected=lambda result: self._tone_result_signal.emit(result),
+                                manual_timeline=manual_tl,
+                            )
+                            
+                            # Cập nhật UI ngay lập tức
                             self.tone_combo.setCurrentText(tone)
+                            if hasattr(self, '_waveform') and title:
+                                self._waveform.set_song_info(title, tone, "Major", 0)
+                            if title:
+                                self._marquee_text = f"🎵 {title}   ★   {tone}"
                             dlg.close()
                     return _play
 
@@ -2530,9 +2553,16 @@ class MainDashboard(QMainWindow):
                 
                 key_display = key_combo.currentText()
                 is_minor = key_display.endswith("m")
+                _CHROMATIC = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
+                _key_root = key_display[:-1] if is_minor else key_display
+                try:
+                    _key_index = _CHROMATIC.index(_key_root)
+                except ValueError:
+                    _key_index = 0
                 timeline_entries.append({
                     'time': float(time_seconds),
                     'key_display': key_display,
+                    'key_index': _key_index,
                     'scale': 'Minor' if is_minor else 'Major'
                 })
             

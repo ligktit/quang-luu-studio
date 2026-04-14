@@ -159,6 +159,23 @@ class ManualToneTimeline:
         return result
     
     @staticmethod
+    def get_entry_at_position(timeline, position_seconds):
+        """Lấy entry áp dụng cho thời gian hiện tại (thời gian <= position lớn nhất)"""
+        if not timeline:
+            return None, -1
+            
+        target_idx = -1
+        for i, entry in enumerate(timeline):
+            if entry['time'] <= position_seconds:
+                target_idx = i
+            else:
+                break
+                
+        if target_idx >= 0:
+            return timeline[target_idx], target_idx
+        return None, -1
+
+    @staticmethod
     def time_str_to_seconds(time_str):
         """Chuyển 'MM:SS' hoặc 'HH:MM:SS' thành giây (float). Trả None nếu không hợp lệ."""
         try:

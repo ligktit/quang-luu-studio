@@ -30,6 +30,7 @@ from core.config import (
 from core.utils import extract_video_id
 from core.memory import MemoryProfiler, MemoryGuard
 from core.media_monitor import WindowsMediaMonitor, _WIN_MEDIA_AVAILABLE
+from core.cdp_monitor import CDPYouTubeMonitor
 from core.midi import MidiHandler
 from core.tone_cache import ToneCacheManager, ManualToneTimeline
 from core.recorder import AudioRecorder
@@ -100,11 +101,13 @@ class ToneSession:
 
     @property
     def is_replaying(self):
-        return self.state == ToneState.REPLAYING
+        with self._lock:
+            return self.state == ToneState.REPLAYING
 
     @property
     def is_scanning(self):
-        return self.state == ToneState.SCANNING
+        with self._lock:
+            return self.state == ToneState.SCANNING
 
     @property
     def cancel_event(self):
@@ -130,8 +133,12 @@ class SystemEngine:
         self._quick_score_thread = None
         self.on_quick_score_complete = None
         
-        # Khởi tạo WindowsMediaMonitor
+        # Khởi tạo WindowsMediaMonitor (WinRT - fallback)
         self.media_monitor = WindowsMediaMonitor()
+        
+        # Khởi tạo CDPYouTubeMonitor (CDP - ưu tiên)
+        self.cdp_monitor = CDPYouTubeMonitor()
+        self.cdp_monitor.start()
         
         # Trạng thái theo dõi YouTube
         self.current_youtube_url = None
@@ -459,12 +466,79 @@ class SystemEngine:
         ".multiinstrument", ".pedalboard", ".channel", ".macro", ".fxchain",
     )
 
+    @staticmethod
+    def _parse_browser_path(raw_path):
+        """
+        Parse browser_path robustly — handles malformed settings.json values like:
+        - "msedge.exe--remote-debugging-port=9222" (no space)
+        - Unbalanced quotes: '...msedge.exe "https://...' (missing closing quote)
+        - Paths with spaces: 'C:/Program Files (x86)/.../msedge.exe'
+        Returns: list of [exe_path, *flags]
+        """
+        import re
+        # Normalize path separators
+        s = raw_path.replace('\\', '/')
+
+        # Try shlex first
+        try:
+            import shlex
+            parts = shlex.split(s)
+            if parts and os.path.exists(parts[0]):
+                return parts
+        except ValueError:
+            pass  # "No closing quotation" etc.
+
+        # Fallback: extract exe path with regex
+        # Match up to .exe (case insensitive), including paths with spaces
+        m = re.match(r'^(.+?\.exe)\b', s, re.IGNORECASE)
+        if m:
+            exe_path = m.group(1).strip().strip('"').strip("'")
+            remainder = s[m.end():].strip()
+            # Split remainder on whitespace, filtering out URLs and empty strings
+            flags = []
+            for token in re.split(r'\s+', remainder):
+                token = token.strip('"').strip("'")
+                if not token:
+                    continue
+                # Skip embedded URLs (user may have pasted URL into settings)
+                if token.startswith('http://') or token.startswith('https://'):
+                    continue
+                # Fix stuck flags like "--remote-debugging-port=9222" attached to exe
+                if token.startswith('-'):
+                    flags.append(token)
+                elif token.startswith('='):
+                    # Stuck to previous flag
+                    if flags:
+                        flags[-1] += token
+            return [exe_path] + flags
+
+        # Last resort: treat entire string as exe path
+        return [s.strip().strip('"')]
+
     def launch_app(self, path, is_web=False):
-        if not path or not os.path.exists(path): return
+        if not path: return
         
         if is_web:
-             threading.Thread(target=lambda: subprocess.Popen([path, "youtube.com"]), daemon=True).start()
+            def _launch_web():
+                from core.config import CDP_DEBUG_PORT
+                args = self._parse_browser_path(path)
+                exe_path = args[0]
+                
+                if os.path.exists(exe_path):
+                    is_pwa = any("--app-id" in a for a in args)
+                    # Mở browser với CDP flags trên default profile (giữ PWA + login)
+                    if not any("remote-debugging-port" in a for a in args):
+                        args.insert(1, f"--remote-debugging-port={CDP_DEBUG_PORT}")
+                    if not any("remote-allow-origins" in a for a in args):
+                        args.insert(1, "--remote-allow-origins=*")
+                    # PWA launcher đã biết URL từ --app-id, không append youtube.com
+                    if not is_pwa:
+                        args.append("youtube.com")
+                    print(f"🌐 [AUTO LAUNCH] Mở {'PWA' if is_pwa else 'YouTube'} với CDP")
+                    subprocess.Popen(args)
+            threading.Thread(target=_launch_web, daemon=True).start()
         else:
+            if not os.path.exists(path): return
             # Logic mở file Studio One (.song, .soundset, ...) hoặc .exe
             if path.lower().endswith(self.STUDIO_ONE_EXTENSIONS):
                 try: os.startfile(path)
@@ -671,6 +745,9 @@ class SystemEngine:
         self.current_youtube_url = url
         self.on_video_end_callback = on_video_end_callback
         self.on_tone_detected_callback = on_tone_detected
+        # Bug fix: sync _last_watched_url ngay tại đây để watcher không cancel
+        # replay vừa khởi động (watcher poll sau ~5s, url != _last_watched_url → is_replaying → stop()).
+        self._last_watched_url = url
         
         # Mở YouTube trong browser
         def open_browser():
@@ -716,20 +793,37 @@ class SystemEngine:
                 except Exception as e:
                     print(f"⚠️ Không thể focus vào browser: {e}")
             
-            if browser_path and os.path.exists(browser_path):
+            if browser_path:
                 try:
-                    subprocess.Popen([browser_path, url])
+                    from core.config import CDP_DEBUG_PORT
+                    args = self._parse_browser_path(browser_path)
+                    exe_path = args[0]
+                    
+                    if os.path.exists(exe_path):
+                        # Mở browser với CDP flags trên default profile (giữ PWA + login)
+                        if not any("remote-debugging-port" in a for a in args):
+                            args.insert(1, f"--remote-debugging-port={CDP_DEBUG_PORT}")
+                        if not any("remote-allow-origins" in a for a in args):
+                            args.insert(1, "--remote-allow-origins=*")
+                            
+                        args.append(url)
+                        print(f"🌐 [BROWSER] Mở URL với CDP (default profile): {exe_path}")
+                        print(f"   Flags: --remote-debugging-port={CDP_DEBUG_PORT}")
+                        subprocess.Popen(args)
+                    else:
+                        print(f"⚠️ [BROWSER] Không tìm thấy file: {exe_path}. Mở bằng mặc định...")
+                        os.startfile(url)
                 except Exception as e:
-                    print(f"⚠️ Lỗi mở browser: {e}")
+                    print(f"⚠️ [BROWSER] Lỗi khởi chạy: {e}")
                     try:
                         os.startfile(url)
                     except Exception:
-                        print(f"⚠️ Không thể mở URL: {url}")
+                        pass
             else:
                 try:
                     os.startfile(url)
                 except Exception:
-                    print(f"⚠️ Không thể mở URL: {url}")
+                    print(f"⚠️ [BROWSER] Không thể mở URL: {url}")
         
         threading.Thread(target=open_browser, daemon=True).start()
         
@@ -739,9 +833,16 @@ class SystemEngine:
             self._tone_session.start_scanning(url)
             replay_cancel = self._tone_session.transition_to_replaying()
             def replay_manual():
-                print("🎵 [MANUAL TONE] Đợi Browser phát nhạc (Windows Media API)...")
-                if not self.media_monitor.wait_for_playback(timeout=30):
-                    print("⚠️ [MANUAL TONE] Timeout chờ phát, bắt đầu replay anyway...")
+                print("🎵 [MANUAL TONE] Đợi Browser phát nhạc...")
+                
+                # Ưu tiên chờ CDP, fallback sang WinRT
+                if self.cdp_monitor.is_connected:
+                    if not self.cdp_monitor.wait_for_playback(timeout=30):
+                        print("⚠️ [MANUAL TONE] Timeout chờ phát CDP, bắt đầu replay anyway...")
+                else:
+                    if not self.media_monitor.wait_for_playback(timeout=30):
+                        print("⚠️ [MANUAL TONE] Timeout chờ phát WinRT, bắt đầu replay anyway...")
+                        
                 if replay_cancel is not None:
                     self._replay_manual_timeline(manual_timeline, cancel_event=replay_cancel)
             threading.Thread(target=replay_manual, daemon=True).start()
@@ -754,9 +855,15 @@ class SystemEngine:
                 self._tone_session.start_scanning(url)
                 replay_cancel = self._tone_session.transition_to_replaying()
                 def replay_resolved_manual():
-                    print("🎵 [MANUAL TONE] Đợi Browser phát nhạc (Windows Media API)...")
-                    if not self.media_monitor.wait_for_playback(timeout=30):
-                        print("⚠️ [MANUAL TONE] Timeout chờ phát, bắt đầu replay anyway...")
+                    print("🎵 [MANUAL TONE] Đợi Browser phát nhạc...")
+                    
+                    if self.cdp_monitor.is_connected:
+                        if not self.cdp_monitor.wait_for_playback(timeout=30):
+                            print("⚠️ [MANUAL TONE] Timeout chờ phát CDP, bắt đầu replay anyway...")
+                    else:
+                        if not self.media_monitor.wait_for_playback(timeout=30):
+                            print("⚠️ [MANUAL TONE] Timeout chờ phát WinRT, bắt đầu replay anyway...")
+                            
                     if replay_cancel is not None:
                         self._replay_manual_timeline(resolved_timeline, cancel_event=replay_cancel)
                 threading.Thread(target=replay_resolved_manual, daemon=True).start()
@@ -765,18 +872,30 @@ class SystemEngine:
                 self._tone_session.start_scanning(url)
                 replay_cancel = self._tone_session.transition_to_replaying()
                 def replay_resolved_cache():
-                    print("🎵 [CACHE TONE] Đợi Browser phát nhạc (Windows Media API)...")
-                    if not self.media_monitor.wait_for_playback(timeout=30):
-                        print("⚠️ [CACHE TONE] Timeout chờ phát, bắt đầu replay anyway...")
+                    print("🎵 [CACHE TONE] Đợi Browser phát nhạc...")
+                    
+                    if self.cdp_monitor.is_connected:
+                        if not self.cdp_monitor.wait_for_playback(timeout=30):
+                            print("⚠️ [CACHE TONE] Timeout chờ phát CDP, bắt đầu replay anyway...")
+                    else:
+                        if not self.media_monitor.wait_for_playback(timeout=30):
+                            print("⚠️ [CACHE TONE] Timeout chờ phát WinRT, bắt đầu replay anyway...")
+                            
                     if replay_cancel is not None:
                         self._replay_cached_timeline(resolved_cached, cancel_event=replay_cancel)
                 threading.Thread(target=replay_resolved_cache, daemon=True).start()
             else:
                 # Không có manual hay cache → auto-detect (dò tone liên tục)
                 def auto_detect_tone():
-                    print("🎵 [AUTO TONE] Đợi Browser phát nhạc (Windows Media API)...")
-                    if not self.media_monitor.wait_for_playback(timeout=30):
-                        print("⚠️ [AUTO TONE] Timeout chờ phát, bắt đầu detect anyway...")
+                    print("🎵 [AUTO TONE] Đợi Browser phát nhạc...")
+                    
+                    if self.cdp_monitor.is_connected:
+                        if not self.cdp_monitor.wait_for_playback(timeout=30):
+                            print("⚠️ [AUTO TONE] Timeout chờ phát CDP, bắt đầu detect anyway...")
+                    else:
+                        if not self.media_monitor.wait_for_playback(timeout=30):
+                            print("⚠️ [AUTO TONE] Timeout chờ phát WinRT, bắt đầu detect anyway...")
+                            
                     print("🔍 [AUTO TONE] Không có cache, bắt đầu dò tone liên tục...")
                     self.detect_tone_continuous(url=url)
                 threading.Thread(target=auto_detect_tone, daemon=True).start()
@@ -1559,57 +1678,67 @@ class SystemEngine:
                 else:
                     current_interval = poll_interval  # Mặc định: 1.5s
                 
-                # ── Tầng 1 (nhẹ): EnumWindows + GetWindowText — so sánh title ──
-                all_windows = SystemEngine._enum_all_visible_windows()
-                
-                # Tạo fingerprint CHỈ từ browser windows (bỏ qua Studio One, DAW, etc.)
-                # Studio One cập nhật title liên tục (vị trí, trạng thái record) → nếu tính
-                # fingerprint từ TẤT CẢ windows, hash thay đổi mỗi poll → UIAutomation 
-                # scan chạy mỗi 1.5s → tạo hàng nghìn COM objects → TRÀN RAM!
-                _BROWSER_TITLE_KEYS = ("chrome", "edge", "firefox", "brave", "opera", "vivaldi", "youtube")
-                browser_titles = tuple(
-                    title for _, title in all_windows
-                    if any(k in title.lower() for k in _BROWSER_TITLE_KEYS)
-                )
-                titles_fingerprint = hash(browser_titles)
-                
-                if titles_fingerprint == self._prev_browser_titles:
-                    # Title browser không đổi → skip UIAutomation (tiết kiệm ~90% CPU + RAM)
-                    pass
-                else:
-                    # ── Tầng 2 (nặng): Title thay đổi → đọc URL qua UIAutomation ──
-                    self._prev_browser_titles = titles_fingerprint
-                    
-                    url = SystemEngine.detect_youtube_url_from_browser(
-                        quiet=True,
-                        all_windows=all_windows,
-                        pwa_title_cache=self._pwa_title_cache,
-                    )
-                    
-                    if url:
-                        self._no_browser_count = 0  # Reset counter
+                # ── Helper: xử lý URL mới phát hiện (dùng chung Tier 0, 1, 2) ──
+                def _handle_new_url(url):
+                    self._no_browser_count = 0
+                    if url != self._last_watched_url:
+                        if not self._tone_session.is_active:
+                            self._dispatch_auto_detect(url, engine_ref)
+                            self._last_watched_url = url
+                        elif self._tone_session.is_scanning:
+                            with self._pending_url_lock:
+                                self._pending_url_queue = [url]
+                            print(f"👁️ [YT WATCHER] {url[:60]}... sẽ được dò sau khi Dò Full hiện tại xong")
+                        elif self._tone_session.is_replaying:
+                            print(f"👁️ [YT WATCHER] URL mới trong lúc replay → hủy replay, dò URL mới")
+                            self._tone_session.stop()
+                            self._dispatch_auto_detect(url, engine_ref)
+                            self._last_watched_url = url
 
-                        if url != self._last_watched_url:
-                            if not self._tone_session.is_active:
-                                # IDLE → bắt đầu dò ngay
-                                self._dispatch_auto_detect(url, engine_ref)
-                                self._last_watched_url = url
-                            elif self._tone_session.is_scanning:
-                                # Đang Dò Full → enqueue URL mới, xử lý sau khi xong
-                                with self._pending_url_lock:
-                                    # Chỉ giữ URL mới nhất (không cần queue dài)
-                                    self._pending_url_queue = [url]
-                                print(f"👁️ [YT WATCHER] {url[:60]}... sẽ được dò sau khi Dò Full hiện tại xong")
-                            # Đang REPLAYING → URL mới quan trọng hơn, hủy replay và dò ngay
-                            elif self._tone_session.is_replaying:
-                                print(f"👁️ [YT WATCHER] URL mới trong lúc replay → hủy replay, dò URL mới")
-                                self._tone_session.stop()
-                                self._dispatch_auto_detect(url, engine_ref)
-                                self._last_watched_url = url
+                # ── Tầng 0 (ưu tiên): CDP — chính xác nhất, không cần UIAutomation/PWA search ──
+                # CDP cập nhật target_url mỗi 100ms từ window.location.href → luôn up-to-date.
+                # Works cho cả browser thông thường lẫn PWA YouTube (Edge/Chrome App).
+                _url_from_cdp = False
+                if self.cdp_monitor.is_connected and self.cdp_monitor.target_url:
+                    cdp_url = SystemEngine._clean_youtube_url(self.cdp_monitor.target_url)
+                    if cdp_url:
+                        _url_from_cdp = True
+                        _handle_new_url(cdp_url)
+
+                if not _url_from_cdp:
+                    # ── Tầng 1 (nhẹ): EnumWindows + GetWindowText — so sánh title ──
+                    all_windows = SystemEngine._enum_all_visible_windows()
+
+                    # Tạo fingerprint CHỈ từ browser windows (bỏ qua Studio One, DAW, etc.)
+                    # Studio One cập nhật title liên tục (vị trí, trạng thái record) → nếu tính
+                    # fingerprint từ TẤT CẢ windows, hash thay đổi mỗi poll → UIAutomation
+                    # scan chạy mỗi 1.5s → tạo hàng nghìn COM objects → TRÀN RAM!
+                    _BROWSER_TITLE_KEYS = ("chrome", "edge", "firefox", "brave", "opera", "vivaldi", "youtube")
+                    browser_titles = tuple(
+                        title for _, title in all_windows
+                        if any(k in title.lower() for k in _BROWSER_TITLE_KEYS)
+                    )
+                    titles_fingerprint = hash(browser_titles)
+
+                    if titles_fingerprint == self._prev_browser_titles:
+                        # Title browser không đổi → skip UIAutomation (tiết kiệm ~90% CPU + RAM)
+                        pass
                     else:
-                        self._no_browser_count += 1
-                
-                del all_windows  # Giải phóng list (hwnd, title) ngay sau khi dùng
+                        # ── Tầng 2 (nặng): Title thay đổi → đọc URL qua UIAutomation + PWA fallback ──
+                        self._prev_browser_titles = titles_fingerprint
+
+                        url = SystemEngine.detect_youtube_url_from_browser(
+                            quiet=True,
+                            all_windows=all_windows,
+                            pwa_title_cache=self._pwa_title_cache,
+                        )
+
+                        if url:
+                            _handle_new_url(url)
+                        else:
+                            self._no_browser_count += 1
+
+                    del all_windows  # Giải phóng list (hwnd, title) ngay sau khi dùng
 
             except Exception as e:
                 print(f"⚠️ [YT WATCHER] Lỗi poll: {e}")
@@ -2679,10 +2808,11 @@ class SystemEngine:
         if not timeline:
             return
 
-        if not _WIN_MEDIA_AVAILABLE:
-            print("❌ [REPLAY] Cần cài winrt để replay timeline theo timeline YouTube.")
-            print("   Chạy: pip install winrt-Windows.Media.Control winrt-Windows.Foundation")
-            return
+        # Không hard-return khi winrt vắng — CDP là nguồn thay thế đủ dùng.
+        # Loop bên trong dùng cdp_monitor nếu connected, fallback sang media_monitor.
+        if not _WIN_MEDIA_AVAILABLE and not self.cdp_monitor.is_connected:
+            print("⚠️ [CACHE REPLAY] Không có winrt và CDP chưa kết nối — replay sẽ chờ CDP.")
+            print("   Mở trình duyệt với --remote-debugging-port để CDP tự kết nối.")
 
         # Nếu không được truyền cancel_event → lấy từ ToneSession hiện tại
         if cancel_event is None:
@@ -2695,34 +2825,48 @@ class SystemEngine:
         timeline = sorted(timeline, key=lambda x: x['time'])
 
         def _replay():
-            current_key  = None
-            last_idx     = -1
-            _gc_counter  = 0
+            current_key    = None
+            last_idx       = -1
+            last_position  = 0.0
+            _gc_counter    = 0
+
+            # Log nguồn đồng bộ
+            if self.cdp_monitor.is_connected:
+                print(f"🔗 [CACHE REPLAY] Nguồn đồng bộ: CDP (port {self.cdp_monitor.port})")
+            else:
+                print(f"⚠️ [CACHE REPLAY] CDP chưa kết nối, dùng WinRT")
 
             while not cancel_event.is_set():
+                # Ưu tiên CDP, fallback sang WinRT
+                is_playing = self.cdp_monitor.is_playing if self.cdp_monitor.is_connected else self.media_monitor.is_playing
+                
                 # Đợi nhạc phát (không bận-wait)
-                if not self.media_monitor.is_playing:
-                    cancel_event.wait(0.1)  # Ngủ 100ms, có thể bị cancel
+                if not is_playing:
+                    cancel_event.wait(0.1)
                     continue
 
-                elapsed = self.media_monitor.current_position
+                elapsed = self.cdp_monitor.current_position if self.cdp_monitor.is_connected else self.media_monitor.current_position
 
-                # Tìm entry có time <= elapsed (lớn nhất thỏa mãn)
-                target_idx = -1
-                for i, entry in enumerate(timeline):
-                    if entry['time'] <= elapsed:
-                        target_idx = i
-                    else:
-                        break
+                # Anti-jitter: bỏ qua các nhảy ngược nhỏ (WinRT jitter < 2s)
+                if elapsed < last_position - 2.0:
+                    last_idx = -1
+                    print(f"⏮️ [CACHE REPLAY] Seek detected: {last_position:.1f}s → {elapsed:.1f}s")
+                elif elapsed < last_position - 0.3:
+                    cancel_event.wait(0.1)
+                    continue
+                last_position = elapsed
+
+                # Tìm entry phù hợp bằng helper
+                entry, target_idx = ManualToneTimeline.get_entry_at_position(timeline, elapsed)
 
                 if target_idx >= 0 and target_idx != last_idx:
-                    entry   = timeline[target_idx]
                     new_key = entry['key_display']
 
                     if new_key != current_key or last_idx == -1:
                         current_key = new_key
                         self._send_tone_midi(entry)
-                        print(f"▶️ [CACHE REPLAY] t={elapsed:.1f}s (trigger={entry['time']}s): {new_key}")
+                        sync_src = "CDP" if self.cdp_monitor.is_connected else "WinRT"
+                        print(f"▶️ [CACHE REPLAY] t={elapsed:.1f}s (trigger={entry['time']}s) [{sync_src}]: {new_key}")
 
                         if self.on_tone_detected_callback:
                             try:
@@ -2758,10 +2902,11 @@ class SystemEngine:
         if not timeline:
             return
 
-        if not _WIN_MEDIA_AVAILABLE:
-            print("❌ [MANUAL REPLAY] Cần cài winrt để replay timeline theo YouTube.")
-            print("   Chạy: pip install winrt-Windows.Media.Control winrt-Windows.Foundation")
-            return
+        # Không hard-return khi winrt vắng — CDP là nguồn thay thế đủ dùng.
+        # Loop bên trong dùng cdp_monitor nếu connected, fallback sang media_monitor.
+        if not _WIN_MEDIA_AVAILABLE and not self.cdp_monitor.is_connected:
+            print("⚠️ [MANUAL REPLAY] Không có winrt và CDP chưa kết nối — replay sẽ chờ CDP.")
+            print("   Mở trình duyệt với --remote-debugging-port để CDP tự kết nối.")
 
         # Nếu không được truyền cancel_event → lấy từ ToneSession hiện tại
         if cancel_event is None:
@@ -2772,35 +2917,51 @@ class SystemEngine:
         print(f"▶️ [MANUAL REPLAY] Bắt đầu replay: {len(timeline)} entries")
 
         def _replay():
-            current_key = None
-            last_idx    = -1
-            _gc_counter = 0
+            current_key    = None
+            last_idx       = -1
+            last_position  = 0.0
+            _gc_counter    = 0
+
+            # Log nguồn đồng bộ
+            if self.cdp_monitor.is_connected:
+                print(f"🔗 [MANUAL REPLAY] Nguồn đồng bộ: CDP (port {self.cdp_monitor.port})")
+            else:
+                print(f"⚠️ [MANUAL REPLAY] CDP chưa kết nối, dùng WinRT (có thể không chính xác)")
 
             while not cancel_event.is_set():
+                # Ưu tiên CDP, fallback sang WinRT
+                is_playing = self.cdp_monitor.is_playing if self.cdp_monitor.is_connected else self.media_monitor.is_playing
+                
                 # Đợi nhạc phát (cancelable wait)
-                if not self.media_monitor.is_playing:
+                if not is_playing:
                     cancel_event.wait(0.1)
                     continue
 
-                elapsed = self.media_monitor.current_position
+                elapsed = self.cdp_monitor.current_position if self.cdp_monitor.is_connected else self.media_monitor.current_position
 
-                # Tìm entry có time <= elapsed (lớn nhất thỏa mãn)
-                target_idx = -1
-                for i, entry in enumerate(timeline):
-                    if entry['time'] <= elapsed:
-                        target_idx = i
-                    else:
-                        break
+                # Anti-jitter: bỏ qua các nhảy ngược nhỏ (WinRT jitter < 2s)
+                if elapsed < last_position - 2.0:
+                    # Seek thật sự (người dùng túa video) → reset index
+                    last_idx = -1
+                    print(f"⏮️ [MANUAL REPLAY] Seek detected: {last_position:.1f}s → {elapsed:.1f}s")
+                elif elapsed < last_position - 0.3:
+                    # Jitter nhỏ từ WinRT → bỏ qua
+                    cancel_event.wait(0.1)
+                    continue
+                last_position = elapsed
+
+                # Tìm entry bằng helper
+                entry, target_idx = ManualToneTimeline.get_entry_at_position(timeline, elapsed)
 
                 if target_idx >= 0 and target_idx != last_idx:
-                    entry   = timeline[target_idx]
                     new_key = entry['key_display']
 
                     if new_key != current_key or last_idx == -1:
                         current_key = new_key
                         self._send_tone_midi(entry)
                         time_str = ManualToneTimeline.seconds_to_time_str(entry['time'])
-                        print(f"▶️ [MANUAL REPLAY] t={elapsed:.1f}s (trigger={time_str}): {new_key}")
+                        sync_src = "CDP" if self.cdp_monitor.is_connected else "WinRT"
+                        print(f"▶️ [MANUAL REPLAY] t={elapsed:.1f}s (trigger={time_str}) [{sync_src}]: {new_key}")
 
                         if self.on_tone_detected_callback:
                             try:
