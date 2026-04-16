@@ -117,7 +117,7 @@ class MainDashboard(QMainWindow):
         # Window — Performance Stage: 1100×650
         self.setWindowTitle("Quang Lưu Studio")
         self.setWindowIcon(QIcon("app_icon.ico"))
-        self.setMinimumWidth(900)
+        self.setMinimumWidth(780)
         self._autotune_on = False
         self.setStyleSheet(APP_QSS)
 
@@ -137,9 +137,10 @@ class MainDashboard(QMainWindow):
         root.addWidget(self._build_body(), 1)
         root.addWidget(self._build_bottom_bar())
 
-        compact_min_h = max(240, self.minimumSizeHint().height())
+        compact_min_h = max(200, self.minimumSizeHint().height())
         self.setMinimumHeight(compact_min_h)
-        self.resize(1100, max(compact_min_h + 20, 300))
+        self.setMinimumWidth(780)
+        self.resize(850, max(compact_min_h + 20, 280))
 
         # MIDI
         self.engine.register_midi_callback(self.on_midi_status_changed)
@@ -250,20 +251,18 @@ class MainDashboard(QMainWindow):
         wrapper.setStyleSheet(f"background-color: {C['bg']};")
         wl = QVBoxLayout(wrapper)
         wl.setContentsMargins(SP.SM, 2, SP.SM, 2)
-        wl.setSpacing(2)
+        wl.setSpacing(4)
 
-        # ── 2. FOUR-PANEL CONTROL DOCK ─────────
-        dock = QHBoxLayout()
-        dock.setSpacing(6)
-
-        dock.addWidget(self._build_panel_mixer(), 25)
-        dock.addWidget(self._build_panel_tone(), 25)
-        dock.addWidget(self._build_panel_mode(), 25)
-        dock.addWidget(self._build_panel_tools(), 25)
-
-        wl.addLayout(dock)
+        # ── Hàng 1: Mixer + Mode + Tools ──
+        top_dock = QHBoxLayout()
+        top_dock.setSpacing(6)
+        top_dock.addWidget(self._build_panel_mixer(), 35)
+        top_dock.addWidget(self._build_panel_mode(), 35)
+        top_dock.addWidget(self._build_panel_tools(), 30)
+        wl.addLayout(top_dock)
 
         return wrapper
+
 
     # ── Panel 1: MIXER ────────────────────────────────────
     def _build_panel_mixer(self):
@@ -280,7 +279,6 @@ class MainDashboard(QMainWindow):
             {"label": "Nhạc",    "icon": "♪", "color": C["teal"],         "cc": "mix_music",   "range": (0, 100), "default": 70, "unit": ""},
             {"label": "Mic",     "icon": "☉", "color": C["orange"],       "cc": "mix_mic",     "range": (-10, 10), "default": 0, "unit": " dB"},
             {"label": "Vang",    "icon": "≡", "color": C["accent"],       "cc": "mix_reverb",  "range": (-10, 10), "default": 0, "unit": " dB"},
-            {"label": "B.Track", "icon": "☖", "color": C["light_purple"], "cc": "mix_backing", "range": (0, 100), "default": 70, "unit": ""},
         ]
 
         self._mixer_sliders = {}
@@ -318,43 +316,130 @@ class MainDashboard(QMainWindow):
         vl.addStretch()
         return panel
 
-    # ── Panel 2: TONE ─────────────────────────────────────
-    def _build_panel_tone(self):
-        panel = GlassPanel("TONE")
+    # ── Panel 4: TOOLS & TONE ────────────────────────────────────
+    def _build_panel_tools(self):
+        panel = GlassPanel("TOOLS")
+        
+        # Tăng khoảng thở dọc
+        panel.body_layout.addSpacing(6)
+        
+        grid = QGridLayout()
+        grid.setSpacing(3)
+
+        func_btns = [
+            ("Chế độ: Nhanh",  C["orange"],       self._on_toggle_scan_mode),
+            ("Dò Lại",      C["teal"],         self._on_force_rescan),
+            ("Auto-Tune",     C["pink"],         self._on_tone_auto),
+            ("Fix Méo",      C["deep_purple"],  self._on_fix_meo),
+        ]
+        self._func_buttons = {}
+        for i, (text, color, cb) in enumerate(func_btns):
+            btn = PainterButton(text, color=color, height=26, radius=8, font_size=9)
+            btn.clicked.connect(cb)
+            grid.addWidget(btn, i // 2, i % 2)
+            self._func_buttons[text] = btn
+
+        panel.body_layout.addLayout(grid)
+        
+        # ── Add Tone Controls Here (moved from bottom) ──
+        panel.body_layout.addSpacing(16)
+        
         hl = QHBoxLayout()
-        hl.setContentsMargins(4, 0, 4, 0)
-        hl.setSpacing(SP.SM)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(0)
 
+        hl.addStretch(1)
         hl.addWidget(self._build_tone_knob("Tone Nhạc", "tone_music", C["teal"]))
-        hl.addWidget(self._build_tone_knob("Tone Giọng", "tone_voice", C["accent"]))
+        hl.addSpacing(16)
 
+        # Vertical divider
+        from PySide6.QtWidgets import QFrame as _TF
+        div = _TF()
+        div.setFrameShape(_TF.VLine)
+        div.setFixedHeight(28)
+        div.setStyleSheet(f"color: {C['border']}; background: {C['border']}; border: none; min-width: 1px; max-width: 1px;")
+        hl.addWidget(div, 0, Qt.AlignVCenter)
+
+        hl.addSpacing(16)
+        hl.addWidget(self._build_tone_knob("Tone Giọng", "tone_voice", C["accent"]))
+        hl.addStretch(1)
+        
         panel.body_layout.addLayout(hl)
         panel.body_layout.addStretch()
         return panel
 
+
     def _build_tone_knob(self, label, cc_key, color):
-        """Tone Nhạc / Tone Giọng — Rotary Knob (QPainter)"""
+        """Tone Nhạc / Tone Giọng — Stepper (+/−) buttons"""
         wrapper = QWidget()
         vl = QVBoxLayout(wrapper)
-        vl.setContentsMargins(0, 2, 0, 2)
-        vl.setSpacing(SP.XS)
+        vl.setContentsMargins(4, 4, 4, 4)
+        vl.setSpacing(4)
         vl.setAlignment(Qt.AlignCenter)
 
-        # Rotary Knob
-        knob = PainterKnob(label=label, minimum=-12, maximum=12,
-                           value=0, color=color, size=56)
-        vl.addWidget(knob, 0, Qt.AlignCenter)
-
+        # Label row
         lbl = QLabel(label)
-        lbl.setStyleSheet(f"font-size:10px; color:{C['text_muted']}; font-weight:600; font-family: {FONT}; background:transparent;")
+        lbl.setStyleSheet(f"font-size:10px; color:{C['text_muted']}; font-weight:700; font-family:{FONT}; background:transparent;")
         lbl.setAlignment(Qt.AlignCenter)
         vl.addWidget(lbl)
 
-        # Semitone value label
-        val_lbl = QLabel("+0")
-        val_lbl.setStyleSheet(f"font-size:11px; font-weight:700; color:{color}; font-family: {FONT_MONO}; background:transparent;")
+        # Stepper row: [−]  [value]  [+]
+        stepper_row = QHBoxLayout()
+        stepper_row.setSpacing(4)
+        stepper_row.setContentsMargins(0, 0, 0, 0)
+
+        _btn_qss = f"""
+            QPushButton {{
+                background-color: {color};
+                color: #fff;
+                border: none;
+                border-radius: 14px;
+                font-size: 16px;
+                font-weight: 900;
+                font-family: {FONT};
+            }}
+            QPushButton:hover {{
+                background-color: {_lighten(color, 0.15)};
+            }}
+            QPushButton:pressed {{
+                background-color: {_lighten(color, -0.1)};
+            }}
+        """
+
+        btn_minus = QPushButton("−")
+        btn_minus.setFixedSize(28, 28)
+        btn_minus.setCursor(Qt.PointingHandCursor)
+        btn_minus.setStyleSheet(_btn_qss)
+        btn_minus.setToolTip(f"Giảm {label} 1 bán cung")
+
+        val_lbl = QLabel(" 0 ")
+        val_lbl.setFixedWidth(42)
         val_lbl.setAlignment(Qt.AlignCenter)
-        vl.addWidget(val_lbl)
+        val_lbl.setStyleSheet(f"""
+            font-size: 14px;
+            font-weight: 800;
+            color: {color};
+            font-family: {FONT_MONO};
+            background: rgba(0,0,0,0.25);
+            border-radius: 6px;
+            padding: 2px 4px;
+        """)
+
+        btn_plus = QPushButton("+")
+        btn_plus.setFixedSize(28, 28)
+        btn_plus.setCursor(Qt.PointingHandCursor)
+        btn_plus.setStyleSheet(_btn_qss)
+        btn_plus.setToolTip(f"Tăng {label} 1 bán cung")
+
+        stepper_row.addStretch()
+        stepper_row.addWidget(btn_minus)
+        stepper_row.addWidget(val_lbl)
+        stepper_row.addWidget(btn_plus)
+        stepper_row.addStretch()
+        vl.addLayout(stepper_row)
+
+        # Current value (semitones, −12 … +12)
+        _current = [0]
 
         # Chromatic scale (12 half-steps)
         _CHROMATIC = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
@@ -382,25 +467,34 @@ class MainDashboard(QMainWindow):
             self.engine.send_midi(MIDI_CC["key_root"], key_midi)
             print(f"🎹 [KEY] {label} -> {base} -> {new_key} (MIDI {key_midi})")
 
-        def _on_knob_changed(new_val):
-            # Update semitone display
-            val_lbl.setText(f"{new_val:+d}")
-            # Send MIDI CC for tone shift
+        def _apply_value(new_val):
+            new_val = max(-12, min(12, new_val))
+            old_val = _current[0]
+            if new_val == old_val:
+                return
+            _current[0] = new_val
+
+            # Update display
+            sign = "+" if new_val >= 0 else ""
+            val_lbl.setText(f"{sign}{new_val}")
+
+            # Send MIDI CC
             midi_value = int(((new_val + 12) / 24) * 127)
             self.engine.send_midi(MIDI_CC[cc_key], midi_value)
 
             if cc_key == "tone_music":
-                old = self.tone_music_value
+                delta = new_val - old_val
                 self.tone_music_value = new_val
-                delta = new_val - old
                 if delta != 0:
                     _shift_key_midi(delta)
             else:
                 self.tone_voice_value = new_val
 
-        knob.valueChanged.connect(_on_knob_changed)
+        btn_minus.clicked.connect(lambda: _apply_value(_current[0] - 1))
+        btn_plus.clicked.connect(lambda: _apply_value(_current[0] + 1))
 
         return wrapper
+
 
     # ── Panel 3: MODE & SFX ───────────────────────────────
     def _build_panel_mode(self):
@@ -450,32 +544,7 @@ class MainDashboard(QMainWindow):
         vl.addStretch()
         return panel
 
-    # ── Panel 4: TOOLS ────────────────────────────────────
-    def _build_panel_tools(self):
-        panel = GlassPanel("TOOLS")
-        
-        # Tăng khoảng thở dọc
-        panel.body_layout.addSpacing(6)
-        
-        grid = QGridLayout()
-        grid.setSpacing(3)
 
-        func_btns = [
-            ("Chế độ: Nhanh",  C["orange"],       self._on_toggle_scan_mode),
-            ("Dò Lại",      C["teal"],         self._on_force_rescan),
-            ("Auto-Tune",     C["pink"],         self._on_tone_auto),
-            ("Fix Méo",      C["deep_purple"],  self._on_fix_meo),
-        ]
-        self._func_buttons = {}
-        for i, (text, color, cb) in enumerate(func_btns):
-            btn = PainterButton(text, color=color, height=26, radius=8, font_size=9)
-            btn.clicked.connect(cb)
-            grid.addWidget(btn, i // 2, i % 2)
-            self._func_buttons[text] = btn
-
-        panel.body_layout.addLayout(grid)
-        panel.body_layout.addStretch()
-        return panel
 
     def _make_mute_callback(self, cc_key, mute_cc_map, ch_view):
         def toggle(is_muted):
@@ -688,52 +757,116 @@ class MainDashboard(QMainWindow):
 
     def _show_settings_dialog(self):
         """Mở dialog thiết lập Mở/Đóng ứng dụng cùng phần mềm."""
-        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox, QLineEdit, QFileDialog
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox, QLineEdit, QFileDialog, QScrollArea, QWidget, QFrame
 
         dlg = QDialog(self)
         dlg.setWindowTitle("⚙️ Thiết lập")
-        dlg.setFixedSize(520, 700)
+        dlg.setMinimumSize(580, 560)
+        dlg.setMaximumSize(620, 820)
+        dlg.resize(580, 680)
         dlg.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 
-        layout = QVBoxLayout(dlg)
-        layout.setSpacing(12)
-        layout.setContentsMargins(24, 20, 24, 20)
+        # Outer layout: title + scroll + footer buttons
+        outer = QVBoxLayout(dlg)
+        outer.setSpacing(0)
+        outer.setContentsMargins(0, 0, 0, 0)
 
+        # ── Header ──
+        header_frame = QFrame()
+        header_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {C['card']};
+                border-bottom: 1px solid {C['border']};
+            }}
+        """)
+        header_lay = QVBoxLayout(header_frame)
+        header_lay.setContentsMargins(24, 16, 24, 14)
         title = QLabel("⚙️ Thiết lập khởi động")
-        title.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {C['teal']}; font-family: {FONT};")
+        title.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {C['teal']}; font-family: {FONT}; background: transparent; border: none;")
         title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
+        header_lay.addWidget(title)
+        outer.addWidget(header_frame)
 
-        # ── Đường dẫn ──
-        def _section_label(text):
-            lbl = QLabel(text)
-            lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px; font-weight: 600; font-family: {FONT}; margin-top: 6px;")
-            return lbl
+        # ── Scroll Area wrapping all content ──
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ border: none; background-color: {C['bg']}; }}
+            QScrollBar:vertical {{
+                background: {C['card']}; width: 6px; border-radius: 3px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {C['border']}; border-radius: 3px; min-height: 20px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        """)
+
+        content_widget = QWidget()
+        content_widget.setStyleSheet(f"background-color: {C['bg']};")
+        layout = QVBoxLayout(content_widget)
+        layout.setSpacing(14)
+        layout.setContentsMargins(20, 16, 20, 16)
+
+        # ── Helper functions ──
+        def _section_header(icon, text):
+            """Card-style section header"""
+            frame = QFrame()
+            frame.setStyleSheet(f"""
+                QFrame {{
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 rgba(56,189,248,18), stop:1 rgba(56,189,248,0));
+                    border-left: 3px solid {C['teal']};
+                    border-radius: 0px 6px 6px 0px;
+                    padding: 2px;
+                }}
+            """)
+            row = QHBoxLayout(frame)
+            row.setContentsMargins(10, 6, 10, 6)
+            lbl = QLabel(f"{icon}  {text}")
+            lbl.setStyleSheet(f"color: {C['text']}; font-size: 13px; font-weight: 700; font-family: {FONT}; background: transparent; border: none;")
+            row.addWidget(lbl)
+            return frame
+
+        def _section_card(widgets_fn):
+            """Wrap content in a card frame"""
+            card = QFrame()
+            card.setStyleSheet(f"""
+                QFrame {{
+                    background-color: rgba(30,41,59,180);
+                    border-radius: 10px;
+                    border: 1px solid rgba(51,65,85,0.6);
+                }}
+            """)
+            vl = QVBoxLayout(card)
+            vl.setContentsMargins(14, 12, 14, 12)
+            vl.setSpacing(10)
+            widgets_fn(vl)
+            return card
 
         input_qss = f"""
             QLineEdit {{
-                background-color: {C['card']};
+                background-color: {C['bg']};
                 color: {C['text']};
                 border: 1px solid {C['border']};
                 border-radius: 8px;
-                padding: 7px 10px;
+                padding: 8px 10px;
                 font-size: 13px;
                 font-family: {FONT};
             }}
-            QLineEdit:focus {{ border-color: {C['teal']}; }}
+            QLineEdit:focus {{ border-color: {C['teal']}; border-width: 2px; }}
         """
 
-        # — Studio One path —
-        layout.addWidget(_section_label("🎹 Đường dẫn Studio One (.song hoặc .exe):"))
-        row_so = QHBoxLayout()
+        # ── SECTION 1: Đường dẫn ──
+        layout.addWidget(_section_header("📁", "Đường dẫn ứng dụng"))
+
+        # Create path inputs first (need them in _save closure)
         inp_so = QLineEdit(self.settings.get("studio_one_path", ""))
         inp_so.setPlaceholderText("VD: D:/Songs/BaiHat.song hoặc C:/.../Studio One 7.exe")
-        inp_so.setStyleSheet(input_qss)
-        row_so.addWidget(inp_so)
         browse_so = QPushButton("📂")
-        browse_so.setFixedSize(38, 34)
-        browse_so.setCursor(Qt.PointingHandCursor)
-        browse_so.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 13, 8))
+        inp_br = QLineEdit(self.settings.get("browser_path", ""))
+        inp_br.setPlaceholderText("VD: C:/Program Files/Google/Chrome/chrome.exe")
+        browse_br = QPushButton("📂")
+
         def _browse_so():
             path, _ = QFileDialog.getOpenFileName(
                 dlg, "Chọn file Studio One hoặc chương trình", "",
@@ -741,21 +874,6 @@ class MainDashboard(QMainWindow):
             )
             if path:
                 inp_so.setText(path)
-        browse_so.clicked.connect(_browse_so)
-        row_so.addWidget(browse_so)
-        layout.addLayout(row_so)
-
-        # — Browser / YouTube path —
-        layout.addWidget(_section_label("🌐 Đường dẫn trình duyệt (YouTube):"))
-        row_br = QHBoxLayout()
-        inp_br = QLineEdit(self.settings.get("browser_path", ""))
-        inp_br.setPlaceholderText("VD: C:/Program Files/Google/Chrome/chrome.exe")
-        inp_br.setStyleSheet(input_qss)
-        row_br.addWidget(inp_br)
-        browse_br = QPushButton("📂")
-        browse_br.setFixedSize(38, 34)
-        browse_br.setCursor(Qt.PointingHandCursor)
-        browse_br.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 13, 8))
         def _browse_br():
             path, _ = QFileDialog.getOpenFileName(
                 dlg, "Chọn trình duyệt", "",
@@ -763,61 +881,95 @@ class MainDashboard(QMainWindow):
             )
             if path:
                 inp_br.setText(path)
+        browse_so.clicked.connect(_browse_so)
         browse_br.clicked.connect(_browse_br)
-        row_br.addWidget(browse_br)
-        layout.addLayout(row_br)
 
-        # ── Checkboxes ──
+        def _build_paths(vl):
+            soLabel = QLabel("🎹 Studio One (.song hoặc .exe):")
+            soLabel.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px; font-weight: 600; font-family: {FONT}; background:transparent; border:none;")
+            vl.addWidget(soLabel)
+            row_so = QHBoxLayout()
+            row_so.setSpacing(6)
+            inp_so.setStyleSheet(input_qss)
+            row_so.addWidget(inp_so)
+            browse_so.setFixedSize(38, 36)
+            browse_so.setCursor(Qt.PointingHandCursor)
+            browse_so.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 14, 8))
+            row_so.addWidget(browse_so)
+            vl.addLayout(row_so)
+
+            brLabel = QLabel("🌐 Trình duyệt (YouTube):")
+            brLabel.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px; font-weight: 600; font-family: {FONT}; background:transparent; border:none;")
+            vl.addWidget(brLabel)
+            row_br = QHBoxLayout()
+            row_br.setSpacing(6)
+            inp_br.setStyleSheet(input_qss)
+            row_br.addWidget(inp_br)
+            browse_br.setFixedSize(38, 36)
+            browse_br.setCursor(Qt.PointingHandCursor)
+            browse_br.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 14, 8))
+            row_br.addWidget(browse_br)
+            vl.addLayout(row_br)
+
+        layout.addWidget(_section_card(_build_paths))
+
+        # ── SECTION 2: Khởi động tự động ──
+        layout.addWidget(_section_header("🚀", "Khởi động / Tắt tự động"))
+
         checkbox_qss = f"""
             QCheckBox {{
                 spacing: 10px;
-                font-size: 14px;
+                font-size: 13px;
                 font-family: {FONT};
                 color: {C['text']};
-                padding: 8px 4px;
+                padding: 4px 2px;
+                background: transparent;
             }}
             QCheckBox::indicator {{
-                width: 20px; height: 20px;
+                width: 18px; height: 18px;
                 border-radius: 4px;
                 border: 2px solid {C['border']};
-                background-color: {C['card']};
+                background-color: {C['bg']};
             }}
             QCheckBox::indicator:checked {{
                 background-color: {C['teal']};
                 border-color: {C['teal']};
             }}
         """
-
         cb_launch_so = QCheckBox("🎹 Mở Studio One khi khởi động")
         cb_launch_so.setStyleSheet(checkbox_qss)
         cb_launch_so.setChecked(self.settings.get("auto_launch_studio_one", False))
-        layout.addWidget(cb_launch_so)
 
         cb_launch_br = QCheckBox("🌐 Mở YouTube (trình duyệt) khi khởi động")
         cb_launch_br.setStyleSheet(checkbox_qss)
         cb_launch_br.setChecked(self.settings.get("auto_launch_browser", False))
-        layout.addWidget(cb_launch_br)
 
         cb_close_so = QCheckBox("🎹 Đóng Studio One khi thoát")
         cb_close_so.setStyleSheet(checkbox_qss)
         cb_close_so.setChecked(self.settings.get("auto_close_studio_one", False))
-        layout.addWidget(cb_close_so)
 
         cb_close_br = QCheckBox("🌐 Đóng trình duyệt khi thoát")
         cb_close_br.setStyleSheet(checkbox_qss)
         cb_close_br.setChecked(self.settings.get("auto_close_browser", False))
-        layout.addWidget(cb_close_br)
 
-        # ── Thiết bị Ghi Âm ──
-        layout.addWidget(_section_label("🎙️ Nguồn thu nhạc (Loopback / ASIOVADPRO):"))
+        def _build_autolaunch(vl):
+            vl.addWidget(cb_launch_so)
+            vl.addWidget(cb_launch_br)
+            vl.addWidget(cb_close_so)
+            vl.addWidget(cb_close_br)
+
+        layout.addWidget(_section_card(_build_autolaunch))
+
+        # ── SECTION 3: Thiết bị Ghi Âm ──
+        layout.addWidget(_section_header("🎙️", "Thiết bị ghi âm"))
 
         combo_qss = f"""
             QComboBox {{
-                background-color: {C['card']};
+                background-color: {C['bg']};
                 color: {C['text']};
                 border: 1px solid {C['border']};
                 border-radius: 8px;
-                padding: 6px 10px;
+                padding: 7px 10px;
                 font-size: 12px;
                 font-family: {FONT};
             }}
@@ -832,8 +984,8 @@ class MainDashboard(QMainWindow):
         """
 
         # Đọc danh sách thiết bị
-        audio_devices = []   # (display_str, index)
-        all_input_devices = []  # (display_str, index)
+        audio_devices = []
+        all_input_devices = []
         saved_lb_idx = self.settings.get("record_loopback_device", -1)
         saved_mic_idx = self.settings.get("record_mic_device", -1)
 
@@ -857,28 +1009,15 @@ class MainDashboard(QMainWindow):
         except Exception as e:
             print(f"⚠️ [SETTINGS] Cannot enumerate audio devices: {e}")
 
-        # ComboBox: nguồn nhạc
         combo_lb = __import__('PySide6.QtWidgets', fromlist=['QComboBox']).QComboBox()
         combo_lb.setStyleSheet(combo_qss)
-        combo_lb.addItem("🔄 Tự động (WASAPI Loopback của lọa mặc định)", -1)
+        combo_lb.addItem("🔄 Tự động (WASAPI Loopback của loa mặc định)", -1)
         lb_sel = 0
         for idx, (label, dev_idx) in enumerate(audio_devices):
             combo_lb.addItem(label, dev_idx)
             if dev_idx == saved_lb_idx:
                 lb_sel = idx + 1
         combo_lb.setCurrentIndex(lb_sel)
-        layout.addWidget(combo_lb)
-
-        asio_hint = QLabel(
-            "💡 Nếu dùng ASIOVADPRO: chọn thiết bị có tên 'ASIOVAD' hoặc 'VB-Cable' trong danh sách"
-        )
-        asio_hint.setStyleSheet(
-            f"color: {C['orange']}; font-size: 11px; font-style: italic; font-family: {FONT};"
-        )
-        asio_hint.setWordWrap(True)
-        layout.addWidget(asio_hint)
-
-        layout.addWidget(_section_label("🎵 Microphone:"))
 
         combo_mic = __import__('PySide6.QtWidgets', fromlist=['QComboBox']).QComboBox()
         combo_mic.setStyleSheet(combo_qss)
@@ -890,46 +1029,74 @@ class MainDashboard(QMainWindow):
             if dev_idx == saved_mic_idx:
                 mic_sel = idx + 2
         combo_mic.setCurrentIndex(mic_sel)
-        layout.addWidget(combo_mic)
 
-        # --- Calibrate Auto-Tune button ---
+        def _build_audio(vl):
+            lb_lbl = QLabel("Nguồn nhạc (Loopback / ASIOVADPRO):")
+            lb_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px; font-weight: 600; font-family: {FONT}; background:transparent; border:none;")
+            vl.addWidget(lb_lbl)
+            vl.addWidget(combo_lb)
+
+            hint = QLabel("💡 Nếu dùng ASIOVADPRO: chọn thiết bị có tên 'ASIOVAD' hoặc 'VB-Cable'")
+            hint.setStyleSheet(f"color: {C['orange']}; font-size: 11px; font-style: italic; font-family: {FONT}; background:transparent; border:none;")
+            hint.setWordWrap(True)
+            vl.addWidget(hint)
+
+            mic_lbl = QLabel("🎵 Microphone:")
+            mic_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px; font-weight: 600; font-family: {FONT}; background:transparent; border:none;")
+            vl.addWidget(mic_lbl)
+            vl.addWidget(combo_mic)
+
+        layout.addWidget(_section_card(_build_audio))
+
+        # ── Calibrate button ──
         calibrate_btn = QPushButton("🎛️ Calibrate Auto-Tune")
         calibrate_btn.setCursor(Qt.PointingHandCursor)
-        calibrate_btn.setFixedHeight(38)
+        calibrate_btn.setFixedHeight(40)
         calibrate_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.1), 14, 18))
         calibrate_btn.clicked.connect(lambda: (dlg.close(), self._show_calibration_wizard()))
         add_shadow(calibrate_btn, C["orange"], 8, (0, 2))
         layout.addWidget(calibrate_btn)
-
         layout.addStretch()
 
-        # --- Buttons ---
-        btn_box = QHBoxLayout()
-        save_btn = QPushButton("💾 Lưu")
+        scroll.setWidget(content_widget)
+        outer.addWidget(scroll, 1)
+
+        # ── Footer Buttons ──
+        footer = QFrame()
+        footer.setStyleSheet(f"""
+            QFrame {{
+                background-color: {C['card']};
+                border-top: 1px solid {C['border']};
+            }}
+        """)
+        footer_lay = QHBoxLayout(footer)
+        footer_lay.setContentsMargins(20, 12, 20, 12)
+        footer_lay.setSpacing(10)
+
+        save_btn = QPushButton("💾 Lưu thiết lập")
         save_btn.setCursor(Qt.PointingHandCursor)
-        save_btn.setFixedHeight(38)
+        save_btn.setFixedHeight(40)
         save_btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.1), 14, 18))
+        add_shadow(save_btn, C["green"], 8, (0, 2))
 
         cancel_btn = QPushButton("Hủy")
         cancel_btn.setCursor(Qt.PointingHandCursor)
-        cancel_btn.setFixedHeight(38)
+        cancel_btn.setFixedHeight(40)
+        cancel_btn.setFixedWidth(90)
         cancel_btn.setStyleSheet(pill_btn_qss(C["card_hover"], _lighten(C["card_hover"], 0.1), 14, 18))
         cancel_btn.clicked.connect(dlg.close)
 
         def _save():
-            # Lưu đường dẫn
             new_so = inp_so.text().strip()
             new_br = inp_br.text().strip()
             if new_so:
                 self.settings["studio_one_path"] = new_so
             if new_br:
                 self.settings["browser_path"] = new_br
-            # Lưu checkbox
             self.settings["auto_launch_studio_one"] = cb_launch_so.isChecked()
             self.settings["auto_launch_browser"] = cb_launch_br.isChecked()
             self.settings["auto_close_studio_one"] = cb_close_so.isChecked()
             self.settings["auto_close_browser"] = cb_close_br.isChecked()
-            # Lưu thiết bị ghi âm
             self.settings["record_loopback_device"] = combo_lb.currentData()
             self.settings["record_mic_device"] = combo_mic.currentData()
             backend.ConfigManager.save_settings(self.settings)
@@ -937,9 +1104,9 @@ class MainDashboard(QMainWindow):
             dlg.close()
 
         save_btn.clicked.connect(_save)
-        btn_box.addWidget(save_btn)
-        btn_box.addWidget(cancel_btn)
-        layout.addLayout(btn_box)
+        footer_lay.addWidget(save_btn, 1)
+        footer_lay.addWidget(cancel_btn)
+        outer.addWidget(footer)
 
         dlg.exec()
 
@@ -959,7 +1126,7 @@ class MainDashboard(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle("🎛️ Calibrate Auto-Tune")
-        dlg.setFixedSize(560, 620)
+        dlg.setFixedSize(620, 700)
         dlg.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 
         main_layout = QVBoxLayout(dlg)
@@ -1728,12 +1895,14 @@ class MainDashboard(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle("🎤 Kết quả Star Score")
-        dlg.setFixedSize(500, 600)
+        dlg.setMinimumSize(520, 640)
+        dlg.resize(540, 720)
         dlg.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
-        layout = QVBoxLayout(dlg)
-        layout.setContentsMargins(SP.XL, SP.XL, SP.XL, SP.XL)
-        layout.setSpacing(SP.MD)
-        
+
+        outer = QVBoxLayout(dlg)
+        outer.setSpacing(0)
+        outer.setContentsMargins(0, 0, 0, 0)
+
         score = result.get("total_score", 0)
         feed = result.get("feedback", {})
         rank = feed.get("rank", "Ca Sĩ")
@@ -1746,68 +1915,154 @@ class MainDashboard(QMainWindow):
         elif score >= 80: theme_color = C["green"]
         elif score >= 70: theme_color = C["orange"]
         else: theme_color = C["pink"]
-        
-        # Title
+
+        # ── Gradient Header with Score ──
+        from PySide6.QtWidgets import QScrollArea as _SA, QWidget as _W
+        header_frame = QFrame()
+        header_frame.setStyleSheet(f"""
+            QFrame {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(30,41,59,255), stop:1 {C['bg']});
+                border-bottom: 1px solid rgba(56,189,248,0.2);
+            }}
+        """)
+        header_lay = QVBoxLayout(header_frame)
+        header_lay.setContentsMargins(24, 20, 24, 16)
+        header_lay.setSpacing(4)
+
         t = QLabel(f"{icon} {rank.upper()} {icon}")
-        t.setStyleSheet(f"font-size: 24px; font-weight: bold; color: {theme_color}; font-family: {FONT};")
+        t.setStyleSheet(f"font-size: 22px; font-weight: bold; color: {theme_color}; font-family: {FONT}; background: transparent;")
         t.setAlignment(Qt.AlignCenter)
-        layout.addWidget(t)
-        
-        # Score Circle (Text)
-        c = QLabel(f"{score:.1f}")
-        c.setStyleSheet(f"font-size: 72px; font-weight: 900; color: {C['text']}; font-family: {FONT};")
-        c.setAlignment(Qt.AlignCenter)
-        layout.addWidget(c)
-        
+        header_lay.addWidget(t)
+
+        # Score display with colored styling
+        score_wrapper = QFrame()
+        score_wrapper.setStyleSheet("background: transparent; border: none;")
+        sw_lay = QHBoxLayout(score_wrapper)
+        sw_lay.setContentsMargins(0, 0, 0, 0)
+        sw_lay.setAlignment(Qt.AlignCenter)
+        c_lbl = QLabel(f"{score:.1f}")
+        c_lbl.setStyleSheet(f"font-size: 80px; font-weight: 900; color: {theme_color}; font-family: {FONT}; background: transparent; letter-spacing: -4px;")
+        c_lbl.setAlignment(Qt.AlignCenter)
+        sw_lay.addWidget(c_lbl)
+        header_lay.addWidget(score_wrapper)
+
         # Stars
         stars_cnt = 5 if score>=95 else 4 if score>=85 else 3 if score>=75 else 2 if score>=60 else 1
         stars_html = "".join(["<span style='color: #F59E0B;'>★</span>" for _ in range(stars_cnt)]) + "".join(["<span style='color: #334155;'>★</span>" for _ in range(5-stars_cnt)])
         star_lbl = QLabel(stars_html)
-        star_lbl.setStyleSheet(f"font-size: 28px;")
+        star_lbl.setStyleSheet("font-size: 30px; background: transparent;")
         star_lbl.setAlignment(Qt.AlignCenter)
-        layout.addWidget(star_lbl)
-        
+        header_lay.addWidget(star_lbl)
+
+        outer.addWidget(header_frame)
+
+        # ── Scroll Content ──
+        scroll = _SA()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ border: none; background-color: {C['bg']}; }}
+            QScrollBar:vertical {{ background: {C['card']}; width: 5px; border-radius: 2px; }}
+            QScrollBar::handle:vertical {{ background: {C['border']}; border-radius: 2px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        """)
+        scroll_content = _W()
+        scroll_content.setStyleSheet(f"background-color: {C['bg']};")
+        layout = QVBoxLayout(scroll_content)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(14)
+
         # Stats Panel
         stats_panel = QFrame()
-        stats_panel.setStyleSheet(f"background-color: {C['card']}; border-radius: 12px; border: 1px solid {C['border']};")
+        stats_panel.setStyleSheet(f"""
+            QFrame {{
+                background-color: {C['card']};
+                border-radius: 14px;
+                border: 1px solid {C['border']};
+            }}
+        """)
         stats_layout = QVBoxLayout(stats_panel)
-        stats_layout.setContentsMargins(SP.LG, SP.LG, SP.LG, SP.LG)
-        stats_layout.setSpacing(SP.LG)
-        
+        stats_layout.setContentsMargins(20, 16, 20, 16)
+        stats_layout.setSpacing(14)
+
+        # Section header inside stats
+        stats_title = QLabel("📊 Chi tiết kết quả")
+        stats_title.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px; font-weight: 700; font-family: {FONT}; background: transparent; border: none; letter-spacing: 1px;")
+        stats_layout.addWidget(stats_title)
+
         def _add_metric(name, val, clr1, clr2):
-            l = QHBoxLayout()
-            l.addWidget(QLabel(name, styleSheet=f"color: {C['text_muted']}; font-size: 13px; font-weight: bold;", fixedWidth=140))
-            l.addWidget(ProgressBarCustom(val, clr1, clr2))
-            l.addWidget(QLabel(f"{val:.0f}%", alignment=Qt.AlignRight, styleSheet=f"color: {C['text']}; font-size: 13px; font-weight: bold;", fixedWidth=40))
-            stats_layout.addLayout(l)
+            row = QHBoxLayout()
+            row.setSpacing(10)
+            name_lbl = QLabel(name)
+            name_lbl.setFixedWidth(155)
+            name_lbl.setStyleSheet(f"color: {C['text']}; font-size: 13px; font-weight: 600; background: transparent; border: none;")
+            row.addWidget(name_lbl)
+            row.addWidget(ProgressBarCustom(val, clr1, clr2))
+            val_lbl = QLabel(f"{val:.0f}%")
+            val_lbl.setFixedWidth(42)
+            val_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            val_lbl.setStyleSheet(f"color: {clr1}; font-size: 13px; font-weight: 700; background: transparent; border: none;")
+            row.addWidget(val_lbl)
+            stats_layout.addLayout(row)
             
         _add_metric("🔊 Nhất quán âm lượng", result.get("volume_consistency", 0), C["accent"], C["pink"])
         _add_metric("🎵 Chính xác cao độ", result.get("pitch_accuracy", 0), C["blue"], C["primary"])
         _add_metric("🎯 Độ rung và luyến", result.get("pitch_stability", 0), C["creative"], C["pink"])
         
         layout.addWidget(stats_panel)
+        add_shadow(stats_panel)
         
         # Feedback Panel
         fb_panel = QFrame()
-        fb_panel.setStyleSheet(f"background-color: rgba(56, 189, 248, 0.05); border-radius: 12px; border: 1px solid rgba(56, 189, 248, 0.2);")
+        fb_panel.setStyleSheet(f"""
+            QFrame {{
+                background-color: rgba(56, 189, 248, 0.06);
+                border-radius: 14px;
+                border: 1px solid rgba(56, 189, 248, 0.25);
+            }}
+        """)
         fb_layout = QVBoxLayout(fb_panel)
-        fb_layout.addWidget(QLabel(f"<b>Nhận xét:</b> {main_fb}", styleSheet=f"color: {C['text']}; font-size: 14px;", wordWrap=True))
+        fb_layout.setContentsMargins(16, 14, 16, 14)
+        fb_layout.setSpacing(8)
+
+        fb_title = QLabel("💬 Nhận xét")
+        fb_title.setStyleSheet(f"color: {C['primary']}; font-size: 11px; font-weight: 700; font-family: {FONT}; background: transparent; border: none; letter-spacing: 1px;")
+        fb_layout.addWidget(fb_title)
+
+        main_lbl = QLabel(main_fb)
+        main_lbl.setStyleSheet(f"color: {C['text']}; font-size: 14px; font-weight: 500; font-family: {FONT}; background: transparent; border: none;")
+        main_lbl.setWordWrap(True)
+        fb_layout.addWidget(main_lbl)
+
         for tip in tips:
-            fb_layout.addWidget(QLabel(tip, styleSheet=f"color: {C['text_muted']}; font-size: 13px;", wordWrap=True))
+            tip_lbl = QLabel(f"• {tip}")
+            tip_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 13px; font-family: {FONT}; background: transparent; border: none;")
+            tip_lbl.setWordWrap(True)
+            fb_layout.addWidget(tip_lbl)
         
         layout.addWidget(fb_panel)
         layout.addStretch()
-        
-        btn = QPushButton("Tiếp Tục Đam Mê")
-        btn.setStyleSheet(pill_btn_qss(theme_color, _lighten(theme_color, 0.1), 14, 12))
-        btn.setFixedHeight(45)
-        btn.clicked.connect(dlg.accept)
-        layout.addWidget(btn)
-        
-        add_shadow(stats_panel)
         add_shadow(fb_panel)
+
+        scroll.setWidget(scroll_content)
+        outer.addWidget(scroll, 1)
+
+        # ── Footer Button ──
+        footer = QFrame()
+        footer.setStyleSheet(f"background-color: {C['card']}; border-top: 1px solid {C['border']};")
+        footer_lay = QHBoxLayout(footer)
+        footer_lay.setContentsMargins(20, 12, 20, 12)
+        btn = QPushButton("🎤  Tiếp Tục Đam Mê")
+        btn.setStyleSheet(pill_btn_qss(theme_color, _lighten(theme_color, 0.1), 15, 18))
+        btn.setFixedHeight(46)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.clicked.connect(dlg.accept)
+        add_shadow(btn, theme_color, 12, (0, 3))
+        footer_lay.addWidget(btn)
+        outer.addWidget(footer)
         
         dlg.exec()
+
 
     def _show_message(self, text, is_error=False):
         """Show temporary message box in center of dashboard"""
@@ -1830,30 +2085,59 @@ class MainDashboard(QMainWindow):
             return
             
         # Không có URL → mở popup
-        from PySide6.QtWidgets import QDialog, QLineEdit, QVBoxLayout, QHBoxLayout
+        from PySide6.QtWidgets import QDialog, QLineEdit, QVBoxLayout, QHBoxLayout, QFrame as _QF
         dlg = QDialog(self)
         dlg.setWindowTitle("💾 Lưu bài hát")
-        dlg.setFixedSize(480, 160)
-        dlg.setStyleSheet(f"background-color: {C['card']}; color: {C['text']};")
-        
-        layout = QVBoxLayout(dlg)
-        
+        dlg.setFixedSize(520, 210)
+        dlg.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
+
+        outer = QVBoxLayout(dlg)
+        outer.setSpacing(0)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        # Header
+        hdr = _QF()
+        hdr.setStyleSheet(f"background-color: {C['card']}; border-bottom: 1px solid {C['border']};")
+        hdr_lay = QVBoxLayout(hdr)
+        hdr_lay.setContentsMargins(20, 14, 20, 12)
         title = QLabel("💾 Nhập URL bài hát cần lưu")
-        title.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {C['teal']}; font-family: {FONT};")
+        title.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {C['teal']}; font-family: {FONT}; background: transparent; border: none;")
         title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
-        
+        hdr_lay.addWidget(title)
+        outer.addWidget(hdr)
+
+        body = QVBoxLayout()
+        body.setContentsMargins(20, 14, 20, 14)
+        body.setSpacing(10)
+
         url_input = QLineEdit()
         url_input.setPlaceholderText("https://www.youtube.com/watch?v=...")
-        url_input.setStyleSheet(f"QLineEdit {{ background-color: {C['bg']}; color: {C['text']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 10px; font-size: 13px; font-family: {FONT}; }}")
-        layout.addWidget(url_input)
-        
+        url_input.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {C['card']};
+                color: {C['text']};
+                border: 1px solid {C['border']};
+                border-radius: 10px;
+                padding: 10px 14px;
+                font-size: 13px;
+                font-family: {FONT};
+            }}
+            QLineEdit:focus {{ border-color: {C['teal']}; border-width: 2px; }}
+        """)
+        body.addWidget(url_input)
+
         btn_box = QHBoxLayout()
+        btn_box.setSpacing(8)
         save_btn = QPushButton("💾 Lưu")
-        save_btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 12, 12))
+        save_btn.setFixedHeight(38)
+        save_btn.setCursor(Qt.PointingHandCursor)
+        save_btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 13, 12))
         cancel_btn = QPushButton("Hủy")
-        cancel_btn.setStyleSheet(pill_btn_qss(C["card_hover"], _lighten(C["card_hover"], 0.1), 12, 12))
-        
+        cancel_btn.setFixedHeight(38)
+        cancel_btn.setFixedWidth(80)
+        cancel_btn.setCursor(Qt.PointingHandCursor)
+        cancel_btn.setStyleSheet(pill_btn_qss(C["card_hover"], _lighten(C["card_hover"], 0.1), 13, 12))
+
         def save_from_url():
             url = url_input.text().strip()
             if not url or ("youtube.com" not in url and "youtu.be" not in url):
@@ -1864,11 +2148,17 @@ class MainDashboard(QMainWindow):
             
         save_btn.clicked.connect(save_from_url)
         cancel_btn.clicked.connect(dlg.reject)
-        
-        btn_box.addWidget(save_btn)
+
+        btn_box.addWidget(save_btn, 1)
         btn_box.addWidget(cancel_btn)
-        layout.addLayout(btn_box)
+        body.addLayout(btn_box)
+
+        body_widget = _QF()
+        body_widget.setStyleSheet(f"background: {C['bg']}; border: none;")
+        body_widget.setLayout(body)
+        outer.addWidget(body_widget)
         dlg.exec()
+
 
     def _process_quick_save(self, url, tone):
         def _task():
@@ -2164,19 +2454,43 @@ class MainDashboard(QMainWindow):
 
 
     def _on_sfx_play(self, file_path: str):
-        """Phát sound effect theo đường dẫn file trực tiếp."""
+        """Phát sound effect theo đường dẫn file (hỗ trợ wav, mp3, ogg, flac...)."""
         if not file_path:
             return
         if not os.path.exists(file_path):
             print(f"⚠️ Không tìm thấy file SFX: {file_path}")
             return
-        def _play():
-            try:
-                import winsound
-                winsound.PlaySound(file_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-            except Exception as e:
-                print(f"❌ Lỗi phát SFX: {e}")
-        threading.Thread(target=_play, daemon=True).start()
+        try:
+            from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+            from PySide6.QtCore import QUrl
+
+            # Tạo player mới mỗi lần (cho phép chồng tiếng)
+            player = QMediaPlayer(self)
+            audio_out = QAudioOutput(self)
+            player.setAudioOutput(audio_out)
+            audio_out.setVolume(1.0)
+            player.setSource(QUrl.fromLocalFile(file_path))
+            player.play()
+
+            # Dọn dẹp khi phát xong
+            def _cleanup(status):
+                if status == QMediaPlayer.EndOfMedia:
+                    player.deleteLater()
+                    audio_out.deleteLater()
+            player.mediaStatusChanged.connect(_cleanup)
+
+            print(f"🔊 SFX: {os.path.basename(file_path)}")
+        except Exception as e:
+            print(f"❌ Lỗi phát SFX: {e}")
+            # Fallback: winsound cho file .wav
+            if file_path.lower().endswith(".wav"):
+                def _play_fallback():
+                    try:
+                        import winsound
+                        winsound.PlaySound(file_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                    except Exception:
+                        pass
+                threading.Thread(target=_play_fallback, daemon=True).start()
 
     def _on_sfx_config_changed(self, sfx_list: list):
         """Lưu danh sách SFX buttons vào settings.json khi thay đổi."""
@@ -2193,34 +2507,107 @@ class MainDashboard(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle("Danh sách bài hát")
-        dlg.setFixedSize(650, 480)
+        dlg.setMinimumHeight(520)
+        dlg.setMinimumWidth(780)
         dlg.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
-        layout = QVBoxLayout(dlg)
 
-        title = QLabel("Danh sách bài hát đã lưu")
-        title.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {C['green']}; font-family: {FONT};")
-        layout.addWidget(title)
+        outer = QVBoxLayout(dlg)
+        outer.setSpacing(0)
+        outer.setContentsMargins(0, 0, 0, 0)
 
+        # ── Header ──
+        hdr = QFrame()
+        hdr.setStyleSheet(f"""
+            QFrame {{
+                background-color: {C['card']};
+                border-bottom: 1px solid {C['border']};
+            }}
+        """)
+        hdr_lay = QHBoxLayout(hdr)
+        hdr_lay.setContentsMargins(20, 14, 20, 12)
+
+        title_lbl = QLabel("🎵  Danh sách bài hát")
+        title_lbl.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {C['green']}; font-family: {FONT}; background: transparent; border: none;")
+        hdr_lay.addWidget(title_lbl)
+        hdr_lay.addStretch()
+
+        count_lbl = QLabel(f"{len(songs)} bài")
+        count_lbl.setStyleSheet(f"font-size: 13px; color: {C['text_muted']}; font-family: {FONT}; background: transparent; border: none;")
+        hdr_lay.addWidget(count_lbl)
+        outer.addWidget(hdr)
+
+        # ── Scroll Content ──
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(f"QScrollArea {{ border: none; background-color: {C['bg']}; }}")
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ border: none; background-color: {C['bg']}; }}
+            QScrollBar:vertical {{ background: {C['card']}; width: 6px; border-radius: 3px; }}
+            QScrollBar::handle:vertical {{ background: {C['border']}; border-radius: 3px; min-height: 20px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        """)
 
         content = QWidget()
+        content.setMinimumWidth(740)
         content.setStyleSheet(f"background-color: {C['bg']};")
         c_layout = QVBoxLayout(content)
+        c_layout.setSpacing(8)
+        c_layout.setContentsMargins(16, 14, 16, 14)
 
         if not songs:
+            empty_frame = QFrame()
+            empty_frame.setStyleSheet(f"""
+                QFrame {{
+                    background-color: rgba(30,41,59,120);
+                    border-radius: 14px;
+                    border: 1px dashed {C['border']};
+                }}
+            """)
+            ef_lay = QVBoxLayout(empty_frame)
+            ef_lay.setContentsMargins(30, 30, 30, 30)
+
+            empty_icon = QLabel("🎵")
+            empty_icon.setStyleSheet("font-size: 36px; background: transparent; border: none;")
+            empty_icon.setAlignment(Qt.AlignCenter)
+            ef_lay.addWidget(empty_icon)
+
             lbl = QLabel("Chưa có bài hát nào được lưu")
-            lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 14px;")
+            lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 15px; font-family: {FONT}; background: transparent; border: none;")
             lbl.setAlignment(Qt.AlignCenter)
-            c_layout.addWidget(lbl)
+            ef_lay.addWidget(lbl)
+
+            hint = QLabel("Nhấn nút 💾 để lưu bài hát từ YouTube")
+            hint.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px; font-style: italic; font-family: {FONT}; background: transparent; border: none;")
+            hint.setAlignment(Qt.AlignCenter)
+            ef_lay.addWidget(hint)
+
+            c_layout.addWidget(empty_frame)
         else:
-            for song in songs:
+            for idx, song in enumerate(songs):
                 item_card = QFrame()
-                item_card.setStyleSheet(f"background-color: {C['card']}; border-radius: 8px; border: 1px solid {C['border']};")
+                item_card.setStyleSheet(f"""
+                    QFrame {{
+                        background-color: {C['card']};
+                        border-radius: 10px;
+                        border: 1px solid {C['border']};
+                        border-left: 3px solid {C['green']};
+                    }}
+                """)
                 i_layout = QHBoxLayout(item_card)
+                i_layout.setContentsMargins(14, 10, 10, 10)
+                i_layout.setSpacing(10)
+
+                # Number badge
+                num_lbl = QLabel(f"{idx+1}")
+                num_lbl.setFixedSize(24, 24)
+                num_lbl.setAlignment(Qt.AlignCenter)
+                num_lbl.setStyleSheet(f"""
+                    color: {C['text_muted']}; font-size: 11px; font-weight: 700;
+                    background: transparent; border: none;
+                """)
+                i_layout.addWidget(num_lbl)
 
                 info_layout = QVBoxLayout()
+                info_layout.setSpacing(3)
                 song_url = song.get("url", "")
                 has_timeline = False
                 if song_url:
@@ -2232,17 +2619,19 @@ class MainDashboard(QMainWindow):
                     s_title += "  \u266b"
 
                 t_lbl = QLabel(s_title)
-                t_lbl.setStyleSheet("font-size: 14px; font-weight: bold; border: none;")
+                t_lbl.setStyleSheet(f"font-size: 14px; font-weight: bold; font-family: {FONT}; border: none; background: transparent; color: {C['text']};")
                 info_layout.addWidget(t_lbl)
 
                 tone_text = f"Tone: {song.get('tone', 'N/A')}"
                 if has_timeline:
                     tl_entries = tl_data.get('timeline', [])
-                    tone_text += f" | {len(tl_entries)} tone changes"
-                tone_text += f" | {song.get('date_added', '')}"
+                    tone_text += f"  |  {len(tl_entries)} đoạn tone"
+                date_str = song.get('date_added', '')
+                if date_str:
+                    tone_text += f"  |  {date_str}"
 
                 d_lbl = QLabel(tone_text)
-                d_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px; border: none;")
+                d_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px; font-family: {FONT}; border: none; background: transparent;")
                 info_layout.addWidget(d_lbl)
 
                 i_layout.addLayout(info_layout, 1)
@@ -2312,14 +2701,22 @@ class MainDashboard(QMainWindow):
 
         c_layout.addStretch()
         scroll.setWidget(content)
-        layout.addWidget(scroll)
+        outer.addWidget(scroll, 1)
 
-        close_btn = PainterButton("Đóng", color=C["card_hover"], height=36, radius=12,
-                                   font_size=13)
+        # ── Footer ──
+        footer = QFrame()
+        footer.setStyleSheet(f"background-color: {C['card']}; border-top: 1px solid {C['border']};")
+        footer_lay = QHBoxLayout(footer)
+        footer_lay.setContentsMargins(16, 10, 16, 10)
+        close_btn = PainterButton("×  Đóng", color=C["card_hover"], height=38, radius=14, font_size=13)
         close_btn.clicked.connect(dlg.close)
-        layout.addWidget(close_btn)
+        footer_lay.addStretch()
+        footer_lay.addWidget(close_btn)
+        outer.addWidget(footer)
 
+        dlg.adjustSize()
         dlg.exec()
+
 
     def _show_edit_song_dialog(self, song):
         """Mở dialog chỉnh sửa timeline (thời gian đổi key/scale) cho bài hát"""
@@ -2350,56 +2747,94 @@ class MainDashboard(QMainWindow):
                 'scale': 'Major'
             }]
 
-        # Dialog chỉnh sửa
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Chỉnh sửa: {song_title[:40]}")
-        dlg.setFixedSize(580, 520)
+        dlg.setMinimumSize(640, 580)
+        dlg.resize(660, 680)
         dlg.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 
-        main_layout = QVBoxLayout(dlg)
-        main_layout.setSpacing(10)
+        outer = QVBoxLayout(dlg)
+        outer.setSpacing(0)
+        outer.setContentsMargins(0, 0, 0, 0)
 
-        # Header
-        header = QLabel("Chỉnh sửa chuỗi tone")
-        header.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {C['primary']}; font-family: {FONT};")
-        header.setAlignment(Qt.AlignCenter)
-        main_layout.addWidget(header)
+        # ── Header ──
+        hdr = QFrame()
+        hdr.setStyleSheet(f"""
+            QFrame {{
+                background-color: {C['card']};
+                border-bottom: 1px solid {C['border']};
+            }}
+        """)
+        hdr_lay = QVBoxLayout(hdr)
+        hdr_lay.setContentsMargins(20, 14, 20, 12)
+        hdr_lay.setSpacing(4)
 
-        sub_lbl = QLabel(f"\u266b  {song_title[:50]}")
-        sub_lbl.setStyleSheet(f"font-size: 13px; color: {C['text_muted']}; font-family: {FONT};")
+        header_lbl = QLabel("Chỉnh sửa chuỗi tone")
+        header_lbl.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {C['primary']}; font-family: {FONT}; background: transparent; border: none;")
+        header_lbl.setAlignment(Qt.AlignCenter)
+        hdr_lay.addWidget(header_lbl)
+
+        sub_lbl = QLabel(f"♫  {song_title[:55]}")
+        sub_lbl.setStyleSheet(f"font-size: 13px; color: {C['text_muted']}; font-family: {FONT}; background: transparent; border: none;")
         sub_lbl.setAlignment(Qt.AlignCenter)
-        main_layout.addWidget(sub_lbl)
+        hdr_lay.addWidget(sub_lbl)
+        outer.addWidget(hdr)
+
+        # ── Content ──
+        body = QVBoxLayout()
+        body.setContentsMargins(16, 12, 16, 10)
+        body.setSpacing(8)
 
         # Column headers
         col_header = QFrame()
-        col_header.setStyleSheet("border: none;")
+        col_header.setStyleSheet(f"""
+            QFrame {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(56,189,248,12), stop:1 rgba(56,189,248,0));
+                border-radius: 6px;
+                border: none;
+            }}
+        """)
         col_h_layout = QHBoxLayout(col_header)
-        col_h_layout.setContentsMargins(12, 0, 12, 0)
+        col_h_layout.setContentsMargins(14, 6, 10, 6)
 
-        lbl_time = QLabel("Thời gian")
-        lbl_time.setFixedWidth(100)
-        lbl_time.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {C['teal']}; font-family: {FONT}; border: none;")
+        num_h = QLabel("#")
+        num_h.setFixedWidth(28)
+        num_h.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {C['text_muted']}; font-family: {FONT}; background: transparent; border: none;")
+        col_h_layout.addWidget(num_h)
+
+        lbl_time = QLabel("Thời gian (MM:SS)")
+        lbl_time.setFixedWidth(110)
+        lbl_time.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {C['teal']}; font-family: {FONT}; background: transparent; border: none;")
         col_h_layout.addWidget(lbl_time)
 
         lbl_key = QLabel("Key / Scale")
-        lbl_key.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {C['teal']}; font-family: {FONT}; border: none;")
+        lbl_key.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {C['teal']}; font-family: {FONT}; background: transparent; border: none;")
         col_h_layout.addWidget(lbl_key, 1)
 
-        lbl_action = QLabel("")
-        lbl_action.setFixedWidth(40)
-        col_h_layout.addWidget(lbl_action)
+        lbl_act = QLabel("Xóa")
+        lbl_act.setFixedWidth(40)
+        lbl_act.setAlignment(Qt.AlignCenter)
+        lbl_act.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {C['text_muted']}; font-family: {FONT}; background: transparent; border: none;")
+        col_h_layout.addWidget(lbl_act)
 
-        main_layout.addWidget(col_header)
+        body.addWidget(col_header)
         
         # Scrollable list of entries
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(f"QScrollArea {{ border: none; background-color: {C['bg']}; }}")
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ border: none; background-color: {C['bg']}; }}
+            QScrollBar:vertical {{ background: {C['card']}; width: 5px; border-radius: 2px; }}
+            QScrollBar::handle:vertical {{ background: {C['border']}; border-radius: 2px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        """)
         
         entries_container = QWidget()
         entries_container.setStyleSheet(f"background-color: {C['bg']};")
         entries_layout = QVBoxLayout(entries_container)
         entries_layout.setSpacing(6)
+        entries_layout.setContentsMargins(0, 4, 0, 4)
         
         # Lưu references tới các widget entries
         entry_widgets = []   # list of (time_input, key_combo, row_frame)
@@ -2409,12 +2844,41 @@ class MainDashboard(QMainWindow):
             'Cm', 'C#m', 'Dm', 'D#m', 'Em', 'Fm', 'F#m', 'Gm', 'G#m', 'Am', 'A#m', 'Bm'
         ]
         
+        def _refresh_numbering():
+            for i, (_, _, rf) in enumerate(entry_widgets):
+                num = rf.findChild(QLabel, f"num_badge")
+                if num:
+                    num.setText(f"{i+1}")
+
         def add_entry_row(time_val=0.0, key_display="C"):
             """Thêm 1 row chỉnh sửa entry"""
             row = QFrame()
-            row.setStyleSheet(f"background-color: {C['card']}; border-radius: 8px; border: 1px solid {C['border']};")
+            row.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {C['card']};
+                    border-radius: 8px;
+                    border: 1px solid {C['border']};
+                }}
+            """)
             row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(10, 6, 10, 6)
+            row_layout.setContentsMargins(10, 6, 8, 6)
+            row_layout.setSpacing(8)
+
+            # Number badge
+            num_badge = QLabel(f"{len(entry_widgets)+1}")
+            num_badge.setObjectName("num_badge")
+            num_badge.setFixedSize(24, 24)
+            num_badge.setAlignment(Qt.AlignCenter)
+            num_badge.setStyleSheet(f"""
+                background-color: rgba(56,189,248,0.15);
+                border-radius: 12px;
+                color: {C['teal']};
+                font-size: 11px;
+                font-weight: 700;
+                font-family: {FONT};
+                border: none;
+            """)
+            row_layout.addWidget(num_badge)
             
             # Time input (MM:SS)
             time_str = backend.ManualToneTimeline.seconds_to_time_str(time_val)
@@ -2431,7 +2895,7 @@ class MainDashboard(QMainWindow):
                 font-weight: bold;
                 font-family: {FONT};
             }}
-            QLineEdit:focus {{ border-color: {C['teal']}; }}""")
+            QLineEdit:focus {{ border-color: {C['teal']}; border-width: 2px; }}""")
             row_layout.addWidget(time_input)
             
             # Key/Scale combo
@@ -2469,13 +2933,13 @@ class MainDashboard(QMainWindow):
                 if len(entry_widgets) <= 1:
                     QMessageBox.warning(dlg, "Cảnh báo", "Phải có ít nhất 1 entry!")
                     return
-                # Tìm và xóa entry khỏi danh sách
                 for i, (ti, kc, rf) in enumerate(entry_widgets):
                     if rf is row:
                         entry_widgets.pop(i)
                         break
                 row.setParent(None)
                 row.deleteLater()
+                _refresh_numbering()
 
             rm_btn.clicked.connect(remove_this)
             row_layout.addWidget(rm_btn)
@@ -2489,14 +2953,12 @@ class MainDashboard(QMainWindow):
         
         entries_layout.addStretch()
         scroll.setWidget(entries_container)
-        main_layout.addWidget(scroll, 1)
+        body.addWidget(scroll, 1)
         
         # Add entry button
-        add_btn = PainterButton("+ Thêm mốc", color=C["teal"], height=34, radius=14,
-                                 font_size=12)
+        add_btn = PainterButton("+ Thêm mốc", color=C["teal"], height=34, radius=14, font_size=12)
 
         def on_add_entry():
-            # Tính thời gian mặc định: sau entry cuối 30s
             last_time = 0
             if entry_widgets:
                 last_input = entry_widgets[-1][0]
@@ -2505,31 +2967,39 @@ class MainDashboard(QMainWindow):
                     last_time = parsed
             new_time = last_time + 30
 
-            # Lấy key của entry cuối
             last_key = "C"
             if entry_widgets:
                 last_key = entry_widgets[-1][1].currentText()
 
             add_entry_row(new_time, last_key)
-            # Scroll xuống cuối
             QTimer.singleShot(50, lambda: scroll.verticalScrollBar().setValue(
                 scroll.verticalScrollBar().maximum()))
 
         add_btn.clicked.connect(on_add_entry)
-        main_layout.addWidget(add_btn)
+        body.addWidget(add_btn)
 
-        # Bottom buttons
-        btn_box = QHBoxLayout()
+        body_widget = QWidget()
+        body_widget.setStyleSheet(f"background: {C['bg']}; border: none;")
+        body_widget.setLayout(body)
+        outer.addWidget(body_widget, 1)
 
-        save_btn = PainterButton("Lưu thay đổi", color=C["green"], height=40, radius=18,
-                                  font_size=14)
+        # ── Footer Buttons ──
+        footer = QFrame()
+        footer.setStyleSheet(f"""
+            QFrame {{
+                background-color: {C['card']};
+                border-top: 1px solid {C['border']};
+            }}
+        """)
+        btn_box = QHBoxLayout(footer)
+        btn_box.setContentsMargins(16, 10, 16, 10)
+        btn_box.setSpacing(8)
 
-        cancel_btn = PainterButton("Hủy", color=C["card_hover"], height=40, radius=18,
-                                    font_size=14)
+        save_btn = PainterButton("Lưu thay đổi", color=C["green"], height=40, radius=18, font_size=14)
+        cancel_btn = PainterButton("Hủy", color=C["card_hover"], height=40, radius=18, font_size=14)
         cancel_btn.clicked.connect(dlg.close)
         
         def on_save():
-            # Thu thập dữ liệu từ các entry widgets
             timeline_entries = []
             has_error = False
             
@@ -2574,16 +3044,13 @@ class MainDashboard(QMainWindow):
                 self._show_message("⚠️ Cần ít nhất 1 entry!", is_error=True)
                 return
             
-            # Sắp xếp theo thời gian
             timeline_entries.sort(key=lambda x: x['time'])
             
-            # Lưu timeline
             if song_url:
                 success = backend.ManualToneTimeline.save_timeline(
                     song_url, song_title, timeline_entries
                 )
                 if success:
-                    # Cập nhật tone chính của bài hát = tone đầu tiên
                     first_key = timeline_entries[0]['key_display']
                     if song_id:
                         backend.SongManager.update_song(song_id, tone=first_key)
@@ -2598,11 +3065,12 @@ class MainDashboard(QMainWindow):
         
         save_btn.clicked.connect(on_save)
         
-        btn_box.addWidget(save_btn)
+        btn_box.addWidget(save_btn, 1)
         btn_box.addWidget(cancel_btn)
-        main_layout.addLayout(btn_box)
+        outer.addWidget(footer)
         
         dlg.exec()
+
 
     def update_score_display(self, score):
         self.current_score = score
@@ -2705,74 +3173,115 @@ class ActivationDialog(QDialog):
         self.activated = False
         self.setWindowTitle("Kích hoạt Quang Lưu Studio")
         self.setWindowIcon(QIcon("app_icon.ico"))
-        self.setFixedSize(500, 480)
+        self.setFixedSize(520, 510)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(15)
-        layout.setContentsMargins(30, 30, 30, 30)
+        outer = QVBoxLayout(self)
+        outer.setSpacing(0)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        # ── Premium Header with gradient ──
+        from PySide6.QtWidgets import QFrame as _QF2
+        header = _QF2()
+        header.setFixedHeight(130)
+        header.setStyleSheet(f"""
+            QFrame {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {C['card']}, stop:0.5 rgba(20,184,166,18), stop:1 {C['card']});
+                border-bottom: 1px solid rgba(20,184,166,0.3);
+            }}
+        """)
+        hdr_lay = QVBoxLayout(header)
+        hdr_lay.setContentsMargins(24, 20, 24, 16)
+        hdr_lay.setSpacing(6)
 
         title = QLabel("🎤 Quang Lưu Studio")
-        title.setStyleSheet(f"font-size:24px; font-weight:bold; color:{C['teal']};")
+        title.setStyleSheet(f"font-size: 26px; font-weight: 900; color: {C['teal']}; font-family: {FONT}; background: transparent; border: none; letter-spacing: -1px;")
         title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
+        hdr_lay.addWidget(title)
 
         if is_expired:
-            msg = QLabel("⚠️ Bản quyền đã hết hạn!\nVui lòng nhập mã kích hoạt mới.")
-            msg.setStyleSheet(f"color: {C['accent']}; font-size:14px;")
+            msg = QLabel("⚠️ Bản quyền đã hết hạn! Vui lòng nhập mã kích hoạt mới.")
+            msg.setStyleSheet(f"color: {C['accent']}; font-size: 14px; font-family: {FONT}; background: transparent; border: none;")
         else:
             msg = QLabel("Vui lòng nhập Activation Code để tiếp tục.")
-            msg.setStyleSheet(f"color: {C['text_muted']}; font-size:14px;")
+            msg.setStyleSheet(f"color: {C['text_muted']}; font-size: 14px; font-family: {FONT}; background: transparent; border: none;")
         msg.setAlignment(Qt.AlignCenter)
-        layout.addWidget(msg)
+        hdr_lay.addWidget(msg)
+        outer.addWidget(header)
+
+        # ── Body ──
+        body_frame = _QF2()
+        body_frame.setStyleSheet(f"background-color: {C['bg']}; border: none;")
+        layout = QVBoxLayout(body_frame)
+        layout.setSpacing(14)
+        layout.setContentsMargins(30, 24, 30, 24)
 
         self.code_input = QLineEdit()
         self.code_input.setPlaceholderText("Nhập activation code...")
+        self.code_input.setFixedHeight(50)
         self.code_input.setStyleSheet(f"""
             QLineEdit {{
                 background-color: {C['card']};
                 color: {C['text']};
                 border: 2px solid {C['border']};
-                border-radius: 10px;
-                padding: 12px;
+                border-radius: 12px;
+                padding: 12px 16px;
                 font-size: 16px;
+                font-family: {FONT};
+                letter-spacing: 2px;
             }}
-            QLineEdit:focus {{ border-color: {C['teal']}; }}
+            QLineEdit:focus {{
+                border-color: {C['teal']};
+                background-color: rgba(20,184,166,0.06);
+            }}
         """)
         layout.addWidget(self.code_input)
 
-        activate_btn = QPushButton("Kích hoạt")
-        activate_btn.setFixedHeight(45)
+        activate_btn = QPushButton("✓ Kích hoạt")
+        activate_btn.setFixedHeight(48)
         activate_btn.setCursor(Qt.PointingHandCursor)
-        activate_btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 16, 22))
+        activate_btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 17, 22))
         activate_btn.clicked.connect(self._activate)
+        add_shadow(activate_btn, C["teal"], 10, (0, 3))
         layout.addWidget(activate_btn)
 
-        # ── Phân cách ──
-        separator = QLabel("─── hoặc ───")
-        separator.setAlignment(Qt.AlignCenter)
-        separator.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px;")
-        layout.addWidget(separator)
+        # ── Separator ──
+        sep_row = QHBoxLayout()
+        sep_line1 = _QF2()
+        sep_line1.setFixedHeight(1)
+        sep_line1.setStyleSheet(f"background-color: {C['border']}; border: none;")
+        sep_label = QLabel("hoặc")
+        sep_label.setAlignment(Qt.AlignCenter)
+        sep_label.setFixedWidth(40)
+        sep_label.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px; background: transparent; border: none;")
+        sep_line2 = _QF2()
+        sep_line2.setFixedHeight(1)
+        sep_line2.setStyleSheet(f"background-color: {C['border']}; border: none;")
+        sep_row.addWidget(sep_line1, 1)
+        sep_row.addWidget(sep_label)
+        sep_row.addWidget(sep_line2, 1)
+        layout.addLayout(sep_row)
 
-        # ── Nút dùng thử ──
+        # ── Trial button ──
         trial_expired = backend.ActivationManager.is_trial_expired()
         if trial_expired:
-            # Trial đã hết hạn → disable nút, hiển thị thông báo
             trial_btn = QPushButton("⏰ Đã hết hạn dùng thử")
-            trial_btn.setFixedHeight(40)
+            trial_btn.setFixedHeight(44)
             trial_btn.setEnabled(False)
             trial_btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {C['card_hover']};
                     color: {C['text_muted']};
                     border: 1px solid {C['border']};
-                    border-radius: 10px;
+                    border-radius: 14px;
                     font-size: 14px;
+                    font-family: {FONT};
                 }}
             """)
         else:
             trial_btn = QPushButton("🎁 Dùng thử miễn phí 7 ngày")
-            trial_btn.setFixedHeight(40)
+            trial_btn.setFixedHeight(44)
             trial_btn.setCursor(Qt.PointingHandCursor)
             trial_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.1), 14, 18))
             trial_btn.clicked.connect(self._start_trial)
@@ -2780,8 +3289,10 @@ class ActivationDialog(QDialog):
 
         self.status_label = QLabel("")
         self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet(f"font-size: 13px; font-family: {FONT}; background: transparent; border: none;")
         layout.addWidget(self.status_label)
         layout.addStretch()
+        outer.addWidget(body_frame, 1)
 
     def _ensure_app(self):
         if not QApplication.instance():
@@ -2843,39 +3354,76 @@ class SetupView(QDialog):
 
         self.setWindowTitle("Cài đặt Quang Lưu Studio")
         self.setWindowIcon(QIcon("app_icon.ico"))
-        self.setFixedSize(550, 420)
+        self.setFixedSize(580, 460)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-        layout.setContentsMargins(30, 25, 30, 25)
+        from PySide6.QtWidgets import QFrame as _QF3
+        outer = QVBoxLayout(self)
+        outer.setSpacing(0)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        # ── Header ──
+        header = _QF3()
+        header.setStyleSheet(f"""
+            QFrame {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {C['card']}, stop:1 rgba(20,184,166,14));
+                border-bottom: 1px solid rgba(20,184,166,0.3);
+            }}
+        """)
+        hdr_vl = QVBoxLayout(header)
+        hdr_vl.setContentsMargins(30, 20, 30, 16)
+        hdr_vl.setSpacing(6)
 
         title = QLabel("⚙️ Cài đặt ban đầu")
-        title.setStyleSheet(f"font-size:22px; font-weight:bold; color:{C['teal']};")
+        title.setStyleSheet(f"font-size: 24px; font-weight: 900; color: {C['teal']}; font-family: {FONT}; background: transparent; border: none;")
         title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
+        hdr_vl.addWidget(title)
 
-        # Studio One path
-        layout.addWidget(self._make_label("Đường dẫn Studio One:"))
+        subtitle = QLabel("Thiết lập đường dẫn để bắt đầu sử dụng Quang Lưu Studio")
+        subtitle.setStyleSheet(f"font-size: 13px; color: {C['text_muted']}; font-family: {FONT}; background: transparent; border: none;")
+        subtitle.setAlignment(Qt.AlignCenter)
+        hdr_vl.addWidget(subtitle)
+        outer.addWidget(header)
+
+        # ── Body ──
+        body = _QF3()
+        body.setStyleSheet(f"background-color: {C['bg']}; border: none;")
+        layout = QVBoxLayout(body)
+        layout.setSpacing(16)
+        layout.setContentsMargins(30, 24, 30, 20)
+
+        # Step 1: Studio One path
+        step1_lbl = QLabel("🔹 Bước 1:  Đường dẫn Studio One")
+        step1_lbl.setStyleSheet(f"color: {C['teal']}; font-size: 13px; font-weight: 700; font-family: {FONT}; background: transparent; border: none;")
+        layout.addWidget(step1_lbl)
+
         row1 = QHBoxLayout()
+        row1.setSpacing(6)
         self.studio_one_input = QLineEdit(existing.get("studio_one_path", ""))
         self.studio_one_input.setStyleSheet(self._input_qss())
         row1.addWidget(self.studio_one_input)
         browse1 = QPushButton("📂")
-        browse1.setFixedSize(40, 36)
+        browse1.setFixedSize(40, 38)
+        browse1.setCursor(Qt.PointingHandCursor)
         browse1.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 14, 10))
         browse1.clicked.connect(self._browse_studio_one)
         row1.addWidget(browse1)
         layout.addLayout(row1)
 
-        # Browser path
-        layout.addWidget(self._make_label("Đường dẫn trình duyệt:"))
+        # Step 2: Browser path
+        step2_lbl = QLabel("🔹 Bước 2:  Đường dẫn trình duyệt (YouTube)")
+        step2_lbl.setStyleSheet(f"color: {C['teal']}; font-size: 13px; font-weight: 700; font-family: {FONT}; background: transparent; border: none;")
+        layout.addWidget(step2_lbl)
+
         row2 = QHBoxLayout()
+        row2.setSpacing(6)
         self.browser_input = QLineEdit(existing.get("browser_path", ""))
         self.browser_input.setStyleSheet(self._input_qss())
         row2.addWidget(self.browser_input)
         browse2 = QPushButton("📂")
-        browse2.setFixedSize(40, 36)
+        browse2.setFixedSize(40, 38)
+        browse2.setCursor(Qt.PointingHandCursor)
         browse2.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 14, 10))
         browse2.clicked.connect(self._browse_browser)
         row2.addWidget(browse2)
@@ -2884,12 +3432,14 @@ class SetupView(QDialog):
         layout.addStretch()
 
         # Save button
-        save_btn = QPushButton("Lưu && Tiếp tục")
-        save_btn.setFixedHeight(45)
+        save_btn = QPushButton("Lưu && Tiếp tục →")
+        save_btn.setFixedHeight(48)
         save_btn.setCursor(Qt.PointingHandCursor)
-        save_btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.1), 16, 22))
+        save_btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.1), 17, 22))
         save_btn.clicked.connect(self._save_and_continue)
+        add_shadow(save_btn, C["green"], 10, (0, 3))
         layout.addWidget(save_btn)
+        outer.addWidget(body, 1)
 
     def _ensure_app(self):
         if not QApplication.instance():

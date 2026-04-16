@@ -32,59 +32,152 @@ from ui.design_tokens import C, SP, FONT, FONT_MONO
 from ui.components.painter_button import PainterButton
 
 
-# ── Simple Flow Layout ────────────────────────────────────────────────────────
-class FlowLayout(QHBoxLayout):
-    """
-    Minimal flow layout: wraps items across rows.
-    Implemented via a custom QWidget with resizeEvent to re-flow children.
-    """
-    pass
+# ── Flow Layout Widget (wraps children across rows) ───────────────────────────
+from PySide6.QtWidgets import QLayout, QLayoutItem, QStyle, QWidgetItem
 
 
-class _HBoxContainer(QWidget):
-    """Simple horizontal container for SFX buttons."""
+class _FlowLayout(QLayout):
+    """A layout that arranges widgets left-to-right then wraps to the next row."""
+
+    def __init__(self, parent=None, margin=4, spacing=8):
+        super().__init__(parent)
+        self.setContentsMargins(margin, margin, margin, margin)
+        self._spacing = spacing
+        self._items: list[QLayoutItem] = []
+
+    def addItem(self, item: QLayoutItem):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def insertWidget(self, index, widget):
+        self.addWidget(widget)
+        # Move the item (just appended) to the desired index
+        item = self._items.pop()
+        self._items.insert(min(index, len(self._items)), item)
+        self.invalidate()
+
+    def indexOf(self, widget):
+        for i, item in enumerate(self._items):
+            if item.widget() is widget:
+                return i
+        return -1
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRectF(0, 0, width, 0).toRect(), test_only=True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize(0, 0)
+        for item in self._items:
+            ms = item.minimumSize()
+            size = size.expandedTo(ms)
+        m = self.contentsMargins()
+        size += QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect, test_only=False):
+        m = self.contentsMargins()
+        effective = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x = effective.x()
+        y = effective.y()
+        row_height = 0
+
+        for item in self._items:
+            w = item.widget()
+            if w is None or w.isHidden():
+                continue
+            sz = item.sizeHint()
+            next_x = x + sz.width() + self._spacing
+            if next_x - self._spacing > effective.right() + 1 and row_height > 0:
+                x = effective.x()
+                y += row_height + self._spacing
+                row_height = 0
+                next_x = x + sz.width() + self._spacing
+            if not test_only:
+                from PySide6.QtCore import QRect as _QR
+                item.setGeometry(_QR(x, y, sz.width(), sz.height()))
+            x = next_x
+            row_height = max(row_height, sz.height())
+
+        return y + row_height - rect.y() + m.bottom()
+
+
+class _FlowContainer(QWidget):
+    """Widget using _FlowLayout to wrap SFX buttons across rows."""
 
     def __init__(self, spacing=8, padding=4, parent=None):
         super().__init__(parent)
-        self._padding = padding
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(padding, padding, padding, padding)
-        lay.setSpacing(spacing)
-        lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self._flow = _FlowLayout(self, margin=padding, spacing=spacing)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
 
     @property
     def _layout(self):
-        return self.layout()
+        return self._flow
 
     def add_widget(self, w: QWidget):
-        # Insert before the last item (which is the [+] btn), or append if empty
-        count = self._layout.count()
-        self._layout.insertWidget(max(0, count), w)
+        self._flow.addWidget(w)
 
     def insert_widget(self, idx: int, w: QWidget):
-        self._layout.insertWidget(idx, w)
+        self._flow.insertWidget(idx, w)
 
     def remove_widget(self, w: QWidget):
-        self._layout.removeWidget(w)
+        idx = self._flow.indexOf(w)
+        if idx >= 0:
+            self._flow.takeAt(idx)
         w.hide()
         w.setParent(None)
 
     def index_of(self, w: QWidget) -> int:
-        return self._layout.indexOf(w)
+        return self._flow.indexOf(w)
 
     def count(self) -> int:
-        return self._layout.count()
+        return self._flow.count()
 
     def widget_at(self, idx: int):
-        item = self._layout.itemAt(idx)
+        item = self._flow.itemAt(idx)
         return item.widget() if item else None
 
     def move_widget(self, from_idx: int, to_idx: int):
         w = self.widget_at(from_idx)
         if w:
-            self._layout.removeWidget(w)
-            self._layout.insertWidget(to_idx, w)
+            self._flow.takeAt(from_idx)
+            item = QWidgetItem(w)
+            self._flow._items.insert(to_idx, item)
+            self._flow.invalidate()
+            self.updateGeometry()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.updateGeometry()
+
+    def sizeHint(self):
+        w = self.width() if self.width() > 0 else 200
+        h = self._flow.heightForWidth(w)
+        return QSize(w, max(h, 32))
 
 
 # ── SFX Item Button ───────────────────────────────────────────────────────────
@@ -358,61 +451,107 @@ class SfxEditDialog(QDialog):
         super().__init__(parent)
         is_edit = sfx_data is not None
         self.setWindowTitle("✏️ Sửa SFX" if is_edit else "➕ Thêm SFX")
-        self.setFixedSize(420, 320)
+        self.setFixedSize(480, 400)
         self.setStyleSheet(f"""
             QDialog {{ background-color: {C['bg']}; color: {C['text']}; }}
-            QLabel  {{ color: {C['text_muted']}; font-size: 12px; font-family: {FONT}; background: transparent; }}
+        """)
+        self._result = None
+        self._color = (sfx_data or {}).get("color", C["teal"])
+
+        from PySide6.QtWidgets import QFrame as _QF4
+        outer = QVBoxLayout(self)
+        outer.setSpacing(0)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        # ── Header ──
+        hdr = _QF4()
+        hdr.setStyleSheet(f"""
+            QFrame {{
+                background-color: {C['card']};
+                border-bottom: 1px solid {C['border']};
+            }}
+        """)
+        hdr_lay = QHBoxLayout(hdr)
+        hdr_lay.setContentsMargins(18, 14, 18, 12)
+
+        title = QLabel("✏️ Sửa nút SFX" if is_edit else "➕ Thêm nút SFX mới")
+        title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {C['teal']}; font-family: {FONT}; background:transparent; border: none;")
+        hdr_lay.addWidget(title)
+        outer.addWidget(hdr)
+
+        # ── Body ──
+        body = _QF4()
+        body.setStyleSheet(f"background-color: {C['bg']}; border: none;")
+        vl = QVBoxLayout(body)
+        vl.setSpacing(12)
+        vl.setContentsMargins(18, 16, 18, 12)
+
+        input_qss = f"""
+            QLabel {{ color: {C['text_muted']}; font-size: 12px; font-family: {FONT}; background: transparent; border: none; }}
             QLineEdit {{
                 background-color: {C['card']};
                 color: {C['text']};
                 border: 1px solid {C['border']};
                 border-radius: 8px;
-                padding: 6px 10px;
+                padding: 7px 10px;
                 font-size: 13px;
                 font-family: {FONT};
             }}
-            QLineEdit:focus {{ border-color: {C['teal']}; }}
-        """)
-        self._result = None
-        self._color = (sfx_data or {}).get("color", C["teal"])
-
-        vl = QVBoxLayout(self)
-        vl.setSpacing(10)
-        vl.setContentsMargins(20, 18, 20, 16)
-
-        # Title
-        title = QLabel("✏️ Sửa nút SFX" if is_edit else "➕ Thêm nút SFX mới")
-        title.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {C['teal']}; font-family: {FONT}; background:transparent;")
-        vl.addWidget(title)
+            QLineEdit:focus {{ border-color: {C['teal']}; border-width: 2px; }}
+        """
+        body.setStyleSheet(f"background-color: {C['bg']}; border: none; " + input_qss)
 
         # Emoji / Label row
         row_emoji = QHBoxLayout()
-        row_emoji.addWidget(QLabel("Emoji:"))
+        row_emoji.setSpacing(8)
+        emoji_lbl = QLabel("Emoji:")
+        emoji_lbl.setFixedWidth(40)
+        emoji_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px; font-family: {FONT}; background: transparent; border: none;")
+        row_emoji.addWidget(emoji_lbl)
         self.inp_emoji = QLineEdit((sfx_data or {}).get("label", "🎵"))
-        self.inp_emoji.setFixedWidth(60)
+        self.inp_emoji.setFixedWidth(64)
+        self.inp_emoji.setStyleSheet(f"""QLineEdit {{
+            background-color: {C['card']}; color: {C['text']};
+            border: 1px solid {C['border']}; border-radius: 8px;
+            padding: 7px 10px; font-size: 18px; font-family: {FONT};
+        }} QLineEdit:focus {{ border-color: {C['teal']}; border-width: 2px; }}""")
         row_emoji.addWidget(self.inp_emoji)
-        row_emoji.addSpacing(12)
-        row_emoji.addWidget(QLabel("Tên nút:"))
+        name_lbl = QLabel("Tên nút:")
+        name_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px; font-family: {FONT}; background: transparent; border: none;")
+        row_emoji.addWidget(name_lbl)
         self.inp_name = QLineEdit((sfx_data or {}).get("name", ""))
         self.inp_name.setPlaceholderText("VD: Cười, Vỗ tay...")
+        self.inp_name.setStyleSheet(f"""QLineEdit {{
+            background-color: {C['card']}; color: {C['text']};
+            border: 1px solid {C['border']}; border-radius: 8px;
+            padding: 7px 10px; font-size: 13px; font-family: {FONT};
+        }} QLineEdit:focus {{ border-color: {C['teal']}; border-width: 2px; }}""")
         row_emoji.addWidget(self.inp_name, 1)
         vl.addLayout(row_emoji)
 
         # File path row
+        file_lbl = QLabel("File âm thanh (.wav / .mp3):")
+        file_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px; font-family: {FONT}; background: transparent; border: none;")
+        vl.addWidget(file_lbl)
         row_file = QHBoxLayout()
-        row_file.addWidget(QLabel("File:"))
+        row_file.setSpacing(6)
         self.inp_file = QLineEdit((sfx_data or {}).get("file_path", ""))
         self.inp_file.setPlaceholderText("Chọn file .wav hoặc .mp3...")
+        self.inp_file.setStyleSheet(f"""QLineEdit {{
+            background-color: {C['card']}; color: {C['text']};
+            border: 1px solid {C['border']}; border-radius: 8px;
+            padding: 7px 10px; font-size: 13px; font-family: {FONT};
+        }} QLineEdit:focus {{ border-color: {C['teal']}; border-width: 2px; }}""")
         row_file.addWidget(self.inp_file, 1)
         btn_browse = QPushButton("📂")
-        btn_browse.setFixedSize(36, 32)
+        btn_browse.setFixedSize(38, 36)
         btn_browse.setCursor(Qt.PointingHandCursor)
         btn_browse.setStyleSheet(f"""
             QPushButton {{
                 background-color: {C['card']};
                 color: {C['text']};
                 border: 1px solid {C['border']};
-                border-radius: 6px;
+                border-radius: 8px;
                 font-size: 14px;
             }}
             QPushButton:hover {{ background-color: {C['card_hover']}; }}
@@ -422,16 +561,20 @@ class SfxEditDialog(QDialog):
         vl.addLayout(row_file)
 
         # Color picker row
+        color_lbl = QLabel("Màu nền nút:")
+        color_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px; font-family: {FONT}; background: transparent; border: none;")
+        vl.addWidget(color_lbl)
+
         color_row = QHBoxLayout()
-        color_row.addWidget(QLabel("Màu:"))
+        color_row.setSpacing(8)
         self._color_btns = []
         for col in self._PRESET_COLORS:
             cb = QPushButton()
-            cb.setFixedSize(22, 22)
+            cb.setFixedSize(30, 30)
             cb.setCursor(Qt.PointingHandCursor)
             is_selected = (col == self._color)
-            border = f"2px solid #fff" if is_selected else f"1px solid {C['border']}"
-            cb.setStyleSheet(f"background-color: {col}; border-radius: 11px; border: {border};")
+            border = f"3px solid #fff" if is_selected else f"2px solid transparent"
+            cb.setStyleSheet(f"background-color: {col}; border-radius: 15px; border: {border};")
             cb.clicked.connect(lambda _, c=col: self._select_color(c))
             color_row.addWidget(cb)
             self._color_btns.append((col, cb))
@@ -439,34 +582,44 @@ class SfxEditDialog(QDialog):
         vl.addLayout(color_row)
 
         vl.addStretch()
+        outer.addWidget(body, 1)
 
-        # Buttons
-        btn_row = QHBoxLayout()
+        # ── Footer Buttons ──
+        footer = _QF4()
+        footer.setStyleSheet(f"background-color: {C['card']}; border-top: 1px solid {C['border']}; border: none;")
+        footer.setStyleSheet(f"""
+            QFrame {{
+                background-color: {C['card']};
+                border-top: 1px solid {C['border']};
+            }}
+        """)
+        btn_row = QHBoxLayout(footer)
+        btn_row.setContentsMargins(18, 10, 18, 10)
         btn_row.setSpacing(8)
         btn_cancel = QPushButton("Huỷ")
-        btn_cancel.setFixedHeight(34)
+        btn_cancel.setFixedHeight(38)
         btn_cancel.setCursor(Qt.PointingHandCursor)
         btn_cancel.setStyleSheet(f"""
             QPushButton {{
-                background-color: {C['card']};
+                background-color: {C['card_hover']};
                 color: {C['text_muted']};
                 border: 1px solid {C['border']};
-                border-radius: 8px;
+                border-radius: 10px;
                 font-size: 13px;
                 font-family: {FONT};
             }}
-            QPushButton:hover {{ background-color: {C['card_hover']}; color: {C['text']}; }}
+            QPushButton:hover {{ background-color: rgba(51,65,85,0.8); color: {C['text']}; }}
         """)
         btn_cancel.clicked.connect(self.reject)
         btn_ok = QPushButton("✅ Lưu")
-        btn_ok.setFixedHeight(34)
+        btn_ok.setFixedHeight(38)
         btn_ok.setCursor(Qt.PointingHandCursor)
         btn_ok.setStyleSheet(f"""
             QPushButton {{
                 background-color: {C['teal']};
                 color: #fff;
                 border: none;
-                border-radius: 8px;
+                border-radius: 10px;
                 font-size: 13px;
                 font-weight: 700;
                 font-family: {FONT};
@@ -476,7 +629,8 @@ class SfxEditDialog(QDialog):
         btn_ok.clicked.connect(self._accept)
         btn_row.addWidget(btn_cancel, 1)
         btn_row.addWidget(btn_ok, 1)
-        vl.addLayout(btn_row)
+        outer.addWidget(footer)
+
 
     def _browse_file(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -489,8 +643,9 @@ class SfxEditDialog(QDialog):
     def _select_color(self, color: str):
         self._color = color
         for col, btn in self._color_btns:
-            border = f"2px solid #fff" if col == color else f"1px solid {C['border']}"
-            btn.setStyleSheet(f"background-color: {col}; border-radius: 11px; border: {border};")
+            border = f"3px solid #fff" if col == color else f"2px solid transparent"
+            btn.setStyleSheet(f"background-color: {col}; border-radius: 15px; border: {border};")
+
 
     def _accept(self):
         self._result = {
@@ -533,37 +688,10 @@ class SfxButtonArea(QWidget):
         self._root.setContentsMargins(0, 0, 0, 0)
         self._root.setSpacing(4)
 
-        # Scroll area — horizontal scroll for overflow
-        self._scroll = QScrollArea()
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._scroll.setFixedHeight(44)
-        self._scroll.setStyleSheet(f"""
-            QScrollArea {{
-                background: transparent;
-                border: none;
-            }}
-            QScrollBar:horizontal {{
-                background: {C['card']};
-                height: 4px;
-                border-radius: 2px;
-            }}
-            QScrollBar::handle:horizontal {{
-                background: {C['border']};
-                border-radius: 2px;
-                min-width: 20px;
-            }}
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-                width: 0; height: 0;
-            }}
-        """)
-
-        # Horizontal container inside scroll
-        self._flow = _HBoxContainer(spacing=8, padding=4)
+        # Flow container — wraps buttons to the next row on overflow
+        self._flow = _FlowContainer(spacing=8, padding=4)
         self._flow.setStyleSheet("background: transparent;")
-        self._scroll.setWidget(self._flow)
-        self._root.addWidget(self._scroll)
+        self._root.addWidget(self._flow)
 
         # Empty state label (shown when no buttons)
         self._empty_lbl = QLabel("Chưa có SFX. Nhấn + để thêm.")
@@ -651,12 +779,20 @@ class SfxButtonArea(QWidget):
     def _sync_empty_state(self):
         has_btns = len(self._btn_widgets) > 0
         self._empty_lbl.setVisible(not has_btns)
-        # Always show scroll (even if 1 btn), but hide if zero buttons
-        self._scroll.setVisible(True)
+        self._flow.setVisible(True)
 
     # ── Slots ─────────────────────────────────────────────────────
     def _on_add(self):
-        dlg = SfxEditDialog(parent=self)
+        # Lấy top-level window làm parent để dialog hiển thị đúng
+        top = self.window()
+        dlg = SfxEditDialog(parent=top)
+        dlg.setWindowModality(Qt.ApplicationModal)
+
+        # Căn giữa dialog trên màn hình
+        if top and top.isVisible():
+            center = top.geometry().center()
+            dlg.move(center.x() - dlg.width() // 2, center.y() - dlg.height() // 2)
+
         if dlg.exec() == QDialog.Accepted:
             result = dlg.get_result()
             if result:
@@ -664,14 +800,21 @@ class SfxButtonArea(QWidget):
                 result["id"] = new_id
                 self._append_button(result, emit=True)
 
+
     def _on_edit(self, btn_widget: SfxItemButton):
-        dlg = SfxEditDialog(sfx_data=btn_widget.data, parent=self)
+        top = self.window()
+        dlg = SfxEditDialog(sfx_data=btn_widget.data, parent=top)
+        dlg.setWindowModality(Qt.ApplicationModal)
+        if top and top.isVisible():
+            center = top.geometry().center()
+            dlg.move(center.x() - dlg.width() // 2, center.y() - dlg.height() // 2)
         if dlg.exec() == QDialog.Accepted:
             result = dlg.get_result()
             if result:
                 new_data = {**btn_widget.data, **result}
                 btn_widget.update_data(new_data)
                 self.sfx_changed.emit(self.get_sfx_list())
+
 
     def _on_delete(self, btn_widget: SfxItemButton):
         if btn_widget in self._btn_widgets:
