@@ -96,6 +96,21 @@ _DEFAULT_APP_CONFIG = {
     "scale_midi_map": {
         "Major": 13,
         "Minor": 18
+    },
+    "mode_midi_map": {
+        "Dân Ca": 36,
+        "Lofi": 45,
+        "Remix": 54,
+        "Đa Thể Loại": 63,
+        "Fix Méo": 127
+    },
+    "mute_multi_cc": {
+        "mix_music":   [],
+        "mix_mic":     [],
+        "mix_reverb":  [
+            {"cc": 41, "on_value": 127, "off_value": 0}
+        ],
+        "mix_backing": []
     }
 }
 
@@ -167,6 +182,21 @@ class AppConfig:
     def get_scale_midi_map(cls):
         """Lấy Scale → MIDI CC value mapping (cho Auto-Tune plugin)"""
         return cls.load().get("scale_midi_map", _DEFAULT_APP_CONFIG["scale_midi_map"])
+
+    @classmethod
+    def get_mode_midi_map(cls):
+        """Lấy Mode → MIDI CC value mapping (cho Auto-Tune plugin)"""
+        return cls.load().get("mode_midi_map", _DEFAULT_APP_CONFIG["mode_midi_map"])
+
+    @classmethod
+    def get_mute_multi_cc(cls):
+        """Lấy danh sách MIDI CC phụ gửi kèm khi toggle mute cho từng kênh.
+        
+        Returns dict: {cc_key: [{cc, on_value, off_value}, ...]}
+        VD: kênh mix_reverb có thể gửi thêm CC 41 (toggle vang hiệu ứng).
+        Cấu hình trong app_config.json, key "mute_multi_cc".
+        """
+        return cls.load().get("mute_multi_cc", _DEFAULT_APP_CONFIG["mute_multi_cc"])
 
     @classmethod
     def reload(cls):

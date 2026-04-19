@@ -1,4 +1,4 @@
-﻿; ============================================================
+; ============================================================
 ; Quang Lưu Studio - Inno Setup Installer Script
 ; ============================================================
 ; Build: Mở file này bằng Inno Setup Compiler → Compile (Ctrl+F9)
@@ -12,7 +12,7 @@
 ; ============================================================
 
 #define MyAppName "Quang Luu Studio"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "1.3.0"
 #define MyAppPublisher "Quang Luu"
 #define MyAppExeName "QuangLuuStudio.exe"
 #define MyAppURL "https://github.com/quang-luu-studio"
@@ -91,7 +91,7 @@ Source: "studio_one\QuangLuuMIDI.surface.xml"; DestDir: "{app}\studio_one"; Flag
 Source: "studio_one\deviceinfo.xml"; DestDir: "{app}\studio_one"; Flags: ignoreversion
 
 ; SFX (sound effects)
-Source: "sfx\*.wav"; DestDir: "{app}\sfx"; Flags: ignoreversion
+Source: "sfx\*"; DestDir: "{app}\sfx"; Flags: ignoreversion recursesubdirs
 
 [Dirs]
 ; Tạo thư mục cho dữ liệu user (writable)

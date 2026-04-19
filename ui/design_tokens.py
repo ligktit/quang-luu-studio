@@ -178,3 +178,66 @@ def darken(hex_color: str, factor: float = 0.2) -> str:
     g = max(0, int(c.green() * (1 - factor)))
     b = max(0, int(c.blue()  * (1 - factor)))
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+# ── QSS helpers ────────────────────────────────────────────────
+
+def card_qss(radius: int = 12, border_left: str = "") -> str:
+    left = f"border-left: 3px solid {border_left};" if border_left else ""
+    return (
+        f"QFrame {{ background-color: {C['card']}; border-radius: {radius}px;"
+        f" border: 1px solid {C['border']}; {left} }}"
+    )
+
+
+def scrollarea_qss(width: int = 6) -> str:
+    r = width // 2
+    return f"""
+        QScrollArea {{ border: none; background-color: {C['bg']}; }}
+        QScrollBar:vertical {{ background: {C['card']}; width: {width}px; border-radius: {r}px; }}
+        QScrollBar::handle:vertical {{ background: {C['border']}; border-radius: {r}px; min-height: 20px; }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+    """.strip()
+
+
+def input_field_qss(focus_color: str = "") -> str:
+    focus = focus_color or C["teal"]
+    return f"""
+        QLineEdit {{
+            background-color: {C['bg']}; color: {C['text']};
+            border: 1px solid {C['border']}; border-radius: 8px;
+            padding: 8px 10px; font-size: 13px; font-family: {FONT};
+        }}
+        QLineEdit:focus {{ border-color: {focus}; border-width: 2px; }}
+    """.strip()
+
+
+def combo_qss(color: str = "", font_size: int = 13) -> str:
+    text_color = color or C["text"]
+    return f"""
+        QComboBox {{
+            background-color: {C['bg']}; color: {text_color};
+            border: 1px solid {C['border']}; border-radius: 6px;
+            padding: 6px 10px; font-size: {font_size}px; font-weight: bold; font-family: {FONT};
+        }}
+        QComboBox::drop-down {{ border: none; }}
+        QComboBox QAbstractItemView {{
+            background-color: {C['card']}; color: {C['text']};
+            selection-background-color: {C['primary']};
+            border: 1px solid {C['border']}; font-size: {font_size - 1}px; font-family: {FONT};
+        }}
+    """.strip()
+
+
+def header_card_qss() -> str:
+    return (
+        f"QFrame {{ background-color: {C['card']};"
+        f" border-bottom: 1px solid {C['border']}; }}"
+    )
+
+
+def footer_card_qss() -> str:
+    return (
+        f"QFrame {{ background-color: {C['card']};"
+        f" border-top: 1px solid {C['border']}; }}"
+    )

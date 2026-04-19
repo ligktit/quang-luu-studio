@@ -66,7 +66,7 @@ class MixerChannel(QWidget):
         # ── PainterFader (QPainter-based) ────────────────────
         self.slider = PainterFader(
             minimum=0, maximum=100,
-            value=50 if unit == " dB" else default,
+            value=default,
             color=color,
         )
         self.slider.setMinimumHeight(130)
@@ -101,6 +101,8 @@ class MixerChannel(QWidget):
 
     def _format(self, val) -> str:
         if self._unit == " dB":
+            if val <= self._min + 0.1:
+                return f"−∞{self._unit}"
             return f"{val:+.1f}{self._unit}"
         return f"{int(val)}{self._unit}"
 

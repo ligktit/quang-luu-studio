@@ -21,6 +21,14 @@
         "mute_reverb": 52,
         "mute_backing": 53
     },
+    "mute_multi_cc": {
+        "mix_music": [],
+        "mix_mic": [],
+        "mix_reverb": [
+            {"cc": 41, "on_value": 127, "off_value": 0}
+        ],
+        "mix_backing": []
+    },
     "scale_values": {
         "major": 13,
         "minor": 18

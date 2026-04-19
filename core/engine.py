@@ -266,6 +266,115 @@ class SystemEngine:
                 self.midi_handler.inport = None
                 self.midi_handler._listen_thread = None
 
+    def send_midi(self, cc, value, auto_reconnect=True):
+        """
+        Gửi MIDI Control Change message (wrapper cho MidiHandler.send_cc())
+        Args:
+            cc: Control Change number (0-127)
+            value: Giá trị (0-127)
+            auto_reconnect: Tự động thử kết nối lại nếu gửi thất bại
+        Returns:
+            bool: True nếu gửi thành công, False nếu thất bại
+        """
+        success = self.midi_handler.send_cc(cc, value)
+        
+        # Nếu thất bại và auto_reconnect=True → thử kết nối lại 1 lần
+        if not success and auto_reconnect:
+            print(f"⚠️ Gửi MIDI thất bại (cc={cc}), đang thử kết nối lại...")
+            if self.connect_midi():
+                success = self.midi_handler.send_cc(cc, value)
+        
+        return success
+
+    # ── Chấm điểm nhanh (Quick Score) ─────────────────────────────────────────────
+
+    def start_quick_score(self, lb_idx, mic_idx, on_ready=None, on_error=None):
+        """
+        Bắt đầu tiến trình chấm điểm nhanh (Quick Score).
+        Thu âm loopback + mic, sau đó tính điểm khi dừng.
+        
+        Args:
+            lb_idx: Index thiết bị loopback
+            mic_idx: Index thiết bị microphone
+            on_ready: Callback(score_data) khi có kết quả
+            on_error: Callback(error_msg) khi xảy ra lỗi
+        """
+        if self.quick_score_active:
+            print("⚠️ [QUICK SCORE] Đã có phiên chấm điểm đang chạy")
+            return
+            
+        def _quick_score_task():
+            self.quick_score_active = True
+            scoring_engine = None
+            try:
+                # 1. Bắt đầu thu âm
+                print(f"🎙️ [QUICK SCORE] Bắt đầu thu âm (LB={lb_idx}, MIC={mic_idx})...")
+                success = self.score_recorder.start_recording(
+                    loopback_device_index=lb_idx,
+                    mic_device_index=mic_idx
+                )
+                if not success:
+                    raise Exception(self.score_recorder.last_error or "Không thể khởi động bộ thu âm.")
+
+                # 2. Đợi cho đến khi stop_quick_score được gọi (hoặc timeout 60s)
+                # Tận dụng loop để có thể ngắt ngay lập tức khi set quick_score_active = False
+                for i in range(600): # Max 60s
+                    if not self.quick_score_active:
+                        break
+                    time.sleep(0.1)
+                
+                # 3. Dừng thu âm và lấy file
+                rec_path = self.score_recorder.stop_recording()
+                if not rec_path or not os.path.exists(rec_path):
+                    raise Exception("Không tìm thấy file ghi âm tạm để phân tích.")
+                
+                # 4. Tính điểm
+                print(f"🎯 [QUICK SCORE] Đang phân tích âm thanh...")
+                scoring_engine = ScoringEngine()
+                if scoring_engine.load_audio(rec_path):
+                    # quick=True để dùng thuật toán chấm điểm nhanh/nhẹ tay
+                    result = scoring_engine.calculate_score(quick=True)
+                    
+                    if result and on_ready:
+                        print(f"✅ [QUICK SCORE] Hoàn thành! Điểm: {result.get('total_score', 0)}")
+                        on_ready(result)
+                else:
+                    raise Exception("Không thể load file âm thanh để chấm điểm.")
+                
+            except Exception as e:
+                print(f"❌ [QUICK SCORE] Lỗi: {e}")
+                if on_error:
+                    on_error(str(e))
+            finally:
+                self.quick_score_active = False
+                if scoring_engine:
+                    scoring_engine.cleanup_temp_file()
+                self.score_recorder.cleanup()
+                MemoryGuard.force_cleanup()
+                
+        self._quick_score_thread = threading.Thread(target=_quick_score_task, daemon=True)
+        self._quick_score_thread.start()
+
+    def stop_quick_score(self, cancel=False):
+        """
+        Dừng tiến trình chấm điểm nhanh.
+        Args:
+            cancel: Nếu True, dừng và KHÔNG tính điểm (không làm gì thêm). 
+                    Nếu False, dừng và bắt đầu tính điểm dựa trên phần đã thu.
+        """
+        if self.quick_score_active:
+            print(f"⏹️ [QUICK SCORE] Dừng chấm điểm (cancel={cancel})")
+            if cancel:
+                # Nếu cancel, ta dừng recorder nhưng không để thread tiếp tục tính điểm
+                # Trong thực tế, thread con vẫn chạy tới phần calculation, nên ta
+                # cần check kĩ hơn hoặc reset callback.
+                self.quick_score_active = False
+                # Dừng recorder ngay lập tức
+                self.score_recorder.stop_recording()
+                self.score_recorder.cleanup()
+            else:
+                self.quick_score_active = False
+
     def connect_midi(self, retry_count=3, delay=1.0, on_connected=None, on_failed=None):
         """
         Kết nối MIDI (wrapper cho MidiHandler.connect())
@@ -290,38 +399,6 @@ class SystemEngine:
                 pass
         return result
 
-    def send_midi(self, cc, value, auto_reconnect=True):
-        """
-        Gửi MIDI Control Change message (wrapper cho MidiHandler.send_cc())
-        Args:
-            cc: Control Change number (0-127)
-            value: Giá trị (0-127)
-            auto_reconnect: Tự động thử kết nối lại nếu gửi thất bại
-        Returns:
-            bool: True nếu gửi thành công, False nếu thất bại
-        """
-        # Kiểm tra kết nối
-        if not self.midi_handler.outport:
-            if auto_reconnect:
-                if self.midi_handler.connect():
-                    print("✅ Đã kết nối lại MIDI")
-                else:
-                    return False
-            else:
-                return False
-        
-        try:
-            # Validate và clamp giá trị
-            cc = max(0, min(127, int(cc)))
-            value = max(0, min(127, int(value)))
-            
-            # Gửi MIDI message qua MidiHandler
-            self.midi_handler.send_cc(cc, value, channel=0)
-            return True
-            
-        except Exception as e:
-            print(f"⚠️ Lỗi gửi MIDI CC {cc} = {value}: {e}")
-            return False
 
     # ── BROWSER VOLUME CONTROL (YouTube) ──
     # Điều khiển volume ứng dụng trình duyệt ở mức hệ thống Windows
@@ -943,30 +1020,25 @@ class SystemEngine:
                 
                 # Tạo ScoringEngine và chấm điểm
                 print("🔧 [CHẤM ĐIỂM] Khởi tạo ScoringEngine...")
-                # Assuming ScoringEngine is defined elsewhere and imported
-                # from .scoring_engine import ScoringEngine 
-                # For now, just a placeholder
-                class ScoringEngine:
-                    def download_youtube_audio(self, url): return None
-                    def load_audio(self, path): return False
-                    def calculate_score(self, video_end): return None
-                    def cleanup_temp_file(self): pass
-                    sample_rate = 48000
                 scoring_engine = ScoringEngine()
                 
                 # Tải audio từ YouTube
                 print("📥 [CHẤM ĐIỂM] Đang tải audio từ YouTube...")
                 audio_path = scoring_engine.download_youtube_audio(youtube_url)
+                
+                result = None
                 if not audio_path:
                     print("❌ [CHẤM ĐIỂM] Lỗi: Không thể tải audio từ YouTube")
-                    if self.on_video_end_callback:
-                        self.on_video_end_callback(None)
-                    return
                 else:
-                    print("❌ [CHẤM ĐIỂM] Lỗi: Không thể tính điểm")
+                    print("📊 [CHẤM ĐIỂM] Đang tải audio into engine...")
+                    if scoring_engine.load_audio(audio_path):
+                        print("🎯 [CHẤM ĐIỂM] Đang tính điểm (video_end mode)...")
+                        result = scoring_engine.calculate_score(video_end=True)
+                    else:
+                        print("❌ [CHẤM ĐIỂM] Lỗi: Không thể load audio")
                 
                 # Cleanup
-                print("🧹 [CHẤM ĐIỂM] Đang dọn dẹp file tạm...")
+                print("Sweep [CHẤM ĐIỂM] Đang dọn dẹp file tạm...")
                 scoring_engine.cleanup_temp_file()
                 print("✅ [CHẤM ĐIỂM] Đã dọn dẹp xong")
                 
