@@ -1153,39 +1153,38 @@ class MainDashboard(QMainWindow):
             app.exec()
 
     def closeEvent(self, event):
-        """Cleanup đầy đủ khi đóng cửa sổ — 7 bước theo thứ tự an toàn."""
-        import threading
+        """Đóng cửa sổ không block — set flags ngay, cleanup nặng chạy nền."""
 
-        # ══ BƯỚC 1: Dừng YT Watcher TRƯỚC (tránh race condition với taskkill) ══
-        self.engine.stop_youtube_watcher()
-        # Reset YouTube state để tránh lần mở lại nhận URL cũ
-        self.engine.current_youtube_url = None
-        self.engine._last_watched_url = None
-        with self.engine._pending_url_lock:
-            self.engine._pending_url_queue.clear()
+        # ── BƯỚC 1: Set stop flags (instant, thread-safe) ──────────────────────
+        # Phải set trước khi accept để các thread thoát loop nhanh nhất có thể.
+        self.engine._youtube_watcher_active = False
+        self.engine.autokey_active = False
+        try:
+            self.engine._tone_session.stop()
+        except Exception:
+            pass
+        # Xóa pending URL queue để watcher không dispatch thêm
+        try:
+            self.engine.current_youtube_url = None
+            self.engine._last_watched_url = None
+            with self.engine._pending_url_lock:
+                self.engine._pending_url_queue.clear()
+        except Exception:
+            pass
 
-        # ══ BƯỚC 2: Dừng tone detection và autokey ══
-        self.engine.stop_autokey()
-        self.engine.stop_tone_detection()
-
-        # ══ BƯỚC 3: Dừng media monitor, restore volume, ngắt MIDI ══
-        self.engine.media_monitor.stop()
-        self.engine.restore_browser_volume()
-        self.engine.disconnect_midi()
-
-        # ══ BƯỚC 4: Dừng tất cả QTimers ══
+        # ── BƯỚC 2: Qt timers — phải dừng trên main thread ────────────────────
         self._status_timer.stop()
         if self._marquee_timer is not None:
             self._marquee_timer.stop()
         if self._marquee_widget is not None and hasattr(self._marquee_widget, 'timer'):
             self._marquee_widget.timer.stop()
 
-        # ══ BƯỚC 5: Dừng waveform audio capture + ghi âm ══
+        # ── BƯỚC 3: Waveform + ghi âm (nhanh, không block) ────────────────────
         if self._waveform is not None:
             try:
                 self._waveform.stop()
-            except Exception as e:
-                print(f"⚠️ waveform.stop() error: {e}")
+            except Exception:
+                pass
         if self.is_recording:
             try:
                 self.engine.recorder.stop_recording(save_path=None)
@@ -1193,34 +1192,64 @@ class MainDashboard(QMainWindow):
                 pass
             self.is_recording = False
 
-        # ══ BƯỚC 6: Đóng ứng dụng ngoài (theo thứ tự đúng) ══
+        # ── BƯỚC 4: Cleanup tức thì (non-blocking COM/MIDI calls) ──────────────
+        try:
+            self.engine.restore_browser_volume()
+        except Exception:
+            pass
+        try:
+            self.engine.disconnect_midi()
+        except Exception:
+            pass
+        try:
+            self.engine.media_monitor.stop()
+        except Exception:
+            pass
 
-        # 6a. Studio One — graceful shutdown trong thread, join với timeout
-        if self.settings.get("auto_close_studio_one", False):
-            _so_thread = threading.Thread(
-                target=self.engine.kill_studio_one_gracefully,
-                kwargs={"timeout_sec": 5},
-                daemon=True
-            )
-            _so_thread.start()
-            _so_thread.join(timeout=7)  # Chờ tối đa 7s trước khi tiếp tục
-
-        # 6b. YouTube — chỉ đóng cửa sổ có "YouTube" trong title, KHÔNG kill toàn bộ browser
-        if self.settings.get("auto_close_browser", False):
-            try:
-                self.engine.close_youtube_windows()
-            except Exception:
-                pass
-
-        # ══ BƯỚC 7: MemoryGuard, GC, Qt cleanup ══
-        if hasattr(self.engine, '_memory_guard'):
-            try:
-                self.engine._memory_guard.stop()
-            except Exception:
-                pass
-        import gc
-        gc.collect()
+        # ── BƯỚC 5: Accept ngay — window đóng, Qt event loop không bị block ───
+        event.accept()
         super().closeEvent(event)
+
+        # ── BƯỚC 6: Cleanup nặng trong daemon thread (join + Studio One) ───────
+        # Daemon thread tự bị kill khi os._exit(0) chạy trong main.py.
+        # Không cần join — chỉ cần đảm bảo các tài nguyên hệ thống được giải phóng.
+        settings_snap = dict(self.settings)
+        engine = self.engine
+
+        def _bg_shutdown():
+            # Watcher loop check flag mỗi 0.1s → join xong nhanh (~0.1s)
+            try:
+                engine.stop_youtube_watcher()
+            except Exception:
+                pass
+            # Autokey: stream.read() block ~23ms/chunk → thoát nhanh sau khi flag set
+            try:
+                engine.stop_autokey()
+            except Exception:
+                pass
+            try:
+                engine.stop_tone_detection()
+            except Exception:
+                pass
+            if settings_snap.get("auto_close_studio_one", False):
+                try:
+                    engine.kill_studio_one_gracefully(timeout_sec=5)
+                except Exception:
+                    pass
+            if settings_snap.get("auto_close_browser", False):
+                try:
+                    engine.close_youtube_windows()
+                except Exception:
+                    pass
+            if hasattr(engine, '_memory_guard'):
+                try:
+                    engine._memory_guard.stop()
+                except Exception:
+                    pass
+            import gc
+            gc.collect()
+
+        threading.Thread(target=_bg_shutdown, daemon=True, name="bg-shutdown").start()
 
 
 # ══════════════════════════════════════════════════════
