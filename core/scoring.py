@@ -5,7 +5,8 @@ Class: ScoringEngine
 import os
 import time
 
-from core.config import FFMPEG_LOCATION, RECORDINGS_DIR
+from core.config import RECORDINGS_DIR
+from core.ytdlp_support import download_with_auth, extract_info_with_auth, make_ydl_opts
 
 
 class ScoringEngine:
@@ -53,19 +54,15 @@ class ScoringEngine:
             print(f"📄 [DOWNLOAD] Tạo file tạm: {temp_path}")
             
             # Cấu hình yt-dlp — chỉ tải 60 giây đầu để tăng tốc dò tone
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'outtmpl': temp_path.replace('.wav', '.%(ext)s'),
-                'postprocessors': [{
+            ydl_opts = make_ydl_opts(
+                format='bestaudio/best',
+                outtmpl=temp_path.replace('.wav', '.%(ext)s'),
+                postprocessors=[{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'wav',
                     'preferredquality': '192',
                 }],
-                'quiet': True,
-                'no_warnings': True,
-            }
-            if FFMPEG_LOCATION:
-                ydl_opts['ffmpeg_location'] = FFMPEG_LOCATION
+            )
             
             print("⬇️  [DOWNLOAD] Đang tải video từ YouTube...")
             
@@ -73,13 +70,11 @@ class ScoringEngine:
             try:
                 ydl_opts_partial = dict(ydl_opts)
                 ydl_opts_partial['download_ranges'] = lambda info, ydl: [{'start_time': 0, 'end_time': 60}]
-                with yt_dlp.YoutubeDL(ydl_opts_partial) as ydl:
-                    ydl.download([youtube_url])
+                download_with_auth(youtube_url, ydl_opts_partial, log_prefix="⚠️ [DOWNLOAD]")
             except Exception as e_partial:
                 # Fallback: tải toàn bộ audio nếu download_ranges thất bại
                 print(f"⚠️ [DOWNLOAD] Không thể tải 60s đầu ({e_partial.__class__.__name__}), tải toàn bộ...")
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([youtube_url])
+                download_with_auth(youtube_url, ydl_opts, log_prefix="⚠️ [DOWNLOAD]")
             
             print("✅ [DOWNLOAD] Đã tải video thành công")
             
@@ -130,19 +125,15 @@ class ScoringEngine:
             temp_path = temp_file.name
             temp_file.close()
             
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'outtmpl': temp_path.replace('.wav', '.%(ext)s'),
-                'postprocessors': [{
+            ydl_opts = make_ydl_opts(
+                format='bestaudio/best',
+                outtmpl=temp_path.replace('.wav', '.%(ext)s'),
+                postprocessors=[{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'wav',
                     'preferredquality': '192',
                 }],
-                'quiet': True,
-                'no_warnings': True,
-            }
-            if FFMPEG_LOCATION:
-                ydl_opts['ffmpeg_location'] = FFMPEG_LOCATION
+            )
             
             video_title = ""
             
@@ -150,14 +141,22 @@ class ScoringEngine:
             try:
                 ydl_opts_partial = dict(ydl_opts)
                 ydl_opts_partial['download_ranges'] = lambda info, ydl: [{'start_time': 0, 'end_time': 60}]
-                with yt_dlp.YoutubeDL(ydl_opts_partial) as ydl:
-                    info = ydl.extract_info(youtube_url, download=True)
-                    video_title = info.get('title', '') if info else ""
+                info = extract_info_with_auth(
+                    youtube_url,
+                    ydl_opts_partial,
+                    download=True,
+                    log_prefix="⚠️ [DOWNLOAD+INFO]"
+                )
+                video_title = info.get('title', '') if info else ""
             except Exception as e_partial:
                 print(f"⚠️ [DOWNLOAD+INFO] Partial download failed ({e_partial.__class__.__name__}), tải toàn bộ...")
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(youtube_url, download=True)
-                    video_title = info.get('title', '') if info else ""
+                info = extract_info_with_auth(
+                    youtube_url,
+                    ydl_opts,
+                    download=True,
+                    log_prefix="⚠️ [DOWNLOAD+INFO]"
+                )
+                video_title = info.get('title', '') if info else ""
             
             print(f"✅ [DOWNLOAD+INFO] Tải thành công | Title: {video_title}")
             

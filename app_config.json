@@ -1,5 +1,8 @@
 {
     "midi_port_name": "QuangLuuMIDI",
+    "youtube_cookie_browser": "auto",
+    "youtube_cookie_profile": "",
+    "youtube_cookie_file": "",
     "midi_cc": {
         "tone_music": 10,
         "tone_voice": 11,

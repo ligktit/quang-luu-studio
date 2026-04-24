@@ -27,7 +27,9 @@ def _make_value_changed_callback(dashboard, cc_key, range_tuple, unit):
     def cb(raw_value):
         if unit == " dB":
             db = min_v + ((max_v - min_v) * (raw_value / 100.0))
-            midi = int(((db - min_v) / (max_v - min_v)) * 127)
+            # Preserve original -60 to +10 dB mapping for MIDI CC
+            orig_min, orig_max = -60.0, 10.0
+            midi = int(((db - orig_min) / (orig_max - orig_min)) * 127)
             midi = max(0, min(127, midi))
         else:
             midi = int((raw_value / 100.0) * 127)
@@ -50,8 +52,8 @@ def build_panel_mixer(dashboard) -> GlassPanel:
     }
     channels = [
         {"label": "Nhạc", "icon": "♪", "color": C["teal"],   "cc": "mix_music",  "range": (0, 100),  "default": 70, "unit": ""},
-        {"label": "Mic",  "icon": "☉", "color": C["orange"], "cc": "mix_mic",    "range": (-60, 10), "default": 86, "unit": " dB"},
-        {"label": "Vang", "icon": "≡", "color": C["accent"], "cc": "mix_reverb", "range": (-60, 10), "default": 86, "unit": " dB"},
+        {"label": "Mic",  "icon": "☉", "color": C["orange"], "cc": "mix_mic",    "range": (-12, 12), "default": 50, "unit": " dB"},
+        {"label": "Vang", "icon": "≡", "color": C["accent"], "cc": "mix_reverb", "range": (-12, 12), "default": 50, "unit": " dB"},
     ]
 
     dashboard._mixer_sliders = {}

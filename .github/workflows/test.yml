@@ -1,0 +1,79 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'core/**'
+      - 'tests/**'
+      - 'requirements.txt'
+      - '.github/workflows/test.yml'
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: pytest (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-test-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-test-
+
+      # Cài test deps + subset deps cần cho unit tests
+      # Không cài pyaudiowpatch/uiautomation/winrt vì chúng cần hardware
+      - name: Install test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          # Core logic deps (không cần hardware)
+          pip install numpy scipy librosa
+          pip install mido python-rtmidi
+          pip install yt-dlp
+          pip install psutil
+          pip install pywin32
+          pip install PySide6
+          # Test framework
+          pip install pytest pytest-mock pytest-cov
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          python -m pytest tests/ `
+            -v `
+            --tb=short `
+            --cov=core `
+            --cov-report=term-missing `
+            --cov-report=xml:coverage.xml `
+            -x
+        env:
+          # Một số tests cần path hợp lệ
+          APPDATA: ${{ runner.temp }}
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 7

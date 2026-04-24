@@ -212,43 +212,61 @@ def download_audio(url, output_dir):
     ffmpeg_location = _find_ffmpeg_location()
     has_ffmpeg = ffmpeg_location is not None
 
-    if has_ffmpeg:
-        ydl_opts = {
-            "format": "bestaudio/best",
-            "outtmpl": output_path,
-            "noplaylist": True,
-            "ffmpeg_location": ffmpeg_location,
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "wav",
-                "preferredquality": "192",
-            }],
-            "quiet": True,
-            "no_warnings": True,
-        }
-    else:
-        # No ffmpeg: download best audio as-is (webm/m4a)
-        ydl_opts = {
-            "format": "bestaudio[ext=m4a]/bestaudio/best",
-            "outtmpl": output_path,
-            "noplaylist": True,
-            "quiet": True,
-            "no_warnings": True,
-        }
+    def get_opts(cookies=None):
+        if has_ffmpeg:
+            opts = {
+                "format": "bestaudio/best",
+                "outtmpl": output_path,
+                "noplaylist": True,
+                "ffmpeg_location": ffmpeg_location,
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "wav",
+                    "preferredquality": "192",
+                }],
+                "quiet": True,
+                "no_warnings": True,
+            }
+        else:
+            opts = {
+                "format": "bestaudio[ext=m4a]/bestaudio/best",
+                "outtmpl": output_path,
+                "noplaylist": True,
+                "quiet": True,
+                "no_warnings": True,
+            }
+        if cookies:
+            opts["cookiesfrombrowser"] = (cookies,)
+        return opts
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            title = info.get("title", "Unknown")
+    # Try downloading: without cookies first, then fallback to various browsers
+    for cookies_browser in [None, "chrome", "edge", "brave", "opera", "firefox"]:
+        ydl_opts = get_opts(cookies_browser)
+        try:
+            if cookies_browser:
+                print(f"  [!] Bị YouTube chặn. Đang thử dùng cookie từ {cookies_browser}...")
+                
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = info.get("title", "Unknown")
 
-        # Find the downloaded file
-        for f in os.listdir(output_dir):
-            if f.startswith("audio."):
-                return os.path.join(output_dir, f), title
+            # Find the downloaded file
+            for f in os.listdir(output_dir):
+                if f.startswith("audio."):
+                    return os.path.join(output_dir, f), title
 
-    except Exception as e:
-        print(f"  ❌ Download error: {e}")
+        except yt_dlp.utils.DownloadError as e:
+            err_msg = str(e).lower()
+            if "sign in to confirm" in err_msg or "bot" in err_msg:
+                continue  # Try next cookie source
+            else:
+                print(f"  ❌ Download error: {e}")
+                return None, None
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+            return None, None
 
+    print("  ❌ Không thể tải video. YouTube bot detection đã chặn tất cả các cách thức (cần đăng nhập trên trình duyệt).")
     return None, None
 
 

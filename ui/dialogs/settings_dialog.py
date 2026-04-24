@@ -155,6 +155,10 @@ class SettingsDialog(QDialog):
         self._combo_lb, self._combo_mic = self._create_audio_combos(settings)
         lay.addWidget(self._section_card(self._build_audio))
 
+        # ── Sửa lỗi CDP (Đồng bộ trình duyệt) ──
+        lay.addWidget(self._section_header("🛠️", "Sửa lỗi đồng bộ (CDP)"))
+        lay.addWidget(self._section_card(self._build_cdp_tools))
+
         # ── Calibrate button ──
         cal_btn = QPushButton("🎛️ Calibrate Auto-Tune")
         cal_btn.setCursor(Qt.PointingHandCursor)
@@ -294,6 +298,41 @@ class SettingsDialog(QDialog):
         mic_hint.setWordWrap(True)
         vl.addWidget(mic_hint)
 
+    def _build_cdp_tools(self, vl):
+        from PySide6.QtWidgets import QLabel, QPushButton, QHBoxLayout
+        desc = QLabel(
+            "💡 Nếu ứng dụng không thể nhảy theo lời bài hát (hiện thông báo CDP chưa kết nối), "
+            "có thể do trình duyệt bị chạy ngầm hoặc thiếu flag. Bạn hãy làm 2 bước:"
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px; font-family: {FONT}; background:transparent; border:none;")
+        vl.addWidget(desc)
+
+        row = QHBoxLayout()
+        kill_btn = QPushButton("🛑 1. Force Kill Trình Duyệt Ngầm")
+        kill_btn.setCursor(Qt.PointingHandCursor)
+        kill_btn.setFixedHeight(40)
+        kill_btn.setStyleSheet(pill_btn_qss(C["accent"], _lighten(C["accent"], 0.1), 13, 10))
+        kill_btn.clicked.connect(self._action_kill_browsers)
+
+        fix_btn = QPushButton("🛠️ 2. Thêm Flag vào Shortcut")
+        fix_btn.setCursor(Qt.PointingHandCursor)
+        fix_btn.setFixedHeight(40)
+        fix_btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 13, 10))
+        fix_btn.clicked.connect(self._action_fix_shortcuts)
+        
+        check_btn = QPushButton("🔍 Kiểm tra")
+        check_btn.setCursor(Qt.PointingHandCursor)
+        check_btn.setFixedHeight(40)
+        check_btn.setFixedWidth(100)
+        check_btn.setStyleSheet(pill_btn_qss(C["blue"], _lighten(C["blue"], 0.1), 13, 10))
+        check_btn.clicked.connect(self._action_check_cdp)
+
+        row.addWidget(kill_btn)
+        row.addWidget(fix_btn)
+        row.addWidget(check_btn)
+        vl.addLayout(row)
+
     def _build_footer(self):
         footer = QFrame()
         footer.setStyleSheet(f"QFrame {{ background-color: {C['card']}; border-top: 1px solid {C['border']}; }}")
@@ -361,3 +400,46 @@ class SettingsDialog(QDialog):
         backend.ConfigManager.save_settings(s)
         self._dashboard._show_message("✅ Đã lưu thiết lập!")
         self.close()
+
+    def _action_kill_browsers(self):
+        import subprocess
+        for browser in ["msedge.exe", "chrome.exe", "brave.exe", "msedgewebview2.exe"]:
+            subprocess.run(f"taskkill /F /IM {browser} /T", shell=True, capture_output=True)
+        self._dashboard._show_message("✅ Đã tắt toàn bộ trình duyệt chạy ngầm!")
+
+    def _action_fix_shortcuts(self):
+        import os, ctypes
+        script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools", "_apply_cdp.ps1"))
+        if not os.path.exists(script_path):
+            self._dashboard._show_message("⚠️ Không tìm thấy công cụ _apply_cdp.ps1", is_error=True)
+            return
+            
+        cmd = f'-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{script_path}"'
+        try:
+            # Dùng ShellExecute với 'runas' để tự động hỏi quyền Admin bằng UAC popup
+            result = ctypes.windll.shell32.ShellExecuteW(None, "runas", "powershell.exe", cmd, None, 1)
+            if result > 32:
+                self._dashboard._show_message("✅ Đã khởi chạy công cụ sửa Shortcut thành công!")
+            else:
+                self._dashboard._show_message("⚠️ Bạn đã từ chối cấp quyền Admin.", is_error=True)
+        except Exception as e:
+            self._dashboard._show_message(f"⚠️ Lỗi: {e}", is_error=True)
+
+    def _action_check_cdp(self):
+        engine = self._dashboard.engine
+        is_cdp = getattr(engine.monitor, 'is_connected', False)
+        
+        # Fallback check
+        win_media = getattr(engine, 'win_media', None)
+        is_winrt = False
+        if win_media:
+            is_winrt = (win_media.current_title != "") or win_media.is_playing
+            
+        if is_cdp:
+            title = getattr(engine.monitor, 'target_url', 'YouTube')
+            self._dashboard._show_message(f"✅ CDP: Đã kết nối!\n({title[:40]}...)")
+        elif is_winrt:
+            self._dashboard._show_message("⚠️ Đang dùng WinRT Fallback.\n(Không nhảy lời chính xác, hãy sửa bước 1 & 2)")
+        else:
+            self._dashboard._show_message("❌ Chưa kết nối trình duyệt.\nHãy mở YouTube trên Edge/Chrome/Brave.", is_error=True)
+

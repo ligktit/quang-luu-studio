@@ -1,0 +1,197 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'   # v1.4.0, v2.0.0, ...
+
+permissions:
+  contents: write   # Cần để tạo GitHub Release
+
+jobs:
+  build:
+    name: Build installer (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────────
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Cần full history để git describe hoạt động
+
+      # ── 2. Python setup ────────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      # ── 3. Install dependencies ────────────────────────────────────────────────
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip wheel
+          # Core deps
+          pip install -r requirements.txt
+          # Build tools
+          pip install pyinstaller
+
+      # ── 4. Verify version matches tag ──────────────────────────────────────────
+      - name: Verify version vs tag
+        shell: python
+        run: |
+          import sys, re
+          sys.path.insert(0, '.')
+          from core.version import __version__
+          tag = "${{ github.ref_name }}"          # e.g. v1.4.0
+          tag_ver = tag.lstrip('v')
+          if __version__ != tag_ver:
+              print(f"ERROR: core/version.py has {__version__!r} but tag is {tag!r}")
+              sys.exit(1)
+          print(f"OK: version {__version__} matches tag {tag}")
+
+      # ── 5. Sync version → .iss ─────────────────────────────────────────────────
+      - name: Sync version to .iss
+        shell: python
+        run: |
+          import sys; sys.path.insert(0, '.')
+          exec(open('sync_version.py').read())
+
+      # ── 6. Build exe (PyInstaller) ─────────────────────────────────────────────
+      - name: Build executable
+        shell: pwsh
+        run: |
+          pyinstaller QuangLuuStudio.spec --noconfirm
+          # Rename _2 → production name expected by .iss
+          if (Test-Path "dist\QuangLuuStudio_2.exe") {
+            Rename-Item "dist\QuangLuuStudio_2.exe" "QuangLuuStudio.exe"
+            Write-Host "Renamed dist\QuangLuuStudio_2.exe → dist\QuangLuuStudio.exe"
+          } elseif (Test-Path "dist\QuangLuuStudio.exe") {
+            Write-Host "dist\QuangLuuStudio.exe already exists"
+          } else {
+            Write-Host "ERROR: No exe found in dist\"
+            Get-ChildItem dist\
+            exit 1
+          }
+
+      # ── 7. Install Inno Setup ──────────────────────────────────────────────────
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $url  = "https://jrsoftware.org/download.php/is.exe"
+          $dest = "$env:TEMP\innosetup.exe"
+          Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+          Start-Process $dest -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES" -Wait
+          Write-Host "Inno Setup installed"
+
+      # ── 8. Build installer ─────────────────────────────────────────────────────
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
+          }
+          & $iscc QuangLuuStudio_Setup.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "Installer built:"
+          Get-ChildItem installer_output\
+
+      # ── 9. (Optional) Code signing ─────────────────────────────────────────────
+      # Bỏ comment khi đã có code signing certificate
+      # - name: Sign installer
+      #   if: secrets.CERT_BASE64 != ''
+      #   shell: pwsh
+      #   env:
+      #     CERT_BASE64: ${{ secrets.CERT_BASE64 }}
+      #     CERT_PASSWORD: ${{ secrets.CERT_PASSWORD }}
+      #   run: |
+      #     $certPath = "$env:TEMP\cert.pfx"
+      #     [System.Convert]::FromBase64String($env:CERT_BASE64) | Set-Content $certPath -AsByteStream
+      #     $setup = (Get-ChildItem installer_output\*.exe).FullName
+      #     signtool sign /f $certPath /p $env:CERT_PASSWORD `
+      #       /tr http://timestamp.sectigo.com /td sha256 /fd sha256 $setup
+      #     Remove-Item $certPath
+
+      # ── 10. Generate SHA256SUMS.txt ────────────────────────────────────────────
+      - name: Generate SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          $outFile = "installer_output\SHA256SUMS.txt"
+          Get-ChildItem installer_output\*.exe | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Out-File -FilePath $outFile -Encoding ascii
+          Write-Host "SHA256SUMS.txt:"
+          Get-Content $outFile
+
+      # ── 11. Generate release notes from commits ────────────────────────────────
+      - name: Generate changelog
+        id: changelog
+        shell: python
+        run: |
+          import subprocess, os, re
+
+          # Lấy tag trước để so sánh
+          result = subprocess.run(
+              ["git", "tag", "--sort=-version:refname"],
+              capture_output=True, text=True
+          )
+          tags = [t.strip() for t in result.stdout.splitlines() if t.strip().startswith('v')]
+          current_tag = "${{ github.ref_name }}"
+
+          if len(tags) >= 2:
+              prev_tag = tags[1]  # Tag ngay trước current
+              log_range = f"{prev_tag}..{current_tag}"
+          else:
+              prev_tag = ""
+              log_range = current_tag
+
+          commits = subprocess.run(
+              ["git", "log", log_range, "--pretty=format:- %s (%h)"],
+              capture_output=True, text=True
+          ).stdout.strip()
+
+          body = f"## Thay đổi trong phiên bản {current_tag}\n\n"
+          if prev_tag:
+              body += f"_(So với {prev_tag})_\n\n"
+          body += commits or "- Không có thay đổi ghi chú"
+
+          # Ghi ra file để GitHub Release action đọc
+          with open("RELEASE_NOTES.md", "w", encoding="utf-8") as f:
+              f.write(body)
+          print("Release notes generated")
+
+      # ── 12. Create GitHub Release ──────────────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Quang Lưu Studio ${{ github.ref_name }}"
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          files: |
+            installer_output/Setup_QuangLuuStudio_v*.exe
+            installer_output/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 13. Upload build artifact (backup) ────────────────────────────────────
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ github.ref_name }}
+          path: installer_output/
+          retention-days: 30

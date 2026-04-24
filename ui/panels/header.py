@@ -14,7 +14,13 @@ def build_header(dashboard) -> PaintedHeaderBar:
     layout = header.layout()
 
     dashboard._midi_dot = PaintedMidiDot()
+    dashboard._midi_dot.setToolTip("Trạng thái kết nối MIDI (Studio One/Loopback)")
     layout.addWidget(dashboard._midi_dot)
+    layout.addSpacing(4)
+
+    dashboard._browser_dot = PaintedMidiDot()
+    dashboard._browser_dot.setToolTip("Trạng thái đồng bộ trình duyệt (CDP/WinRT)")
+    layout.addWidget(dashboard._browser_dot)
     layout.addSpacing(SP.XS)
 
     dashboard._marquee_widget = SmoothMarqueeLabel(dashboard._marquee_text_value, color="#fc8403")

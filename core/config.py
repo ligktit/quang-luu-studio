@@ -76,6 +76,9 @@ APP_CONFIG_FILE = "app_config.json"
 # Defaults nếu file không tồn tại hoặc thiếu field
 _DEFAULT_APP_CONFIG = {
     "midi_port_name": "QuangLuuMIDI",
+    "youtube_cookie_browser": "auto",
+    "youtube_cookie_profile": "",
+    "youtube_cookie_file": "",
     "midi_cc": {
         "tone_music": 10, "tone_voice": 11,
         "mix_music": 20, "mix_mic": 21, "mix_reverb": 22, "mix_backing": 23,

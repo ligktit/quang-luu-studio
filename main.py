@@ -3,12 +3,10 @@ import sys
 import ctypes
 import atexit
 import shutil
+import threading
+import logging
 
-# ── PyInstaller _MEI cleanup ──────────────────────────
-# Khi build --onefile, PyInstaller giải nén vào thư mục tạm _MEIxxxxx.
-# Nếu daemon threads/subprocesses vẫn giữ file handles khi thoát,
-# Windows không thể xóa thư mục → báo lỗi "Failed to remove temporary directory".
-
+# ── PyInstaller _MEI cleanup ──────────────────────────────────────────────────
 def _cleanup_mei():
     """Xóa thư mục tạm _MEI khi app thoát (chỉ chạy trong PyInstaller frozen mode)."""
     if not getattr(sys, 'frozen', False):
@@ -17,25 +15,104 @@ def _cleanup_mei():
     if mei_dir and os.path.isdir(mei_dir):
         shutil.rmtree(mei_dir, ignore_errors=True)
 
-# atexit là safety net cho nhánh exit bất thường; đường thoát chính gọi _cleanup_mei() thủ công
-# vì os._exit(0) bỏ qua mọi atexit handler.
 atexit.register(_cleanup_mei)
 
-# Set DPI awareness TRƯỚC khi import Qt (tránh "SetProcessDpiAwarenessContext() failed" trong PyInstaller)
+# ── DPI awareness — BEFORE Qt import ─────────────────────────────────────────
 try:
-    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_ssize_t(-4))  # PER_MONITOR_AWARE_V2
+    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_ssize_t(-4))
 except Exception:
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Fallback cho Windows 8.1
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except Exception:
         pass
 
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
-os.environ["QT_OPENGL"] = "angle"  # ANGLE ổn định hơn native OpenGL trên Windows
+os.environ["QT_OPENGL"] = "angle"
+
+# ── Logging — init before any core import ─────────────────────────────────────
+from pathlib import Path
+from core.logger import setup_logging, get_logger
+from core.config import _get_data_dir
+
+_LOG_DIR = Path(_get_data_dir()) / "logs"
+setup_logging(_LOG_DIR, level=logging.INFO)
+log = get_logger(__name__)
+
+from core.version import __version__
+log.info("Quang Lưu Studio v%s starting", __version__)
 
 import backend
 import frontend_qt
 
+
+# ── Update check ──────────────────────────────────────────────────────────────
+
+def _schedule_update_check():
+    """
+    Chạy sau khi MainDashboard đã hiển thị (non-blocking background thread).
+    Nếu có phiên bản mới, emit signal để show dialog ở main thread.
+    """
+    from core.updater import check_and_notify_update
+    from core.config import ConfigManager
+    import time
+
+    # Respect user preference
+    settings   = ConfigManager.load_settings() or {}
+    update_cfg = settings.get("update", {})
+    if not update_cfg.get("auto_check", True):
+        return
+
+    # Rate-limit: check at most once per 24h
+    import time as _time
+    last_check = update_cfg.get("last_check_timestamp", 0)
+    if _time.time() - last_check < 86400:
+        log.info("Update check skipped (checked within last 24h)")
+        return
+
+    def _on_update_available(release):
+        from ui.dialogs.update_dialog import UpdateDialog
+        if UpdateDialog.should_skip(release.version):
+            log.info("Update %s skipped by user preference", release.version)
+            return
+
+        # Marshal to Qt main thread via QMetaObject.invokeMethod / signal
+        try:
+            from PySide6.QtCore import QMetaObject, Qt
+            from PySide6.QtWidgets import QApplication
+
+            def _show():
+                app = QApplication.instance()
+                if app:
+                    dlg = UpdateDialog(release)
+                    dlg.exec()
+
+            QMetaObject.invokeMethod(
+                QApplication.instance(),
+                "invokeMethod",
+                Qt.QueuedConnection,
+            )
+            # Simpler fallback: schedule via singleShot
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, _show)
+        except Exception as e:
+            log.warning("Could not show update dialog: %s", e)
+
+    check_and_notify_update(on_update_available=_on_update_available)
+
+    # Update last check timestamp
+    try:
+        from core.config import ConfigManager
+        import time as _t
+        settings   = ConfigManager.load_settings() or {}
+        update_cfg = settings.get("update", {})
+        update_cfg["last_check_timestamp"] = _t.time()
+        settings["update"] = update_cfg
+        ConfigManager.save_settings(settings)
+    except Exception:
+        pass
+
+
+# ── App lifecycle ─────────────────────────────────────────────────────────────
 
 def _license_or_trial_expired():
     am = backend.ActivationManager
@@ -44,8 +121,8 @@ def _license_or_trial_expired():
 
 def main():
     """
-    Vòng đời app — dùng loop thay vì đệ quy callback để tránh tích lũy stack frames
-    khi user reactivate / lưu setup nhiều lần.
+    App lifecycle loop — avoid recursion to prevent stack accumulation
+    when the user reactivates or saves setup multiple times.
     """
     while True:
         # 1. Activation / trial gate
@@ -53,33 +130,39 @@ def main():
             dialog = frontend_qt.ActivationDialog(is_expired=_license_or_trial_expired())
             dialog.mainloop()
             if not dialog.activated:
-                return  # User đóng dialog mà chưa kích hoạt → thoát
+                log.info("User exited without activating")
+                return
             continue
 
         if backend.ActivationManager.is_trial_active():
             days = backend.ActivationManager.get_trial_days_remaining()
-            print(f"🎁 [TRIAL] Đang dùng thử — Còn {days:.1f} ngày")
+            log.info("[TRIAL] %d days remaining", int(days))
 
         # 2. Settings
         settings = backend.ConfigManager.load_settings()
 
-        # 3. Điều hướng
+        # 3. Route
         if settings:
+            # Launch update check in background after dashboard shows
+            threading.Thread(target=_schedule_update_check, daemon=True).start()
             frontend_qt.MainDashboard(settings).mainloop()
-            return  # Dashboard đóng = thoát app
+            log.info("Dashboard closed, exiting")
+            return
         else:
             setup = frontend_qt.SetupView()
             setup.mainloop()
             if not setup._saved:
-                return  # User bỏ qua setup → thoát
+                log.info("Setup cancelled, exiting")
+                return
 
 
 if __name__ == "__main__":
     try:
         main()
+    except Exception:
+        log.exception("Unhandled exception in main()")
     finally:
-        # Cleanup thủ công vì os._exit bypass atexit.
-        # os._exit cần thiết để buộc OS thu hồi mọi file handle
-        # do daemon threads (MIDI, media monitor, memory guard) còn giữ.
+        log.info("App exiting")
+        logging.shutdown()
         _cleanup_mei()
         os._exit(0)

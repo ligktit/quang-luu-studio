@@ -18,6 +18,7 @@ import ui.panels as panels
 from ui.components.button import _make_pill_qss, _make_circle_qss
 from ui.components.waveform_hero import WaveformHeroPanel
 from ui.components.painter_button import PainterButton
+from core.ytdlp_support import extract_info_with_auth, make_ydl_opts
 
 # ─── MIDI CC MAPPING (đọc từ app_config.json) ───
 try:
@@ -84,6 +85,12 @@ class MainDashboard(QMainWindow):
     _autokey_signal = Signal(dict)
     _tone_result_signal = Signal(dict)
     _midi_cc_signal = Signal(int, int)
+    
+    _midi_status_signal = Signal()
+    _browser_status_signal = Signal()
+    _message_signal = Signal(str, bool)
+    _score_report_signal = Signal(dict)
+    _score_btn_reset_signal = Signal()
 
     @property
     def _marquee_text(self):
@@ -171,11 +178,18 @@ class MainDashboard(QMainWindow):
         
         self.engine.on_midi_cc_callback = lambda cc, v: self._midi_cc_signal.emit(cc, v)
         self._midi_cc_signal.connect(self._on_midi_cc_received)
+        
+        self._midi_status_signal.connect(self._update_midi_status)
+        self._browser_status_signal.connect(self._update_browser_status)
+        self._message_signal.connect(self._show_message)
+        self._score_report_signal.connect(self._show_scoring_report)
+        self._score_btn_reset_signal.connect(self._reset_score_btn)
 
-        # MIDI check timer
-        self._midi_timer = QTimer(self)
-        self._midi_timer.timeout.connect(self._update_midi_status)
-        self._midi_timer.start(5000)
+        # Status check timer (5s MIDI, 2s Browser)
+        self._status_timer = QTimer(self)
+        self._status_timer.timeout.connect(self._update_midi_status)
+        self._status_timer.timeout.connect(self._update_browser_status)
+        self._status_timer.start(2500)
 
         # Auto launch (Studio One + Browser theo settings)
         self._auto_launch_apps()
@@ -279,6 +293,26 @@ class MainDashboard(QMainWindow):
         if self._waveform is not None:
             self._waveform.set_midi_status(connected)
 
+    def _update_browser_status(self):
+        """Cập nhật đèn báo trạng thái trình duyệt (CDP/WinRT)."""
+        cdp_connected = getattr(self.engine.cdp_monitor, 'is_connected', False)
+        
+        # Check WinRT fallback logic
+        win_media = getattr(self.engine, 'media_monitor', None)
+        winrt_active = False
+        if win_media and not cdp_connected:
+            winrt_active = (win_media.current_title != "") or win_media.is_playing
+
+        if cdp_connected:
+            # CDP Kết nối thành công (Xanh lá - Chế độ cao nhất)
+            self._browser_dot.setStyleSheet(f"color: {C['green']}; font-size: 10px;")
+        elif winrt_active:
+            # WinRT Kết nối (Vàng/Cam - Chế độ fallback)
+            self._browser_dot.setStyleSheet(f"color: {C['orange']}; font-size: 10px;")
+        else:
+            # Không có kết nối (Đỏ/Accent)
+            self._browser_dot.setStyleSheet(f"color: {C['accent']}; font-size: 10px;")
+
     def _on_midi_cc_received(self, cc, value):
         # Khi MIDI CC đến → cập nhật UI combobox mà KHÔNG re-emit send_midi.
         # Dùng QSignalBlocker (RAII) thay vì flag toàn cục — đúng idiom Qt.
@@ -314,7 +348,7 @@ class MainDashboard(QMainWindow):
             print(f"⚠️ UI MIDI Sync Error: {e}")
 
     def on_midi_status_changed(self, connected, port_name=None):
-        QTimer.singleShot(0, self._update_midi_status)
+        self._midi_status_signal.emit()
 
     def _auto_launch_apps(self):
         """Tự động mở Studio One và/hoặc YouTube browser khi khởi động (theo settings)."""
@@ -625,14 +659,12 @@ class MainDashboard(QMainWindow):
             # Bật chấm điểm
             def on_score_ready(result):
                 # Reset UI
-                if btn:
-                    QTimer.singleShot(0, lambda: btn.setText(""))
-                    QTimer.singleShot(0, lambda: btn.setStyleSheet(pill_btn_qss(C["light_purple"], _lighten(C["light_purple"], 0.12), 11, 14)))
+                self._score_btn_reset_signal.emit()
                 
                 if "error" in result:
-                    QTimer.singleShot(0, lambda: self._show_message(f"❌ Lỗi chấm điểm: {result['error']}", is_error=True))
+                    self._message_signal.emit(f"❌ Lỗi chấm điểm: {result['error']}", True)
                 else:
-                    QTimer.singleShot(0, lambda: self._show_scoring_report(result))
+                    self._score_report_signal.emit(result)
                     
             lb_idx = self.settings.get("record_loopback_device", -1)
             mic_idx = self.settings.get("record_mic_device", -1)
@@ -643,6 +675,14 @@ class MainDashboard(QMainWindow):
                 btn.setStyleSheet(pill_btn_qss(C["accent"], _darken(C["accent"], 0.2), 11, 14))
                 
             self.engine.start_quick_score(lb_idx, mic_idx, on_ready=on_score_ready, on_error=lambda err: self._show_message(err, True))
+
+    def _reset_score_btn(self):
+        btn = self._func_buttons.get("Chấm điểm") or self._func_buttons.get("Đang ghi (chờ kết thúc)")
+        if btn:
+            btn.setText("")
+            btn.setStyleSheet(pill_btn_qss(C["light_purple"], _lighten(C["light_purple"], 0.12), 11, 14))
+            if "Đang ghi (chờ kết thúc)" in self._func_buttons:
+                self._func_buttons["Chấm điểm"] = self._func_buttons.pop("Đang ghi (chờ kết thúc)")
 
     def _show_scoring_report(self, result: dict):
         from ui.dialogs.scoring_report import ScoringReportDialog
@@ -757,20 +797,20 @@ class MainDashboard(QMainWindow):
                     save_tone = tl[0].get('key_display', save_tone)
             else:
                 try:
-                    import yt_dlp
-                    ydl_opts = {'quiet': True, 'no_warnings': True, 'skip_download': True}
-                    if backend.FFMPEG_LOCATION:
-                        ydl_opts['ffmpeg_location'] = backend.FFMPEG_LOCATION
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(url, download=False)
-                        title = info.get('title', title)
+                    info = extract_info_with_auth(
+                        url,
+                        make_ydl_opts(skip_download=True),
+                        download=False,
+                        log_prefix="⚠️ [QUICK SAVE]"
+                    )
+                    title = info.get('title', title)
                 except Exception:
                     pass
             
             if backend.SongManager.add_song(title, url, save_tone):
-                QTimer.singleShot(0, lambda t=title: self._show_message(f"✅ Đã lưu: {t[:40]}"))
+                self._message_signal.emit(f"✅ Đã lưu: {title[:40]}", False)
             else:
-                QTimer.singleShot(0, lambda: self._show_message("❌ Lỗi khi lưu bài hát", is_error=True))
+                self._message_signal.emit("❌ Lỗi khi lưu bài hát", True)
                 
         threading.Thread(target=_task, daemon=True).start()
 
@@ -1134,7 +1174,7 @@ class MainDashboard(QMainWindow):
         self.engine.disconnect_midi()
 
         # ══ BƯỚC 4: Dừng tất cả QTimers ══
-        self._midi_timer.stop()
+        self._status_timer.stop()
         if self._marquee_timer is not None:
             self._marquee_timer.stop()
         if self._marquee_widget is not None and hasattr(self._marquee_widget, 'timer'):

@@ -1,4 +1,4 @@
-; ============================================================
+﻿; ============================================================
 ; Quang Lưu Studio - Inno Setup Installer Script
 ; ============================================================
 ; Build: Mở file này bằng Inno Setup Compiler → Compile (Ctrl+F9)
@@ -12,10 +12,10 @@
 ; ============================================================
 
 #define MyAppName "Quang Luu Studio"
-#define MyAppVersion "1.3.0"
+#define MyAppVersion "1.4.0"
 #define MyAppPublisher "Quang Luu"
 #define MyAppExeName "QuangLuuStudio.exe"
-#define MyAppURL "https://github.com/quang-luu-studio"
+#define MyAppURL "https://github.com/ligktit/quang-luu-studio"
 #define MyAppDataFolder "QuangLuuStudio"
 
 [Setup]

@@ -17,6 +17,7 @@ activation check doesn't pull in audio / MIDI / media-monitor stacks.
 import importlib
 
 # ── Eager: lightweight, needed before the activation gate ──
+from core.version import __version__ as APP_VERSION
 from core.config import (
     SETTINGS_FILE,
     SONGS_FILE,
@@ -76,6 +77,8 @@ def __dir__():
 
 
 __all__ = [
+    # Version
+    "APP_VERSION",
     # Constants
     "SETTINGS_FILE", "SONGS_FILE", "ACTIVATION_FILE",
     "MANUAL_TIMELINES_FILE", "TONE_CACHE_FILE", "APP_CONFIG_FILE",
