@@ -155,6 +155,10 @@ class SettingsDialog(QDialog):
         self._combo_lb, self._combo_mic = self._create_audio_combos(settings)
         lay.addWidget(self._section_card(self._build_audio))
 
+        # ── YouTube Cookie ──
+        lay.addWidget(self._section_header("🍪", "YouTube Cookie"))
+        lay.addWidget(self._section_card(self._build_cookie_tools))
+
         # ── Sửa lỗi CDP (Đồng bộ trình duyệt) ──
         lay.addWidget(self._section_header("🛠️", "Sửa lỗi đồng bộ (CDP)"))
         lay.addWidget(self._section_card(self._build_cdp_tools))
@@ -298,6 +302,92 @@ class SettingsDialog(QDialog):
         mic_hint.setWordWrap(True)
         vl.addWidget(mic_hint)
 
+    def _build_cookie_tools(self, vl):
+        from PySide6.QtWidgets import QComboBox
+        import os
+
+        desc = QLabel(
+            "Nếu thấy lỗi \"Could not copy Chrome cookie database\", dùng Firefox hoặc "
+            "xuất cookie ra file một lần (Chrome phải đóng hoàn toàn khi xuất)."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(
+            f"color: {C['text_muted']}; font-size: 12px; font-family: {FONT};"
+            " background:transparent; border:none;"
+        )
+        vl.addWidget(desc)
+
+        # Browser selector
+        browser_row = QHBoxLayout()
+        browser_lbl = QLabel("Nguồn cookie:")
+        browser_lbl.setStyleSheet(
+            f"color: {C['text_muted']}; font-size: 12px; font-family: {FONT};"
+            " background:transparent; border:none; min-width: 100px;"
+        )
+        self._combo_cookie_browser = QComboBox()
+        self._combo_cookie_browser.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {C['bg']}; color: {C['text']};
+                border: 1px solid {C['border']}; border-radius: 8px;
+                padding: 6px 10px; font-size: 12px; font-family: {FONT};
+            }}
+            QComboBox::drop-down {{ border: none; width: 20px; }}
+            QComboBox QAbstractItemView {{
+                background-color: {C['card']}; color: {C['text']};
+                selection-background-color: {C['teal']};
+                border: 1px solid {C['border']}; font-size: 12px;
+            }}
+        """)
+        BROWSER_OPTIONS = [
+            ("auto",    "Auto (thử lần lượt)"),
+            ("firefox", "Firefox (khuyến dùng, không lock)"),
+            ("edge",    "Edge"),
+            ("chrome",  "Chrome"),
+            ("brave",   "Brave"),
+            ("none",    "Tắt (dùng cookie file)"),
+        ]
+        current = (backend.AppConfig.get("youtube_cookie_browser") or "auto").strip().lower()
+        for val, label in BROWSER_OPTIONS:
+            self._combo_cookie_browser.addItem(label, val)
+            if val == current:
+                self._combo_cookie_browser.setCurrentIndex(self._combo_cookie_browser.count() - 1)
+        browser_row.addWidget(browser_lbl)
+        browser_row.addWidget(self._combo_cookie_browser, 1)
+        vl.addLayout(browser_row)
+
+        # Export button + status
+        export_row = QHBoxLayout()
+        export_btn = QPushButton("📤 Xuất Cookie ra File")
+        export_btn.setCursor(Qt.PointingHandCursor)
+        export_btn.setFixedHeight(36)
+        export_btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 12, 12))
+        export_btn.setToolTip(
+            "Xuất cookie từ browser đang chọn ra file.\n"
+            "Chrome/Edge/Brave phải đóng hoàn toàn trước khi xuất.\n"
+            "Firefox có thể xuất khi đang mở."
+        )
+
+        from core.ytdlp_support import _AUTO_COOKIE_FILE
+        file_exists = os.path.exists(_AUTO_COOKIE_FILE)
+        self._cookie_status_lbl = QLabel("✅ Có file cookie" if file_exists else "⚠️ Chưa có file cookie")
+        self._cookie_status_lbl.setStyleSheet(
+            f"color: {C['green'] if file_exists else C['orange']}; font-size: 11px;"
+            f" font-family: {FONT}; background:transparent; border:none;"
+        )
+
+        export_btn.clicked.connect(self._action_export_cookies)
+        export_row.addWidget(export_btn)
+        export_row.addWidget(self._cookie_status_lbl, 1)
+        vl.addLayout(export_row)
+
+        hint = QLabel(f"File: {_AUTO_COOKIE_FILE}")
+        hint.setStyleSheet(
+            f"color: {C['text_muted']}; font-size: 10px; font-style: italic;"
+            f" font-family: {FONT}; background:transparent; border:none;"
+        )
+        hint.setWordWrap(True)
+        vl.addWidget(hint)
+
     def _build_cdp_tools(self, vl):
         from PySide6.QtWidgets import QLabel, QPushButton, QHBoxLayout
         desc = QLabel(
@@ -398,8 +488,59 @@ class SettingsDialog(QDialog):
         s["record_loopback_device"] = self._combo_lb.currentData()
         s["record_mic_device"]      = self._combo_mic.currentData()
         backend.ConfigManager.save_settings(s)
+
+        # Save cookie browser choice to app_config.json
+        cookie_browser = self._combo_cookie_browser.currentData() or "auto"
+        backend.AppConfig.update("youtube_cookie_browser", cookie_browser)
+        if cookie_browser != "none":
+            backend.AppConfig.update("youtube_cookie_file", "")
+        backend.AppConfig.save()
+
         self._dashboard._show_message("✅ Đã lưu thiết lập!")
         self.close()
+
+    def _action_export_cookies(self):
+        import threading
+        browser = self._combo_cookie_browser.currentData() or "chrome"
+        if browser in ("none", "auto"):
+            browser = "chrome"
+        self._cookie_status_lbl.setText("⏳ Đang xuất cookie...")
+        self._cookie_status_lbl.setStyleSheet(
+            f"color: {C['teal']}; font-size: 11px; font-family: {FONT};"
+            " background:transparent; border:none;"
+        )
+
+        def _run():
+            from core.ytdlp_support import export_cookies_to_file, _AUTO_COOKIE_FILE
+            result = export_cookies_to_file(browser=browser, log_prefix="[SETTINGS]")
+            from PySide6.QtCore import QTimer
+            def _update():
+                if result:
+                    self._cookie_status_lbl.setText("✅ Xuất cookie thành công!")
+                    self._cookie_status_lbl.setStyleSheet(
+                        f"color: {C['green']}; font-size: 11px; font-family: {FONT};"
+                        " background:transparent; border:none;"
+                    )
+                    self._dashboard._show_message(f"Cookie đã lưu:\n{result}")
+                    # Auto-switch config to use the cookie file
+                    backend.AppConfig.update("youtube_cookie_browser", "none")
+                    backend.AppConfig.update("youtube_cookie_file", result)
+                    backend.AppConfig.save()
+                else:
+                    self._cookie_status_lbl.setText("❌ Xuất thất bại (đóng browser trước?)")
+                    self._cookie_status_lbl.setStyleSheet(
+                        f"color: {C['accent']}; font-size: 11px; font-family: {FONT};"
+                        " background:transparent; border:none;"
+                    )
+                    self._dashboard._show_message(
+                        f"Không xuất được cookie từ {browser}.\n\n"
+                        "Chrome/Edge/Brave phải đóng hoàn toàn.\n"
+                        "Hãy thử Firefox (không cần đóng).",
+                        is_error=True
+                    )
+            QTimer.singleShot(0, _update)
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _action_kill_browsers(self):
         import subprocess
