@@ -236,6 +236,22 @@ class _LifecycleMixin:
             except Exception:
                 pass
 
+        # Try to explicitly kill Chromium PWA processes for YouTube
+        try:
+            import psutil
+            for proc in psutil.process_iter(['name', 'cmdline']):
+                name = (proc.info.get('name') or '').lower()
+                cmdline = proc.info.get('cmdline') or []
+                if name in ('chrome.exe', 'msedge.exe', 'brave.exe', 'coccoc.exe'):
+                    cmd_str = ' '.join(cmdline).lower()
+                    if 'youtube.com' in cmd_str and ('--app=' in cmd_str or '--app-id=' in cmd_str):
+                        try:
+                            proc.terminate()
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
         try:
             import win32gui
             import win32con
@@ -248,7 +264,7 @@ class _LifecycleMixin:
             if not win32gui.IsWindowVisible(hwnd):
                 return True
             title = win32gui.GetWindowText(hwnd).lower()
-            if "youtube" in title or "youtu.be" in title:
+            if "youtube" in title or "youtu.be" in title or "yt music" in title:
                 yt_hwnds.append(hwnd)
             return True
 
@@ -263,6 +279,8 @@ class _LifecycleMixin:
 
         for hwnd in yt_hwnds:
             try:
+                # Gửi WM_SYSCOMMAND SC_CLOSE hiệu quả hơn với Chromium PWAs
+                win32gui.SendMessageTimeout(hwnd, win32con.WM_SYSCOMMAND, win32con.SC_CLOSE, 0, win32con.SMTO_ABORTIFHUNG, 500)
                 win32gui.SendMessageTimeout(hwnd, win32con.WM_CLOSE, 0, 0, win32con.SMTO_ABORTIFHUNG, 500)
             except Exception:
                 pass
