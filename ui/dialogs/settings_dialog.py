@@ -29,8 +29,8 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self._dashboard = parent
         self.setWindowTitle("Thiết lập")
-        self.setMinimumSize(760, 680)
-        self.resize(800, 720)
+        self.setMinimumSize(820, 700)
+        self.resize(860, 720)
         self.setModal(True)
         self.setStyleSheet(self._dialog_qss())
         self._build_ui()
@@ -391,9 +391,38 @@ class SettingsDialog(QDialog):
     def _build_tools_tab(self):
         tab = QWidget()
         tab.setStyleSheet("background: transparent;")
-        lay = QVBoxLayout(tab)
+        lay = QHBoxLayout(tab)
         lay.setContentsMargins(22, 18, 22, 18)
-        lay.setSpacing(12)
+        lay.setSpacing(16)
+
+        # Geometry: 860px dialog - 44px content margins - 16px column gap = 800px.
+        # Each column gets about 400px, preventing the three tool groups from
+        # competing for one vertical stack and preventing button compression.
+        left_col = QWidget()
+        left_col.setStyleSheet("background: transparent;")
+        left_col.setMinimumWidth(360)
+        left = QVBoxLayout(left_col)
+        left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(12)
+        left.addWidget(self._section_header(SVG_GLOBE, "YouTube Cookie"))
+        left.addWidget(self._section_card(self._build_cookie_tools))
+        left.addStretch()
+
+        right_col = QWidget()
+        right_col.setStyleSheet("background: transparent;")
+        right_col.setMinimumWidth(360)
+        right = QVBoxLayout(right_col)
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(12)
+        right.addWidget(self._section_header(SVG_WRENCH, "Sửa lỗi đồng bộ (CDP)"))
+        right.addWidget(self._section_card(self._build_cdp_tools))
+        right.addWidget(self._section_header(SVG_UPLOAD, "Cập nhật phần mềm"))
+        right.addWidget(self._section_card(self._build_update_tools))
+        right.addStretch()
+
+        lay.addWidget(left_col, 1)
+        lay.addWidget(right_col, 1)
+        return tab
 
         lay.addWidget(self._section_header(SVG_GLOBE, "YouTube Cookie"))
         lay.addWidget(self._section_card(self._build_cookie_tools))
@@ -519,7 +548,7 @@ class SettingsDialog(QDialog):
         vl.addWidget(mic_hint)
 
     def _build_cookie_tools(self, vl):
-        from PySide6.QtWidgets import QComboBox
+        from PySide6.QtWidgets import QComboBox, QFormLayout
         import os
 
         desc = QLabel(
@@ -527,19 +556,25 @@ class SettingsDialog(QDialog):
             "xuất cookie ra file một lần (Chrome phải đóng hoàn toàn khi xuất)."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet(
-            self._field_label_qss(size=12, weight=500)
-        )
+        desc.setStyleSheet(self._field_label_qss(size=11, weight=500))
         vl.addWidget(desc)
+        vl.addSpacing(10)
 
-        # Browser selector
-        browser_row = QHBoxLayout()
+        # Sử dụng FormLayout để căn chỉnh nhãn và input chuyên nghiệp hơn
+        form = QFormLayout()
+        form.setSpacing(12)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setLabelAlignment(Qt.AlignLeft)
+
+        # Hàng 1: Nguồn cookie
         browser_lbl = QLabel("Nguồn cookie:")
-        browser_lbl.setStyleSheet(
-            self._field_label_qss(size=12, weight=800) + " min-width: 100px;"
-        )
+        browser_lbl.setStyleSheet(self._field_label_qss(size=12, weight=800))
+        browser_lbl.setFixedWidth(110)
+        
         self._combo_cookie_browser = QComboBox()
         self._combo_cookie_browser.setStyleSheet(self._combo_qss)
+        self._combo_cookie_browser.setFixedHeight(36)
+        
         BROWSER_OPTIONS = [
             ("auto",    "Auto (thử lần lượt)"),
             ("firefox", "Firefox (khuyến dùng, không lock)"),
@@ -553,42 +588,45 @@ class SettingsDialog(QDialog):
             self._combo_cookie_browser.addItem(label, val)
             if val == current:
                 self._combo_cookie_browser.setCurrentIndex(self._combo_cookie_browser.count() - 1)
-        browser_row.addWidget(browser_lbl)
-        browser_row.addWidget(self._combo_cookie_browser, 1)
-        vl.addLayout(browser_row)
+        
+        form.addRow(browser_lbl, self._combo_cookie_browser)
 
-        # Export button + status
-        export_row = QHBoxLayout()
+        # Hàng 2: Xuất Cookie
+        export_lbl = QLabel("Tạo file cookie:")
+        export_lbl.setStyleSheet(self._field_label_qss(size=12, weight=800))
+        export_lbl.setFixedWidth(110)
+
+        export_box = QVBoxLayout()
+        export_box.setContentsMargins(0, 0, 0, 0)
+        export_box.setSpacing(6)
         export_btn = QPushButton("Xuất Cookie ra File")
         export_btn.setIcon(self._svg_icon(SVG_UPLOAD, "white", 16))
         export_btn.setIconSize(QSize(16, 16))
         export_btn.setCursor(Qt.PointingHandCursor)
-        export_btn.setFixedHeight(38)
+        export_btn.setFixedHeight(36)
+        export_btn.setMinimumWidth(190)
         export_btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 12, 12))
         add_shadow(export_btn, C["teal"], 8, (0, 2))
-        export_btn.setToolTip(
-            "Xuất cookie từ browser đang chọn ra file.\n"
-            "Chrome/Edge/Brave phải đóng hoàn toàn trước khi xuất.\n"
-            "Firefox có thể xuất khi đang mở."
-        )
 
         from core.ytdlp_support import _AUTO_COOKIE_FILE
         file_exists = os.path.exists(_AUTO_COOKIE_FILE)
         self._cookie_status_lbl = QLabel("Có file cookie" if file_exists else "Chưa có file cookie")
+        self._cookie_status_lbl.setMinimumHeight(18)
         self._cookie_status_lbl.setStyleSheet(
             f"color: {C['green'] if file_exists else C['orange']}; font-size: 11px;"
-            f" font-family: {FONT}; background:transparent; border:none;"
+            f" font-family: {FONT}; background:transparent; border:none; font-weight: bold;"
         )
-
+        
         export_btn.clicked.connect(self._action_export_cookies)
-        export_row.addWidget(export_btn)
-        export_row.addWidget(self._cookie_status_lbl, 1)
-        vl.addLayout(export_row)
+        export_box.addWidget(export_btn, 0, Qt.AlignLeft)
+        export_box.addWidget(self._cookie_status_lbl)
+        
+        form.addRow(export_lbl, export_box)
+        vl.addLayout(form)
+        vl.addSpacing(6)
 
-        hint = QLabel(f"File: {_AUTO_COOKIE_FILE}")
-        hint.setStyleSheet(
-            self._field_label_qss(size=10, weight=500, italic=True)
-        )
+        hint = QLabel(f"Lưu file tại: {_AUTO_COOKIE_FILE}")
+        hint.setStyleSheet(self._field_label_qss(size=10, weight=500, italic=True))
         hint.setWordWrap(True)
         vl.addWidget(hint)
 
@@ -599,17 +637,19 @@ class SettingsDialog(QDialog):
             "có thể do trình duyệt bị chạy ngầm hoặc thiếu flag. Bạn hãy làm 2 bước:"
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet(self._field_label_qss(size=12, weight=500))
+        desc.setStyleSheet(self._field_label_qss(size=11, weight=500))
         vl.addWidget(desc)
+        vl.addSpacing(8)
 
-        row = QHBoxLayout()
-        row.setSpacing(10)
+        row = QVBoxLayout()
+        row.setContentsMargins(0, 4, 0, 4)
+        row.setSpacing(8)
         kill_btn = QPushButton("1. Force Kill Trình Duyệt Ngầm")
         kill_btn.setIcon(self._svg_icon(SVG_CANCEL, "white", 16))
         kill_btn.setIconSize(QSize(16, 16))
         kill_btn.setCursor(Qt.PointingHandCursor)
-        kill_btn.setFixedHeight(42)
-        kill_btn.setStyleSheet(pill_btn_qss(C["accent"], _lighten(C["accent"], 0.1), 13, 10))
+        kill_btn.setFixedHeight(36)
+        kill_btn.setStyleSheet(pill_btn_qss(C["accent"], _lighten(C["accent"], 0.1), 12, 10))
         add_shadow(kill_btn, C["accent"], 8, (0, 2))
         kill_btn.clicked.connect(self._action_kill_browsers)
 
@@ -617,8 +657,8 @@ class SettingsDialog(QDialog):
         fix_btn.setIcon(self._svg_icon(SVG_WRENCH, "white", 16))
         fix_btn.setIconSize(QSize(16, 16))
         fix_btn.setCursor(Qt.PointingHandCursor)
-        fix_btn.setFixedHeight(42)
-        fix_btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 13, 10))
+        fix_btn.setFixedHeight(36)
+        fix_btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 12, 10))
         add_shadow(fix_btn, C["teal"], 8, (0, 2))
         fix_btn.clicked.connect(self._action_fix_shortcuts)
         
@@ -626,9 +666,8 @@ class SettingsDialog(QDialog):
         check_btn.setIcon(self._svg_icon(SVG_SEARCH, "white", 16))
         check_btn.setIconSize(QSize(16, 16))
         check_btn.setCursor(Qt.PointingHandCursor)
-        check_btn.setFixedHeight(42)
-        check_btn.setFixedWidth(108)
-        check_btn.setStyleSheet(pill_btn_qss(C["blue"], _lighten(C["blue"], 0.1), 13, 10))
+        check_btn.setFixedHeight(36)
+        check_btn.setStyleSheet(pill_btn_qss(C["blue"], _lighten(C["blue"], 0.1), 12, 10))
         check_btn.clicked.connect(self._action_check_cdp)
 
         row.addWidget(kill_btn)
@@ -643,6 +682,7 @@ class SettingsDialog(QDialog):
         version_lbl.setStyleSheet(self._field_label_qss(size=12, weight=600))
         version_lbl.setTextFormat(Qt.RichText)
         vl.addWidget(version_lbl)
+        vl.addSpacing(2)
 
         # Last check timestamp
         last_check_text = self._format_last_update_check()
@@ -651,15 +691,18 @@ class SettingsDialog(QDialog):
             self._field_label_qss(size=11, weight=500, italic=True)
         )
         vl.addWidget(self._update_last_check_lbl)
+        vl.addSpacing(8)
 
         # Action row
         action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 4, 0, 4)
         action_row.setSpacing(10)
         check_btn = QPushButton("Kiểm tra cập nhật")
         check_btn.setIcon(self._svg_icon(SVG_SEARCH, "white", 16))
         check_btn.setIconSize(QSize(16, 16))
         check_btn.setCursor(Qt.PointingHandCursor)
         check_btn.setFixedHeight(38)
+        check_btn.setFixedWidth(180)
         check_btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 12, 14))
         add_shadow(check_btn, C["teal"], 8, (0, 2))
         check_btn.clicked.connect(self._action_check_for_updates)
@@ -673,16 +716,9 @@ class SettingsDialog(QDialog):
         self._update_status_lbl.setWordWrap(True)
 
         action_row.addWidget(check_btn)
+        action_row.addSpacing(10)
         action_row.addWidget(self._update_status_lbl, 1)
         vl.addLayout(action_row)
-
-        hint = QLabel(
-            "App tự kiểm tra mỗi 24h khi khởi động. Nhấn nút trên để check ngay. "
-            "Khi có bản mới, hộp thoại tải xuống sẽ tự hiện."
-        )
-        hint.setStyleSheet(self._field_label_qss(size=10, weight=500, italic=True))
-        hint.setWordWrap(True)
-        vl.addWidget(hint)
 
     def _format_last_update_check(self):
         try:
