@@ -111,6 +111,30 @@
     </Control>
 
     <!-- ============================================ -->
+    <!-- MUTE MULTI CC EFFECTS (CC 41-44)             -->
+    <!-- ============================================ -->
+    
+    <!-- mute_multi_1: Phụ trợ Mute Vang 1 (CC 41) -->
+    <Control name="muteMulti1" title="Mute Multi 1" type="button" options="receive public">
+      <MidiMessage status="#B0" address="41"/>
+    </Control>
+    
+    <!-- mute_multi_2: Phụ trợ Mute Vang 2 (CC 42) -->
+    <Control name="muteMulti2" title="Mute Multi 2" type="button" options="receive public">
+      <MidiMessage status="#B0" address="42"/>
+    </Control>
+    
+    <!-- mute_multi_3: Phụ trợ Mute Vang 3 (CC 43) -->
+    <Control name="muteMulti3" title="Mute Multi 3" type="button" options="receive public">
+      <MidiMessage status="#B0" address="43"/>
+    </Control>
+    
+    <!-- mute_multi_4: Phụ trợ Mute Vang 4 (CC 44) -->
+    <Control name="muteMulti4" title="Mute Multi 4" type="button" options="receive public">
+      <MidiMessage status="#B0" address="44"/>
+    </Control>
+
+    <!-- ============================================ -->
     <!-- MIXER MUTE TOGGLES (CC 50-53)               -->
     <!-- ============================================ -->
     

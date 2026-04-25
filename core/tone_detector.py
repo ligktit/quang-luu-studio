@@ -127,7 +127,7 @@ class ToneDetector:
         return overlap >= 6  # Chia sẻ ít nhất 6 nốt
 
     @staticmethod
-    def detect_key_from_audio(audio_data, sample_rate, accumulated_chroma=None):
+    def detect_key_from_audio(audio_data, sample_rate, accumulated_chroma=None, skip_hum_detection=False):
         """
         Phát hiện tone/key của bài hát từ audio data.
         Pipeline: Robust Preprocessing → CQT chroma (energy-weighted) → Weighted Multi-profile → Disambiguation
@@ -155,34 +155,36 @@ class ToneDetector:
             # Stage 4: Quality validation
             rms_check = np.sqrt(np.mean(audio_data ** 2))
             if rms_check < 0.001:
-                print("   ⚠️ Audio quá nhỏ hoặc im lặng, bỏ qua")
+                print("   Audio quá nhỏ hoặc im lặng, bỏ qua")
                 return None
             
             # Stage 5: Adaptive hum removal (PYIN detect → notch filter)
-            try:
-                f0_detect, voiced, _ = librosa.pyin(
-                    audio_data, fmin=50, fmax=80, sr=sample_rate,
-                    frame_length=4096
-                )
-                valid_f0 = f0_detect[~np.isnan(f0_detect) & voiced]
-                del f0_detect, voiced  # Giải phóng mảng pyin ngay
-                if len(valid_f0) > 100:
-                    hum_freq = np.median(valid_f0)
-                    hum_ratio = np.sum(np.abs(valid_f0 - hum_freq) < 2) / len(valid_f0)
-                    if hum_ratio > 0.95:
-                        S = librosa.stft(audio_data)
-                        freqs = librosa.fft_frequencies(sr=sample_rate)
-                        for harmonic_n in range(1, 4):
-                            target = hum_freq * harmonic_n
-                            S[np.abs(freqs - target) < 5] = 0
-                        audio_data = librosa.istft(S, length=len(audio_data))
-                        del S, freqs  # Giải phóng STFT matrix (~8MB)
-                        print(f"   ✅ Notch: loại hum {hum_freq:.0f}Hz ({hum_ratio*100:.0f}%)")
-                del valid_f0
-            except Exception:
-                pass
+            # Skipped for YouTube audio (encoder already cleaned) to save ~100–200 ms
+            if not skip_hum_detection:
+                try:
+                    f0_detect, voiced, _ = librosa.pyin(
+                        audio_data, fmin=50, fmax=80, sr=sample_rate,
+                        frame_length=4096
+                    )
+                    valid_f0 = f0_detect[~np.isnan(f0_detect) & voiced]
+                    del f0_detect, voiced  # Giải phóng mảng pyin ngay
+                    if len(valid_f0) > 100:
+                        hum_freq = np.median(valid_f0)
+                        hum_ratio = np.sum(np.abs(valid_f0 - hum_freq) < 2) / len(valid_f0)
+                        if hum_ratio > 0.95:
+                            S = librosa.stft(audio_data)
+                            freqs = librosa.fft_frequencies(sr=sample_rate)
+                            for harmonic_n in range(1, 4):
+                                target = hum_freq * harmonic_n
+                                S[np.abs(freqs - target) < 5] = 0
+                            audio_data = librosa.istft(S, length=len(audio_data))
+                            del S, freqs  # Giải phóng STFT matrix (~8MB)
+                            print(f"   Notch: loại hum {hum_freq:.0f}Hz ({hum_ratio*100:.0f}%)")
+                    del valid_f0
+                except Exception:
+                    pass
             
-            print(f"   ✅ Preprocessing OK (p99.9={p999:.4f}, rms={rms_check:.4f})")
+            print(f"   Preprocessing OK (p99.9={p999:.4f}, rms={rms_check:.4f})")
             print("🎵 [DÒ TONE] Pipeline: CQT → Weighted Multi-profile...")
             
             # === BƯỚC 1: Chroma CQT (energy-weighted) ===
@@ -205,7 +207,7 @@ class ToneDetector:
             # Lưu normalized (cho disambiguation)
             cqt_normalized = chroma_avg.copy()
             
-            print(f"   ✅ Chroma CQT (energy-weighted)")
+            print(f"   Chroma CQT (energy-weighted)")
             print(f"📊 [DÒ TONE] Chroma: {[f'{x:.3f}' for x in chroma_avg]}")
             
             # === BƯỚC 2b: EMA (AutoKey mode) ===
@@ -278,7 +280,7 @@ class ToneDetector:
                     family.append(r)
             
             if len(family) >= 2:
-                print(f"   🔍 Key family ({len(family)} candidates):")
+                print(f"   Key family ({len(family)} candidates):")
                 
                 best_candidate = None
                 best_score = -1
@@ -316,14 +318,14 @@ class ToneDetector:
                         top2_common = KEY_COMMON.get(top2["key"], 0.5)
                         if top2_common > top1_common:
                             best_candidate = top2
-                            print(f"   🎯 Tiebreaker: {top1['key']} ({top1_common:.1f}) → {top2['key']} ({top2_common:.1f})")
+                            print(f"   Tiebreaker: {top1['key']} ({top1_common:.1f}) → {top2['key']} ({top2_common:.1f})")
                 
 
                 
                 if best_candidate and best_candidate["key"] != best["key"]:
-                    print(f"   🔄 Family winner: {best['key']} → {best_candidate['key']}")
+                    print(f"   Family winner: {best['key']} → {best_candidate['key']}")
                 else:
-                    print(f"   ✅ Giữ {best['key']}")
+                    print(f"   Giữ {best['key']}")
                 best = best_candidate or best
             
             best_key = best["key_index"]
@@ -335,9 +337,9 @@ class ToneDetector:
             else:
                 key_display = ToneDetector.MINOR_KEY_NAMES[best_key]
             
-            print(f"🎯 [DÒ TONE] Kết quả: {key_display} (confidence: {best_corr:.4f})")
+            print(f"Kết quả: {key_display} (confidence: {best_corr:.4f})")
             print(f"   📊 KS={best.get('ks_corr',0):.4f}  T={best.get('temp_corr',0):.4f}  A={best.get('aarden_corr',0):.4f}")
-            print(f"🎯 [DÒ TONE] Top 5:")
+            print(f"Top 5:")
             for r in all_results[:5]:
                 print(f"   {r['key']}: {r['correlation']:.4f}")
             
@@ -358,7 +360,7 @@ class ToneDetector:
             }
             
         except Exception as e:
-            print(f"❌ [DÒ TONE] Lỗi phân tích: {e}")
+            print(f"[DÒ TONE] Lỗi phân tích: {e}")
             import traceback
             print(traceback.format_exc())
             return None
@@ -377,7 +379,7 @@ class ToneDetector:
         try:
             import pyaudiowpatch as pyaudio
         except ImportError:
-            print("❌ [DÒ TONE] Thư viện 'pyaudiowpatch' chưa được cài đặt.")
+            print("[DÒ TONE] Thư viện 'pyaudiowpatch' chưa được cài đặt.")
             print("   Chạy: pip install pyaudiowpatch")
             return None
         
@@ -392,8 +394,7 @@ class ToneDetector:
         pa = None
         stream = None
         try:
-            print("=" * 60)
-            print(f"🎤 [DÒ TONE] Thu âm loopback từ hệ thống ({duration}s)...")
+            print(f"Thu âm loopback từ hệ thống ({duration}s)...")
             
             pa = pyaudio.PyAudio()
             
@@ -406,7 +407,7 @@ class ToneDetector:
                     break
             
             if not wasapi_info:
-                print("❌ [DÒ TONE] Không tìm thấy WASAPI host API!")
+                print("[DÒ TONE] Không tìm thấy WASAPI host API!")
                 return None
             
             loopback_dev = None
@@ -418,14 +419,14 @@ class ToneDetector:
                         break
             
             if not loopback_dev:
-                print("❌ [DÒ TONE] Không tìm thấy thiết bị loopback!")
+                print("[DÒ TONE] Không tìm thấy thiết bị loopback!")
                 return None
             
             device_sr = int(loopback_dev["defaultSampleRate"])
             chunk_size = 1024
             
-            print(f"✅ [DÒ TONE] Sử dụng loopback: {loopback_dev['name']}")
-            print(f"⏺️  [DÒ TONE] Đang thu âm {duration} giây...")
+            print(f"[DÒ TONE] Sử dụng loopback: {loopback_dev['name']}")
+            print(f"[DÒ TONE] Đang thu âm {duration} giây...")
             
             stream = pa.open(
                 format=pyaudio.paFloat32,
@@ -454,7 +455,7 @@ class ToneDetector:
                     except Exception:
                         pass
                 
-                print(f"   ⏱️  Còn {remaining}s...")
+                print(f"   Còn {remaining}s...")
             
             # Ghép các chunks
             audio_data = np.concatenate(audio_chunks)
@@ -462,14 +463,14 @@ class ToneDetector:
             audio_data = np.nan_to_num(audio_data, nan=0.0, posinf=0.0, neginf=0.0)
             
             actual_duration = len(audio_data) / device_sr
-            print(f"✅ [DÒ TONE] Đã thu: {actual_duration:.1f}s, {len(audio_data)} samples")
+            print(f"[DÒ TONE] Đã thu: {actual_duration:.1f}s, {len(audio_data)} samples")
             
             # Kiểm tra âm thanh
             rms = np.sqrt(np.mean(audio_data ** 2))
             print(f"📊 [DÒ TONE] RMS level: {rms:.6f}")
             
             if rms < 0.001:
-                print("⚠️ [DÒ TONE] Không phát hiện âm thanh! Hãy đảm bảo đang phát nhạc.")
+                print("[DÒ TONE] Không phát hiện âm thanh! Hãy đảm bảo đang phát nhạc.")
                 return None
             
             
@@ -484,7 +485,7 @@ class ToneDetector:
             return result
             
         except Exception as e:
-            print(f"❌ [DÒ TONE] Lỗi thu âm: {e}")
+            print(f"[DÒ TONE] Lỗi thu âm: {e}")
             import traceback
             print(traceback.format_exc())
             return None
@@ -516,8 +517,7 @@ class ToneDetector:
             import librosa
             from core.scoring import ScoringEngine
             
-            print("=" * 60)
-            print(f"🎵 [DÒ TONE] Bắt đầu dò tone từ YouTube...")
+            print(f"Bắt đầu dò tone từ YouTube...")
             print(f"🔗 URL: {youtube_url}")
             
             # Download audio
@@ -525,12 +525,12 @@ class ToneDetector:
             audio_path = scoring_engine.download_youtube_audio(youtube_url)
             
             if not audio_path:
-                print("❌ [DÒ TONE] Không thể tải audio")
+                print("[DÒ TONE] Không thể tải audio")
                 return None
             
             try:
                 # Load audio (giới hạn thời gian để tăng tốc)
-                print(f"📂 [DÒ TONE] Loading audio (max {duration_limit}s)...")
+                print(f"📂 [DÒ TONE] Đang tải audio (tối đa {duration_limit}giây)...")
                 audio_data, sr = librosa.load(
                     audio_path,
                     sr=22050,
@@ -539,10 +539,10 @@ class ToneDetector:
                 )
                 
                 actual_duration = len(audio_data) / sr
-                print(f"✅ [DÒ TONE] Loaded: {actual_duration:.1f}s, sr={sr}")
+                print(f"[DÒ TONE] Đã tải: {actual_duration:.1f}giây, sr={sr}")
                 
                 # Detect key
-                result = ToneDetector.detect_key_from_audio(audio_data, sr)
+                result = ToneDetector.detect_key_from_audio(audio_data, sr, skip_hum_detection=True)
                 del audio_data  # Giải phóng audio data ngay sau khi dò tone
                 try:
                     from core.memory import MemoryGuard
@@ -555,7 +555,7 @@ class ToneDetector:
                 scoring_engine.cleanup_temp_file()
                 
         except Exception as e:
-            print(f"❌ [DÒ TONE] Lỗi: {e}")
+            print(f"[DÒ TONE] Lỗi: {e}")
             import traceback
             print(traceback.format_exc())
             return None
@@ -575,8 +575,8 @@ class ToneDetector:
         import scipy.signal
         
         duration = len(audio_data) / sr
-        if on_progress: on_progress("Đang phân tích cấu trúc bài hát (novelty curve)...")
-        print("🔍 [NOVELTY] Bắt đầu phân tích cấu trúc...")
+        if on_progress: on_progress("Phân tích cấu trúc...")
+        print("[NOVELTY] Bắt đầu phân tích cấu trúc...")
         
         # 1. Novelty curve (dựa trên chroma)
         hop_length = int(sr / 2) # 0.5s per frame
@@ -598,7 +598,7 @@ class ToneDetector:
         print(f"📊 [NOVELTY] Đã tìm thấy {len(initial_boundaries)} điểm thay đổi cấu trúc thô")
         
         # 2. Refine với sliding window (±3s)
-        if on_progress: on_progress("Đang tinh chỉnh các điểm chuyển đoạn...")
+        if on_progress: on_progress("Tinh chỉnh điểm chuyển...")
         refined_boundaries = []
         for b in initial_boundaries:
             start_frame = int(max(0, b - 3.0) * sr / hop_length)
@@ -623,7 +623,7 @@ class ToneDetector:
             
             if on_progress:
                 pct = int((i + 1) / (len(boundaries) - 1) * 100)
-                on_progress(f"Dò tone phân đoạn {i+1}/{len(boundaries)-1} ({pct}%)...")
+                on_progress(f"Dò tone {i+1}/{len(boundaries)-1} ({pct}%)...")
                 
             seg_audio = audio_data[int(start*sr):int(end*sr)]
             if len(seg_audio) < sr * 2:
@@ -707,7 +707,7 @@ class ToneDetector:
                     'confidence': float(seg['result'].get('confidence', 0.8))
                 }
                 timeline_entries.append(entry)
-                print(f"✅ [TIMELINE] {seg['start']:.1f}s → {seg['key_display']}")
+                print(f"[TIMELINE] {seg['start']:.1f}s -> {seg['key_display']}")
                 
         # Xử lý case track toàn bị Silent/ngắn
         if not timeline_entries and final_segments and final_segments[0]['result']:

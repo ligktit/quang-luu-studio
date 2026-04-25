@@ -29,9 +29,18 @@ if "%ISCC_PATH%"=="" (
 echo [OK] Tim thay Inno Setup: %ISCC_PATH%
 echo.
 
-REM === Bước 1: Build EXE bằng PyInstaller ===
+REM === Bước 1: Đồng bộ phiên bản ===
 echo ----------------------------------------
-echo  Buoc 1: Build EXE bang PyInstaller
+echo  Buoc 1: Dong bo phien ban
+echo ----------------------------------------
+echo.
+python sync_version.py
+echo.
+
+
+REM === Bước 2: Build EXE bằng PyInstaller ===
+echo ----------------------------------------
+echo  Buoc 2: Build EXE bang PyInstaller
 echo ----------------------------------------
 echo.
 
@@ -67,9 +76,9 @@ if not exist "dist\QuangLuuStudio.exe" (
     exit /b 1
 )
 
-REM === Bước 2: Build Installer bằng Inno Setup ===
+REM === Bước 3: Build Installer bằng Inno Setup ===
 echo ----------------------------------------
-echo  Buoc 2: Build Installer bang Inno Setup
+echo  Buoc 3: Build Installer bang Inno Setup
 echo ----------------------------------------
 echo.
 
@@ -95,7 +104,7 @@ echo ========================================
 echo  THANH CONG!
 echo ========================================
 echo.
-echo  File cai dat: installer_output\Setup_QuangLuuStudio_v1.0.0.exe
+echo  File cai dat: installer_output\Setup_QuangLuuStudio_v1.4.0exe
 echo.
 echo  Ban co the gui file nay cho nguoi khac
 echo  de ho cai dat Quang Luu Studio.

@@ -50,9 +50,9 @@ class _MidiMixin:
         if self.midi_handler.outport:
             try:
                 self.midi_handler.outport.close()
-                print("✅ Đã ngắt kết nối MIDI Out")
+                print("Đã ngắt kết nối MIDI Out")
             except Exception as e:
-                print(f"⚠️ Lỗi khi ngắt MIDI Out: {e}")
+                print(f"Lỗi khi ngắt MIDI Out: {e}")
             finally:
                 self.midi_handler.outport = None
 
@@ -60,9 +60,9 @@ class _MidiMixin:
             try:
                 self.midi_handler._is_listening = False
                 self.midi_handler.inport.close()
-                print("✅ Đã ngắt kết nối MIDI In")
+                print("Đã ngắt kết nối MIDI In")
             except Exception as e:
-                print(f"⚠️ Lỗi khi ngắt MIDI In: {e}")
+                print(f"Lỗi khi ngắt MIDI In: {e}")
             finally:
                 self.midi_handler.inport = None
                 self.midi_handler._listen_thread = None
@@ -72,7 +72,13 @@ class _MidiMixin:
     def send_midi(self, cc, value, auto_reconnect=True):
         success = self.midi_handler.send_cc(cc, value)
         if not success and auto_reconnect:
-            print(f"⚠️ Gửi MIDI thất bại (cc={cc}), đang thử kết nối lại...")
+            # Throttle warnings to avoid spamming console
+            now = time.time()
+            last_warn = getattr(self, '_last_midi_fail_warn', 0)
+            if now - last_warn > 10:
+                print(f"Gửi MIDI thất bại (cc={cc}), đang thử kết nối lại...")
+                self._last_midi_fail_warn = now
+            
             if self.connect_midi():
                 success = self.midi_handler.send_cc(cc, value)
         return success
@@ -82,12 +88,12 @@ class _MidiMixin:
             cc_list = [10, 11, 20, 21, 22, 23, 30, 31, 32, 33, 34, 35, 36, 50, 51, 52, 53]
 
         def run_learn():
-            print(f"🚀 [MIDI LEARN] Bắt đầu gửi {len(cc_list)} tín hiệu MIDI...")
+            print(f"[MIDI LEARN] Bắt đầu gửi {len(cc_list)} tín hiệu MIDI...")
             for cc in cc_list:
                 self.send_midi(cc, 64)
                 time.sleep(0.2)
                 self.send_midi(cc, 0)
                 time.sleep(0.1)
-            print("✅ [MIDI LEARN] Hoàn tất gửi chuỗi tín hiệu.")
+            print("[MIDI LEARN] Hoàn tất gửi chuỗi tín hiệu.")
 
         threading.Thread(target=run_learn, daemon=True).start()

@@ -14,7 +14,7 @@ try:
     _WEBSOCKET_AVAILABLE = True
 except ImportError:
     _WEBSOCKET_AVAILABLE = False
-    print("⚠️ [CDP] Vui lòng cài đặt websocket-client: pip install websocket-client")
+    print("[CDP] Vui lòng cài đặt websocket-client: pip install websocket-client")
 
 from core.config import CDP_DEBUG_PORT, CDP_CONNECT_TIMEOUT, CDP_POLL_INTERVAL
 
@@ -129,7 +129,7 @@ class CDPYouTubeMonitor:
                         self._ws.settimeout(5.0)
                         self.is_connected = True
                         self.target_url = page_url
-                        print(f"🔗 [CDP] Đã kết nối tới tab YouTube: {page_url[:50]}...")
+                        print(f"[CDP] Đã kết nối tới tab YouTube: {page_url[:50]}...")
                     else:
                         self.is_connected = False
                         time.sleep(1.0)
@@ -177,7 +177,7 @@ class CDPYouTubeMonitor:
                     self._ws = None
                 time.sleep(1.0)
             except Exception as e:
-                print(f"⚠️ [CDP] Lỗi loop: {e}")
+                print(f"[CDP] Lỗi loop: {e}")
                 self.is_connected = False
                 self.is_playing = False
                 time.sleep(1.0)
@@ -189,3 +189,22 @@ class CDPYouTubeMonitor:
                 return True
             time.sleep(0.5)
         return False
+
+    def set_player_volume(self, volume_percent):
+        """Đặt âm lượng cho trình phát YouTube (0-100)."""
+        if not self.is_connected:
+            return False
+        
+        # YouTube player API: setVolume(number) nhận giá trị 0-100
+        vol = max(0, min(100, int(volume_percent)))
+        script = f"""
+        (function() {{
+            var player = document.querySelector('#movie_player');
+            if (player && typeof player.setVolume === 'function') {{
+                player.setVolume({vol});
+                return true;
+            }}
+            return false;
+        }})();
+        """
+        return self._evaluate_js(script)

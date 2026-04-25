@@ -1,4 +1,4 @@
-﻿; ============================================================
+; ============================================================
 ; Quang Lưu Studio - Inno Setup Installer Script
 ; ============================================================
 ; Build: Mở file này bằng Inno Setup Compiler → Compile (Ctrl+F9)
@@ -82,6 +82,8 @@ Source: "app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Script cài đặt loopMIDI + Surface
 Source: "setup_all.bat"; DestDir: "{app}"; Flags: ignoreversion
+; Script cấu hình YouTube cookies
+Source: "configure_youtube_cookies.bat"; DestDir: "{app}"; Flags: ignoreversion
 
 ; App config — MIDI mapping (admin editable, không ghi đè nếu đã tồn tại)
 Source: "app_config.json"; DestDir: "{app}"; Flags: onlyifdoesntexist
@@ -106,6 +108,8 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilen
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app_icon.ico"; Tasks: startmenuicon
 ; Shortcut gỡ cài đặt trong Start Menu
 Name: "{autoprograms}\Gỡ cài đặt {#MyAppName}"; Filename: "{uninstallexe}"; Tasks: startmenuicon
+; Shortcut cấu hình YouTube Cookies
+Name: "{autoprograms}\{#MyAppName} - Cấu hình YouTube Cookies"; Filename: "{app}\configure_youtube_cookies.bat"; Tasks: startmenuicon
 ; Shortcut mở thư mục Recordings
 Name: "{autoprograms}\{#MyAppName} Recordings"; Filename: "{userdocs}\{#MyAppDataFolder}"; Tasks: startmenuicon
 

@@ -2,6 +2,7 @@ import backend
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QProgressBar, QFrame, QTabWidget, QGridLayout, QWidget,
+    QSpinBox,
 )
 from PySide6.QtCore import Qt, QTimer
 
@@ -29,7 +30,7 @@ class CalibrationWizardDialog(QDialog):
         super().__init__(parent)
         self._dashboard = parent
         self.setWindowTitle("🎛️ Calibrate Auto-Tune")
-        self.setFixedSize(620, 700)
+        self.setFixedSize(640, 780)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 
         self._state = {
@@ -148,13 +149,13 @@ class CalibrationWizardDialog(QDialog):
         lay.setSpacing(10)
         lay.setContentsMargins(12, 12, 12, 12)
 
-        instr = QLabel("Quan sát dải Scale Type trên Auto-Tune.\nNhấn nút tương ứng khi thấy Major hoặc Minor.")
+        instr = QLabel("Quét MIDI hoặc nhập số thủ công (0-127).")
         instr.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: {FONT};")
         instr.setWordWrap(True)
         lay.addWidget(instr)
 
         btn_row = QHBoxLayout()
-        self._major_btn = QPushButton("🟢 Đây là Major")
+        self._major_btn = QPushButton("Day la Major")
         self._major_btn.setCursor(Qt.PointingHandCursor)
         self._major_btn.setFixedHeight(44)
         self._major_btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 14, 16))
@@ -163,7 +164,7 @@ class CalibrationWizardDialog(QDialog):
         add_shadow(self._major_btn, C["green"], 6, (0, 2))
         btn_row.addWidget(self._major_btn)
 
-        self._minor_btn = QPushButton("🟠 Đây là Minor")
+        self._minor_btn = QPushButton("Day la Minor")
         self._minor_btn.setCursor(Qt.PointingHandCursor)
         self._minor_btn.setFixedHeight(44)
         self._minor_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 14, 16))
@@ -177,15 +178,41 @@ class CalibrationWizardDialog(QDialog):
         result_frame.setStyleSheet(f"background-color: {C['bg']}; border-radius: 8px; padding: 6px;")
         rf_lay = QHBoxLayout(result_frame)
         rf_lay.setContentsMargins(12, 8, 12, 8)
-        self._major_result = QLabel("Major: —")
+        self._major_result = QLabel("Major: ---")
         self._major_result.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {C['green']}; font-family: Consolas;")
         self._major_result.setAlignment(Qt.AlignCenter)
         rf_lay.addWidget(self._major_result)
-        self._minor_result = QLabel("Minor: —")
+        self._minor_result = QLabel("Minor: ---")
         self._minor_result.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {C['orange']}; font-family: Consolas;")
         self._minor_result.setAlignment(Qt.AlignCenter)
         rf_lay.addWidget(self._minor_result)
         lay.addWidget(result_frame)
+
+        # ── Manual input ──
+        manual_lbl = QLabel("Nhap thu cong:")
+        manual_lbl.setStyleSheet(f"font-size: 11px; color: {C['text_muted']}; font-family: {FONT};")
+        lay.addWidget(manual_lbl)
+
+        mr = QHBoxLayout()
+        self._major_spin = self._make_spinbox()
+        maj_apply = QPushButton("Set Major")
+        maj_apply.setFixedHeight(30)
+        maj_apply.setCursor(Qt.PointingHandCursor)
+        maj_apply.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 11, 8))
+        maj_apply.clicked.connect(lambda: self._manual_set_scale("major"))
+        mr.addWidget(self._major_spin)
+        mr.addWidget(maj_apply)
+
+        self._minor_spin = self._make_spinbox()
+        min_apply = QPushButton("Set Minor")
+        min_apply.setFixedHeight(30)
+        min_apply.setCursor(Qt.PointingHandCursor)
+        min_apply.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 8))
+        min_apply.clicked.connect(lambda: self._manual_set_scale("minor"))
+        mr.addWidget(self._minor_spin)
+        mr.addWidget(min_apply)
+        lay.addLayout(mr)
+
         lay.addStretch()
         return tab
 
@@ -195,16 +222,17 @@ class CalibrationWizardDialog(QDialog):
         lay.setSpacing(8)
         lay.setContentsMargins(12, 12, 12, 12)
 
-        instr = QLabel("Quan sát dải Key Root trên Auto-Tune.\nNhấn nút tương ứng khi thấy đúng nốt.")
+        instr = QLabel("Quét MIDI hoặc nhập số (0-127) cho từng key.")
         instr.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: {FONT};")
         instr.setWordWrap(True)
         lay.addWidget(instr)
 
         black_keys = {"C#", "D#", "F#", "G#", "A#"}
         grid = QGridLayout()
-        grid.setSpacing(6)
+        grid.setSpacing(4)
         self._key_buttons = {}
         self._key_result_labels = {}
+        self._key_spinboxes = {}
 
         for idx, key_name in enumerate(self.ALL_KEYS):
             btn_color = C["deep_purple"] if key_name in black_keys else C["primary"]
@@ -215,23 +243,37 @@ class CalibrationWizardDialog(QDialog):
 
             kbtn = QPushButton(key_name)
             kbtn.setCursor(Qt.PointingHandCursor)
-            kbtn.setFixedHeight(38)
-            kbtn.setStyleSheet(pill_btn_qss(btn_color, _lighten(btn_color, 0.12), 13, 8))
+            kbtn.setFixedHeight(30)
+            kbtn.setStyleSheet(pill_btn_qss(btn_color, _lighten(btn_color, 0.12), 12, 6))
             kbtn.setEnabled(False)
             kbtn.clicked.connect(self._make_key_capture(key_name))
             cl.addWidget(kbtn)
 
-            klbl = QLabel("—")
-            klbl.setStyleSheet(f"font-size: 11px; color: {C['text_muted']}; font-family: Consolas;")
+            # Manual spinbox row
+            spin_row = QHBoxLayout()
+            spin_row.setSpacing(2)
+            kspin = self._make_spinbox(width=48)
+            spin_row.addWidget(kspin)
+            kapply = QPushButton("Set")
+            kapply.setFixedSize(30, 24)
+            kapply.setCursor(Qt.PointingHandCursor)
+            kapply.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 9, 2))
+            kapply.clicked.connect(self._make_key_manual_set(key_name))
+            spin_row.addWidget(kapply)
+            cl.addLayout(spin_row)
+
+            klbl = QLabel("---")
+            klbl.setStyleSheet(f"font-size: 10px; color: {C['text_muted']}; font-family: Consolas;")
             klbl.setAlignment(Qt.AlignCenter)
             cl.addWidget(klbl)
 
             grid.addWidget(cell, idx // 4, idx % 4)
             self._key_buttons[key_name] = kbtn
             self._key_result_labels[key_name] = klbl
+            self._key_spinboxes[key_name] = kspin
 
         lay.addLayout(grid)
-        self._key_counter = QLabel("Đã capture: 0 / 12 keys")
+        self._key_counter = QLabel("Da capture: 0 / 12 keys")
         self._key_counter.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: {FONT};")
         self._key_counter.setAlignment(Qt.AlignCenter)
         lay.addWidget(self._key_counter)
@@ -244,33 +286,47 @@ class CalibrationWizardDialog(QDialog):
         lay.setSpacing(10)
         lay.setContentsMargins(12, 12, 12, 12)
 
-        instr = QLabel("Quan sát dải Mode/Preset trên Auto-Tune.\nNhấn nút tương ứng khi thấy đúng chế độ.")
+        instr = QLabel("Quét MIDI hoặc nhập số (0-127) cho từng mode.")
         instr.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: {FONT};")
         instr.setWordWrap(True)
         lay.addWidget(instr)
 
         grid = QGridLayout()
-        grid.setSpacing(8)
+        grid.setSpacing(6)
         self._mode_buttons = {}
         self._mode_result_labels = {}
+        self._mode_spinboxes = {}
 
         for idx, m_name in enumerate(self.ALL_MODES):
             mbtn = QPushButton(m_name)
             mbtn.setCursor(Qt.PointingHandCursor)
-            mbtn.setFixedHeight(44)
-            mbtn.setStyleSheet(pill_btn_qss(C["primary"], _lighten(C["primary"], 0.12), 14, 16))
+            mbtn.setFixedHeight(38)
+            mbtn.setStyleSheet(pill_btn_qss(C["primary"], _lighten(C["primary"], 0.12), 13, 14))
             mbtn.setEnabled(False)
             mbtn.clicked.connect(self._make_mode_capture(m_name))
 
-            mres = QLabel("—")
+            # Manual spinbox row
+            spin_row = QHBoxLayout()
+            mspin = self._make_spinbox(width=60)
+            mapply = QPushButton("Set")
+            mapply.setFixedSize(36, 26)
+            mapply.setCursor(Qt.PointingHandCursor)
+            mapply.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 10, 4))
+            mapply.clicked.connect(self._make_mode_manual_set(m_name))
+            spin_row.addWidget(mspin)
+            spin_row.addWidget(mapply)
+
+            mres = QLabel("---")
             mres.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: Consolas;")
             mres.setAlignment(Qt.AlignCenter)
 
             row, col = divmod(idx, 2)
-            grid.addWidget(mbtn, row * 2,     col)
-            grid.addWidget(mres, row * 2 + 1, col)
+            grid.addWidget(mbtn, row * 3,     col)
+            grid.addLayout(spin_row, row * 3 + 1, col)
+            grid.addWidget(mres, row * 3 + 2, col)
             self._mode_buttons[m_name] = mbtn
             self._mode_result_labels[m_name] = mres
+            self._mode_spinboxes[m_name] = mspin
 
         lay.addLayout(grid)
         lay.addStretch()
@@ -370,7 +426,12 @@ class CalibrationWizardDialog(QDialog):
 
     def _check_save_enabled(self):
         s = self._state
-        ok = (s["major_value"] is not None and s["minor_value"] is not None) or bool(s["key_values"])
+        ok = (
+            s["major_value"] is not None
+            or s["minor_value"] is not None
+            or bool(s["key_values"])
+            or bool(s["mode_values"])
+        )
         self._save_btn.setEnabled(ok)
 
     def _capture_major(self):
@@ -458,12 +519,100 @@ class CalibrationWizardDialog(QDialog):
         backend.AppConfig.save()
 
         parts = []
-        if s["major_value"] is not None and s["minor_value"] is not None:
-            parts.append(f"Scale: Maj={s['major_value']}, Min={s['minor_value']}")
+        if s["major_value"] is not None:
+            parts.append(f"Maj={s['major_value']}")
+        if s["minor_value"] is not None:
+            parts.append(f"Min={s['minor_value']}")
         if s["key_values"]:
             parts.append(f"Keys: {len(s['key_values'])}/12")
         if s["mode_values"]:
-            parts.append(f"Modes/Fix: {len(s['mode_values'])}/5")
+            parts.append(f"Modes: {len(s['mode_values'])}/5")
 
-        self._dashboard._show_message(f"✅ Đã lưu! {' | '.join(parts)}")
+        self._dashboard._show_message("Đã lưu cân chỉnh")
         self.close()
+
+    # ── Helpers ───────────────────────────────────────────────
+
+    def _make_spinbox(self, width=70):
+        """Create a styled QSpinBox (0-127) for manual CC input."""
+        spin = QSpinBox()
+        spin.setRange(0, 127)
+        spin.setFixedWidth(width)
+        spin.setFixedHeight(28)
+        spin.setStyleSheet(f"""
+            QSpinBox {{
+                background-color: {C['bg']};
+                color: {C['text']};
+                border: 1px solid {C['border']};
+                border-radius: 6px;
+                padding: 2px 6px;
+                font-size: 13px;
+                font-family: Consolas;
+            }}
+            QSpinBox::up-button, QSpinBox::down-button {{
+                background-color: {C['card_hover']};
+                border: none;
+                width: 16px;
+            }}
+        """)
+        return spin
+
+    def _manual_set_scale(self, scale_type):
+        """Set scale value from manual spinbox input."""
+        if scale_type == "major":
+            v = self._major_spin.value()
+            self._state["major_value"] = v
+            self._major_result.setText(f"Major: {v}")
+            self._major_result.setStyleSheet(
+                f"font-size: 15px; font-weight: bold; color: {C['green']}; font-family: Consolas;"
+                f" background-color: rgba(16,185,129,0.15); border-radius: 6px; padding: 4px;"
+            )
+        else:
+            v = self._minor_spin.value()
+            self._state["minor_value"] = v
+            self._minor_result.setText(f"Minor: {v}")
+            self._minor_result.setStyleSheet(
+                f"font-size: 15px; font-weight: bold; color: {C['orange']}; font-family: Consolas;"
+                f" background-color: rgba(245,158,11,0.15); border-radius: 6px; padding: 4px;"
+            )
+        self._check_save_enabled()
+
+    def _make_key_manual_set(self, key_name):
+        """Return a closure that sets a key value from its spinbox."""
+        def _set():
+            if key_name not in getattr(self, '_key_spinboxes', {}):
+                return
+            v = self._key_spinboxes[key_name].value()
+            self._state["key_values"][key_name] = v
+            self._key_result_labels[key_name].setText(str(v))
+            self._key_result_labels[key_name].setStyleSheet(
+                f"font-size: 10px; font-weight: bold; color: {C['green']}; font-family: Consolas;"
+            )
+            self._key_buttons[key_name].setStyleSheet(
+                pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 12, 8)
+            )
+            n = len(self._state["key_values"])
+            self._key_counter.setText(f"Da capture: {n} / 12 keys")
+            if n == 12:
+                self._key_counter.setStyleSheet(
+                    f"font-size: 12px; color: {C['green']}; font-weight: bold; font-family: {FONT};"
+                )
+            self._check_save_enabled()
+        return _set
+
+    def _make_mode_manual_set(self, m_name):
+        """Return a closure that sets a mode value from its spinbox."""
+        def _set():
+            if m_name not in getattr(self, '_mode_spinboxes', {}):
+                return
+            v = self._mode_spinboxes[m_name].value()
+            self._state["mode_values"][m_name] = v
+            self._mode_result_labels[m_name].setText(str(v))
+            self._mode_result_labels[m_name].setStyleSheet(
+                f"font-size: 14px; font-weight: bold; color: {C['primary']}; font-family: Consolas;"
+            )
+            self._mode_buttons[m_name].setStyleSheet(
+                pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 13, 16)
+            )
+            self._check_save_enabled()
+        return _set

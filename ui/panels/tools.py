@@ -86,7 +86,7 @@ def _build_tone_knob_widget(dashboard, label: str, cc_key: str, color: str) -> Q
         key_midi_map = backend.AppConfig.get_key_midi_map()
         key_midi = key_midi_map.get(new_key, 0)
         dashboard.engine.send_midi(dashboard.MIDI_CC["key_root"], key_midi)
-        print(f"🎹 [KEY] {label} -> {base} -> {new_key} (MIDI {key_midi})")
+        print(f"[KEY] {label} -> {base} -> {new_key} (MIDI {key_midi})")
 
     def _apply_value(new_val):
         new_val = max(-12, min(12, new_val))
@@ -130,6 +130,12 @@ def build_panel_tools(dashboard) -> GlassPanel:
         btn.clicked.connect(cb)
         grid.addWidget(btn, i // 2, i % 2)
         dashboard._func_buttons[text] = btn
+        
+        # Set initial active state for toggles
+        if text == "Auto-Tune":
+            btn.setActive(getattr(dashboard, "tune_state", True))
+        elif text == "Fix Méo":
+            btn.setActive(getattr(dashboard, "fix_meo_state", False))
 
     panel.body_layout.addLayout(grid)
     panel.body_layout.addSpacing(16)

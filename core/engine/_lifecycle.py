@@ -88,7 +88,7 @@ class _LifecycleMixin:
                         args.insert(1, "--remote-allow-origins=*")
                     if not is_pwa:
                         args.append("youtube.com")
-                    print(f"🌐 [AUTO LAUNCH] Mở {'PWA' if is_pwa else 'YouTube'} với CDP")
+                    print(f"[AUTO LAUNCH] Mở {'PWA' if is_pwa else 'YouTube'} với CDP")
                     subprocess.Popen(args)
             threading.Thread(target=_launch_web, daemon=True).start()
         else:
@@ -134,7 +134,7 @@ class _LifecycleMixin:
                 win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
             except Exception:
                 pass
-        print("🎹 [STUDIO ONE] Đã gửi WM_CLOSE, chờ dialog Save...")
+        print("[STUDIO ONE] Đã gửi WM_CLOSE, chờ dialog Save...")
 
         SAVE_DIALOG_KEYWORDS = ["save", "lưu", "unsaved", "changes", "studio one"]
 
@@ -163,27 +163,27 @@ class _LifecycleMixin:
 
             if dialog_hwnds:
                 dlg_hwnd, dlg_title = dialog_hwnds[0]
-                print(f"💾 [STUDIO ONE] Phát hiện dialog: '{dlg_title}' → nhấn Enter để lưu")
+                print(f"[STUDIO ONE] Phát hiện dialog: '{dlg_title}' -> nhấn Enter để lưu")
                 try:
                     win32gui.ShowWindow(dlg_hwnd, win32con.SW_RESTORE)
                     win32gui.SetForegroundWindow(dlg_hwnd)
                     time.sleep(0.15)
                     pyautogui.press('enter')
                     enter_sent = True
-                    print("✅ [STUDIO ONE] Đã nhấn Enter xác nhận lưu")
+                    print("[STUDIO ONE] Đã nhấn Enter xác nhận lưu")
                 except Exception as e:
-                    print(f"⚠️ [STUDIO ONE] Không thể nhấn Enter: {e}")
+                    print(f"[STUDIO ONE] Không thể nhấn Enter: {e}")
                     try:
                         VK_RETURN = 0x0D
                         win32gui.PostMessage(dlg_hwnd, win32con.WM_KEYDOWN, VK_RETURN, 0)
                         win32gui.PostMessage(dlg_hwnd, win32con.WM_KEYUP,   VK_RETURN, 0)
                         enter_sent = True
-                        print("✅ [STUDIO ONE] Đã gửi WM_KEYDOWN Enter")
+                        print("[STUDIO ONE] Đã gửi WM_KEYDOWN Enter")
                     except Exception as e2:
-                        print(f"⚠️ [STUDIO ONE] WM_KEYDOWN cũng thất bại: {e2}")
+                        print(f"[STUDIO ONE] WM_KEYDOWN cũng thất bại: {e2}")
 
         if not enter_sent:
-            print("ℹ️ [STUDIO ONE] Không thấy dialog Save")
+            print("[STUDIO ONE] Không thấy dialog Save")
 
         deadline = time.time() + timeout_sec
         while time.time() < deadline:
@@ -192,11 +192,11 @@ class _LifecycleMixin:
                 for p in psutil.process_iter(['name'])
             )
             if not still_running:
-                print("✅ [STUDIO ONE] Đã thoát hoàn toàn")
+                print("[STUDIO ONE] Đã thoát hoàn toàn")
                 return
             time.sleep(0.4)
 
-        print("⚠️ [STUDIO ONE] Timeout, chuyển sang force kill...")
+        print("[STUDIO ONE] Timeout, chuyển sang force kill...")
         self._force_kill_studio_one()
 
     def _force_kill_studio_one(self):
@@ -209,9 +209,9 @@ class _LifecycleMixin:
             if os.system(f'taskkill /F /IM "{name}" /T >nul 2>&1') == 0:
                 killed = True
         if killed:
-            print("⚠️ [STUDIO ONE] Force kill hoàn tất")
+            print("[STUDIO ONE] Force kill hoàn tất")
         else:
-            print("ℹ️ [STUDIO ONE] Không tìm thấy process để kill")
+            print("[STUDIO ONE] Không tìm thấy process để kill")
 
     def kill_app(self):
         """Deprecated alias."""
@@ -240,7 +240,7 @@ class _LifecycleMixin:
             return
 
         if not yt_hwnds:
-            print("ℹ️ [YOUTUBE] Không tìm thấy cửa sổ YouTube để đóng")
+            print("[YOUTUBE] Không tìm thấy cửa sổ YouTube để đóng")
             return
 
         for hwnd in yt_hwnds:
@@ -248,4 +248,4 @@ class _LifecycleMixin:
                 win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
             except Exception:
                 pass
-        print(f"✅ [YOUTUBE] Đã gửi WM_CLOSE cho {len(yt_hwnds)} cửa sổ YouTube")
+        print(f"[YOUTUBE] Đã gửi WM_CLOSE cho {len(yt_hwnds)} cửa sổ YouTube")

@@ -33,7 +33,7 @@ class ToneCacheManager:
             with open(ToneCacheManager.CACHE_FILE, "w", encoding="utf-8") as f:
                 json.dump(cache, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            print(f"⚠️ Lỗi lưu tone cache: {e}")
+            print(f"Lỗi lưu tone cache: {e}")
     
     @staticmethod
     def get_cached_tone(youtube_url):
@@ -66,7 +66,7 @@ class ToneCacheManager:
         tone_data["cached_at"] = time.time()
         cache[video_id] = tone_data
         ToneCacheManager._save_cache(cache)
-        print(f"💾 [CACHE] Đã lưu tone cho video {video_id}")
+        print(f"[CACHE] Đã lưu tone cho video {video_id}")
     
     @staticmethod
     def clear_cache():
@@ -94,7 +94,7 @@ class ManualToneTimeline:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             return True
         except Exception as e:
-            print(f"⚠️ Lỗi lưu manual timelines: {e}")
+            print(f"Lỗi lưu manual timelines: {e}")
             return False
     
     @staticmethod

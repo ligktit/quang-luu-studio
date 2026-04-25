@@ -2,7 +2,18 @@
   "permissions": {
     "allow": [
       "Bash(PYTHONIOENCODING=utf-8 python *)",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Bash(git add *)",
+      "Bash(git restore *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git tag *)",
+      "Bash(git rm *)",
+      "Bash(mkdir -p ~/.claude/plans)",
+      "Bash(cp docs/POT_PROVIDER_INTEGRATION_PLAN.md ~/.claude/plans/POT_PROVIDER_INTEGRATION_PLAN_2026-04-25.md)",
+      "Bash(curl -L --fail --max-time 120 -o tools/bgutil-pot-provider.exe \"https://github.com/Brainicism/bgutil-ytdlp-pot-provider/releases/latest/download/bgutil-pot-provider-windows-x64.exe\")",
+      "Bash(curl -s \"https://api.github.com/repos/Brainicism/bgutil-ytdlp-pot-provider/releases/latest\")",
+      "Bash(git stash *)"
     ]
   }
 }

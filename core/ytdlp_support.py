@@ -18,6 +18,13 @@ DEFAULT_COOKIE_BROWSERS = ("firefox", "edge", "chrome", "brave", "opera", "vival
 # Auto-snapshot saved here so the app can use it on next run after export
 _AUTO_COOKIE_FILE = os.path.join(DATA_DIR, "youtube_cookies.txt")
 
+# Client list tried by yt-dlp before falling back to other extractors.
+# `tv_embedded` and `web_safari` frequently bypass YouTube's bot check when a
+# PO Token is available; `default` is the full web client; `ios`/`android` are
+# last-resort fallbacks that sometimes work for age-gated content.
+DEFAULT_PLAYER_CLIENTS = ("tv_embedded", "web_safari", "default", "ios")
+
+
 BOT_CHALLENGE_MARKERS = (
     "sign in to confirm you're not a bot",
     "sign in to confirm youre not a bot",
@@ -86,11 +93,31 @@ def make_ydl_opts(**extra_opts):
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
+        # Cap per-connection read/connect ops so a stalled CDN or auth wall does
+        # not hang the detection thread indefinitely. The engine-level watchdog
+        # provides the outer deadline.
+        "socket_timeout": 20,
+        "retries": 2,
+        "fragment_retries": 2,
     }
     if FFMPEG_LOCATION:
         opts["ffmpeg_location"] = FFMPEG_LOCATION
     opts.update(extra_opts)
+    _apply_default_extractor_args(opts)
     return opts
+
+
+def _apply_default_extractor_args(opts):
+    """Inject player_client list, preserving any user override."""
+    existing = opts.get("extractor_args") or {}
+    youtube = dict(existing.get("youtube") or {})
+
+    if "player_client" not in youtube:
+        youtube["player_client"] = list(DEFAULT_PLAYER_CLIENTS)
+
+    merged = dict(existing)
+    merged["youtube"] = youtube
+    opts["extractor_args"] = merged
 
 
 def extract_info_with_auth(url, ydl_opts=None, download=False, log_prefix="[YTDLP]"):

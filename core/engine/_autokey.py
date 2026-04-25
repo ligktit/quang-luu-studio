@@ -9,6 +9,7 @@ from core.memory import MemoryProfiler, MemoryGuard
 from core.tone_cache import ToneCacheManager, ManualToneTimeline
 from core.tone_detector import ToneDetector
 from core.media_monitor import _WIN_MEDIA_AVAILABLE
+from core.engine._youtube import _extract_key_root
 
 
 class _AutokeyMixin:
@@ -16,7 +17,7 @@ class _AutokeyMixin:
 
     def start_autokey(self, on_key_update=None, segment_duration=5):
         if self.autokey_active:
-            print("⚠️ [AUTOKEY] Đã đang chạy, bỏ qua.")
+            print("[AUTOKEY] Đã đang chạy, bỏ qua.")
             return
 
         self.autokey_active             = True
@@ -39,7 +40,7 @@ class _AutokeyMixin:
                 try:
                     import pyaudiowpatch as pyaudio
                 except ImportError:
-                    print("❌ [AUTOKEY] pyaudiowpatch không khả dụng.")
+                    print("[AUTOKEY] pyaudiowpatch không khả dụng.")
                     self.autokey_active = False
                     return
 
@@ -52,7 +53,7 @@ class _AutokeyMixin:
                         break
 
                 if not wasapi_info:
-                    print("❌ [AUTOKEY] Không tìm thấy WASAPI host API!")
+                    print("[AUTOKEY] Không tìm thấy WASAPI host API!")
                     pa.terminate()
                     self.autokey_active = False
                     return
@@ -65,7 +66,7 @@ class _AutokeyMixin:
                         break
 
                 if not loopback_dev:
-                    print("❌ [AUTOKEY] Không tìm thấy thiết bị loopback!")
+                    print("[AUTOKEY] Không tìm thấy thiết bị loopback!")
                     pa.terminate()
                     self.autokey_active = False
                     return
@@ -79,7 +80,7 @@ class _AutokeyMixin:
                 audio_buffer    = np.zeros(MAX_BUFFER_FRAMES, dtype=np.float32)
                 write_pos       = 0
 
-                print(f"🎹 [AUTOKEY] Bắt đầu — segment={segment_duration}s, device={loopback_dev['name']}")
+                print(f"[AUTOKEY] Bắt đầu — segment={segment_duration}s, device={loopback_dev['name']}")
                 mem        = MemoryProfiler("AUTOKEY")
                 gc_counter = 0
 
@@ -174,6 +175,7 @@ class _AutokeyMixin:
                                     on_key_update({
                                         'status':      'detected',
                                         'key_display': current_key,
+                                        'key':         result['key'],   # root note, no 'm' suffix
                                         'key_index':   result['key_index'],
                                         'scale':       result['scale'],
                                         'confidence':  confidence,
@@ -187,7 +189,7 @@ class _AutokeyMixin:
                             mem.checkpoint(f"buf={write_pos / SAMPLE_RATE:.0f}s")
 
                         except Exception as e:
-                            print(f"❌ [AUTOKEY] Lỗi segment: {e}")
+                            print(f"[AUTOKEY] Lỗi segment: {e}")
                             time.sleep(1)
                 finally:
                     mem.summary()
@@ -197,7 +199,7 @@ class _AutokeyMixin:
 
             except Exception as e:
                 import traceback
-                print(f"❌ [AUTOKEY] Lỗi khởi tạo: {e}\n{traceback.format_exc()}")
+                print(f"[AUTOKEY] Lỗi khởi tạo: {e}\n{traceback.format_exc()}")
             finally:
                 if com_initialized:
                     try:
@@ -205,7 +207,7 @@ class _AutokeyMixin:
                     except Exception:
                         pass
                 self.autokey_active = False
-                print("🏁 [AUTOKEY] Đã dừng")
+                print("[AUTOKEY] Đã dừng")
                 MemoryGuard.force_cleanup()
                 if on_key_update:
                     try:
@@ -218,7 +220,7 @@ class _AutokeyMixin:
 
     def stop_autokey(self):
         if self.autokey_active:
-            print("⏹️ [AUTOKEY] Đang dừng...")
+            print("[AUTOKEY] Đang dừng...")
         self.autokey_active = False
         if self._autokey_thread:
             self._autokey_thread.join(timeout=6.0)
@@ -238,8 +240,7 @@ class _AutokeyMixin:
         elapsed         = 0
         VOTING_WINDOW   = ToneDetector.VOTING_WINDOW
 
-        print("=" * 60)
-        print(f"🎵 [TONE CONTINUOUS] Bắt đầu (segment={segment_duration}s, voting={VOTING_WINDOW})")
+        print(f"[TONE CONTINUOUS] Bắt đầu (segment={segment_duration}s, voting={VOTING_WINDOW})")
 
         com_initialized = False
         pa = None
@@ -253,7 +254,7 @@ class _AutokeyMixin:
         try:
             import pyaudiowpatch as pyaudio
         except ImportError:
-            print("❌ [TONE CONTINUOUS] pyaudiowpatch không khả dụng")
+            print("[TONE CONTINUOUS] pyaudiowpatch không khả dụng")
             self.tone_detection_active = False
             return
 
@@ -267,7 +268,7 @@ class _AutokeyMixin:
                     break
 
             if not wasapi_info:
-                print("❌ [TONE CONTINUOUS] Không tìm thấy WASAPI!")
+                print("[TONE CONTINUOUS] Không tìm thấy WASAPI!")
                 self.tone_detection_active = False
                 return
 
@@ -279,7 +280,7 @@ class _AutokeyMixin:
                     break
 
             if not loopback_dev:
-                print("❌ [TONE CONTINUOUS] Không tìm thấy thiết bị loopback!")
+                print("[TONE CONTINUOUS] Không tìm thấy thiết bị loopback!")
                 self._tone_session.stop()
                 return
 
@@ -291,7 +292,7 @@ class _AutokeyMixin:
                 input=True, input_device_index=loopback_dev["index"],
                 frames_per_buffer=chunk_size,
             )
-            print(f"✅ [TONE CONTINUOUS] Loopback: {loopback_dev['name']}, sr={device_sr}")
+            print(f"[TONE CONTINUOUS] Loopback: {loopback_dev['name']}, sr={device_sr}")
 
             _seg_count = 0
             while not cancel.is_set() and self.youtube_monitoring_active:
@@ -370,7 +371,7 @@ class _AutokeyMixin:
                     elapsed += segment_duration
 
                 except Exception as e:
-                    print(f"❌ [TONE CONTINUOUS] Lỗi segment: {e}")
+                    print(f"[TONE CONTINUOUS] Lỗi segment: {e}")
                     elapsed += segment_duration
 
         finally:
@@ -399,9 +400,9 @@ class _AutokeyMixin:
                 'primary_key':  primary_key,
                 'key_timeline': key_timeline,
             })
-            print(f"💾 [TONE] Đã lưu cache: primary={primary_key}, {len(key_timeline)} segments")
+            print(f"[TONE] Đã lưu cache: primary={primary_key}, {len(key_timeline)} segments")
 
-        print("🏁 [TONE CONTINUOUS] Kết thúc")
+        print("[TONE CONTINUOUS] Kết thúc")
         MemoryGuard.force_cleanup()
 
     # ── Replay helpers ───────────────────────────────────────────────────────────
@@ -412,13 +413,13 @@ class _AutokeyMixin:
             return
 
         if not _WIN_MEDIA_AVAILABLE and not self.cdp_monitor.is_connected:
-            print("⚠️ [CACHE REPLAY] Không có winrt và CDP chưa kết nối.")
+            print("[CACHE REPLAY] Không có winrt và CDP chưa kết nối.")
 
         if cancel_event is None:
             cancel_event = self._tone_session.cancel_event
 
         primary_key = cached_data.get('primary_key', timeline[0]['key_display'])
-        print(f"▶️ [CACHE REPLAY] primary={primary_key}, {len(timeline)} segments")
+        print(f"[CACHE REPLAY] primary={primary_key}, {len(timeline)} segments")
         timeline = sorted(timeline, key=lambda x: x['time'])
 
         def _replay():
@@ -451,10 +452,14 @@ class _AutokeyMixin:
                         current_key = new_key
                         self._send_tone_midi(entry)
                         sync_src = "CDP" if self.cdp_monitor.is_connected else "WinRT"
-                        print(f"▶️ [CACHE REPLAY] t={elapsed:.1f}s [{sync_src}]: {new_key}")
+                        print(f"[CACHE REPLAY] t={elapsed:.1f}s [{sync_src}]: {new_key}")
                         if self.on_tone_detected_callback:
                             try:
-                                self.on_tone_detected_callback(entry)
+                                # Đảm bảo 'key' field có mặt cho UI dropdown
+                                cb_entry = dict(entry)
+                                if 'key' not in cb_entry:
+                                    cb_entry['key'] = _extract_key_root(cb_entry.get('key_display', 'C'))
+                                self.on_tone_detected_callback(cb_entry)
                             except Exception:
                                 pass
                     last_idx = target_idx
@@ -465,7 +470,7 @@ class _AutokeyMixin:
 
                 cancel_event.wait(0.1)
 
-            print("🏁 [CACHE REPLAY] Kết thúc replay")
+            print("[CACHE REPLAY] Kết thúc replay")
 
         threading.Thread(target=_replay, daemon=True).start()
 
@@ -474,13 +479,13 @@ class _AutokeyMixin:
             return
 
         if not _WIN_MEDIA_AVAILABLE and not self.cdp_monitor.is_connected:
-            print("⚠️ [MANUAL REPLAY] Không có winrt và CDP chưa kết nối.")
+            print("[MANUAL REPLAY] Không có winrt và CDP chưa kết nối.")
 
         if cancel_event is None:
             cancel_event = self._tone_session.cancel_event
 
         timeline = sorted(timeline, key=lambda x: x['time'])
-        print(f"▶️ [MANUAL REPLAY] Bắt đầu replay: {len(timeline)} entries")
+        print(f"[MANUAL REPLAY] Bắt đầu replay: {len(timeline)} entries")
 
         def _replay():
             current_key   = None
@@ -513,10 +518,14 @@ class _AutokeyMixin:
                         self._send_tone_midi(entry)
                         time_str = ManualToneTimeline.seconds_to_time_str(entry['time'])
                         sync_src = "CDP" if self.cdp_monitor.is_connected else "WinRT"
-                        print(f"▶️ [MANUAL REPLAY] t={elapsed:.1f}s (trigger={time_str}) [{sync_src}]: {new_key}")
+                        print(f"[MANUAL REPLAY] t={elapsed:.1f}s (trigger={time_str}) [{sync_src}]: {new_key}")
                         if self.on_tone_detected_callback:
                             try:
-                                self.on_tone_detected_callback(entry)
+                                # Đảm bảo 'key' field có mặt cho UI dropdown
+                                cb_entry = dict(entry)
+                                if 'key' not in cb_entry:
+                                    cb_entry['key'] = _extract_key_root(cb_entry.get('key_display', 'C'))
+                                self.on_tone_detected_callback(cb_entry)
                             except Exception:
                                 pass
                     last_idx = target_idx
@@ -527,6 +536,6 @@ class _AutokeyMixin:
 
                 cancel_event.wait(0.1)
 
-            print("🏁 [MANUAL REPLAY] Kết thúc replay")
+            print("[MANUAL REPLAY] Kết thúc replay")
 
         threading.Thread(target=_replay, daemon=True).start()

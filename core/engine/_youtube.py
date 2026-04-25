@@ -79,7 +79,7 @@ class _YouTubeMixin:
             import uiautomation as auto
         except ImportError:
             if not quiet:
-                print("❌ [DÒ TONE] Thư viện 'uiautomation' chưa được cài đặt.")
+                print("[DÒ TONE] Thư viện 'uiautomation' chưa được cài đặt.")
             return None
 
         browser_keywords = [
@@ -98,7 +98,7 @@ class _YouTubeMixin:
                     break
 
         if not quiet:
-            print(f"🔍 [DÒ TONE] Tìm thấy {len(browser_windows)} cửa sổ trình duyệt")
+            print(f"[DÒ TONE] Tìm thấy {len(browser_windows)} cửa sổ trình duyệt")
 
         for bw in browser_windows:
             hwnd    = bw["hwnd"]
@@ -130,7 +130,7 @@ class _YouTubeMixin:
                                 url   = _normalize_url(value)
                                 clean = _clean_youtube_url(url)
                                 if clean:
-                                    print(f"   ✅ YouTube URL: {clean}")
+                                    print(f"   YouTube URL: {clean}")
                                     return clean
                     except Exception:
                         continue
@@ -155,7 +155,7 @@ class _YouTubeMixin:
                         url   = _normalize_url(value)
                         clean = _clean_youtube_url(url)
                         if clean:
-                            print(f"   ✅ YouTube URL: {clean}")
+                            print(f"   YouTube URL: {clean}")
                             return clean
 
                 try:
@@ -177,13 +177,13 @@ class _YouTubeMixin:
                             url   = _normalize_url(value)
                             clean = _clean_youtube_url(url)
                             if clean:
-                                print(f"   ✅ YouTube URL (Brave): {clean}")
+                                print(f"   YouTube URL (Brave): {clean}")
                                 return clean
                 except Exception:
                     pass
 
             except Exception as e:
-                print(f"   ⚠️ Lỗi đọc cửa sổ {bw['browser']}: {e}")
+                print(f"   Lỗi đọc cửa sổ {bw['browser']}: {e}")
                 continue
             finally:
                 del control, children
@@ -195,7 +195,7 @@ class _YouTubeMixin:
             return pwa_url
 
         if not quiet:
-            print("⚠️ [DÒ TONE] Không tìm thấy YouTube URL trên trình duyệt hoặc PWA.")
+            print("[DÒ TONE] Không tìm thấy YouTube URL trên trình duyệt hoặc PWA.")
         return None
 
     @staticmethod
@@ -241,7 +241,7 @@ class _YouTubeMixin:
                 pass
             except Exception as e:
                 if not quiet:
-                    print(f"   ⚠️ [PWA] Lỗi kiểm tra process: {e}")
+                    print(f"   [PWA] Lỗi kiểm tra process: {e}")
                 continue
             pwa_candidates.append({"hwnd": hwnd, "title": title})
 
@@ -249,7 +249,7 @@ class _YouTubeMixin:
             return None
 
         if not quiet:
-            print(f"📱 [DÒ TONE] Tìm thấy {len(pwa_candidates)} cửa sổ PWA YouTube")
+            print(f"[DÒ TONE] Tìm thấy {len(pwa_candidates)} cửa sổ PWA YouTube")
 
         import re as _re
         for candidate in pwa_candidates:
@@ -269,12 +269,12 @@ class _YouTubeMixin:
                 continue
 
             if not quiet:
-                print(f"📱 [DÒ TONE] PWA YouTube: \"{video_title}\"")
+                print(f"[DÒ TONE] PWA YouTube: \"{video_title}\"")
 
             if pwa_title_cache is not None and video_title in pwa_title_cache:
                 cached_url = pwa_title_cache[video_title]
                 if not quiet:
-                    print(f"   ✅ PWA cache hit: {cached_url}")
+                    print(f"   PWA cache hit: {cached_url}")
                 return cached_url
 
             try:
@@ -282,7 +282,7 @@ class _YouTubeMixin:
                     f"ytsearch:{video_title}",
                     make_ydl_opts(skip_download=True, default_search='ytsearch'),
                     download=False,
-                    log_prefix="⚠️ [DÒ TONE]",
+                    log_prefix="[DÒ TONE]",
                 )
                 if not info:
                     continue
@@ -291,13 +291,13 @@ class _YouTubeMixin:
                     video_id = entries[0].get('id', '')
                     if video_id:
                         found_url = f"https://www.youtube.com/watch?v={video_id}"
-                        print(f"   ✅ PWA YouTube URL: {found_url}")
+                        print(f"   PWA YouTube URL: {found_url}")
                         if pwa_title_cache is not None:
                             pwa_title_cache[video_title] = found_url
                         return found_url
             except Exception as e:
                 if not quiet:
-                    print(f"   ⚠️ [DÒ TONE] PWA search lỗi: {e}")
+                    print(f"   [DÒ TONE] PWA search lỗi: {e}")
                 continue
         return None
 
@@ -347,7 +347,7 @@ class _YouTubeMixin:
                         win32gui.SetForegroundWindow(hwnd)
                         time.sleep(0.3)
                 except Exception as e:
-                    print(f"⚠️ Không thể focus vào browser: {e}")
+                    print(f"Không thể focus vào browser: {e}")
 
             if browser_path:
                 try:
@@ -359,13 +359,13 @@ class _YouTubeMixin:
                         if not any("remote-allow-origins" in a for a in args):
                             args.insert(1, "--remote-allow-origins=*")
                         args.append(url)
-                        print(f"🌐 [BROWSER] Mở URL với CDP: {exe_path}")
+                        print(f"[BROWSER] Mở URL với CDP: {exe_path}")
                         subprocess.Popen(args)
                     else:
-                        print(f"⚠️ [BROWSER] Không tìm thấy file: {exe_path}. Mở bằng mặc định...")
+                        print(f"[BROWSER] Không tìm thấy file: {exe_path}. Mở bằng mặc định...")
                         os.startfile(url)
                 except Exception as e:
-                    print(f"⚠️ [BROWSER] Lỗi khởi chạy: {e}")
+                    print(f"[BROWSER] Lỗi khởi chạy: {e}")
                     try:
                         os.startfile(url)
                     except Exception:
@@ -374,7 +374,7 @@ class _YouTubeMixin:
                 try:
                     os.startfile(url)
                 except Exception as e:
-                    print(f"⚠️ [BROWSER] Lỗi mở URL mặc định: {e}")
+                    print(f"[BROWSER] Lỗi mở URL mặc định: {e}")
 
         threading.Thread(target=open_browser, daemon=True).start()
 
@@ -397,42 +397,40 @@ class _YouTubeMixin:
     # ── _start_youtube_monitoring ────────────────────────────────────────────────
 
     def _start_youtube_monitoring(self, youtube_url):
-        print("=" * 60)
-        print("📺 [YOUTUBE MONITORING] Bắt đầu theo dõi video YouTube...")
-        print(f"🔗 URL: {youtube_url}")
+        print("[YOUTUBE MONITORING] Bắt đầu theo dõi video YouTube...")
+        print(f"[YOUTUBE MONITORING] URL: {youtube_url}")
 
         def get_video_duration():
             try:
-                print("⏱️  [YOUTUBE MONITORING] Đang lấy thông tin video...")
+                print("[YOUTUBE MONITORING] Đang lấy thông tin video...")
                 info = extract_info_with_auth(
                     youtube_url, make_ydl_opts(), download=False,
-                    log_prefix="⚠️ [YOUTUBE MONITORING]",
+                    log_prefix="[YOUTUBE MONITORING]",
                 )
                 duration = info.get('duration', 0)
                 title    = info.get('title', 'N/A')
-                print(f"✅ [YOUTUBE MONITORING] {title} ({duration // 60}:{duration % 60:02d})")
+                print(f"[YOUTUBE MONITORING] {title} ({duration // 60}:{duration % 60:02d})")
                 return duration
             except Exception as e:
-                print(f"❌ [YOUTUBE MONITORING] Không thể lấy duration: {e}")
+                print(f"[YOUTUBE MONITORING] Không thể lấy độ dài video: {e}")
                 return None
 
         def on_video_end():
+            """When video ends, trigger Quick Score to finish if active."""
             try:
-                print("=" * 60)
-                print("🎬 [CHẤM ĐIỂM] Video kết thúc, bắt đầu chấm điểm...")
-                scoring_engine = ScoringEngine()
-                audio_path     = scoring_engine.download_youtube_audio(youtube_url)
-                result = None
-                if audio_path and scoring_engine.load_audio(audio_path):
-                    result = scoring_engine.calculate_score(video_end=True)
-                scoring_engine.cleanup_temp_file()
-                if self.on_video_end_callback:
-                    self.on_video_end_callback(result)
-                elif result:
-                    print(f"✅ [CHẤM ĐIỂM] Điểm: {result.get('total_score', 0):.1f}")
+                print("[VIDEO END] Video kết thúc.")
+                if self.quick_score_active:
+                    # Quick Score is recording — trigger it to stop and score
+                    print("[VIDEO END] Quick Score đang ghi âm -> tự động dừng để chấm điểm.")
+                    self.quick_score_active = False
+                    # The _quick_score_task loop will detect this,
+                    # stop recording, and score the user's actual audio.
+                else:
+                    print("[VIDEO END] Quick Score không hoạt động, bỏ qua chấm điểm.")
+                    if self.on_video_end_callback:
+                        self.on_video_end_callback(None)
             except Exception as e:
-                import traceback
-                print(f"❌ [CHẤM ĐIỂM] Lỗi: {e}\n{traceback.format_exc()}")
+                print(f"[VIDEO END] Lỗi: {e}")
                 if self.on_video_end_callback:
                     self.on_video_end_callback(None)
 
@@ -441,13 +439,12 @@ class _YouTubeMixin:
             duration = get_video_duration()
             if duration and duration > 0:
                 wait_time = duration + 5
-                print(f"⏳ [YOUTUBE MONITORING] Đợi {wait_time}s...")
+                print(f"[YOUTUBE MONITORING] Đợi {wait_time}giây...")
                 time.sleep(wait_time)
                 if self.youtube_monitoring_active:
                     on_video_end()
             self.youtube_monitoring_active = False
-            print("🏁 [YOUTUBE MONITORING] Đã kết thúc monitoring")
-            print("=" * 60)
+            print("[YOUTUBE MONITORING] Đã kết thúc giám sát video")
 
         self.youtube_monitoring_active = False
         threading.Thread(target=monitor_video, daemon=True).start()
@@ -464,7 +461,7 @@ class _YouTubeMixin:
             daemon=True,
         )
         self._youtube_watcher_thread.start()
-        print("👁️ [YT WATCHER] Đã bắt đầu theo dõi trình duyệt...")
+        print("[YT WATCHER] Đã bắt đầu theo dõi trình duyệt...")
 
     def stop_youtube_watcher(self):
         self._youtube_watcher_active = False
@@ -473,7 +470,7 @@ class _YouTubeMixin:
             self._youtube_watcher_thread = None
         with self._pending_url_lock:
             self._pending_url_queue.clear()
-        print("👁️ [YT WATCHER] Đã dừng theo dõi trình duyệt.")
+        print("[YT WATCHER] Đã dừng theo dõi trình duyệt.")
 
     def _youtube_watcher_loop(self, poll_interval):
         engine_ref = weakref.ref(self)
@@ -498,9 +495,9 @@ class _YouTubeMixin:
                         elif self._tone_session.is_scanning:
                             with self._pending_url_lock:
                                 self._pending_url_queue = [url]
-                            print(f"👁️ [YT WATCHER] {url[:60]}... sẽ được dò sau")
+                            print(f"[YT WATCHER] {url[:60]}... sẽ được dò sau")
                         elif self._tone_session.is_replaying:
-                            print("👁️ [YT WATCHER] URL mới trong lúc replay → hủy, dò mới")
+                            print("[YT WATCHER] URL mới trong lúc replay → hủy, dò mới")
                             self._tone_session.stop()
                             self._dispatch_auto_detect(url, engine_ref)
                             self._last_watched_url = url
@@ -538,7 +535,7 @@ class _YouTubeMixin:
                     del all_windows
 
             except Exception as e:
-                print(f"⚠️ [YT WATCHER] Lỗi poll: {e}")
+                print(f"[YT WATCHER] Lỗi poll: {e}")
 
             if not self._tone_session.is_active:
                 pending_url = None
@@ -547,7 +544,7 @@ class _YouTubeMixin:
                         pending_url = self._pending_url_queue.pop(0)
                         self._pending_url_queue.clear()
                 if pending_url and pending_url != self._last_watched_url:
-                    print(f"👁️ [YT WATCHER] Đang xử lý URL đang chờ: {pending_url[:60]}...")
+                    print(f"[YT WATCHER] Đang xử lý URL đang chờ: {pending_url[:60]}...")
                     self._dispatch_auto_detect(pending_url, engine_ref)
                     self._last_watched_url = pending_url
 
@@ -555,7 +552,8 @@ class _YouTubeMixin:
             if poll_count % 20 == 0:
                 MemoryGuard.force_cleanup()
 
-            mem.checkpoint("poll")
+            # mem.checkpoint("poll")
+            pass
 
             for _ in range(int(current_interval * 10)):
                 if not self._youtube_watcher_active:
@@ -566,7 +564,7 @@ class _YouTubeMixin:
     # ── Dispatch helper ──────────────────────────────────────────────────────────
 
     def _dispatch_auto_detect(self, url, engine_ref, skip_resolve=False):
-        print(f"👁️ [YT WATCHER] Phát hiện YouTube mới: {url}")
+        print(f"[YT WATCHER] Phát hiện YouTube mới: {url}")
 
         def _on_complete(result):
             eng = engine_ref()
@@ -626,8 +624,19 @@ class _YouTubeMixin:
 
 
 def _extract_key_root(key_display: str) -> str:
-    """Parse key root from 'D Major' → 'D'. Exposed at module level for reuse."""
+    """
+    Trích xuất root note từ key_display.
+    Xử lý cả 2 format:
+      - 'Am', 'C#m', 'D#m'  → 'A', 'C#', 'D#'   (format từ ToneDetector)
+      - 'D Major', 'Am Minor' → 'D', 'Am'          (format cũ có space)
+    """
     if not key_display:
         return "C"
-    parts = key_display.strip().split()
-    return parts[0] if parts else "C"
+    s = key_display.strip()
+    # Format có space: lấy phần đầu tiên
+    if " " in s:
+        return s.split()[0]
+    # Format minor có suffix 'm': 'Am' → 'A', 'C#m' → 'C#', 'D#m' → 'D#'
+    if s.endswith("m") and len(s) >= 2:
+        return s[:-1]
+    return s

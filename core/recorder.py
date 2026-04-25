@@ -79,7 +79,7 @@ class AudioRecorder:
                     "Không tìm thấy recorder_worker.py. "
                     "Đảm bảo file này nằm cùng thư mục với QuangLuuStudio.exe"
                 )
-                print(f"❌ [RECORDER] {self.last_error}")
+                print(f"[RECORDER] {self.last_error}")
                 self.recording = False
                 try:
                     os.remove(self._stop_flag_path)
@@ -109,7 +109,7 @@ class AudioRecorder:
                     f"{err}. "
                     f"Vào ⚙️ Cài đặt → Nguồn thu nhạc để chọn đúng thiết bị."
                 )
-                print(f"❌ [RECORDER] {self.last_error}")
+                print(f"[RECORDER] {self.last_error}")
                 self.recording = False
                 try:
                     os.remove(self._stop_flag_path)
@@ -119,9 +119,9 @@ class AudioRecorder:
 
             if not started:
                 # Timeout nhưng thread vẫn alive → có thể đang init chậm, tiếp tục
-                print("⚠️ [RECORDER] Timeout chờ STARTED, nhưng thread vẫn chạy → tiếp tục")
+                print("[RECORDER] Timeout chờ STARTED, nhưng thread vẫn chạy → tiếp tục")
 
-            print("🎙️ [RECORDER] Worker đã khởi động (frozen mode)")
+            print("[RECORDER] Worker đã khởi động (frozen mode)")
             return True
 
         else:
@@ -145,10 +145,10 @@ class AudioRecorder:
                     encoding="utf-8",
                     errors="replace"
                 )
-                print(f"🎙️ [RECORDER] Started subprocess (PID={self._process.pid})")
+                print(f"[RECORDER] Đã khởi động tiến trình ghi âm (PID={self._process.pid})")
             except Exception as e:
                 self.last_error = f"Không thể khởi tạo subprocess: {e}"
-                print(f"❌ [RECORDER] {self.last_error}")
+                print(f"[RECORDER] {self.last_error}")
                 self.recording = False
                 return False
             
@@ -168,6 +168,8 @@ class AudioRecorder:
                     except Exception:
                         pass
                     error_msg = f"Worker thoát với exit code {ret}. {stderr_out.strip()[:200]}"
+                    if ret == 3:
+                        error_msg += "\n💡 Gợi ý: Thiết bị ghi âm có thể đang bị ứng dụng khác (như Studio One) chiếm quyền sử dụng (Exclusive Mode). Hãy chọn thiết bị khác hoặc dùng ASIOVADPRO."
                     break
                 
                 # Thử đọc 1 dòng stdout (non-blocking)
@@ -175,7 +177,7 @@ class AudioRecorder:
                     line = self._process.stdout.readline()
                     if line:
                         line = line.strip()
-                        print(f"🎙️ [RECORDER] Worker: {line}")
+                        print(f"[RECORDER] Worker: {line}")
                         if line == "STARTED":
                             started_ok = True
                             break
@@ -191,7 +193,7 @@ class AudioRecorder:
                 if error_msg is None:
                     error_msg = "Timeout: worker không phản hồi trong 5 giây"
                 self.last_error = error_msg
-                print(f"❌ [RECORDER] {self.last_error}")
+                print(f"[RECORDER] {self.last_error}")
                 # Dừng process
                 try:
                     self._process.kill()
@@ -212,7 +214,7 @@ class AudioRecorder:
                     for line in self._process.stdout:
                         line = line.strip()
                         if line:
-                            print(f"🎙️ [RECORDER] Worker: {line}")
+                            print(f"[RECORDER] Worker: {line}")
                 except Exception:
                     pass
             threading.Thread(target=_drain_stdout, daemon=True).start()
@@ -258,7 +260,7 @@ class AudioRecorder:
                 file_size = os.path.getsize(self.output_path)
                 if file_size <= 44:
                     self.last_error = "File ghi âm rỗng — không bắt được âm thanh từ WASAPI Loopback"
-                    print(f"❌ [RECORDER] {self.last_error}")
+                    print(f"[RECORDER] {self.last_error}")
                     try:
                         os.remove(self.output_path)
                     except Exception:
@@ -271,10 +273,10 @@ class AudioRecorder:
                     return True
                 except Exception as e:
                     self.last_error = f"Lỗi di chuyển file: {e}"
-                    print(f"❌ [RECORDER] {self.last_error}")
+                    print(f"[RECORDER] {self.last_error}")
                     return False
             self.last_error = "Không tìm thấy file ghi âm tạm"
-            print(f"❌ [RECORDER] {self.last_error}")
+            print(f"[RECORDER] {self.last_error}")
             return False
         
         return self.output_path
@@ -316,7 +318,7 @@ class AudioRecorder:
         builtins.print = _patched_print
 
         try:
-            _orig_print(f"🎙️ [RECORDER] Exec worker: {worker_path}", flush=True)
+            _orig_print(f"[RECORDER] Exec worker: {worker_path}", flush=True)
             with open(worker_path, 'r', encoding='utf-8') as f:
                 code = f.read()
 
@@ -328,7 +330,7 @@ class AudioRecorder:
             exec(compile(code, worker_path, 'exec'), ns)
 
         except Exception as e:
-            _orig_print(f"❌ [RECORDER] Inline worker error: {e}", flush=True)
+            _orig_print(f"[RECORDER] Inline worker error: {e}", flush=True)
             import traceback
             traceback.print_exc()
         finally:

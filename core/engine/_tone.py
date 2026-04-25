@@ -15,36 +15,122 @@ from core.engine._youtube import _extract_key_root
 _CAMELOT_MAJOR = ["8B", "3B", "10B", "5B", "12B", "7B", "2B", "9B", "4B", "11B", "6B", "1B"]
 _CAMELOT_MINOR = ["5A", "12A", "7A", "2A", "9A", "4A", "11A", "6A", "1A", "8A", "3A", "10A"]
 
+# Hard deadlines for the detection pipeline. If the worker thread does not
+# return within these windows, the watchdog fires on_error so the UI can
+# recover instead of displaying "Đang dò..." forever. Fast scan is capped
+# tighter because it only downloads 45s of audio.
+_FAST_SCAN_TIMEOUT_SEC = 90
+_FULL_SCAN_TIMEOUT_SEC = 300
+
+
+def _install_watchdog(timeout_sec, on_complete, on_error, label, on_timeout_hook=None):
+    """Wrap detection callbacks with a once-only timeout guard.
+
+    Returns (safe_complete, safe_error, cancel_event). When the deadline fires,
+    `on_timeout_hook` (if provided) is invoked so the worker thread can stop
+    cleanly via the session state machine. Both callbacks are idempotent.
+    """
+    done = threading.Event()
+    watchdog_cancel = threading.Event()
+
+    def _safe_complete(result):
+        if done.is_set():
+            return
+        done.set()
+        timer.cancel()
+        if on_complete:
+            on_complete(result)
+
+    def _safe_error(msg):
+        if done.is_set():
+            return
+        done.set()
+        timer.cancel()
+        if on_error:
+            on_error(msg)
+
+    def _fire_timeout():
+        if done.is_set():
+            return
+        done.set()
+        watchdog_cancel.set()
+        # Log via stderr-safe ASCII to avoid UnicodeEncodeError on cp1252 consoles
+        # which would crash the Timer thread before on_error fires.
+        try:
+            import logging
+            logging.getLogger(__name__).warning(
+                "[WATCHDOG] %s timeout after %ds", label, timeout_sec
+            )
+        except Exception:
+            pass
+        if on_timeout_hook:
+            try:
+                on_timeout_hook()
+            except Exception:
+                pass
+        if on_error:
+            try:
+                on_error(
+                    f"Quá thời gian chờ {timeout_sec}s khi {label}. "
+                    "YouTube có thể đang chặn yêu cầu — thử xuất cookie trong Thiết lập hoặc kiểm tra mạng."
+                )
+            except Exception:
+                pass
+
+    timer = threading.Timer(timeout_sec, _fire_timeout)
+    timer.daemon = True
+    timer.start()
+    return _safe_complete, _safe_error, watchdog_cancel
+
 
 class _ToneMixin:
     # ── DRY Helpers ──────────────────────────────────────────────────────────────
 
     def _resolve_tone(self, url):
+        # In-session memoization: check RAM cache first
+        if url in self._tone_resolve_cache:
+            self._tone_resolve_cache.move_to_end(url)
+            source, data = self._tone_resolve_cache[url]
+            print(f"[RESOLVE] Cache phiên: {source}")
+            return (source, data)
+
         saved_manual = ManualToneTimeline.load_timeline(url)
         if saved_manual and saved_manual.get('timeline'):
-            print(f"✅ [RESOLVE] Manual timeline hit: {len(saved_manual['timeline'])} entries")
+            print(f"[RESOLVE] Khớp timeline thủ công: {len(saved_manual['timeline'])} đoạn")
+            self._tone_resolve_cache_put(url, ('manual', saved_manual))
             return ('manual', saved_manual)
 
         cached = ToneCacheManager.get_cached_tone(url)
         if cached and cached.get('key_timeline'):
-            print(f"✅ [RESOLVE] Tone cache hit: {cached.get('primary_key', '?')}")
+            print(f"[RESOLVE] Khớp bộ nhớ đệm: {cached.get('primary_key', '?')}")
+            self._tone_resolve_cache_put(url, ('cache', cached))
             return ('cache', cached)
 
         return (None, None)
 
-    def _check_tone_cache(self, url):
-        cached = ToneCacheManager.get_cached_tone(url)
-        if not cached:
-            return None
+    def _tone_resolve_cache_put(self, url, entry):
+        """Insert into in-session cache, evicting oldest if over max size."""
+        self._tone_resolve_cache[url] = entry
+        self._tone_resolve_cache.move_to_end(url)
+        while len(self._tone_resolve_cache) > self._TONE_RESOLVE_CACHE_MAX:
+            self._tone_resolve_cache.popitem(last=False)
 
+    def _tone_resolve_cache_invalidate(self, url):
+        """Remove a URL from the in-session cache (called after save)."""
+        self._tone_resolve_cache.pop(url, None)
+
+    def _build_cache_result(self, cached):
+        """Build a flat result dict from already-loaded cache data + send MIDI.
+        Replaces the old _check_tone_cache which re-read JSON from disk."""
         timeline = cached.get('key_timeline', [])
         if not timeline:
             return None
 
-        print(f"✅ [CACHE] Hit: {cached.get('primary_key', '?')}")
-        latest = timeline[-1]
+        latest      = timeline[-1]
+        key_display = cached.get('primary_key', latest.get('key_display', 'C'))
         result = {
-            'key_display': cached.get('primary_key', latest.get('key_display', 'C')),
+            'key_display': key_display,
+            'key':         _extract_key_root(key_display),   # root note cho UI dropdown
             'key_index':   latest.get('key_index', 0),
             'scale':       latest.get('scale', 'Major'),
             'confidence':  latest.get('confidence', 0),
@@ -55,8 +141,8 @@ class _ToneMixin:
         self._send_tone_midi(result)
         return result
 
-    @staticmethod
-    def _save_tone_to_cache(url, result, title=""):
+
+    def _save_tone_to_cache(self, url, result, title=""):
         cache_data = {
             'primary_key': result['key_display'],
             'title': title,
@@ -71,6 +157,8 @@ class _ToneMixin:
             }]
         }
         ToneCacheManager.save_tone(url, cache_data)
+        # Invalidate in-session cache so next resolve re-reads fresh data
+        self._tone_resolve_cache_invalidate(url)
 
     @staticmethod
     def _extract_key_root(key_display):
@@ -78,15 +166,14 @@ class _ToneMixin:
 
     def _send_tone_midi(self, result):
         from core.config import AppConfig
-        config = AppConfig.get_instance()
 
         key_index = result.get('key_index', 0)
         scale     = result.get('scale', 'Major')
 
-        key_map   = config.get_key_midi_map()
-        scale_map = config.get_scale_midi_map()
-        mode_map  = config.get_mode_midi_map()
-        midi_cc   = config.get_midi_cc()
+        key_map   = AppConfig.get_key_midi_map()
+        scale_map = AppConfig.get_scale_midi_map()
+        mode_map  = AppConfig.get_mode_midi_map()
+        midi_cc   = AppConfig.get_midi_cc()
 
         # Key
         key_names  = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
@@ -97,13 +184,13 @@ class _ToneMixin:
         scale_cc_val = scale_map.get(scale, scale_map.get('Major', 13))
 
         # Send via MIDI CCs
-        tone_cc  = midi_cc.get('tone_music', 10)
-        scale_cc = midi_cc.get('tone_scale', 11)
+        tone_cc  = midi_cc.get('key_root', 33)
+        scale_cc = midi_cc.get('scale_type', midi_cc.get('key_scale', 35))
 
         self.send_midi(tone_cc,  key_cc_val)
         self.send_midi(scale_cc, scale_cc_val)
 
-        print(f"🎹 [MIDI] Key={key_name} (cc={tone_cc}, val={key_cc_val}) "
+        print(f"[MIDI] Key={key_name} (cc={tone_cc}, val={key_cc_val}) "
               f"Scale={scale} (cc={scale_cc}, val={scale_cc_val})")
 
     # ── Detect from system audio ────────────────────────────────────────────────
@@ -116,8 +203,10 @@ class _ToneMixin:
                     if source == 'manual':
                         timeline = resolved_data['timeline']
                         first    = timeline[0]
+                        kd       = first.get('key_display', 'C')
                         result   = {
-                            'key_display': first.get('key_display', 'C'),
+                            'key_display': kd,
+                            'key':         _extract_key_root(kd),
                             'key_index':   first.get('key_index', 0),
                             'scale':       first.get('scale', 'Major'),
                             'confidence':  first.get('confidence', 0),
@@ -129,7 +218,7 @@ class _ToneMixin:
                             on_complete(result)
                         return
                     elif source == 'cache':
-                        cached_result = self._check_tone_cache(self.current_youtube_url)
+                        cached_result = self._build_cache_result(resolved_data)
                         if cached_result:
                             if on_complete:
                                 on_complete(cached_result)
@@ -137,13 +226,13 @@ class _ToneMixin:
 
                 result = None
                 if self.current_youtube_url:
-                    print("🎵 [DÒ TONE] Dùng YouTube audio...")
+                    print("[DÒ TONE] Dùng YouTube audio...")
                     try:
                         result = ToneDetector.detect_key_from_youtube(
                             self.current_youtube_url, duration_limit=30
                         )
                     except Exception as e:
-                        print(f"⚠️ [DÒ TONE] YouTube download thất bại: {e}")
+                        print(f"[DÒ TONE] YouTube download thất bại: {e}")
 
                 if not result:
                     result = ToneDetector.detect_key_from_system_audio(
@@ -160,7 +249,7 @@ class _ToneMixin:
                     if on_error:
                         on_error("Không thể dò tone. Hãy đảm bảo đang phát nhạc.")
             except Exception as e:
-                print(f"❌ [DÒ TONE] Lỗi: {e}")
+                print(f"[DÒ TONE] Lỗi: {e}")
                 if on_error:
                     on_error(str(e))
             finally:
@@ -186,8 +275,10 @@ class _ToneMixin:
                 if source == 'manual':
                     timeline = resolved_data['timeline']
                     first    = timeline[0]
+                    kd       = first.get('key_display', 'C')
                     result   = {
-                        'key_display': first.get('key_display', 'C'),
+                        'key_display': kd,
+                        'key':         _extract_key_root(kd),
                         'key_index':   first.get('key_index', 0),
                         'scale':       first.get('scale', 'Major'),
                         'confidence':  first.get('confidence', 0),
@@ -199,7 +290,7 @@ class _ToneMixin:
                         on_complete(result)
                     return
                 elif source == 'cache':
-                    cached_result = self._check_tone_cache(youtube_url)
+                    cached_result = self._build_cache_result(resolved_data)
                     if cached_result:
                         if on_complete:
                             on_complete(cached_result)
@@ -219,7 +310,7 @@ class _ToneMixin:
                         on_error("Không thể dò tone từ YouTube. Hãy thử lại.")
             except Exception as e:
                 import traceback
-                print(f"❌ [LẤY TONE YT] Lỗi: {e}\n{traceback.format_exc()}")
+                print(f"[LẤY TONE YT] Lỗi: {e}\n{traceback.format_exc()}")
                 if on_error:
                     on_error(str(e))
             finally:
@@ -231,6 +322,12 @@ class _ToneMixin:
 
     def detect_tone_from_browser(self, on_complete=None, on_error=None, on_progress=None,
                                   url=None, skip_resolve=False):
+        on_complete, on_error, watchdog_cancel = _install_watchdog(
+            _FAST_SCAN_TIMEOUT_SEC, on_complete, on_error,
+            label="dò tone nhanh",
+            on_timeout_hook=lambda: self._tone_session.stop(),
+        )
+
         def _detect():
             try:
                 # 1. Xác định URL
@@ -254,8 +351,10 @@ class _ToneMixin:
                     if source == 'manual':
                         timeline    = resolved_data['timeline']
                         first       = timeline[0]
+                        kd          = first.get('key_display', 'C')
                         flat_result = {
-                            'key_display':  first.get('key_display', 'C'),
+                            'key_display':  kd,
+                            'key':          _extract_key_root(kd),
                             'key_index':    first.get('key_index', 0),
                             'scale':        first.get('scale', 'Major'),
                             'confidence':   first.get('confidence', 0),
@@ -276,17 +375,17 @@ class _ToneMixin:
                         return
 
                     elif source == 'cache':
-                        cached = self._check_tone_cache(youtube_url)
-                        if cached:
+                        cached_result = self._build_cache_result(resolved_data)
+                        if cached_result:
                             self.current_youtube_url = youtube_url
                             replay_cancel = self._tone_session.transition_to_replaying()
                             if replay_cancel is not None:
                                 self._replay_cached_timeline(
-                                    ToneCacheManager.get_cached_tone(youtube_url),
+                                    resolved_data,
                                     cancel_event=replay_cancel,
                                 )
                             if on_complete:
-                                on_complete(cached)
+                                on_complete(cached_result)
                             return
 
                 if cancel.is_set():
@@ -298,9 +397,9 @@ class _ToneMixin:
 
                 scoring_engine = ScoringEngine()
                 try:
-                    audio_path, info = scoring_engine.download_youtube_audio_with_info(youtube_url)
+                    audio_path, video_title = scoring_engine.download_youtube_audio_with_info(youtube_url)
                 except Exception:
-                    audio_path, info = None, {}
+                    audio_path, video_title = None, ''
 
                 if cancel.is_set():
                     return
@@ -313,15 +412,22 @@ class _ToneMixin:
                 if on_progress:
                     on_progress("Đang phân tích âm điệu...")
 
-                # 5. Load + detect
+                # 5. Load + detect (sr=16000 for fast scan — CQT chroma only needs ≤4 kHz)
                 result = None
                 try:
                     import librosa
-                    audio_data, sr = librosa.load(audio_path, sr=22050, mono=True, duration=45)
-                    result = ToneDetector.detect_key_from_audio(audio_data, sr)
+
+                    if cancel.is_set():
+                        return
+                    audio_data, sr = librosa.load(audio_path, sr=16000, mono=True, duration=45)
+
+                    if cancel.is_set():
+                        del audio_data
+                        return
+                    result = ToneDetector.detect_key_from_audio(audio_data, sr, skip_hum_detection=True)
                     del audio_data
                 except Exception as e:
-                    print(f"⚠️ [DÒ TONE] Lỗi load/detect audio: {e}")
+                    print(f"[DÒ TONE] Lỗi load/detect audio: {e}")
                 finally:
                     scoring_engine.cleanup_temp_file()
                     del scoring_engine
@@ -330,7 +436,6 @@ class _ToneMixin:
                     return
 
                 if result:
-                    video_title = info.get('title', '') if isinstance(info, dict) else ''
                     result.update({
                         'title':       video_title,
                         'key':         _extract_key_root(result.get('key_display', 'C')),
@@ -349,11 +454,15 @@ class _ToneMixin:
                     self.current_youtube_url = youtube_url
                     self._save_tone_to_cache(youtube_url, result, title=video_title)
 
-                    # Replay đơn giản (single tone)
+                    # Replay đơn giản (single tone) — build replay dict from result in scope
                     replay_cancel = self._tone_session.transition_to_replaying()
                     if replay_cancel is not None:
+                        replay_data = {
+                            'primary_key':  result['key_display'],
+                            'key_timeline': result.get('key_timeline', []),
+                        }
                         self._replay_cached_timeline(
-                            ToneCacheManager.get_cached_tone(youtube_url),
+                            replay_data,
                             cancel_event=replay_cancel,
                         )
 
@@ -365,7 +474,7 @@ class _ToneMixin:
 
             except Exception as e:
                 import traceback
-                print(f"❌ [DÒ TONE] Lỗi: {e}\n{traceback.format_exc()}")
+                print(f"[DÒ TONE] Lỗi: {e}\n{traceback.format_exc()}")
                 if on_error:
                     on_error(str(e))
             finally:
@@ -381,10 +490,16 @@ class _ToneMixin:
                 on_error("Không có YouTube URL.")
             return
 
+        on_complete, on_error, watchdog_cancel = _install_watchdog(
+            _FULL_SCAN_TIMEOUT_SEC, on_complete, on_error,
+            label="dò tone toàn bộ bài",
+            on_timeout_hook=lambda: self._tone_session.stop(),
+        )
+
         if not skip_resolve:
             saved_manual = ManualToneTimeline.load_timeline(url)
             if saved_manual and saved_manual.get('timeline'):
-                print(f"✅ [AUTO TIMELINE] Đã có manual timeline ({len(saved_manual['timeline'])} entries), replay")
+                print(f"[AUTO TIMELINE] Đã có timeline thủ công ({len(saved_manual['timeline'])} đoạn), đang phát lại")
                 timeline    = saved_manual['timeline']
                 first_entry = timeline[0]
                 self._send_tone_midi(first_entry)
@@ -424,7 +539,7 @@ class _ToneMixin:
                     del info
                     gc.collect()
                 except Exception as e:
-                    print(f"⚠️ [AUTO TIMELINE] Không lấy được title: {e}")
+                    print(f"[AUTO TIMELINE] Không lấy được title: {e}")
 
                 if cancel.is_set():
                     return
@@ -445,10 +560,18 @@ class _ToneMixin:
                 if on_progress:
                     on_progress("Đang load file âm thanh...")
 
+                if cancel.is_set():
+                    return
+
                 audio_data, sr = librosa.load(audio_path, sr=22050, mono=True)
                 total_seconds  = len(audio_data) / sr
                 num_segments   = math.ceil(total_seconds / SEGMENT_DURATION)
-                print(f"✅ [AUTO TIMELINE] Audio: {total_seconds:.1f}s, {num_segments} segments")
+                print(f"[AUTO TIMELINE] Audio: {total_seconds:.1f}giây, {num_segments} đoạn")
+
+                if cancel.is_set():
+                    del audio_data
+                    audio_data = None
+                    return
 
                 timeline_entries = ToneDetector.detect_timeline_advanced(audio_data, sr, on_progress)
 
@@ -469,13 +592,15 @@ class _ToneMixin:
                     on_progress("Đang lưu kết quả...")
 
                 ManualToneTimeline.save_timeline(url, video_title, timeline_entries)
-                print(f"✅ [AUTO TIMELINE] Đã lưu: {video_title} ({len(timeline_entries)} entries)")
+                print(f"[AUTO TIMELINE] Đã lưu: {video_title} ({len(timeline_entries)} đoạn)")
 
                 cache_timeline = [{**e, **{'confidence': e.get('confidence', 0.8)}} for e in timeline_entries]
                 ToneCacheManager.save_tone(url, {
                     'primary_key':  timeline_entries[0]['key_display'],
                     'key_timeline': cache_timeline,
                 })
+                # Invalidate in-session cache after disk writes
+                self._tone_resolve_cache_invalidate(url)
 
                 first_key = timeline_entries[0]
                 self._send_tone_midi(first_key)
@@ -494,7 +619,7 @@ class _ToneMixin:
 
             except Exception as e:
                 import traceback
-                print(f"❌ [AUTO TIMELINE] Lỗi: {e}\n{traceback.format_exc()}")
+                print(f"[AUTO TIMELINE] Lỗi: {e}\n{traceback.format_exc()}")
                 if on_error:
                     on_error(str(e))
             finally:

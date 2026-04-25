@@ -32,11 +32,29 @@ os.environ["QT_OPENGL"] = "angle"
 # ── Logging — init before any core import ─────────────────────────────────────
 from pathlib import Path
 from core.logger import setup_logging, get_logger
+try:
+    from core.logger import flush_logs
+except ImportError:
+    def flush_logs(): pass  # noqa: E704 — fallback cho bản build cũ
 from core.config import _get_data_dir
 
 _LOG_DIR = Path(_get_data_dir()) / "logs"
 setup_logging(_LOG_DIR, level=logging.INFO)
 log = get_logger(__name__)
+
+# Bắt crash không được xử lý từ bất kỳ thread nào
+def _excepthook(exc_type, exc_value, exc_tb):
+    log.critical("Unhandled exception", exc_info=(exc_type, exc_value, exc_tb))
+    flush_logs()
+sys.excepthook = _excepthook
+
+def _thread_excepthook(args):
+    if args.exc_type is SystemExit:
+        return
+    log.critical("Unhandled exception in thread '%s'", args.thread, exc_info=(
+        args.exc_type, args.exc_value, args.exc_tb))
+    flush_logs()
+threading.excepthook = _thread_excepthook
 
 from core.version import __version__
 log.info("Quang Lưu Studio v%s starting", __version__)
@@ -162,7 +180,8 @@ if __name__ == "__main__":
     except Exception:
         log.exception("Unhandled exception in main()")
     finally:
-        log.info("App exiting")
+        log.info("App exiting — log dir: %s", _LOG_DIR)
+        flush_logs()
         logging.shutdown()
         _cleanup_mei()
         os._exit(0)

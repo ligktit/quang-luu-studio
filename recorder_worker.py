@@ -85,20 +85,20 @@ def find_loopback_device(pa):
         if default_out_idx >= 0:
             default_out = pa.get_device_info_by_index(default_out_idx)
             default_out_name = default_out.get("name", "").lower()
-            print(f"INFO: Default output: [{default_out_idx}] {default_out['name']!r}", flush=True)
+            print(f"INFO: Output: [{default_out_idx}] {default_out['name'][:30]}", flush=True)
 
             for lb in all_loopbacks:
                 lb_name = lb.get("name", "").lower()
                 lb_base = lb_name.replace("[loopback]", "").strip()
                 if lb_base in default_out_name or default_out_name in lb_base:
-                    print(f"INFO: Matched loopback analogue: [{lb['index']}] {lb['name']!r}", flush=True)
+                    print(f"INFO: Loopback: [{lb['index']}] {lb['name'][:30]}", flush=True)
                     return lb
 
             # Thử helper API
             try:
                 analogue = pa.get_wasapi_loopback_analogue_by_index(default_out_idx)
                 if analogue:
-                    print(f"INFO: Helper API loopback: [{analogue['index']}] {analogue['name']!r}", flush=True)
+                    print(f"INFO: Loopback API: [{analogue['index']}] {analogue['name'][:30]}", flush=True)
                     return analogue
             except (AttributeError, Exception):
                 pass
@@ -107,7 +107,7 @@ def find_loopback_device(pa):
 
     # Ưu tiên 2: fallback về loopback đầu tiên
     fallback = all_loopbacks[0]
-    print(f"WARNING: Using fallback loopback: [{fallback['index']}] {fallback['name']!r}", flush=True)
+    print(f"WARNING: Dùng loopback dự phòng: [{fallback['index']}] {fallback['name']!r}", flush=True)
     return fallback
 
 
@@ -182,7 +182,7 @@ def main():
         # Dùng device do user chỉ định
         try:
             loopback_dev = pa.get_device_info_by_index(req_loopback_idx)
-            print(f"INFO: Using user-selected device: [{req_loopback_idx}] {loopback_dev['name']!r}", flush=True)
+            print(f"INFO: Loopback: [{req_loopback_idx}] {loopback_dev['name'][:30]}", flush=True)
         except Exception as e:
             print(f"ERROR: Invalid loopback device index {req_loopback_idx}: {e}",
                   file=sys.stderr, flush=True)
@@ -201,11 +201,11 @@ def main():
     if req_mic_idx == -2:
         # -2 = tắt mic hoàn toàn
         mic_dev = None
-        print("INFO: Microphone disabled by user", flush=True)
+        print("INFO: Mic đã tắt", flush=True)
     elif req_mic_idx >= 0:
         try:
             mic_dev = pa.get_device_info_by_index(req_mic_idx)
-            print(f"INFO: Using user-selected mic: [{req_mic_idx}] {mic_dev['name']!r}", flush=True)
+            print(f"INFO: Mic: [{req_mic_idx}] {mic_dev['name'][:30]}", flush=True)
         except Exception as e:
             print(f"WARNING: Invalid mic device index {req_mic_idx}: {e}, using default", flush=True)
             mic_dev = find_default_mic(pa)
@@ -255,7 +255,7 @@ def main():
             flush=True
         )
     else:
-        print("WARNING: No microphone, recording loopback only", flush=True)
+        print("INFO: Chỉ thu nhạc", flush=True)
 
     # FIX 3: queue.Queue thay lock+list.
     # put_nowait() trong ASIO callback KHÔNG bao giờ block → không làm trễ
@@ -484,7 +484,7 @@ def main():
     pa.terminate()
 
     duration = frames_written / out_rate if out_rate > 0 else 0
-    print(f"DONE: {duration:.1f}s written to {output_path}", flush=True)
+    print(f"DONE: Đã ghi {duration:.1f}s", flush=True)
 
 
 if __name__ == "__main__":

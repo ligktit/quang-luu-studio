@@ -25,7 +25,7 @@ try:
     MIDI_CC = backend.AppConfig.get_midi_cc()
     SCALE_VALUES = backend.AppConfig.get_scale_values()
 except Exception as e:
-    print(f"⚠️ Không đọc được app_config.json, dùng giá trị mặc định: {e}")
+    print(f"[CONFIG] Khong doc duoc app_config.json, dung gia tri mac dinh: {e}")
     MIDI_CC = {}
     SCALE_VALUES = {}
 
@@ -118,13 +118,17 @@ class MainDashboard(QMainWindow):
         self.current_score = None
         self.be_state = False
         self.vang_state = False
+        self.fix_meo_state = False
         self.mute_states = {
             "mix_music": False, "mix_mic": False,
             "mix_reverb": False, "mix_backing": False
         }
         self.autokey_active = False
         self.tune_state = True
+        self.fix_meo_state = False
         self.current_scale = "Major"
+
+        self._mixer_channels = {}
 
         # Widgets / timers populated by _build_* — init to None so hot paths can
         # do `is None` checks instead of `hasattr` probes.
@@ -344,8 +348,35 @@ class MainDashboard(QMainWindow):
                     with QSignalBlocker(self.scale_combo):
                         self.scale_combo.setCurrentText(scale_str)
                 self._sync_scale_button(self.scale_is_major)
+            
+            # --- Xử lý phản hồi Mute từ MIDI ---
+            mute_cc_to_key = {
+                int(MIDI_CC.get("mute_music", 50)): "mix_music",
+                int(MIDI_CC.get("mute_mic", 51)): "mix_mic",
+                int(MIDI_CC.get("mute_reverb", 52)): "mix_reverb",
+                int(MIDI_CC.get("mute_backing", 53)): "mix_backing",
+            }
+            if cc in mute_cc_to_key:
+                key = mute_cc_to_key[cc]
+                is_muted = (value >= 64)
+                self.mute_states[key] = is_muted
+                if key in self._mixer_channels:
+                    self._mixer_channels[key].set_muted(is_muted)
+                    print(f"[MIDI SYNC] {key} -> {'MUTED' if is_muted else 'ACTIVE'} (Value {value})")
+
+            # --- Xử lý phản hồi Toggles khác ---
+            if cc == int(MIDI_CC.get("tone_auto", 31)):
+                self.tune_state = (value >= 64)
+                btn = self._func_buttons.get("Auto-Tune")
+                if btn: btn.setActive(self.tune_state)
+            
+            if cc == int(MIDI_CC.get("fix_meo", 36)):
+                self.fix_meo_state = (value >= 64)
+                btn = self._func_buttons.get("Fix Méo")
+                if btn: btn.setActive(self.fix_meo_state)
+
         except Exception as e:
-            print(f"⚠️ UI MIDI Sync Error: {e}")
+            print(f"[MIDI SYNC] UI MIDI Sync Error: {e}")
 
     def on_midi_status_changed(self, connected, port_name=None):
         self._midi_status_signal.emit()
@@ -386,11 +417,12 @@ class MainDashboard(QMainWindow):
         """Khởi động YouTube URL Watcher với callbacks thread-safe."""
         def _auto_on_complete(result):
             self._tone_result_signal.emit(result)
-        
+
         def _auto_on_error(msg):
-            # Lỗi auto-detect → chỉ in log, không hiện popup
-            print(f"⚠️ [YT WATCHER] Auto-detect lỗi: {msg}")
-        
+            # Route error qua signal để UI reset marquee + button state
+            print(f"[YT WATCHER] Auto-detect loi: {msg}")
+            self._tone_result_signal.emit({'error': msg, 'auto_detected': True})
+
         def _auto_on_progress(text):
             # Chỉ hiện "Đang dò..." trên marquee, không hiện chi tiết
             if not getattr(self, '_do_tone_running', False):
@@ -414,7 +446,7 @@ class MainDashboard(QMainWindow):
                 btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 11, 14))
                 if old_key in self._func_buttons:
                     self._func_buttons["Chế độ: Full"] = self._func_buttons.pop(old_key)
-            self._show_message("Đã chọn Chế độ Dò: Full (Mất thời gian tải nhưng dò chính xác timeline)")
+            self._show_message("Chế độ: Dò Full")
         else:
             self.engine.tone_scan_mode = 'fast'
             if btn:
@@ -423,30 +455,58 @@ class MainDashboard(QMainWindow):
                 btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
                 if old_key in self._func_buttons:
                     self._func_buttons["Chế độ: Nhanh"] = self._func_buttons.pop(old_key)
-            self._show_message("Đã chọn Chế độ Dò: Nhanh (Chỉ dò 45s đầu tiên)")
+            self._show_message("Chế độ: Dò Nhanh")
+
+    def _set_rescan_button_state(self, state: str):
+        """Centralized button state: 'idle' | 'running' | 'cancel'.
+        Avoids duplicating button-style logic across 3 code paths."""
+        btn = (self._func_buttons.get("Dò Lại")
+               or self._func_buttons.get("⏳ Đang dò...")
+               or self._func_buttons.get("❌ Huỷ"))
+        if not btn:
+            return
+        old_key = btn.text()
+        if state == "idle":
+            btn.setEnabled(True)
+            btn.setText("Dò Lại")
+            btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 11, 14))
+        elif state == "running":
+            btn.setEnabled(True)
+            btn.setText("❌ Huỷ")
+            btn.setStyleSheet(pill_btn_qss(C["accent"], _lighten(C["accent"], 0.12), 11, 14))
+        # Update _func_buttons key to match the new text
+        if old_key != btn.text() and old_key in self._func_buttons:
+            self._func_buttons[btn.text()] = self._func_buttons.pop(old_key)
+
+    def _on_cancel_rescan(self):
+        """Cancel a running rescan — called from button click on main thread."""
+        self.engine._tone_session.stop()
+        self._do_tone_running = False
+        self._set_rescan_button_state("idle")
+        self.autokey_dot.setStyleSheet(f"color: {C['card_hover']}; font-size: 16px;")
+        self._marquee_text = "♪ Quang Lưu Studio — Karaoke Pro ♪"
+        self._show_message("Đã huỷ dò tone")
 
     def _on_force_rescan(self):
-        btn = self._func_buttons.get("Dò Lại") or self._func_buttons.get("⏳ Đang dò...")
+        # If already running → treat as cancel
         if getattr(self, '_do_tone_running', False):
+            self._on_cancel_rescan()
             return
         self._do_tone_running = True
         
-        if btn:
-            btn.setEnabled(False)
-            btn.setText("⏳ Đang dò...")
-            btn.setStyleSheet(pill_btn_qss(C["accent"], _lighten(C["accent"], 0.12), 11, 14))
+        self._set_rescan_button_state("running")
         self.autokey_dot.setStyleSheet(f"color: {C['orange']}; font-size: 16px;")
         self._marquee_text = "♪ Đang dò lại... ♪"
 
         import weakref
         url = getattr(self.engine, 'current_youtube_url', None)
+        # Single stop() — Tier 1.3: pulled before if/else to avoid double call
+        self.engine._tone_session.stop()
         if url:
-            self._show_message(f"Bắt đầu ép dò lại URL...")
-            self.engine._tone_session.stop()
+            self._show_message("Đang dò lại...")
             self.engine._dispatch_auto_detect(url, weakref.ref(self.engine), skip_resolve=True)
         else:
-            self._show_message(f"Bắt đầu tự động quét trình duyệt...")
-            self.engine._tone_session.stop()
+            self._show_message("Đang quét trình duyệt...")
             
             def _on_complete(result):
                 self._tone_result_signal.emit(result)
@@ -491,13 +551,7 @@ class MainDashboard(QMainWindow):
             msg = result['error']
             self._do_tone_running = False
             self._do_tone_done = False
-            btn = self._func_buttons.get("⏳ Đang dò...") or self._func_buttons.get("Dò Lại")
-            if btn:
-                btn.setEnabled(True)
-                btn.setText("Dò Lại")
-                btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 11, 14))
-                if btn.text() == "⏳ Đang dò..." and "⏳ Đang dò..." in self._func_buttons:
-                    self._func_buttons["Dò Lại"] = self._func_buttons.pop("⏳ Đang dò...")
+            self._set_rescan_button_state("idle")
             self.autokey_dot.setStyleSheet(f"color: {C['card_hover']}; font-size: 16px;")
             self._marquee_text = "♪ Quang Lưu Studio — Karaoke Pro ♪"
             self._show_message(f"❌ {msg}", is_error=True)
@@ -560,13 +614,7 @@ class MainDashboard(QMainWindow):
         confidence = result.get('confidence', 0)
         
         # === 2. Reset nút "Dò Lại" về trạng thái ban đầu ===
-        btn = self._func_buttons.get("⏳ Đang dò...") or self._func_buttons.get("Dò Lại")
-        if btn:
-            btn.setEnabled(True)
-            btn.setText("Dò Lại")
-            btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 11, 14))
-            if "⏳ Đang dò..." in self._func_buttons:
-                self._func_buttons["Dò Lại"] = self._func_buttons.pop("⏳ Đang dò...")
+        self._set_rescan_button_state("idle")
         
         # === 3. Cập nhật dot → xanh (đã phát hiện) ===
         self.autokey_dot.setStyleSheet(f"color: {C['green']}; font-size: 16px;")
@@ -611,18 +659,33 @@ class MainDashboard(QMainWindow):
             threading.Thread(target=_auto_save, daemon=True).start()
 
     def _on_tone_auto(self):
-        self.engine.send_midi(MIDI_CC["tone_auto"], 127)
+        self.tune_state = not getattr(self, 'tune_state', True)
+        val = 127 if self.tune_state else 0
+        self.engine.send_midi(MIDI_CC["tone_auto"], val)
+        btn = self._func_buttons.get("Auto-Tune")
+        if btn:
+            btn.setActive(self.tune_state)
+        print(f"[TONE AUTO] -> {'ON' if self.tune_state else 'OFF'} (Value {val})")
 
     def _on_fix_meo(self):
+        self.fix_meo_state = not getattr(self, 'fix_meo_state', False)
+        val = 127 if self.fix_meo_state else 0
+        
         # Ưu tiên dùng giá trị cân chỉnh trong mode_midi_map nếu có
         mode_map = backend.AppConfig.get_mode_midi_map()
         if "Fix Méo" in mode_map:
-            val = mode_map["Fix Méo"]
+            # Nếu dùng mode_map thì thường là giá trị cố định, nhưng ta vẫn dùng toggle logic
+            midi_val = mode_map["Fix Méo"] if self.fix_meo_state else 0
             mode_cc = int(MIDI_CC.get("mode", 30))
-            self.engine.send_midi(mode_cc, val)
+            self.engine.send_midi(mode_cc, midi_val)
         else:
             # Fallback dùng CC fix_meo riêng
-            self.engine.send_midi(MIDI_CC["fix_meo"], 127)
+            self.engine.send_midi(MIDI_CC["fix_meo"], val)
+        
+        btn = self._func_buttons.get("Fix Méo")
+        if btn:
+            btn.setActive(self.fix_meo_state)
+        print(f"[FIX MEO] -> {'ON' if self.fix_meo_state else 'OFF'} (Value {val})")
 
     def _on_scale_toggle(self):
         """Toggle Major ↔ Minor"""
@@ -654,7 +717,7 @@ class MainDashboard(QMainWindow):
             if btn:
                 btn.setText("") # Về lại icon mode
                 btn.setStyleSheet(pill_btn_qss(C["light_purple"], _lighten(C["light_purple"], 0.12), 11, 14))
-            self._show_message("Đã hủy quá trình chấm điểm", is_error=False)
+            self._show_message("Đã huỷ chấm điểm")
         else:
             # Bật chấm điểm
             def on_score_ready(result):
@@ -662,19 +725,22 @@ class MainDashboard(QMainWindow):
                 self._score_btn_reset_signal.emit()
                 
                 if "error" in result:
-                    self._message_signal.emit(f"❌ Lỗi chấm điểm: {result['error']}", True)
+                    self._message_signal.emit(f"Lỗi chấm điểm: {result['error']}", True)
                 else:
                     self._score_report_signal.emit(result)
                     
             lb_idx = self.settings.get("record_loopback_device", -1)
             mic_idx = self.settings.get("record_mic_device", -1)
             
-            self._show_message("🎤 QUICK SCORE Kích Hoạt!\nBắt đầu hát, điểm sẽ được tính khi video dừng.", is_error=False)
+            # Pass current key for key conformity analysis
+            key_ref = getattr(self, 'current_tone', None)
+            
+            self._show_message("Đang chấm điểm...")
             if btn:
                 btn.setText("Đang ghi (chờ kết thúc)")
                 btn.setStyleSheet(pill_btn_qss(C["accent"], _darken(C["accent"], 0.2), 11, 14))
                 
-            self.engine.start_quick_score(lb_idx, mic_idx, on_ready=on_score_ready, on_error=lambda err: self._show_message(err, True))
+            self.engine.start_quick_score(lb_idx, mic_idx, on_ready=on_score_ready, on_error=lambda err: self._message_signal.emit(err, True), key_reference=key_ref)
 
     def _reset_score_btn(self):
         btn = self._func_buttons.get("Chấm điểm") or self._func_buttons.get("Đang ghi (chờ kết thúc)")
@@ -692,11 +758,13 @@ class MainDashboard(QMainWindow):
         """Show temporary message box in center of dashboard"""
         lbl = QLabel(text, self)
         color = C["accent"] if is_error else C["green"]
-        lbl.setStyleSheet(f"background-color: {C['card']}; color: {color}; border: 1px solid {color}; border-radius: 8px; padding: 10px 20px; font-size: 14px; font-weight: bold; font-family: {FONT};")
+        font_size = 14 if is_error else 11
+        padding = "10px 20px" if is_error else "6px 12px"
+        lbl.setStyleSheet(f"background-color: {C['card']}; color: {color}; border: 1px solid {color}; border-radius: 8px; padding: {padding}; font-size: {font_size}px; font-weight: bold; font-family: {FONT};")
         lbl.adjustSize()
         lbl.move(self.width()//2 - lbl.width()//2, self.height()//2 - lbl.height()//2)
         lbl.show()
-        QTimer.singleShot(2500, lbl.deleteLater)
+        QTimer.singleShot(2000 if not is_error else 4000, lbl.deleteLater)
 
     def _on_save(self):
         """Lưu bài hát thông minh (Quick Save)"""
@@ -801,7 +869,7 @@ class MainDashboard(QMainWindow):
                         url,
                         make_ydl_opts(skip_download=True),
                         download=False,
-                        log_prefix="⚠️ [QUICK SAVE]"
+                        log_prefix="[QUICK SAVE]"
                     )
                     title = info.get('title', title)
                 except Exception:
@@ -883,7 +951,7 @@ class MainDashboard(QMainWindow):
                     win32gui.ShowWindow(h, win32con.SW_HIDE)
                 except Exception:
                     pass
-            self._show_message(f"🙈 Đã ẩn Studio One ({len(hwnd_list)} cửa sổ)")
+            self._show_message("Đã ẩn Studio One")
         else:
             # Hiện tất cả
             for h in hwnd_list:
@@ -900,7 +968,7 @@ class MainDashboard(QMainWindow):
                     win32gui.SetForegroundWindow(main_hwnd)
                 except Exception:
                     pass
-            self._show_message(f"👁️ Đã hiện Studio One ({len(hwnd_list)} cửa sổ)")
+            self._show_message("Đã hiện Studio One")
 
     def _on_toggle_asiolink(self):
         """Ẩn/Hiện cửa sổ ASIOLINK (ASIO4ALL, ASIOVADPRO, ASIOLink Pro, v.v.)"""
@@ -1083,7 +1151,7 @@ class MainDashboard(QMainWindow):
         if not file_path:
             return
         if not os.path.exists(file_path):
-            print(f"⚠️ Không tìm thấy file SFX: {file_path}")
+            print(f"[SFX] Khong tim thay file SFX: {file_path}")
             return
         try:
             from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -1104,9 +1172,9 @@ class MainDashboard(QMainWindow):
                     audio_out.deleteLater()
             player.mediaStatusChanged.connect(_cleanup)
 
-            print(f"🔊 SFX: {os.path.basename(file_path)}")
+            print(f"[SFX] Playing: {os.path.basename(file_path)}")
         except Exception as e:
-            print(f"❌ Lỗi phát SFX: {e}")
+            print(f"[SFX] Loi phat SFX: {e}")
             # Fallback: winsound cho file .wav
             if file_path.lower().endswith(".wav"):
                 def _play_fallback():
@@ -1123,7 +1191,7 @@ class MainDashboard(QMainWindow):
         try:
             backend.ConfigManager.save_settings(self.settings)
         except Exception as e:
-            print(f"⚠️ Không lưu được SFX settings: {e}")
+            print(f"[SFX] Khong luu duoc SFX settings: {e}")
 
     def _show_songs_list(self):
         from ui.dialogs.songs_list import SongsListDialog

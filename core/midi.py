@@ -35,24 +35,29 @@ class MidiHandler:
                 if MIDI_PORT_NAME in name:
                     self.outport = mido.open_output(name)
                     self._connect_out_warned = False  # Reset khi kết nối thành công
-                    print(f"✅ MIDI Out connected: {name}")
+                    print(f"Kết nối MIDI Out thành công: {name}")
                     return True
             if not self._connect_out_warned:
-                print(f"⚠️ Không tìm thấy MIDI port '{MIDI_PORT_NAME}'. Available: {available}")
+                print(f"Không tìm thấy MIDI port '{MIDI_PORT_NAME}'. Available: {available}")
                 self._connect_out_warned = True
             return False
         except Exception as e:
             if not self._connect_out_warned:
-                print(f"❌ Lỗi kết nối MIDI: {e}")
+                print(f"Lỗi kết nối MIDI: {e}")
                 self._connect_out_warned = True
             return False
     
     def send_cc(self, cc, value, channel=0):
         """Gửi MIDI Control Change message"""
-        import mido
         if self.outport:
-            msg = mido.Message('control_change', channel=channel, control=cc, value=value)
-            self.outport.send(msg)
+            try:
+                import mido
+                msg = mido.Message('control_change', channel=channel, control=cc, value=value)
+                self.outport.send(msg)
+                return True
+            except Exception:
+                return False
+        return False
     
     def start_listening(self):
         """Bắt đầu lắng nghe MIDI input (background thread)"""
@@ -70,15 +75,15 @@ class MidiHandler:
                         target=self._listen_loop, daemon=True
                     )
                     self._listen_thread.start()
-                    print(f"✅ MIDI In connected: {name}")
+                    print(f"Kết nối MIDI In thành công: {name}")
                     return True
             if not self._connect_in_warned:
-                print(f"⚠️ Không tìm thấy MIDI input port '{MIDI_PORT_NAME}'")
+                print(f"Không tìm thấy MIDI input port '{MIDI_PORT_NAME}'")
                 self._connect_in_warned = True
             return False
         except Exception as e:
             if not self._connect_in_warned:
-                print(f"❌ Lỗi kết nối MIDI In: {e}")
+                print(f"Lỗi kết nối MIDI In: {e}")
                 self._connect_in_warned = True
             return False
     

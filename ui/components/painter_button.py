@@ -188,6 +188,18 @@ class PainterButton(QWidget):
                 p.setPen(text_color)
                 p.drawText(QRectF(0, 0, w, h), Qt.AlignCenter, self._text)
 
+        # ── Active LED Indicator ──
+        if self._active:
+            p.setPen(Qt.NoPen)
+            # Outer glow
+            glow = QColor(base)
+            glow.setAlpha(120)
+            p.setBrush(glow)
+            p.drawEllipse(QRectF(w - 11, 4, 8, 8))
+            # Inner white dot
+            p.setBrush(QColor(255, 255, 255))
+            p.drawEllipse(QRectF(w - 9, 6, 4, 4))
+
         p.end()
 
     # ── Mouse events ─────────────────────────────────────────

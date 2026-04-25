@@ -33,15 +33,15 @@ class MemoryProfiler:
         self._last_rss = rss
         self._peak_rss = max(self._peak_rss, rss)
         self._count += 1
-        if abs(delta) > 5 * 1024 * 1024:  # Chỉ log khi thay đổi > 5MB
-            print(f"📊 [{self._tag}] {label}: RSS={rss / 1024 / 1024:.1f}MB "
+        if abs(delta) > 20 * 1024 * 1024:  # Chỉ log khi thay đổi > 20MB
+            print(f"[{self._tag}] {label}: RSS={rss / 1024 / 1024:.1f}MB "
                   f"(Δ={delta / 1024 / 1024:+.1f}MB)")
     
     def summary(self):
         rss = self._process.memory_info().rss
         total_delta = rss - self._start_rss
         peak_delta = self._peak_rss - self._start_rss
-        print(f"📊 [{self._tag}] SUMMARY: "
+        print(f"[{self._tag}] SUMMARY: "
               f"current={rss / 1024 / 1024:.1f}MB, "
               f"peak={self._peak_rss / 1024 / 1024:.1f}MB, "
               f"tăng={total_delta / 1024 / 1024:+.1f}MB, "
@@ -139,7 +139,7 @@ class MemoryGuard:
         self._running = True
         self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._thread.start()
-        print(f"🛡️ [MEMORY GUARD] Đã khởi động (interval={self._interval}s, "
+        print(f"[MEMORY GUARD] Đã khởi động (interval={self._interval}s, "
               f"gc_threshold={self._gc_threshold // (1024*1024)}MB, "
               f"emergency={self._emergency_threshold // (1024*1024)}MB)")
     
@@ -165,8 +165,9 @@ class MemoryGuard:
                         MemoryGuard.force_cleanup()  # gc(2) + librosa cache + trim
                         new_rss = process.memory_info().rss
                         freed = rss - new_rss
-                        print(f"🧹 [MEMORY GUARD] GC: freed {freed // (1024*1024)}MB, "
-                              f"RSS: {new_rss // (1024*1024)}MB")
+                        if freed > 10 * 1024 * 1024: # Chỉ log khi giải phóng đáng kể
+                            print(f"[MEMORY GUARD] GC: freed {freed // (1024*1024)}MB, "
+                                  f"RSS: {new_rss // (1024*1024)}MB")
                         rss = new_rss
                 
                 # ── Mức 2: Cache Cleanup (trung bình) ──
@@ -177,7 +178,7 @@ class MemoryGuard:
                 
                 # ── Mức 4: Emergency Mode (nặng) ──
                 if rss > self._emergency_threshold:
-                    print(f"🚨 [MEMORY GUARD] EMERGENCY! RSS={rss // (1024*1024)}MB "
+                    print(f"[MEMORY GUARD] EMERGENCY! RSS={rss // (1024*1024)}MB "
                           f"> {self._emergency_threshold // (1024*1024)}MB")
                     # Clear all caches trước khi force cleanup
                     if self._engine:
@@ -185,14 +186,14 @@ class MemoryGuard:
                             self._engine._pwa_title_cache.clear()
                     MemoryGuard.force_cleanup()  # gc(2) + librosa cache + trim
                     new_rss = process.memory_info().rss
-                    print(f"🚨 [MEMORY GUARD] Emergency cleanup done: "
+                    print(f"[MEMORY GUARD] Emergency cleanup done: "
                           f"RSS={new_rss // (1024*1024)}MB")
                     rss = new_rss
                 
                 self._last_rss = rss
                 
             except Exception as e:
-                print(f"⚠️ [MEMORY GUARD] Lỗi: {e}")
+                print(f"[MEMORY GUARD] Lỗi: {e}")
             
             # Chờ interval (kiểm tra dừng mỗi giây)
             for _ in range(self._interval):
@@ -211,7 +212,8 @@ class MemoryGuard:
                 keys = list(cache.keys())
                 for key in keys[:-20]:  # Giữ 20 entry mới nhất
                     del cache[key]
-                print(f"🧹 [MEMORY GUARD] PWA cache: trimmed to {len(cache)} entries")
+                # print(f"🧹 [MEMORY GUARD] PWA cache: trimmed to {len(cache)} entries")
+                pass
         except Exception:
             pass
     
@@ -230,8 +232,8 @@ class MemoryGuard:
                         age = now - os.path.getmtime(fpath)
                         if age > self._cache_ttl:
                             os.remove(fpath)
-                            print(f"🧹 [MEMORY GUARD] Xóa temp: {os.path.basename(fpath)} "
-                                  f"(age={int(age)}s)")
+                            # print(f"🧹 [MEMORY GUARD] Xóa temp: {os.path.basename(fpath)} (age={int(age)}s)")
+                            pass
                     except Exception:
                         pass
         except Exception:

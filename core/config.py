@@ -152,11 +152,14 @@ class AppConfig:
                     else:
                         cls._data[key] = value
 
-                print(f"✅ App config loaded: {config_path}")
+                import logging
+                logging.getLogger("config").info(f"App config loaded: {config_path}")
             except Exception as e:
-                print(f"⚠️ Lỗi đọc {APP_CONFIG_FILE}: {e} — dùng giá trị mặc định")
+                import logging
+                logging.getLogger("config").warning(f"Lỗi đọc {APP_CONFIG_FILE}: {e} — dùng giá trị mặc định")
         else:
-            print(f"ℹ️ {APP_CONFIG_FILE} không tìm thấy — dùng giá trị mặc định")
+            import logging
+            logging.getLogger("config").info(f"{APP_CONFIG_FILE} không tìm thấy — dùng giá trị mặc định")
 
         return cls._data
 
@@ -225,10 +228,10 @@ class AppConfig:
         try:
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(cls._data, f, indent=4, ensure_ascii=False)
-            print(f"✅ App config saved: {config_path}")
+            print(f"App config saved: {config_path}")
             return True
         except Exception as e:
-            print(f"❌ Lỗi ghi {APP_CONFIG_FILE}: {e}")
+            print(f"Lỗi ghi {APP_CONFIG_FILE}: {e}")
             return False
 
 
@@ -239,12 +242,14 @@ MIDI_PORT_NAME = AppConfig.get("midi_port_name", "QuangLuuMIDI")
 # FFmpeg location (sử dụng consolidated find_ffmpeg từ core.utils)
 FFMPEG_LOCATION = find_ffmpeg()
 if FFMPEG_LOCATION:
-    print(f"✅ FFmpeg found: {FFMPEG_LOCATION}")
+    import logging
+    logging.getLogger("config").info(f"FFmpeg found: {FFMPEG_LOCATION}")
     # Thêm vào PATH để yt-dlp download_ranges có thể tìm ffmpeg
     if FFMPEG_LOCATION not in os.environ.get("PATH", ""):
         os.environ["PATH"] = FFMPEG_LOCATION + os.pathsep + os.environ.get("PATH", "")
 else:
-    print("⚠️ FFmpeg không tìm thấy! Tính năng tải YouTube audio sẽ không hoạt động.")
+    import logging
+    logging.getLogger("config").warning("FFmpeg không tìm thấy! Tính năng tải YouTube audio sẽ không hoạt động.")
 
 # --- CDP (Chrome DevTools Protocol) Constants ---
 CDP_DEBUG_PORT = AppConfig.get("cdp_debug_port", 9222)

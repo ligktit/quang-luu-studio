@@ -35,11 +35,11 @@ class _GradientBar(QFrame):
 
 
 class ScoringReportDialog(QDialog):
-    """Dialog hiển thị kết quả chấm điểm Star Score."""
+    """Dialog hien thi ket qua cham diem Star Score."""
 
     def __init__(self, parent, result: dict):
         super().__init__(parent)
-        self.setWindowTitle("🎤 Kết quả Star Score")
+        self.setWindowTitle("Ket qua Star Score")
         self.setMinimumSize(520, 640)
         self.resize(540, 720)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
@@ -50,7 +50,7 @@ class ScoringReportDialog(QDialog):
     def _build_ui(self, result: dict):
         score = result.get("total_score", 0)
         feed  = result.get("feedback", {})
-        rank     = feed.get("rank", "Ca Sĩ")
+        rank     = feed.get("rank", "Ca Si")
         icon     = feed.get("icon", "🎵")
         main_fb  = feed.get("main", "")
         tips     = feed.get("tips", [])
@@ -149,16 +149,30 @@ class ScoringReportDialog(QDialog):
         lay.setContentsMargins(20, 16, 20, 16)
         lay.setSpacing(14)
 
-        title = QLabel("📊 Chi tiết kết quả")
+        title = QLabel("Chi tiet ket qua")
         title.setStyleSheet(
             f"color: {C['text_muted']}; font-size: 11px; font-weight: 700;"
             f" font-family: {FONT}; background: transparent; border: none; letter-spacing: 1px;"
         )
         lay.addWidget(title)
 
-        self._add_metric(lay, "🔊 Nhất quán âm lượng", result.get("volume_consistency", 0), C["accent"], C["pink"])
-        self._add_metric(lay, "🎵 Chính xác cao độ",   result.get("pitch_accuracy",    0), C["blue"],   C["primary"])
-        self._add_metric(lay, "🎯 Độ rung và luyến",   result.get("pitch_stability",   0), C["creative"], C["pink"])
+        # Only show metrics that have real values (> 0)
+        metrics = [
+            ("Chinh xac cao do", result.get("pitch_intonation", 0), C["blue"], C["primary"]),
+            ("Do on dinh giong", result.get("pitch_stability", 0), C["creative"], C["pink"]),
+            ("Nhat quan am luong", result.get("volume_consistency", 0), C["accent"], C["pink"]),
+            ("Nhip dieu", result.get("rhythm_score", 0), C["green"], C["teal"]),
+            ("Dung tong", result.get("key_conformity", 0), C["orange"], C["accent"]),
+        ]
+
+        for name, val, clr1, clr2 in metrics:
+            if val > 0:
+                self._add_metric(lay, name, val, clr1, clr2)
+
+        # Always show voiced ratio as info
+        voiced = result.get("voiced_ratio", 0)
+        if voiced > 0:
+            self._add_metric(lay, "Giong ro rang", voiced, C["teal"], C["green"])
 
         return panel
 
@@ -199,7 +213,7 @@ class ScoringReportDialog(QDialog):
         lay.setContentsMargins(16, 14, 16, 14)
         lay.setSpacing(8)
 
-        title = QLabel("💬 Nhận xét")
+        title = QLabel("Nhan xet")
         title.setStyleSheet(
             f"color: {C['primary']}; font-size: 11px; font-weight: 700;"
             f" font-family: {FONT}; background: transparent; border: none; letter-spacing: 1px;"
@@ -231,7 +245,7 @@ class ScoringReportDialog(QDialog):
         lay = QHBoxLayout(footer)
         lay.setContentsMargins(20, 12, 20, 12)
 
-        btn = QPushButton("🎤  Tiếp Tục Đam Mê")
+        btn = QPushButton("Tiep Tuc Dam Me")
         btn.setStyleSheet(pill_btn_qss(theme, _lighten(theme, 0.1), 15, 18))
         btn.setFixedHeight(46)
         btn.setCursor(Qt.PointingHandCursor)

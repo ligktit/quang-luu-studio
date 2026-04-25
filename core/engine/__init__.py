@@ -7,6 +7,7 @@ SystemEngine is assembled from focused mixin classes; the public API is identica
 import ctypes
 import ctypes.wintypes
 import threading
+from collections import OrderedDict
 
 from core.config import AppConfig, ConfigManager, MIDI_PORT_NAME
 from core.memory import MemoryProfiler, MemoryGuard
@@ -86,6 +87,10 @@ class SystemEngine(
         self._prev_browser_titles  = None
         self._pwa_title_cache      = {}
         self._no_browser_count     = 0
+
+        # In-session tone resolve cache (avoids repeated JSON disk reads)
+        self._tone_resolve_cache: OrderedDict[str, tuple] = OrderedDict()
+        self._TONE_RESOLVE_CACHE_MAX = 8
 
         # Memory management
         self._memory_guard = MemoryGuard(
