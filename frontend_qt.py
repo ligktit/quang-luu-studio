@@ -1222,6 +1222,7 @@ class MainDashboard(QMainWindow):
 
     def closeEvent(self, event):
         """Đóng cửa sổ không block — set flags ngay, cleanup nặng chạy nền."""
+        self.hide()
 
         # ── BƯỚC 1: Set stop flags (instant, thread-safe) ──────────────────────
         # Phải set trước khi accept để các thread thoát loop nhanh nhất có thể.
@@ -1283,6 +1284,19 @@ class MainDashboard(QMainWindow):
             backend.ConfigManager.save_settings(self.settings)
         except Exception as e:
             print(f"Lỗi lưu mixer levels: {e}")
+
+        # ── BƯỚC 5: Đóng ứng dụng liên kết (Đồng bộ, trước khi os._exit) ───────
+        if self.settings.get("auto_close_browser", False):
+            try:
+                self.engine.close_youtube_windows()
+            except Exception:
+                pass
+
+        if self.settings.get("auto_close_studio_one", False):
+            try:
+                self.engine.kill_studio_one_gracefully(timeout_sec=5)
+            except Exception:
+                pass
             
         event.accept()
         super().closeEvent(event)
@@ -1308,16 +1322,6 @@ class MainDashboard(QMainWindow):
                 engine.stop_tone_detection()
             except Exception:
                 pass
-            if settings_snap.get("auto_close_studio_one", False):
-                try:
-                    engine.kill_studio_one_gracefully(timeout_sec=5)
-                except Exception:
-                    pass
-            if settings_snap.get("auto_close_browser", False):
-                try:
-                    engine.close_youtube_windows()
-                except Exception:
-                    pass
             if hasattr(engine, '_memory_guard'):
                 try:
                     engine._memory_guard.stop()
