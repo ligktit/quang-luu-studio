@@ -401,6 +401,9 @@ class SettingsDialog(QDialog):
         lay.addWidget(self._section_header(SVG_WRENCH, "Sửa lỗi đồng bộ (CDP)"))
         lay.addWidget(self._section_card(self._build_cdp_tools))
 
+        lay.addWidget(self._section_header(SVG_UPLOAD, "Cập nhật phần mềm"))
+        lay.addWidget(self._section_card(self._build_update_tools))
+
         lay.addStretch()
         return tab
 
@@ -632,6 +635,144 @@ class SettingsDialog(QDialog):
         row.addWidget(fix_btn)
         row.addWidget(check_btn)
         vl.addLayout(row)
+
+    def _build_update_tools(self, vl):
+        from core.version import __version__
+
+        version_lbl = QLabel(f"Phiên bản hiện tại: <b>{__version__}</b>")
+        version_lbl.setStyleSheet(self._field_label_qss(size=12, weight=600))
+        version_lbl.setTextFormat(Qt.RichText)
+        vl.addWidget(version_lbl)
+
+        # Last check timestamp
+        last_check_text = self._format_last_update_check()
+        self._update_last_check_lbl = QLabel(last_check_text)
+        self._update_last_check_lbl.setStyleSheet(
+            self._field_label_qss(size=11, weight=500, italic=True)
+        )
+        vl.addWidget(self._update_last_check_lbl)
+
+        # Action row
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+        check_btn = QPushButton("Kiểm tra cập nhật")
+        check_btn.setIcon(self._svg_icon(SVG_SEARCH, "white", 16))
+        check_btn.setIconSize(QSize(16, 16))
+        check_btn.setCursor(Qt.PointingHandCursor)
+        check_btn.setFixedHeight(38)
+        check_btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 12, 14))
+        add_shadow(check_btn, C["teal"], 8, (0, 2))
+        check_btn.clicked.connect(self._action_check_for_updates)
+        self._update_check_btn = check_btn
+
+        self._update_status_lbl = QLabel("")
+        self._update_status_lbl.setStyleSheet(
+            f"color: {C['teal']}; font-size: 11px; font-family: {FONT};"
+            " background:transparent; border:none;"
+        )
+        self._update_status_lbl.setWordWrap(True)
+
+        action_row.addWidget(check_btn)
+        action_row.addWidget(self._update_status_lbl, 1)
+        vl.addLayout(action_row)
+
+        hint = QLabel(
+            "App tự kiểm tra mỗi 24h khi khởi động. Nhấn nút trên để check ngay. "
+            "Khi có bản mới, hộp thoại tải xuống sẽ tự hiện."
+        )
+        hint.setStyleSheet(self._field_label_qss(size=10, weight=500, italic=True))
+        hint.setWordWrap(True)
+        vl.addWidget(hint)
+
+    def _format_last_update_check(self):
+        try:
+            settings = self._dashboard.settings or {}
+            ts = settings.get("update", {}).get("last_check_timestamp", 0)
+            if not ts:
+                return "Lần kiểm tra cuối: chưa có"
+            from datetime import datetime
+            return f"Lần kiểm tra cuối: {datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M')}"
+        except Exception:
+            return "Lần kiểm tra cuối: chưa có"
+
+    def _action_check_for_updates(self):
+        import threading
+        from PySide6.QtCore import QTimer
+
+        self._update_check_btn.setEnabled(False)
+        self._update_status_lbl.setText("Đang kết nối GitHub...")
+        self._update_status_lbl.setStyleSheet(
+            f"color: {C['teal']}; font-size: 11px; font-family: {FONT};"
+            " background:transparent; border:none;"
+        )
+
+        def _run():
+            result = {"release": None, "error": None}
+            try:
+                from core.updater import check_latest_release, is_newer
+                release = check_latest_release()
+                if release is None:
+                    result["error"] = "Không kết nối được GitHub hoặc chưa có release nào."
+                elif not is_newer(release.version):
+                    result["release"] = release
+                    result["up_to_date"] = True
+                else:
+                    result["release"] = release
+                    result["up_to_date"] = False
+            except Exception as exc:
+                result["error"] = f"Lỗi khi kiểm tra: {exc}"
+
+            QTimer.singleShot(0, lambda: self._on_update_check_done(result))
+
+        threading.Thread(target=_run, daemon=True, name="update-check").start()
+
+    def _on_update_check_done(self, result):
+        self._update_check_btn.setEnabled(True)
+
+        # Update last_check timestamp regardless
+        try:
+            import time as _t
+            settings = self._dashboard.settings
+            update_cfg = settings.get("update", {}) or {}
+            update_cfg["last_check_timestamp"] = _t.time()
+            settings["update"] = update_cfg
+            backend.ConfigManager.save_settings(settings)
+            self._update_last_check_lbl.setText(self._format_last_update_check())
+        except Exception:
+            pass
+
+        if result.get("error"):
+            self._update_status_lbl.setText(result["error"])
+            self._update_status_lbl.setStyleSheet(
+                f"color: {C['accent']}; font-size: 11px; font-family: {FONT};"
+                " background:transparent; border:none;"
+            )
+            return
+
+        release = result.get("release")
+        if result.get("up_to_date"):
+            self._update_status_lbl.setText(f"Đã là phiên bản mới nhất ({release.version}).")
+            self._update_status_lbl.setStyleSheet(
+                f"color: {C['green']}; font-size: 11px; font-family: {FONT};"
+                " background:transparent; border:none;"
+            )
+            return
+
+        # New version available — show update dialog
+        self._update_status_lbl.setText(f"Có phiên bản mới: {release.version}")
+        self._update_status_lbl.setStyleSheet(
+            f"color: {C['orange']}; font-size: 11px; font-family: {FONT};"
+            " background:transparent; border:none;"
+        )
+        try:
+            from ui.dialogs.update_dialog import UpdateDialog
+            UpdateDialog(release).exec()
+        except Exception as exc:
+            self._update_status_lbl.setText(f"Không mở được hộp thoại cập nhật: {exc}")
+            self._update_status_lbl.setStyleSheet(
+                f"color: {C['accent']}; font-size: 11px; font-family: {FONT};"
+                " background:transparent; border:none;"
+            )
 
     def _build_footer(self):
         footer = QFrame()
