@@ -1275,6 +1275,15 @@ class MainDashboard(QMainWindow):
             pass
 
         # ── BƯỚC 5: Accept ngay — window đóng, Qt event loop không bị block ───
+        try:
+            mixer_levels = {}
+            for cc_key, slider in getattr(self, '_mixer_sliders', {}).items():
+                mixer_levels[cc_key] = slider.value()
+            self.settings["mixer_levels"] = mixer_levels
+            backend.ConfigManager.save_settings(self.settings)
+        except Exception as e:
+            print(f"Lỗi lưu mixer levels: {e}")
+            
         event.accept()
         super().closeEvent(event)
 

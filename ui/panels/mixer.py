@@ -59,10 +59,11 @@ def build_panel_mixer(dashboard) -> GlassPanel:
         "mix_reverb":  "mute_reverb",
         "mix_backing": "mute_backing",
     }
+    saved_levels = dashboard.settings.get("mixer_levels", {}) if dashboard.settings else {}
     channels = [
-        {"label": "Nhạc", "icon": "♪", "color": C["teal"],   "cc": "mix_music",  "range": (0, 100),  "default": 70, "unit": ""},
-        {"label": "Mic",  "icon": "☉", "color": C["orange"], "cc": "mix_mic",    "range": (-12, 12), "default": 50, "unit": " dB"},
-        {"label": "Vang", "icon": "≡", "color": C["accent"], "cc": "mix_reverb", "range": (-12, 12), "default": 50, "unit": " dB"},
+        {"label": "Nhạc", "icon": "♪", "color": C["teal"],   "cc": "mix_music",  "range": (0, 100),  "default": saved_levels.get("mix_music", 70), "unit": ""},
+        {"label": "Mic",  "icon": "☉", "color": C["orange"], "cc": "mix_mic",    "range": (-12, 12), "default": saved_levels.get("mix_mic", 50), "unit": " dB"},
+        {"label": "Vang", "icon": "≡", "color": C["accent"], "cc": "mix_reverb", "range": (-12, 12), "default": saved_levels.get("mix_reverb", 50), "unit": " dB"},
     ]
 
     dashboard._mixer_sliders = {}

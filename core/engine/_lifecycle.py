@@ -89,7 +89,8 @@ class _LifecycleMixin:
                     if not is_pwa:
                         args.append("youtube.com")
                     print(f"[AUTO LAUNCH] Mở {'PWA' if is_pwa else 'YouTube'} với CDP")
-                    subprocess.Popen(args)
+                    proc = subprocess.Popen(args)
+                    self._browser_process = proc
             threading.Thread(target=_launch_web, daemon=True).start()
         else:
             if not os.path.exists(path):
@@ -218,6 +219,23 @@ class _LifecycleMixin:
         self._force_kill_studio_one()
 
     def close_youtube_windows(self):
+        closed_via_cdp = False
+        if hasattr(self, 'cdp_monitor') and getattr(self.cdp_monitor, 'is_connected', False):
+            try:
+                self.cdp_monitor._send_command("Page.close")
+                print("[YOUTUBE] Đã đóng tab/PWA qua CDP")
+                closed_via_cdp = True
+                time.sleep(0.2)
+            except Exception as e:
+                print(f"[YOUTUBE] Lỗi đóng qua CDP: {e}")
+
+        if hasattr(self, '_browser_process') and self._browser_process:
+            try:
+                self._browser_process.terminate()
+                print("[YOUTUBE] Đã terminate process trình duyệt")
+            except Exception:
+                pass
+
         try:
             import win32gui
             import win32con
@@ -245,7 +263,9 @@ class _LifecycleMixin:
 
         for hwnd in yt_hwnds:
             try:
-                win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+                win32gui.SendMessageTimeout(hwnd, win32con.WM_CLOSE, 0, 0, win32con.SMTO_ABORTIFHUNG, 500)
             except Exception:
                 pass
-        print(f"[YOUTUBE] Đã gửi WM_CLOSE cho {len(yt_hwnds)} cửa sổ YouTube")
+        
+        if yt_hwnds or closed_via_cdp:
+            print(f"[YOUTUBE] Đã yêu cầu đóng {len(yt_hwnds)} cửa sổ YouTube (fallback)")
