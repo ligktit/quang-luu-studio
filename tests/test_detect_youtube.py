@@ -11,8 +11,10 @@ Covers:
 """
 import ctypes
 import pytest
+import sys
 from unittest.mock import patch, MagicMock
 
+sys.modules['uiautomation'] = MagicMock()
 import detect_youtube as dy
 
 
