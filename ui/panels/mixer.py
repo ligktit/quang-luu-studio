@@ -34,14 +34,21 @@ def _make_mute_callback(dashboard, cc_key, mute_cc_map):
 def _make_value_changed_callback(dashboard, cc_key, range_tuple, unit):
     min_v, max_v = range_tuple
     def cb(raw_value):
-        if unit == " dB":
-            db = min_v + ((max_v - min_v) * (raw_value / 100.0))
-            # Preserve original -60 to +10 dB mapping for MIDI CC
-            orig_min, orig_max = -60.0, 10.0
-            midi = int(((db - orig_min) / (orig_max - orig_min)) * 127)
+        if cc_key in ["mix_mic", "mix_reverb"]:
+            # UI -10..+10 là dB thật. Calibrate với Studio One: 0 dB = MIDI 76, +10 dB = MIDI 100
+            # (tuyến tính trong dải UI: 2.4 MIDI / dB)
+            db = float(raw_value)
+            midi = int(round(76 + db * 2.4))
+            midi = max(0, min(127, midi))
+        elif cc_key == "tone_music":
+            # Transpose: -12 to 12
+            normalized = (raw_value - min_v) / (max_v - min_v) if max_v > min_v else 0
+            midi = int(normalized * 127)
             midi = max(0, min(127, midi))
         else:
+            # mix_music: 0 to 100
             midi = int((raw_value / 100.0) * 127)
+            
         dashboard.engine.send_midi(dashboard.MIDI_CC[cc_key], midi)
         if cc_key == "mix_music":
             dashboard.engine.set_browser_volume(int(raw_value))
@@ -60,10 +67,20 @@ def build_panel_mixer(dashboard) -> GlassPanel:
         "mix_backing": "mute_backing",
     }
     saved_levels = dashboard.settings.get("mixer_levels", {}) if dashboard.settings else {}
+    
+    def _get_level(key, fallback):
+        val = saved_levels.get(key, fallback)
+        # Nếu giá trị là 50 (mặc định cũ của thang 0-100) và dải hiện tại là âm-dương
+        # thì khả năng cao là setting cũ, ta reset về 0.
+        if val == 50 and key in ["mix_mic", "mix_reverb", "tone_music"]:
+            return 0
+        return val
+
     channels = [
-        {"label": "Nhạc", "icon": "♪", "color": C["teal"],   "cc": "mix_music",  "range": (0, 100),  "default": saved_levels.get("mix_music", 70), "unit": ""},
-        {"label": "Mic",  "icon": "☉", "color": C["orange"], "cc": "mix_mic",    "range": (-12, 12), "default": saved_levels.get("mix_mic", 50), "unit": " dB"},
-        {"label": "Vang", "icon": "≡", "color": C["accent"], "cc": "mix_reverb", "range": (-12, 12), "default": saved_levels.get("mix_reverb", 50), "unit": " dB"},
+        {"label": "Nhạc", "icon": "♪", "color": C["teal"],   "cc": "mix_music",  "range": (0, 100),  "default": _get_level("mix_music", 70), "unit": "", "has_mute": True, "has_inf_bottom": False},
+        {"label": "Mic",  "icon": "☉", "color": C["orange"], "cc": "mix_mic",    "range": (-10, 10), "default": _get_level("mix_mic", 0), "unit": "", "has_mute": True, "has_inf_bottom": True},
+        {"label": "Vang", "icon": "≡", "color": C["accent"], "cc": "mix_reverb", "range": (-10, 10), "default": _get_level("mix_reverb", 0), "unit": "", "has_mute": True, "has_inf_bottom": True},
+        {"label": "Giọng", "icon": "↕", "color": C["deep_purple"], "cc": "tone_music", "range": (-12, 12), "default": _get_level("tone_music", 0), "unit": "", "has_mute": False, "has_inf_bottom": False},
     ]
 
     dashboard._mixer_sliders = {}
@@ -80,6 +97,8 @@ def build_panel_mixer(dashboard) -> GlassPanel:
             val_range=ch["range"],
             default=ch["default"],
             unit=ch["unit"],
+            has_mute=ch["has_mute"],
+            has_inf_bottom=ch["has_inf_bottom"],
         )
 
         def _bind_mute(channel_view, cc_key=ch["cc"]):
@@ -88,7 +107,9 @@ def build_panel_mixer(dashboard) -> GlassPanel:
                 _make_mute_callback(dashboard, cc_key, mute_cc_map)(is_muted)
             return _do_toggle
 
-        ch_view.mute_btn.clicked.connect(_bind_mute(ch_view))
+        if ch["has_mute"]:
+            ch_view.mute_btn.clicked.connect(_bind_mute(ch_view))
+            
         ch_view.slider.valueChanged.connect(
             _make_value_changed_callback(dashboard, ch["cc"], ch["range"], ch["unit"])
         )

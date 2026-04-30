@@ -85,6 +85,7 @@ _DEFAULT_APP_CONFIG = {
         "mode": 30, "autokey": 31, "score_trigger": 32,
         "key_root": 33, "key_scale": 34, "scale_type": 35,
         "tune_on_off": 36, "tone_auto": 31, "fix_meo": 36,
+        "mode_danca": 30, "mode_lofi": 37, "mode_remix": 38, "mode_datheloai": 39,
         "mute_music": 50, "mute_mic": 51, "mute_reverb": 52, "mute_backing": 53,
     },
     "scale_values": {
@@ -101,10 +102,6 @@ _DEFAULT_APP_CONFIG = {
         "Minor": 18
     },
     "mode_midi_map": {
-        "Dân Ca": 36,
-        "Lofi": 45,
-        "Remix": 54,
-        "Đa Thể Loại": 63,
         "Fix Méo": 127
     },
     "mute_multi_cc": {

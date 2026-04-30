@@ -219,39 +219,23 @@ class _LifecycleMixin:
         self._force_kill_studio_one()
 
     def close_youtube_windows(self):
-        closed_via_cdp = False
-        if hasattr(self, 'cdp_monitor') and getattr(self.cdp_monitor, 'is_connected', False):
+        """Đóng mọi tab YouTube đang mở.
+        - Browser nhiều tab: chỉ tab YouTube đóng, các tab khác giữ nguyên.
+        - Browser/PWA chỉ có 1 tab YouTube: tab cuối đóng → window/process exit theo.
+        Ưu tiên CDP (chính xác, không động chạm tab khác). Fallback win32 cho
+        trường hợp browser được mở thủ công không có --remote-debugging-port."""
+        closed_via_cdp = 0
+        if hasattr(self, 'cdp_monitor'):
             try:
-                self.cdp_monitor._send_command("Page.close")
-                print("[YOUTUBE] Đã đóng tab/PWA qua CDP")
-                closed_via_cdp = True
-                time.sleep(0.2)
+                closed_via_cdp = self.cdp_monitor.close_all_youtube_tabs()
             except Exception as e:
-                print(f"[YOUTUBE] Lỗi đóng qua CDP: {e}")
+                print(f"[YOUTUBE] Lỗi enumerate CDP: {e}")
 
-        if hasattr(self, '_browser_process') and self._browser_process:
-            try:
-                self._browser_process.terminate()
-                print("[YOUTUBE] Đã terminate process trình duyệt")
-            except Exception:
-                pass
+        if closed_via_cdp > 0:
+            print(f"[YOUTUBE] Đã đóng {closed_via_cdp} tab YouTube qua CDP")
+            return
 
-        # Try to explicitly kill Chromium PWA processes for YouTube
-        try:
-            import psutil
-            for proc in psutil.process_iter(['name', 'cmdline']):
-                name = (proc.info.get('name') or '').lower()
-                cmdline = proc.info.get('cmdline') or []
-                if name in ('chrome.exe', 'msedge.exe', 'brave.exe', 'coccoc.exe'):
-                    cmd_str = ' '.join(cmdline).lower()
-                    if 'youtube.com' in cmd_str and ('--app=' in cmd_str or '--app-id=' in cmd_str):
-                        try:
-                            proc.terminate()
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-
+        # Fallback: không có CDP port (browser mở thủ công). Tìm theo title.
         try:
             import win32gui
             import win32con
@@ -274,16 +258,13 @@ class _LifecycleMixin:
             return
 
         if not yt_hwnds:
-            print("[YOUTUBE] Không tìm thấy cửa sổ YouTube để đóng")
+            print("[YOUTUBE] Không tìm thấy cửa sổ YouTube để đóng (fallback)")
             return
 
         for hwnd in yt_hwnds:
             try:
-                # Gửi WM_SYSCOMMAND SC_CLOSE hiệu quả hơn với Chromium PWAs
                 win32gui.SendMessageTimeout(hwnd, win32con.WM_SYSCOMMAND, win32con.SC_CLOSE, 0, win32con.SMTO_ABORTIFHUNG, 500)
                 win32gui.SendMessageTimeout(hwnd, win32con.WM_CLOSE, 0, 0, win32con.SMTO_ABORTIFHUNG, 500)
             except Exception:
                 pass
-        
-        if yt_hwnds or closed_via_cdp:
-            print(f"[YOUTUBE] Đã yêu cầu đóng {len(yt_hwnds)} cửa sổ YouTube (fallback)")
+        print(f"[YOUTUBE] Đã yêu cầu đóng {len(yt_hwnds)} cửa sổ YouTube (fallback win32)")

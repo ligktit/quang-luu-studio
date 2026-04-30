@@ -26,7 +26,7 @@ class CalibrationWizardDialog(QDialog):
     """
 
     ALL_KEYS  = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-    ALL_MODES = ["Dân Ca", "Lofi", "Remix", "Đa Thể Loại", "Fix Méo"]
+    ALL_MODES = ["Fix Méo"]
 
     def __init__(self, parent):
         super().__init__(parent)

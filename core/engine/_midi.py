@@ -85,7 +85,7 @@ class _MidiMixin:
 
     def trigger_midi_learn(self, cc_list=None):
         if cc_list is None:
-            cc_list = [10, 11, 20, 21, 22, 23, 30, 31, 32, 33, 34, 35, 36, 50, 51, 52, 53]
+            cc_list = [10, 11, 20, 21, 22, 23, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 50, 51, 52, 53]
 
         def run_learn():
             print(f"[MIDI LEARN] Bắt đầu gửi {len(cc_list)} tín hiệu MIDI...")

@@ -49,6 +49,8 @@ class HMixerChannel(QWidget):
         val_range: tuple = (0, 100),
         default: int = 70,
         unit: str = "",
+        has_mute: bool = True,
+        has_inf_bottom: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -57,6 +59,7 @@ class HMixerChannel(QWidget):
         self._min, self._max = val_range
         self._unit = unit
         self._muted = False
+        self._has_inf_bottom = has_inf_bottom
         self._icon_on = icon            # channel icon (♪/☉/≡/☖) — NOT used for mute button
         self._name_text = label         # original label text, needed to restore after unmute
         self._pre_mute_val: int = -1    # slider value saved before mute
@@ -85,7 +88,7 @@ class HMixerChannel(QWidget):
 
         # Horizontal slider
         self.slider = PainterHSlider(
-            minimum=0, maximum=100,
+            minimum=self._min, maximum=self._max,
             value=default,
             color=color,
         )
@@ -109,6 +112,11 @@ class HMixerChannel(QWidget):
         self.mute_btn.setCursor(Qt.PointingHandCursor)
         self.mute_btn.setToolTip("Tắt âm kênh này (Mute)")
         self._apply_mute_style(False)
+        if not has_mute:
+            self.mute_btn.hide()
+            # If no mute button, we can add a spacer or just let it be empty
+            self.mute_btn.setFixedWidth(0)
+            self.mute_btn.setContentsMargins(0,0,0,0)
         hl.addWidget(self.mute_btn)
 
         # Connect value display
@@ -161,15 +169,18 @@ class HMixerChannel(QWidget):
             self.val_label.setText(self._format(self._to_real(v)))
 
     def _format(self, val) -> str:
+        if self._has_inf_bottom and val <= self._min + 0.1:
+            return f"−∞{self._unit}"
+
         if self._unit == " dB":
-            if val <= self._min + 0.1:
-                return f"−∞{self._unit}"
             return f"{val:+.1f}{self._unit}"
+        elif self._min < 0:
+            if int(val) == 0:
+                return f"0{self._unit}"
+            return f"{int(val):+d}{self._unit}"
         return f"{int(val)}{self._unit}"
 
     def _to_real(self, slider_val: int) -> float:
-        if self._unit == " dB":
-            return self._min + ((self._max - self._min) * (slider_val / 100))
         return slider_val
 
     def _apply_mute_visual(self, muted: bool):

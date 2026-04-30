@@ -79,7 +79,7 @@ def test_appconfig_get_mode_midi_map():
     # C-10: `get_mode_midi_map()`
     with patch("core.config.AppConfig._get_config_path", return_value="dummy"):
         mm = AppConfig.get_mode_midi_map()
-        assert "Lofi" in mm
+        assert "Fix Méo" in mm
 
 def test_appconfig_update_and_save(tmp_path):
     # C-11: `update(key, value)` + `save()`

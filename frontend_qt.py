@@ -673,14 +673,14 @@ class MainDashboard(QMainWindow):
         
         # Ưu tiên dùng giá trị cân chỉnh trong mode_midi_map nếu có
         mode_map = backend.AppConfig.get_mode_midi_map()
+        cc_num = int(MIDI_CC.get("fix_meo", 36))
         if "Fix Méo" in mode_map:
             # Nếu dùng mode_map thì thường là giá trị cố định, nhưng ta vẫn dùng toggle logic
             midi_val = mode_map["Fix Méo"] if self.fix_meo_state else 0
-            mode_cc = int(MIDI_CC.get("mode", 30))
-            self.engine.send_midi(mode_cc, midi_val)
+            self.engine.send_midi(cc_num, midi_val)
         else:
-            # Fallback dùng CC fix_meo riêng
-            self.engine.send_midi(MIDI_CC["fix_meo"], val)
+            # Fallback dùng giá trị mặc định 127/0
+            self.engine.send_midi(cc_num, val)
         
         btn = self._func_buttons.get("Fix Méo")
         if btn:
@@ -1120,13 +1120,20 @@ class MainDashboard(QMainWindow):
     def _on_mode_selected(self, mode):
         self.current_mode = mode
 
-        # Gửi MIDI CC khi chọn mode (lấy từ calibration)
-        mode_map = backend.AppConfig.get_mode_midi_map()
-        mode_val = mode_map.get(mode)
-        if mode_val is not None:
-            mode_cc = int(MIDI_CC.get("mode", 30))
-            self.engine.send_midi(mode_cc, mode_val)
-            print(f"🎭 [MODE] {mode} -> MIDI CC {mode_cc} Value {mode_val}")
+        # Gửi MIDI CC khi chọn mode (ON = 127, OFF = 0)
+        mode_cc_mapping = {
+            "Dân Ca": int(MIDI_CC.get("mode_danca", 30)),
+            "Lofi": int(MIDI_CC.get("mode_lofi", 37)),
+            "Remix": int(MIDI_CC.get("mode_remix", 38)),
+            "Đa Thể Loại": int(MIDI_CC.get("mode_datheloai", 39))
+        }
+
+        # Send 127 to the selected mode, 0 to the others
+        for m_name, cc_num in mode_cc_mapping.items():
+            val = 127 if m_name == mode else 0
+            self.engine.send_midi(cc_num, val)
+            if m_name == mode:
+                print(f"🎭 [MODE] {mode} -> MIDI CC {cc_num} Value {val}")
 
         # Visual feedback — use the single source defined in _build_panel_mode.
         for m, btn in self._mode_buttons.items():

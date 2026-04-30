@@ -62,6 +62,52 @@ class CDPYouTubeMonitor:
 
         return None, None
 
+    def close_all_youtube_tabs(self):
+        """Quét mọi port CDP, gửi Page.close cho từng tab/PWA YouTube.
+        Trả về số tab đã yêu cầu đóng. Mở WS riêng cho mỗi target — không
+        phụ thuộc kết nối monitor đang chạy, không bị giới hạn bởi
+        _YT_PATHS (vốn chỉ match /watch và /shorts cho mục đích monitor)."""
+        if not _WEBSOCKET_AVAILABLE:
+            return 0
+
+        closed = 0
+        for port in range(self.port, self.port + 11):
+            try:
+                req = urllib.request.Request(f"http://127.0.0.1:{port}/json")
+                with urllib.request.urlopen(req, timeout=0.3) as response:
+                    targets = json.loads(response.read().decode('utf-8'))
+            except (urllib.error.URLError, ConnectionRefusedError, TimeoutError):
+                continue
+            except Exception:
+                continue
+
+            for target in targets:
+                if target.get('type') != 'page':
+                    continue
+                url = target.get('url', '')
+                if 'youtube.com' not in url and 'youtu.be' not in url:
+                    continue
+                ws_url = target.get('webSocketDebuggerUrl')
+                if not ws_url:
+                    continue
+                try:
+                    ws = websocket.create_connection(ws_url, timeout=1.0)
+                    ws.settimeout(1.0)
+                    ws.send(json.dumps({"id": 1, "method": "Page.close"}))
+                    try:
+                        ws.recv()
+                    except Exception:
+                        pass
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+                    closed += 1
+                    print(f"[CDP] Đã yêu cầu đóng tab YouTube: {url[:60]}")
+                except Exception as e:
+                    print(f"[CDP] Lỗi đóng tab {url[:50]}: {e}")
+        return closed
+
     def start(self):
         if not _WEBSOCKET_AVAILABLE:
             return

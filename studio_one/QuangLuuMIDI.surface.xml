@@ -13,13 +13,16 @@
   CC Mapping (đồng bộ với backend.py _DEFAULT_APP_CONFIG["midi_cc"]):
   - CC 10-11: Tone controls (knobs)
   - CC 20-23: Mixer controls (faders)
-  - CC 30:    Mode (button)
+  - CC 30:    Mode Dân Ca (button)
   - CC 31:    AutoKey / Tone Auto (button, shared CC)
   - CC 32:    Score Trigger (button)
   - CC 33:    Key Root (knob)
   - CC 34:    Key Scale (knob)
   - CC 35:    Scale Type (knob)
   - CC 36:    Tune On/Off / Fix Méo (button, shared CC)
+  - CC 37:    Mode Lofi (button)
+  - CC 38:    Mode Remix (button)
+  - CC 39:    Mode Đa Thể Loại (button)
   - CC 50-53: Mute toggles (buttons)
 -->
 <ControlSurface name="QuangLuuMIDI" 
@@ -71,9 +74,24 @@
     <!-- FUNCTION BUTTONS (CC 30-32)                  -->
     <!-- ============================================ -->
     
-    <!-- mode: Chế độ hoạt động (0=Off, 127=On) -->
-    <Control name="mode" title="Mode" type="button" options="receive public">
+    <!-- mode_danca: Chế độ Dân Ca (0=Off, 127=On) -->
+    <Control name="modeDanca" title="Mode Dân Ca" type="button" options="receive public">
       <MidiMessage status="#B0" address="30"/>
+    </Control>
+    
+    <!-- mode_lofi: Chế độ Lofi (0=Off, 127=On) -->
+    <Control name="modeLofi" title="Mode Lofi" type="button" options="receive public">
+      <MidiMessage status="#B0" address="37"/>
+    </Control>
+    
+    <!-- mode_remix: Chế độ Remix (0=Off, 127=On) -->
+    <Control name="modeRemix" title="Mode Remix" type="button" options="receive public">
+      <MidiMessage status="#B0" address="38"/>
+    </Control>
+    
+    <!-- mode_datheloai: Chế độ Đa Thể Loại (0=Off, 127=On) -->
+    <Control name="modeDatheloai" title="Mode Đa Thể Loại" type="button" options="receive public">
+      <MidiMessage status="#B0" address="39"/>
     </Control>
     
     <!-- autokey / tone_auto: Bật/tắt AutoKey / Tone Auto (0=Off, 127=On) — shared CC 31 -->
