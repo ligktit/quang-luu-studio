@@ -59,7 +59,21 @@ Bấm **"Lưu thiết lập"**. Cấu hình sẽ được áp dụng ngay, khôn
 
 ## 3. Lệnh giọng nói
 
-Giữ phím **(do user cấu hình, mặc định không có hotkey hệ thống — dùng nút "Voice" trong tương lai hoặc gọi qua MIDI controller)**, nói lệnh, thả ra. App sẽ đọc lại "Đã thực hiện" hoặc "Không hiểu lệnh".
+**Cách dùng (push-to-talk):**
+
+1. **Giữ Ctrl+Space** — nghe tiếng beep cao + popup đỏ "🎤 ĐANG NGHE..." giữa màn hình + TTS nói "Đang nghe".
+2. **Nói lệnh** trong khi vẫn giữ phím (vd: "dò tone", "tăng nhạc").
+3. **Thả Ctrl+Space** — nghe tiếng beep thấp, popup biến mất, app nói "Đã thực hiện" hoặc "Không hiểu lệnh".
+
+**Dấu hiệu xác nhận đang lắng nghe:**
+
+| Dấu hiệu | Mô tả |
+|---|---|
+| 🔊 Beep 880 Hz (cao, 80 ms) | Bắt đầu nghe |
+| 🔴 Popup đỏ "🎤 ĐANG NGHE..." | Trong suốt thời gian giữ phím |
+| 🔊 TTS đọc "Đang nghe" | Bắt đầu (nếu TTS đang bật) |
+| 🔊 Beep 440 Hz (thấp, 60 ms) | Vừa thả phím — kết thúc nghe |
+| 🔊 TTS đọc "Đã thực hiện" / "Không hiểu lệnh" | Sau khi xử lý lệnh |
 
 Một số lệnh hỗ trợ:
 

@@ -1352,6 +1352,92 @@ class MainDashboard(QMainWindow):
         except Exception as e:
             print(f"[A11Y] VoiceInput init lỗi: {e}")
             self._a11y_voice = None
+        self._a11y_voice_listening = False
+        self._a11y_voice_indicator = None
+
+    # ── Voice push-to-talk (Ctrl+Space hold) ──────────────────
+
+    def keyPressEvent(self, event):
+        from PySide6.QtCore import Qt
+        if (event.key() == Qt.Key_Space
+                and event.modifiers() & Qt.ControlModifier
+                and not event.isAutoRepeat()
+                and getattr(self, "_a11y_voice", None) is not None):
+            self._a11y_voice_start()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        from PySide6.QtCore import Qt
+        if (event.key() == Qt.Key_Space
+                and not event.isAutoRepeat()
+                and getattr(self, "_a11y_voice_listening", False)):
+            self._a11y_voice_stop()
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+    def _a11y_voice_start(self):
+        if self._a11y_voice is None or self._a11y_voice_listening:
+            return
+        self._a11y_voice_listening = True
+        # Visual indicator — popup đỏ giữa header
+        self._a11y_show_voice_indicator(True)
+        # Beep ngắn để báo bắt đầu (winsound)
+        try:
+            import winsound
+            winsound.Beep(880, 80)
+        except Exception:
+            pass
+        self._a11y_speak("Đang nghe", priority="high")
+        try:
+            self._a11y_voice.start_listening()
+        except Exception as e:
+            self._a11y_speak(f"Lỗi mở mic: {e}", priority="high")
+            self._a11y_voice_listening = False
+            self._a11y_show_voice_indicator(False)
+
+    def _a11y_voice_stop(self):
+        if not self._a11y_voice_listening:
+            return
+        self._a11y_voice_listening = False
+        self._a11y_show_voice_indicator(False)
+        try:
+            import winsound
+            winsound.Beep(440, 60)
+        except Exception:
+            pass
+        try:
+            if self._a11y_voice is not None:
+                self._a11y_voice.stop_listening()  # sẽ trigger _a11y_on_voice_intent
+        except Exception as e:
+            print(f"[A11Y] voice stop lỗi: {e}")
+
+    def _a11y_show_voice_indicator(self, show: bool):
+        from PySide6.QtWidgets import QLabel
+        from PySide6.QtCore import Qt
+        if not show:
+            if self._a11y_voice_indicator is not None:
+                self._a11y_voice_indicator.hide()
+                self._a11y_voice_indicator.deleteLater()
+                self._a11y_voice_indicator = None
+            return
+        lbl = QLabel("🎤  ĐANG NGHE...", self)
+        lbl.setStyleSheet(
+            "background-color: #EF4444; color: white;"
+            " border: 2px solid #FFEB3B; border-radius: 10px;"
+            " padding: 8px 16px; font-size: 16px; font-weight: 900;"
+        )
+        lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
+        lbl.adjustSize()
+        # Đặt ở giữa-trên dashboard
+        x = self.width() // 2 - lbl.width() // 2
+        y = 80
+        lbl.move(x, y)
+        lbl.show()
+        lbl.raise_()
+        self._a11y_voice_indicator = lbl
 
     def _a11y_speak(self, text, priority="normal"):
         if getattr(self, "_a11y_announcer", None) is not None:
