@@ -35,6 +35,7 @@ def build_bottom_bar(dashboard) -> QWidget:
         font_size=10, svg_content=SVG_SAVE, svg_size=18, fixed_width=38,
     )
     btn_save.setToolTip("Lưu")
+    btn_save.setAccessibleName("Lưu bài")
     btn_save.clicked.connect(dashboard._on_save)
     bar_layout.addWidget(btn_save)
     dashboard._func_buttons["💾 Lưu"] = btn_save
@@ -44,6 +45,7 @@ def build_bottom_bar(dashboard) -> QWidget:
         font_size=10, svg_content=SVG_LIST, svg_size=18, fixed_width=38,
     )
     btn_list.setToolTip("Danh sách")
+    btn_list.setAccessibleName("Danh sách bài")
     btn_list.clicked.connect(dashboard._show_songs_list)
     bar_layout.addWidget(btn_list)
     dashboard._func_buttons["Danh sách"] = btn_list
@@ -51,6 +53,7 @@ def build_bottom_bar(dashboard) -> QWidget:
     bar_layout.addStretch()
 
     dashboard.record_button = PainterRecordButton()
+    dashboard.record_button.setAccessibleName("Ghi âm")
     dashboard.record_button.clicked.connect(dashboard._on_record)
     bar_layout.addWidget(dashboard.record_button)
 
@@ -61,6 +64,7 @@ def build_bottom_bar(dashboard) -> QWidget:
         font_size=10, svg_content=SVG_STAR, svg_size=18, fixed_width=38,
     )
     btn_score.setToolTip("Chấm điểm")
+    btn_score.setAccessibleName("Chấm điểm")
     btn_score.clicked.connect(dashboard._on_score)
     bar_layout.addWidget(btn_score)
     dashboard._func_buttons["Chấm điểm"] = btn_score
@@ -70,6 +74,7 @@ def build_bottom_bar(dashboard) -> QWidget:
         font_size=10, svg_content=SVG_FOLDER, svg_size=18, fixed_width=38,
     )
     btn_folder.setToolTip("Thư mục")
+    btn_folder.setAccessibleName("Thư mục")
     btn_folder.clicked.connect(dashboard._on_open_recordings_folder)
     bar_layout.addWidget(btn_folder)
     dashboard._func_buttons["Thư Mục"] = btn_folder

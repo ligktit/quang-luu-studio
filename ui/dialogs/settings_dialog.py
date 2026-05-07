@@ -18,6 +18,7 @@ from ui.components.svg_icons import (
     SVG_SETTINGS,
     SVG_UPLOAD,
     SVG_WRENCH,
+    SVG_EYE_OPEN,
 )
 from frontend_qt import pill_btn_qss, add_shadow, _lighten
 
@@ -326,6 +327,13 @@ class SettingsDialog(QDialog):
             "Công cụ",
         )
 
+        # Tab 4: Accessibility
+        self._tabs.addTab(
+            self._build_accessibility_tab(settings),
+            self._svg_icon(SVG_EYE_OPEN, "white", 16),
+            "Trợ năng",
+        )
+
         outer.addWidget(self._tabs, 1)
         outer.addWidget(self._build_footer())
 
@@ -436,6 +444,19 @@ class SettingsDialog(QDialog):
         lay.addStretch()
         return tab
 
+    def _build_accessibility_tab(self, settings):
+        tab = QWidget()
+        tab.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(22, 18, 22, 18)
+        lay.setSpacing(12)
+
+        lay.addWidget(self._section_header(SVG_EYE_OPEN, "Hỗ trợ người khiếm thị"))
+        lay.addWidget(self._section_card(self._build_accessibility_options))
+
+        lay.addStretch()
+        return tab
+
     def _build_paths(self, vl):
         so_lbl = QLabel("Studio One (.song hoặc .exe):")
         so_lbl.setStyleSheet(self._field_label_qss())
@@ -471,6 +492,46 @@ class SettingsDialog(QDialog):
         vl.addWidget(self._cb_launch_br)
         vl.addWidget(self._cb_close_so)
         vl.addWidget(self._cb_close_br)
+
+    def _build_accessibility_options(self, vl):
+        acc = backend.AppConfig.get("accessibility") or {}
+        vl.setSpacing(8)
+        
+        self._cb_tts = QCheckBox("Bật giọng nói thông báo (TTS)")
+        self._cb_tts.setStyleSheet(self._checkbox_qss)
+        self._cb_tts.setChecked(acc.get("tts_enabled", False))
+        self._cb_tts.setAccessibleName("Bật thông báo giọng nói TTS")
+        vl.addWidget(self._cb_tts)
+
+        self._cb_announce_focus = QCheckBox("Đọc tên nút/thanh trượt khi chọn (Announce Focus)")
+        self._cb_announce_focus.setStyleSheet(self._checkbox_qss)
+        self._cb_announce_focus.setChecked(acc.get("announce_focus", True))
+        self._cb_announce_focus.setAccessibleName("Đọc tên điều khiển khi được chọn")
+        vl.addWidget(self._cb_announce_focus)
+
+        self._cb_announce_state = QCheckBox("Đọc trạng thái khi thay đổi (Tone, Điểm, etc.)")
+        self._cb_announce_state.setStyleSheet(self._checkbox_qss)
+        self._cb_announce_state.setChecked(acc.get("announce_state", True))
+        self._cb_announce_state.setAccessibleName("Đọc thay đổi trạng thái")
+        vl.addWidget(self._cb_announce_state)
+
+        self._cb_voice_cmd = QCheckBox("Bật điều khiển bằng giọng nói (Giữ Ctrl+Space)")
+        self._cb_voice_cmd.setStyleSheet(self._checkbox_qss)
+        self._cb_voice_cmd.setChecked(acc.get("voice_command_enabled", False))
+        self._cb_voice_cmd.setAccessibleName("Điều khiển bằng giọng nói")
+        vl.addWidget(self._cb_voice_cmd)
+
+        self._cb_high_contrast = QCheckBox("Chế độ tương phản cao (Nền đen, chữ vàng)")
+        self._cb_high_contrast.setStyleSheet(self._checkbox_qss)
+        self._cb_high_contrast.setChecked(acc.get("high_contrast", False))
+        self._cb_high_contrast.setAccessibleName("Bật chế độ tương phản cao")
+        vl.addWidget(self._cb_high_contrast)
+
+        self._cb_focus_ring = QCheckBox("Viền chỉ thị nổi bật (Focus Ring Dày)")
+        self._cb_focus_ring.setStyleSheet(self._checkbox_qss)
+        self._cb_focus_ring.setChecked(acc.get("focus_ring_thick", False))
+        self._cb_focus_ring.setAccessibleName("Bật viền nổi bật")
+        vl.addWidget(self._cb_focus_ring)
 
     def _create_audio_combos(self, settings):
         from PySide6.QtWidgets import QComboBox
@@ -876,6 +937,17 @@ class SettingsDialog(QDialog):
         s["auto_close_browser"]     = self._cb_close_br.isChecked()
         s["record_loopback_device"] = self._combo_lb.currentData()
         s["record_mic_device"]      = self._combo_mic.currentData()
+
+        acc = backend.AppConfig.get("accessibility") or {}
+        if hasattr(self, "_cb_tts"):
+            acc["tts_enabled"] = self._cb_tts.isChecked()
+            acc["announce_focus"] = self._cb_announce_focus.isChecked()
+            acc["announce_state"] = self._cb_announce_state.isChecked()
+            acc["voice_command_enabled"] = self._cb_voice_cmd.isChecked()
+            acc["high_contrast"] = self._cb_high_contrast.isChecked()
+            acc["focus_ring_thick"] = self._cb_focus_ring.isChecked()
+            backend.AppConfig.update("accessibility", acc)
+
         backend.ConfigManager.save_settings(s)
 
         # Save cookie browser choice to app_config.json

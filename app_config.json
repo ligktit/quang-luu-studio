@@ -83,5 +83,13 @@
             }
         ],
         "mix_backing": []
+    },
+    "accessibility": {
+        "tts_enabled": true,
+        "announce_focus": true,
+        "announce_state": true,
+        "voice_command_enabled": true,
+        "high_contrast": false,
+        "focus_ring_thick": false
     }
 }

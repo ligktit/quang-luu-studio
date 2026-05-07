@@ -46,6 +46,7 @@ def _build_tone_knob_widget(dashboard, label: str, cc_key: str, color: str) -> Q
     btn_minus.setCursor(Qt.PointingHandCursor)
     btn_minus.setStyleSheet(_btn_qss)
     btn_minus.setToolTip(f"Giảm {label} 1 bán cung")
+    btn_minus.setAccessibleName(f"Giảm {label}")
 
     val_lbl = QLabel(" 0 ")
     val_lbl.setFixedWidth(42)
@@ -54,12 +55,14 @@ def _build_tone_knob_widget(dashboard, label: str, cc_key: str, color: str) -> Q
         f"font-size:14px; font-weight:800; color:{color}; font-family:{FONT_MONO};"
         f" background:rgba(0,0,0,0.25); border-radius:6px; padding:2px 4px;"
     )
+    val_lbl.setAccessibleName(f"Giá trị {label}")
 
     btn_plus = QPushButton("+")
     btn_plus.setFixedSize(28, 28)
     btn_plus.setCursor(Qt.PointingHandCursor)
     btn_plus.setStyleSheet(_btn_qss)
     btn_plus.setToolTip(f"Tăng {label} 1 bán cung")
+    btn_plus.setAccessibleName(f"Tăng {label}")
 
     stepper_row.addStretch()
     stepper_row.addWidget(btn_minus)
@@ -127,6 +130,7 @@ def build_panel_tools(dashboard) -> GlassPanel:
     ]
     for i, (text, color, cb) in enumerate(func_btns):
         btn = PainterButton(text, color=color, height=26, radius=8, font_size=9)
+        btn.setAccessibleName(text)
         btn.clicked.connect(cb)
         grid.addWidget(btn, i // 2, i % 2)
         dashboard._func_buttons[text] = btn

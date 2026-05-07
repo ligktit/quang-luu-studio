@@ -92,6 +92,7 @@ class HMixerChannel(QWidget):
             value=default,
             color=color,
         )
+        self.slider.setAccessibleName(f"Mức {label}")
         hl.addWidget(self.slider, 1)
 
         # Value label
@@ -102,6 +103,7 @@ class HMixerChannel(QWidget):
             f"font-size:12px; font-weight:600; color:{color}; "
             f"font-family: {FONT_MONO}; background:transparent;"
         )
+        self.val_label.setAccessibleName(f"Giá trị {label}")
         hl.addWidget(self.val_label)
 
         # Mute button — uses dedicated speaker icons (🔊/🔇), NOT the channel icon
@@ -111,6 +113,7 @@ class HMixerChannel(QWidget):
         self.mute_btn.setFixedSize(28, 22)
         self.mute_btn.setCursor(Qt.PointingHandCursor)
         self.mute_btn.setToolTip("Tắt âm kênh này (Mute)")
+        self.mute_btn.setAccessibleName(f"Tắt âm {label}")
         self._apply_mute_style(False)
         if not has_mute:
             self.mute_btn.hide()

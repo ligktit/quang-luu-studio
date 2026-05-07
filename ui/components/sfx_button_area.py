@@ -205,6 +205,7 @@ class SfxItemButton(QWidget):
         self.setCursor(Qt.PointingHandCursor)
         self.setAcceptDrops(True)
         self._check_file()
+        self.setAccessibleName(f"Hiệu ứng {self._data.get('name', 'Không tên')}")
 
         # Missing-file pulse timer
         self._pulse_timer = QTimer(self)
@@ -226,6 +227,7 @@ class SfxItemButton(QWidget):
             self._pulse_timer.stop()
             self._pulse_alpha = 0
         self.setToolTip(self._build_tooltip())
+        self.setAccessibleName(f"Hiệu ứng {self._data.get('name', 'Không tên')}")
         self.update()
 
     # ── Helpers ───────────────────────────────────────────────────
@@ -710,6 +712,7 @@ class SfxButtonArea(QWidget):
         self._add_btn = PainterButton("＋", color=C["card_hover"], height=28, radius=8, font_size=13)
         self._add_btn.setFixedWidth(36)
         self._add_btn.setToolTip("Thêm nút SFX mới")
+        self._add_btn.setAccessibleName("Thêm nút SFX")
         self._add_btn.clicked.connect(self._on_add)
         # Add [+] to flow upfront — buttons will be inserted BEFORE it
         self._flow._layout.addWidget(self._add_btn)
