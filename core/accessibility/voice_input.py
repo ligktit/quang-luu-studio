@@ -141,6 +141,7 @@ class VoiceInput:
             if self._listening:
                 return
             if not self._ensure_model():
+                print("[VOICE] start_listening bỏ qua — model chưa sẵn sàng")
                 return
             self._listening = True
             self._recognizer = KaldiRecognizer(self._model, self._rate)
@@ -150,11 +151,13 @@ class VoiceInput:
                     channels=1, callback=self._on_audio,
                 )
                 self._stream.start()
+                print(f"[VOICE] >>> Bắt đầu nghe (rate={self._rate})")
             except Exception as e:
                 self._listening = False
                 if self._on_error:
                     self._on_error(f"Không mở được mic: {e}")
                 log.warning("Voice input mic open lỗi: %s", e)
+                print(f"[VOICE] !!! Lỗi mở mic: {e}")
 
     def stop_listening(self):
         with self._lock:
@@ -171,21 +174,31 @@ class VoiceInput:
 
             # Lấy final result
             transcript = ""
+            raw_json = ""
             try:
                 if self._recognizer is not None:
-                    res = self._recognizer.FinalResult()
-                    transcript = (json.loads(res) or {}).get("text", "")
-            except Exception:
+                    raw_json = self._recognizer.FinalResult()
+                    transcript = (json.loads(raw_json) or {}).get("text", "")
+            except Exception as e:
+                print(f"[VOICE] !!! Lỗi parse kết quả: {e}")
                 transcript = ""
             self._recognizer = None
 
-            if transcript and self._on_intent:
+            print(f"[VOICE] <<< Dừng nghe. Transcript: {transcript!r}")
+            if not transcript:
+                print(f"[VOICE]     (raw JSON: {raw_json})")
+                if self._on_intent:
+                    self._on_intent(Intent(name="empty", text=""))
+                return
+
+            if self._on_intent:
                 intent = match_intent(transcript)
                 if intent is not None:
                     intent.text = transcript
+                    print(f"[VOICE]     -> Match intent: {intent.name}")
                     self._on_intent(intent)
                 else:
-                    # Vẫn gửi intent "unknown" để frontend phản hồi "Không hiểu lệnh"
+                    print(f"[VOICE]     -> Không match intent nào")
                     self._on_intent(Intent(name="unknown", text=transcript))
 
     # ── sounddevice callback ────────────────────────────────

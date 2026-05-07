@@ -1594,6 +1594,13 @@ class MainDashboard(QMainWindow):
         """Xử lý intent từ voice command. intent: voice_input.Intent"""
         name = getattr(intent, "name", "unknown")
         text = getattr(intent, "text", "")
+        print(f"[VOICE INTENT] name={name!r} text={text!r}")
+
+        if name == "empty":
+            self._a11y_speak("Không nghe rõ. Hãy nói to và rõ hơn.", priority="high")
+            self._show_message("🎤 Không nghe được lệnh", is_error=True)
+            return
+
         actions = {
             "autokey":          self._on_force_rescan,
             "record_toggle":    self._on_record,
@@ -1617,12 +1624,17 @@ class MainDashboard(QMainWindow):
         }
         action = actions.get(name)
         if action is None:
-            self._a11y_speak(f"Không hiểu lệnh: {text}")
+            print(f"[VOICE INTENT]   -> Không hiểu lệnh: {text!r}")
+            self._a11y_speak(f"Không hiểu lệnh: {text}", priority="high")
+            self._show_message(f"🎤 Nghe được: \"{text}\" — không hiểu", is_error=True)
             return
         try:
+            print(f"[VOICE INTENT]   -> Thực hiện: {name}")
             action()
-            self._a11y_speak("Đã thực hiện")
+            self._a11y_speak("Đã thực hiện", priority="high")
+            self._show_message(f"🎤 \"{text}\" → {name}")
         except Exception as e:
+            print(f"[VOICE INTENT]   -> Lỗi: {e}")
             self._a11y_speak(f"Lỗi: {e}", priority="high")
 
     def _a11y_step_volume(self, cc_key: str, delta: int):
