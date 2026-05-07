@@ -13,7 +13,16 @@
       "Bash(cp docs/POT_PROVIDER_INTEGRATION_PLAN.md ~/.claude/plans/POT_PROVIDER_INTEGRATION_PLAN_2026-04-25.md)",
       "Bash(curl -L --fail --max-time 120 -o tools/bgutil-pot-provider.exe \"https://github.com/Brainicism/bgutil-ytdlp-pot-provider/releases/latest/download/bgutil-pot-provider-windows-x64.exe\")",
       "Bash(curl -s \"https://api.github.com/repos/Brainicism/bgutil-ytdlp-pot-provider/releases/latest\")",
-      "Bash(git stash *)"
+      "Bash(git stash *)",
+      "Bash(dir /s /b ACCESSIBILITY_PLAN.md)",
+      "Bash(pwsh -Command \"Get-ChildItem -Path 'D:\\\\Projects\\\\LiveStudio\\\\quang-luu-studio' -Filter 'ACCESSIBILITY_PLAN.md' -Recurse -ErrorAction SilentlyContinue | Select-Object FullName\")",
+      "Bash(pip install *)",
+      "Bash(mkdir -p models)",
+      "Bash(curl -L -o vosk-vi.zip \"https://alphacephei.com/vosk/models/vosk-model-small-vn-0.4.zip\")",
+      "Bash(cat C:\\\\\\\\Users\\\\\\\\LIGKT\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\D--Projects-LiveStudio-quang-luu-studio--claude-worktrees-strange-herschel-bff047\\\\\\\\4ef75fa3-e0b1-4b3d-82a5-a2a8cc6a9b0e\\\\\\\\tasks\\\\\\\\b4xu4t5q7.output)",
+      "Bash(cat C:\\\\\\\\Users\\\\\\\\LIGKT\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\D--Projects-LiveStudio-quang-luu-studio--claude-worktrees-strange-herschel-bff047\\\\\\\\4ef75fa3-e0b1-4b3d-82a5-a2a8cc6a9b0e\\\\\\\\tasks\\\\\\\\b32bkd89k.output)",
+      "Bash(mv vosk-model-small-vn-0.4 vosk-vi)",
+      "Bash(rm vosk-vi.zip)"
     ]
   }
 }

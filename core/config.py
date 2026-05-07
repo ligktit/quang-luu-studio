@@ -111,6 +111,18 @@ _DEFAULT_APP_CONFIG = {
             {"cc": 41, "on_value": 127, "off_value": 0}
         ],
         "mix_backing": []
+    },
+    "accessibility": {
+        "tts_enabled": False,
+        "tts_voice": "",
+        "tts_rate": 180,
+        "voice_command_enabled": False,
+        "voice_command_hotkey": "Ctrl+Space",
+        "high_contrast": False,
+        "font_scale": 1.0,
+        "focus_ring_thick": False,
+        "announce_focus": True,
+        "announce_state": True
     }
 }
 
@@ -190,6 +202,19 @@ class AppConfig:
     def get_mode_midi_map(cls):
         """Lấy Mode → MIDI CC value mapping (cho Auto-Tune plugin)"""
         return cls.load().get("mode_midi_map", _DEFAULT_APP_CONFIG["mode_midi_map"])
+
+    @classmethod
+    def get_accessibility(cls):
+        """Lấy accessibility config (TTS, voice command, theme...)."""
+        return cls.load().get("accessibility", _DEFAULT_APP_CONFIG["accessibility"])
+
+    @classmethod
+    def set_accessibility(cls, **kwargs):
+        """Cập nhật một hoặc nhiều field accessibility và lưu file."""
+        data = cls.load()
+        a11y = data.setdefault("accessibility", dict(_DEFAULT_APP_CONFIG["accessibility"]))
+        a11y.update(kwargs)
+        cls.save()
 
     @classmethod
     def get_mute_multi_cc(cls):

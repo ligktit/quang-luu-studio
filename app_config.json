@@ -83,5 +83,17 @@
             }
         ],
         "mix_backing": []
+    },
+    "accessibility": {
+        "tts_enabled": false,
+        "tts_voice": "",
+        "tts_rate": 180,
+        "voice_command_enabled": true,
+        "voice_command_hotkey": "Ctrl+Space",
+        "high_contrast": false,
+        "font_scale": 1.0,
+        "focus_ring_thick": false,
+        "announce_focus": true,
+        "announce_state": true
     }
 }

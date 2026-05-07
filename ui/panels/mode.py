@@ -27,6 +27,8 @@ def build_panel_mode(dashboard) -> GlassPanel:
     mode_row.setSpacing(3)
     for mlabel, mcolor in mode_config:
         mbtn = PainterButton(mlabel, color=mcolor, height=26, radius=8, font_size=9)
+        mbtn.setAccessibleName(f"Chế độ {mlabel}")
+        mbtn.setAccessibleDescription(f"Chuyển sang chế độ {mlabel}")
         mbtn.clicked.connect(lambda m=mlabel: dashboard._on_mode_selected(m))
         mode_row.addWidget(mbtn)
         dashboard._mode_buttons[mlabel] = mbtn

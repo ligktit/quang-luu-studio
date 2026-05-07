@@ -2,6 +2,7 @@ import backend
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox,
     QLineEdit, QFileDialog, QWidget, QFrame, QTabWidget,
+    QSlider, QComboBox,
 )
 from PySide6.QtCore import Qt, QSize, QByteArray
 from PySide6.QtGui import QIcon, QPixmap, QPainter
@@ -324,6 +325,12 @@ class SettingsDialog(QDialog):
             self._build_tools_tab(),
             self._svg_icon(SVG_WRENCH, "white", 16),
             "Công cụ",
+        )
+        # Tab 4: Accessibility
+        self._tabs.addTab(
+            self._build_accessibility_tab(),
+            self._svg_icon(SVG_MIC, "white", 16),
+            "Trợ năng",
         )
 
         outer.addWidget(self._tabs, 1)
@@ -810,6 +817,222 @@ class SettingsDialog(QDialog):
                 " background:transparent; border:none;"
             )
 
+    # ── Accessibility tab ────────────────────────────────────
+
+    def _build_accessibility_tab(self):
+        """Tab "Trợ năng" — TTS, voice command, high contrast, font scale."""
+        from PySide6.QtWidgets import QScrollArea
+        tab = QScrollArea()
+        tab.setWidgetResizable(True)
+        tab.setFrameShape(QFrame.NoFrame)
+        tab.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        inner = QWidget()
+        inner.setStyleSheet("background: transparent;")
+        tab.setWidget(inner)
+        lay = QVBoxLayout(inner)
+        lay.setContentsMargins(22, 18, 22, 18)
+        lay.setSpacing(12)
+
+        cfg = backend.AppConfig.get_accessibility()
+
+        # ── TTS section ──
+        lay.addWidget(self._section_header(SVG_MIC, "Giọng đọc nội bộ (TTS)"))
+        self._a11y_cb_tts = QCheckBox("Bật TTS đọc trạng thái và phím tắt (Ctrl+Shift+V)")
+        self._a11y_cb_tts.setStyleSheet(self._checkbox_qss)
+        self._a11y_cb_tts.setChecked(bool(cfg.get("tts_enabled", False)))
+
+        self._a11y_cb_announce_focus = QCheckBox("Đọc tên control khi Tab tới")
+        self._a11y_cb_announce_focus.setStyleSheet(self._checkbox_qss)
+        self._a11y_cb_announce_focus.setChecked(bool(cfg.get("announce_focus", True)))
+
+        self._a11y_cb_announce_state = QCheckBox("Đọc thông báo và thay đổi trạng thái")
+        self._a11y_cb_announce_state.setStyleSheet(self._checkbox_qss)
+        self._a11y_cb_announce_state.setChecked(bool(cfg.get("announce_state", True)))
+
+        # Voice combo
+        self._a11y_combo_voice = QComboBox()
+        self._a11y_combo_voice.setStyleSheet(self._combo_qss)
+        self._a11y_combo_voice.addItem("Tự động (chọn voice tiếng Việt nếu có)", "")
+        try:
+            from core.accessibility.speaker import get_speaker
+            spk = get_speaker()
+            for vid, name, lang in spk.list_voices():
+                label = f"{name}  [{lang}]" if lang else name
+                self._a11y_combo_voice.addItem(label, vid)
+            current_vid = cfg.get("tts_voice", "") or ""
+            if current_vid:
+                idx = self._a11y_combo_voice.findData(current_vid)
+                if idx >= 0:
+                    self._a11y_combo_voice.setCurrentIndex(idx)
+        except Exception as e:
+            print(f"[SETTINGS] list_voices lỗi: {e}")
+
+        # Rate slider (100..250)
+        self._a11y_slider_rate = QSlider(Qt.Horizontal)
+        self._a11y_slider_rate.setMinimum(100)
+        self._a11y_slider_rate.setMaximum(250)
+        self._a11y_slider_rate.setValue(int(cfg.get("tts_rate", 180)))
+        self._a11y_slider_rate.setAccessibleName("Tốc độ đọc")
+        self._a11y_lbl_rate = QLabel(f"{self._a11y_slider_rate.value()} từ/phút")
+        self._a11y_lbl_rate.setStyleSheet(self._field_label_qss())
+        self._a11y_slider_rate.valueChanged.connect(
+            lambda v: self._a11y_lbl_rate.setText(f"{v} từ/phút")
+        )
+
+        test_btn = QPushButton("Thử giọng nói")
+        test_btn.setCursor(Qt.PointingHandCursor)
+        test_btn.setFixedHeight(36)
+        test_btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 12, 12))
+        test_btn.clicked.connect(self._a11y_test_tts)
+
+        def _build_tts_card(vl):
+            vl.addWidget(self._a11y_cb_tts)
+            vl.addWidget(self._a11y_cb_announce_focus)
+            vl.addWidget(self._a11y_cb_announce_state)
+            voice_lbl = QLabel("Giọng:")
+            voice_lbl.setStyleSheet(self._field_label_qss())
+            vl.addWidget(voice_lbl)
+            vl.addWidget(self._a11y_combo_voice)
+            rate_lbl = QLabel("Tốc độ đọc (từ/phút):")
+            rate_lbl.setStyleSheet(self._field_label_qss())
+            vl.addWidget(rate_lbl)
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            row.addWidget(self._a11y_slider_rate, 1)
+            row.addWidget(self._a11y_lbl_rate)
+            vl.addLayout(row)
+            vl.addWidget(test_btn, 0, Qt.AlignLeft)
+        lay.addWidget(self._section_card(_build_tts_card))
+
+        # ── Voice command section ──
+        lay.addWidget(self._section_header(SVG_MIC, "Lệnh giọng nói (Vosk)"))
+        self._a11y_cb_voice = QCheckBox("Bật lệnh giọng nói (giữ Ctrl+Space để nói)")
+        self._a11y_cb_voice.setStyleSheet(self._checkbox_qss)
+        self._a11y_cb_voice.setChecked(bool(cfg.get("voice_command_enabled", False)))
+
+        def _build_voice_card(vl):
+            vl.addWidget(self._a11y_cb_voice)
+            hint = QLabel(
+                "Yêu cầu: tải Vosk model tiếng Việt vào thư mục models/vosk-vi/.\n"
+                "Lệnh hỗ trợ: dò tone, ghi âm, lưu bài, chấm điểm, mở danh sách,\n"
+                "tăng/giảm nhạc/mic/vang, chế độ Bolero/Lofi/Remix, đọc trạng thái."
+            )
+            hint.setWordWrap(True)
+            hint.setStyleSheet(self._field_label_qss(size=11, weight=500, italic=True))
+            vl.addWidget(hint)
+        lay.addWidget(self._section_card(_build_voice_card))
+
+        # ── Visual section ──
+        lay.addWidget(self._section_header(SVG_SETTINGS, "Tương phản và cỡ chữ"))
+        self._a11y_cb_high_contrast = QCheckBox("Tương phản cao (nền đen, chữ vàng) — Ctrl+H")
+        self._a11y_cb_high_contrast.setStyleSheet(self._checkbox_qss)
+        self._a11y_cb_high_contrast.setChecked(bool(cfg.get("high_contrast", False)))
+
+        self._a11y_cb_focus_ring = QCheckBox("Viền focus dày 3px (giúp dễ thấy)")
+        self._a11y_cb_focus_ring.setStyleSheet(self._checkbox_qss)
+        self._a11y_cb_focus_ring.setChecked(bool(cfg.get("focus_ring_thick", False)))
+
+        # Font scale slider 70..200 → 0.7..2.0
+        self._a11y_slider_font = QSlider(Qt.Horizontal)
+        self._a11y_slider_font.setMinimum(70)
+        self._a11y_slider_font.setMaximum(200)
+        self._a11y_slider_font.setValue(int(round(float(cfg.get("font_scale", 1.0)) * 100)))
+        self._a11y_slider_font.setAccessibleName("Cỡ chữ")
+        self._a11y_lbl_font = QLabel(f"{self._a11y_slider_font.value()}%")
+        self._a11y_lbl_font.setStyleSheet(self._field_label_qss())
+        self._a11y_slider_font.valueChanged.connect(
+            lambda v: self._a11y_lbl_font.setText(f"{v}%")
+        )
+
+        def _build_visual_card(vl):
+            vl.addWidget(self._a11y_cb_high_contrast)
+            vl.addWidget(self._a11y_cb_focus_ring)
+            scale_lbl = QLabel("Cỡ chữ (Ctrl++ / Ctrl+- để chỉnh nhanh):")
+            scale_lbl.setStyleSheet(self._field_label_qss())
+            vl.addWidget(scale_lbl)
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            row.addWidget(self._a11y_slider_font, 1)
+            row.addWidget(self._a11y_lbl_font)
+            vl.addLayout(row)
+        lay.addWidget(self._section_card(_build_visual_card))
+
+        lay.addStretch()
+        return tab
+
+    def _a11y_test_tts(self):
+        try:
+            from core.accessibility.speaker import get_speaker
+            spk = get_speaker()
+            spk.set_rate(int(self._a11y_slider_rate.value()))
+            voice = self._a11y_combo_voice.currentData() or ""
+            if voice:
+                spk.set_voice(voice)
+            spk.set_enabled(True)
+            spk.start()
+            spk.speak("Xin chào, đây là Quang Lưu Studio. Trợ năng giọng nói đã sẵn sàng.", priority="high")
+        except Exception as e:
+            self._dashboard._show_message(f"Lỗi TTS: {e}", is_error=True)
+
+    def _a11y_collect_and_apply(self):
+        """Gọi từ _save() để lưu accessibility config + apply runtime."""
+        try:
+            backend.AppConfig.set_accessibility(
+                tts_enabled=self._a11y_cb_tts.isChecked(),
+                tts_voice=self._a11y_combo_voice.currentData() or "",
+                tts_rate=int(self._a11y_slider_rate.value()),
+                voice_command_enabled=self._a11y_cb_voice.isChecked(),
+                high_contrast=self._a11y_cb_high_contrast.isChecked(),
+                focus_ring_thick=self._a11y_cb_focus_ring.isChecked(),
+                font_scale=round(float(self._a11y_slider_font.value()) / 100.0, 2),
+                announce_focus=self._a11y_cb_announce_focus.isChecked(),
+                announce_state=self._a11y_cb_announce_state.isChecked(),
+            )
+        except Exception as e:
+            print(f"[SETTINGS] save accessibility lỗi: {e}")
+            return
+
+        # Apply runtime
+        d = self._dashboard
+        try:
+            tm = getattr(d, "_a11y_theme", None)
+            if tm is not None:
+                tm.set_high_contrast(self._a11y_cb_high_contrast.isChecked())
+                tm.set_focus_ring_thick(self._a11y_cb_focus_ring.isChecked())
+                tm.set_font_scale(float(self._a11y_slider_font.value()) / 100.0)
+                tm.apply()
+        except Exception as e:
+            print(f"[SETTINGS] apply theme lỗi: {e}")
+
+        try:
+            spk = getattr(d, "_a11y_speaker", None)
+            if spk is not None:
+                spk.set_rate(int(self._a11y_slider_rate.value()))
+                vid = self._a11y_combo_voice.currentData() or ""
+                if vid:
+                    spk.set_voice(vid)
+                enabled = self._a11y_cb_tts.isChecked()
+                spk.set_enabled(enabled)
+                if enabled:
+                    spk.start()
+        except Exception as e:
+            print(f"[SETTINGS] apply speaker lỗi: {e}")
+
+        try:
+            ann = getattr(d, "_a11y_announcer", None)
+            if ann is not None:
+                ann.set_announce_focus(self._a11y_cb_announce_focus.isChecked())
+                ann.set_announce_state(self._a11y_cb_announce_state.isChecked())
+        except Exception as e:
+            print(f"[SETTINGS] apply announcer lỗi: {e}")
+
+        # Voice command — lazy init khi user enable
+        try:
+            if self._a11y_cb_voice.isChecked() and getattr(d, "_a11y_voice", None) is None:
+                d._a11y_init_voice()
+        except Exception as e:
+            print(f"[SETTINGS] voice init lỗi: {e}")
+
     def _build_footer(self):
         footer = QFrame()
         footer.setObjectName("settingsFooter")
@@ -884,6 +1107,12 @@ class SettingsDialog(QDialog):
         if cookie_browser != "none":
             backend.AppConfig.update("youtube_cookie_file", "")
         backend.AppConfig.save()
+
+        # Accessibility — lưu + apply runtime ngay
+        try:
+            self._a11y_collect_and_apply()
+        except Exception as e:
+            print(f"[SETTINGS] accessibility apply lỗi: {e}")
 
         self._dashboard._show_message("Đã lưu thiết lập")
         self.close()

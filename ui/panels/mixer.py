@@ -101,6 +101,21 @@ def build_panel_mixer(dashboard) -> GlassPanel:
             has_inf_bottom=ch["has_inf_bottom"],
         )
 
+        # Accessible names cho slider + mute button
+        ch_view.setAccessibleName(f"Kênh {ch['label']}")
+        try:
+            ch_view.slider.setAccessibleName(f"Âm lượng {ch['label']}")
+            ch_view.slider.setAccessibleDescription(
+                f"Thanh trượt điều chỉnh âm lượng kênh {ch['label']}. Mũi tên trái phải để tăng giảm."
+            )
+            if ch["has_mute"]:
+                ch_view.mute_btn.setAccessibleName(f"Tắt âm {ch['label']}")
+                ch_view.mute_btn.setAccessibleDescription(
+                    f"Tắt hoặc bật lại âm thanh kênh {ch['label']}"
+                )
+        except Exception:
+            pass
+
         def _bind_mute(channel_view, cc_key=ch["cc"]):
             def _do_toggle():
                 is_muted = channel_view.toggle_mute()
@@ -109,10 +124,17 @@ def build_panel_mixer(dashboard) -> GlassPanel:
 
         if ch["has_mute"]:
             ch_view.mute_btn.clicked.connect(_bind_mute(ch_view))
-            
+
         ch_view.slider.valueChanged.connect(
             _make_value_changed_callback(dashboard, ch["cc"], ch["range"], ch["unit"])
         )
+
+        # Announce slider value change qua announcer (debounced).
+        def _announce_slider_value(value, cc_key=ch["cc"]):
+            announcer = getattr(dashboard, "_a11y_announcer", None)
+            if announcer is not None:
+                announcer.announce_slider(cc_key, value)
+        ch_view.slider.valueChanged.connect(_announce_slider_value)
 
         vl.addWidget(ch_view)
         dashboard._mixer_sliders[ch["cc"]] = ch_view.slider

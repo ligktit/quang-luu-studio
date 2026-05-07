@@ -26,3 +26,9 @@ uiautomation>=2.0
 # Windows Media Control (WinRT)
 winrt-Windows.Media.Control>=2.0
 winrt-Windows.Foundation>=2.0
+
+# Accessibility — TTS (SAPI5 offline) + Voice command (Vosk offline VI)
+# pyttsx3 bắt buộc cho TTS. vosk là tuỳ chọn — voice command sẽ tắt nếu chưa cài
+# hoặc chưa tải model vào models/vosk-vi/.
+pyttsx3>=2.90
+vosk>=0.3.45

@@ -20,6 +20,10 @@ from ui.components.waveform_hero import WaveformHeroPanel
 from ui.components.painter_button import PainterButton
 from core.ytdlp_support import extract_info_with_auth, make_ydl_opts
 
+# ─── Accessibility (TTS, theme, shortcuts) ───
+from core.accessibility import Speaker, Announcer, ThemeManager, register_shortcuts
+from core.accessibility.speaker import get_speaker
+
 # ─── MIDI CC MAPPING (đọc từ app_config.json) ───
 try:
     MIDI_CC = backend.AppConfig.get_midi_cc()
@@ -200,6 +204,9 @@ class MainDashboard(QMainWindow):
 
         # YouTube URL Watcher — tự động dò tone khi mở YouTube
         self._start_youtube_watcher()
+
+        # Accessibility — TTS, theme, shortcuts (sau khi UI đã build xong)
+        self._init_accessibility()
 
     # ─────────────────────────────────────────
     #  HEADER (55px — Golden Ratio compact)
@@ -1214,6 +1221,334 @@ class MainDashboard(QMainWindow):
         if self._waveform is not None:
             self._waveform.set_score(score)
 
+    # ══════════════════════════════════════════
+    #  ACCESSIBILITY (TTS, theme, voice, shortcuts)
+    # ══════════════════════════════════════════
+
+    def _init_accessibility(self):
+        """Khởi tạo Speaker/Announcer/ThemeManager + đăng ký shortcuts.
+
+        Mọi lỗi đều bị nuốt và log — accessibility là tính năng phụ, không
+        được phép crash app khi pyttsx3/vosk thiếu.
+        """
+        try:
+            cfg = backend.AppConfig.get_accessibility()
+        except Exception:
+            cfg = {}
+
+        # Theme
+        try:
+            self._a11y_theme = ThemeManager()
+            self._a11y_theme.set_high_contrast(bool(cfg.get("high_contrast", False)))
+            self._a11y_theme.set_font_scale(float(cfg.get("font_scale", 1.0)))
+            self._a11y_theme.set_focus_ring_thick(bool(cfg.get("focus_ring_thick", False)))
+            self._a11y_theme.apply()
+        except Exception as e:
+            print(f"[A11Y] Theme init lỗi: {e}")
+            self._a11y_theme = None
+
+        # Speaker
+        try:
+            self._a11y_speaker = get_speaker(
+                rate=int(cfg.get("tts_rate", 180)),
+                voice_id=cfg.get("tts_voice", "") or "",
+                enabled=bool(cfg.get("tts_enabled", False)),
+            )
+            self._a11y_speaker.set_enabled(bool(cfg.get("tts_enabled", False)))
+            if self._a11y_speaker.enabled:
+                self._a11y_speaker.start()
+        except Exception as e:
+            print(f"[A11Y] Speaker init lỗi: {e}")
+            self._a11y_speaker = None
+
+        # Announcer
+        try:
+            self._a11y_announcer = Announcer(
+                speaker=self._a11y_speaker,
+                dashboard=self,
+                announce_focus=bool(cfg.get("announce_focus", True)),
+                announce_state=bool(cfg.get("announce_state", True)),
+            )
+            self._a11y_announcer.attach_focus_filter()
+            self._a11y_announcer.hook_dashboard_signals()
+        except Exception as e:
+            print(f"[A11Y] Announcer init lỗi: {e}")
+            self._a11y_announcer = None
+
+        # Voice command (lazy — chỉ tạo khi user kích hoạt vì cần Vosk model)
+        self._a11y_voice = None
+        if cfg.get("voice_command_enabled", False):
+            self._a11y_init_voice()
+
+        # Tab order — chạy theo Header → Mixer → Mode → Tools → Bottom
+        try:
+            self._setup_tab_order()
+        except Exception as e:
+            print(f"[A11Y] Tab order lỗi: {e}")
+
+        # Shortcuts
+        try:
+            register_shortcuts(self)
+        except Exception as e:
+            print(f"[A11Y] Shortcuts lỗi: {e}")
+
+    def _setup_tab_order(self):
+        """Thiết lập Tab order rõ ràng cho điều hướng bằng bàn phím."""
+        # Header → Tools → Mixer → Mode → Bottom
+        chain = []
+        for attr in ("tone_combo", "scale_combo", "_settings_btn", "_eye_btn"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                chain.append(w)
+        # Mixer sliders
+        for cc in ("mix_music", "mix_mic", "mix_reverb", "tone_music"):
+            sl = self._mixer_sliders.get(cc) if hasattr(self, "_mixer_sliders") else None
+            if sl is not None:
+                chain.append(sl)
+            mb = self._mixer_icon_btns.get(cc) if hasattr(self, "_mixer_icon_btns") else None
+            if mb is not None and mb.isVisible():
+                chain.append(mb)
+        # Mode + Tools buttons
+        for btn in (self._mode_buttons or {}).values():
+            chain.append(btn)
+        for key in ("Chế độ: Nhanh", "Chế độ: Full", "Dò Lại", "Auto-Tune", "Fix Méo"):
+            b = self._func_buttons.get(key)
+            if b is not None:
+                chain.append(b)
+        # Bottom bar
+        for key in ("💾 Lưu", "Danh sách", "Chấm điểm", "Thư Mục"):
+            b = self._func_buttons.get(key)
+            if b is not None:
+                chain.append(b)
+        if hasattr(self, "record_button") and self.record_button is not None:
+            chain.append(self.record_button)
+
+        # Đảm bảo focusable
+        from PySide6.QtCore import Qt
+        for w in chain:
+            try:
+                w.setFocusPolicy(Qt.StrongFocus)
+            except Exception:
+                pass
+
+        # Set Tab order theo cặp liên tiếp
+        for prev, nxt in zip(chain, chain[1:]):
+            try:
+                self.setTabOrder(prev, nxt)
+            except Exception:
+                pass
+
+    def _a11y_init_voice(self):
+        """Tạo VoiceInput service (chỉ gọi khi user enable + có model)."""
+        try:
+            from core.accessibility.voice_input import VoiceInput
+            self._a11y_voice = VoiceInput(
+                on_intent=self._a11y_on_voice_intent,
+                on_error=lambda msg: self._a11y_speak(msg, priority="high"),
+            )
+            if not self._a11y_voice.available:
+                self._a11y_speak("Chưa có model giọng nói. Hãy tải Vosk vi vào thư mục models.")
+                self._a11y_voice = None
+        except Exception as e:
+            print(f"[A11Y] VoiceInput init lỗi: {e}")
+            self._a11y_voice = None
+
+    def _a11y_speak(self, text, priority="normal"):
+        if getattr(self, "_a11y_announcer", None) is not None:
+            if priority == "high":
+                self._a11y_announcer.announce_error(text)
+            else:
+                self._a11y_announcer.announce_state(text)
+
+    # ── Shortcut callbacks ────────────────────────────────
+
+    def _a11y_speak_help(self):
+        lines = getattr(self, "_a11y_help_lines", []) or []
+        text = "Bộ phím tắt trợ năng. " + ". ".join(lines[:18]) if lines else "Chưa có phím tắt nào được đăng ký"
+        self._a11y_speak(text, priority="high")
+
+    def _a11y_speak_status(self):
+        try:
+            midi_ok = self.engine.is_midi_connected()
+        except Exception:
+            midi_ok = False
+        tone = getattr(self, "current_tone", "C")
+        scale = getattr(self, "current_scale", "Major")
+        mode = getattr(self, "current_mode", "")
+        from core.accessibility.announcer import key_to_vn
+        parts = [
+            f"MIDI {'kết nối' if midi_ok else 'mất kết nối'}",
+            f"tone {key_to_vn(tone, scale)}",
+        ]
+        if mode:
+            parts.append(f"chế độ {mode}")
+        try:
+            sl = self._mixer_sliders.get("mix_music")
+            if sl is not None:
+                parts.append(f"nhạc {int(sl.value())}")
+        except Exception:
+            pass
+        try:
+            sl = self._mixer_sliders.get("mix_mic")
+            if sl is not None:
+                parts.append(f"mic {int(sl.value())}")
+        except Exception:
+            pass
+        self._a11y_speak(", ".join(parts), priority="high")
+
+    def _a11y_toggle_tts(self):
+        spk = getattr(self, "_a11y_speaker", None)
+        if spk is None:
+            return
+        new_state = not spk.enabled
+        spk.set_enabled(new_state)
+        if new_state:
+            spk.start()
+            backend.AppConfig.set_accessibility(tts_enabled=True)
+            spk.speak("Đã bật giọng đọc", priority="high")
+        else:
+            backend.AppConfig.set_accessibility(tts_enabled=False)
+            self._show_message("TTS: tắt")
+
+    def _a11y_toggle_high_contrast(self):
+        tm = getattr(self, "_a11y_theme", None)
+        if tm is None:
+            return
+        tm.set_high_contrast(not tm.is_high_contrast())
+        tm.apply()
+        backend.AppConfig.set_accessibility(high_contrast=tm.is_high_contrast())
+        self._a11y_speak("Bật tương phản cao" if tm.is_high_contrast() else "Tắt tương phản cao")
+
+    def _a11y_increase_font(self):
+        tm = getattr(self, "_a11y_theme", None)
+        if tm is None:
+            return
+        tm.increase_font()
+        tm.apply()
+        backend.AppConfig.set_accessibility(font_scale=tm.font_scale())
+        self._a11y_speak(f"Cỡ chữ {int(tm.font_scale() * 100)} phần trăm")
+
+    def _a11y_decrease_font(self):
+        tm = getattr(self, "_a11y_theme", None)
+        if tm is None:
+            return
+        tm.decrease_font()
+        tm.apply()
+        backend.AppConfig.set_accessibility(font_scale=tm.font_scale())
+        self._a11y_speak(f"Cỡ chữ {int(tm.font_scale() * 100)} phần trăm")
+
+    def _a11y_reset_font(self):
+        tm = getattr(self, "_a11y_theme", None)
+        if tm is None:
+            return
+        tm.set_font_scale(1.0)
+        tm.apply()
+        backend.AppConfig.set_accessibility(font_scale=1.0)
+        self._a11y_speak("Khôi phục cỡ chữ mặc định")
+
+    def _a11y_tone_music_up(self):
+        self._a11y_step_tone("tone_music", +1)
+
+    def _a11y_tone_music_down(self):
+        self._a11y_step_tone("tone_music", -1)
+
+    def _a11y_tone_voice_up(self):
+        self._a11y_step_tone("tone_voice", +1)
+
+    def _a11y_tone_voice_down(self):
+        self._a11y_step_tone("tone_voice", -1)
+
+    def _a11y_step_tone(self, which: str, delta: int):
+        # Reuse existing slider if present (Tone Giọng = "tone_music" slider trong mixer
+        # với range -12..+12 đã có sẵn).  Tone "tone_voice" được điều khiển qua knob,
+        # nên ta gửi MIDI trực tiếp + cập nhật state.
+        try:
+            if which == "tone_music":
+                sl = self._mixer_sliders.get("tone_music")
+                if sl is not None:
+                    new = max(sl.minimum(), min(sl.maximum(), sl.value() + delta))
+                    sl.setValue(new)
+                    self._a11y_speak(f"Tone Giọng {new:+d}")
+                    return
+            # tone_voice: knob — tự gửi MIDI
+            cur = getattr(self, "tone_voice_value", 0)
+            new = max(-12, min(12, cur + delta))
+            self.tone_voice_value = new
+            midi_value = int(((new + 12) / 24) * 127)
+            self.engine.send_midi(MIDI_CC.get("tone_voice", 11), midi_value)
+            self._a11y_speak(f"Tone Nhạc {new:+d}")
+        except Exception as e:
+            print(f"[A11Y] step_tone lỗi: {e}")
+
+    def _a11y_toggle_mute_music(self):
+        self._a11y_toggle_mute("mix_music", "Nhạc")
+
+    def _a11y_toggle_mute_mic(self):
+        self._a11y_toggle_mute("mix_mic", "Mic")
+
+    def _a11y_toggle_mute_reverb(self):
+        self._a11y_toggle_mute("mix_reverb", "Vang")
+
+    def _a11y_toggle_mute_backing(self):
+        self._a11y_toggle_mute("mix_backing", "Giọng đệm")
+
+    def _a11y_toggle_mute(self, cc_key: str, label: str):
+        try:
+            ch = self._mixer_channels.get(cc_key) if hasattr(self, "_mixer_channels") else None
+            if ch is None or not getattr(ch, "mute_btn", None):
+                self._a11y_speak(f"Kênh {label} không có nút tắt âm")
+                return
+            ch.mute_btn.click()
+            is_muted = ch.is_muted()
+            self._a11y_speak(f"{label} {'đã tắt âm' if is_muted else 'đã bật lại'}")
+        except Exception as e:
+            print(f"[A11Y] toggle_mute lỗi: {e}")
+
+    def _a11y_on_voice_intent(self, intent):
+        """Xử lý intent từ voice command. intent: voice_input.Intent"""
+        name = getattr(intent, "name", "unknown")
+        text = getattr(intent, "text", "")
+        actions = {
+            "autokey":          self._on_force_rescan,
+            "record_toggle":    self._on_record,
+            "save":             self._on_save,
+            "open_songs":       self._show_songs_list,
+            "score":            self._on_score,
+            "speak_status":     self._a11y_speak_status,
+            "stop_tts":         lambda: self._a11y_speaker and self._a11y_speaker.stop(),
+            "mute_music":       self._a11y_toggle_mute_music,
+            "mute_mic":         self._a11y_toggle_mute_mic,
+            "volume_up_music":  lambda: self._a11y_step_volume("mix_music", +5),
+            "volume_down_music": lambda: self._a11y_step_volume("mix_music", -5),
+            "volume_up_mic":    lambda: self._a11y_step_volume("mix_mic", +1),
+            "volume_down_mic":  lambda: self._a11y_step_volume("mix_mic", -1),
+            "volume_up_reverb": lambda: self._a11y_step_volume("mix_reverb", +1),
+            "volume_down_reverb": lambda: self._a11y_step_volume("mix_reverb", -1),
+            "mode_danca":       lambda: self._on_mode_selected("Dân Ca"),
+            "mode_lofi":        lambda: self._on_mode_selected("Lofi"),
+            "mode_remix":       lambda: self._on_mode_selected("Remix"),
+            "mode_datheloai":   lambda: self._on_mode_selected("Đa Thể Loại"),
+        }
+        action = actions.get(name)
+        if action is None:
+            self._a11y_speak(f"Không hiểu lệnh: {text}")
+            return
+        try:
+            action()
+            self._a11y_speak("Đã thực hiện")
+        except Exception as e:
+            self._a11y_speak(f"Lỗi: {e}", priority="high")
+
+    def _a11y_step_volume(self, cc_key: str, delta: int):
+        try:
+            sl = self._mixer_sliders.get(cc_key) if hasattr(self, "_mixer_sliders") else None
+            if sl is None:
+                return
+            new = max(sl.minimum(), min(sl.maximum(), sl.value() + delta))
+            sl.setValue(new)
+        except Exception as e:
+            print(f"[A11Y] step_volume lỗi: {e}")
+
     def _ensure_app(self):
         if not QApplication.instance():
             self._app = QApplication(sys.argv)
@@ -1254,6 +1589,20 @@ class MainDashboard(QMainWindow):
             self._marquee_timer.stop()
         if self._marquee_widget is not None and hasattr(self._marquee_widget, 'timer'):
             self._marquee_widget.timer.stop()
+
+        # Accessibility cleanup
+        try:
+            spk = getattr(self, "_a11y_speaker", None)
+            if spk is not None:
+                spk.stop()
+        except Exception:
+            pass
+        try:
+            voice = getattr(self, "_a11y_voice", None)
+            if voice is not None:
+                voice.stop_listening()
+        except Exception:
+            pass
 
         # ── BƯỚC 3: Waveform + ghi âm (nhanh, không block) ────────────────────
         if self._waveform is not None:
