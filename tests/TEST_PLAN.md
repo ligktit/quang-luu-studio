@@ -176,9 +176,9 @@ def mock_midi_handler(mocker):
 | # | Test case | Setup | Expected |
 |---|---|---|---|
 | A-14 | `start_trial()` | Chưa có trial | `trial_start` được ghi vào file |
-| A-15 | `is_trial_active()` trong 7 ngày | `trial_start` = 3 ngày trước | `True` |
-| A-16 | `is_trial_expired()` sau 7 ngày | `trial_start` = 8 ngày trước | `True` |
-| A-17 | `get_trial_days_remaining()` | `trial_start` = 2 ngày trước | `5` (±1) |
+| A-15 | `is_trial_active()` trong 3 ngày | `trial_start` = 1 ngày trước | `True` |
+| A-16 | `is_trial_expired()` sau 3 ngày | `trial_start` = 4 ngày trước | `True` |
+| A-17 | `get_trial_days_remaining()` | `trial_start` = 1 ngày trước | `2` (±1) |
 | A-18 | `needs_activation()` — chưa activated, trial hết | — | `True` |
 | A-19 | `needs_activation()` — đang trial | Trial còn 3 ngày | `False` |
 

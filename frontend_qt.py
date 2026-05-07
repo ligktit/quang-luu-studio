@@ -1809,7 +1809,7 @@ class ActivationDialog(QDialog):
                 }}
             """)
         else:
-            trial_btn = QPushButton("🎁 Dùng thử miễn phí 7 ngày")
+            trial_btn = QPushButton("🎁 Dùng thử miễn phí 3 ngày")
             trial_btn.setFixedHeight(44)
             trial_btn.setCursor(Qt.PointingHandCursor)
             trial_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.1), 14, 18))

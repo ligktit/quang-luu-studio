@@ -96,7 +96,7 @@ def test_start_trial(mock_activation_file):
     # A-14
     res = ActivationManager.start_trial()
     assert res["success"] is True
-    assert res["days_remaining"] == 7
+    assert res["days_remaining"] == 3
     
     data = json.loads(mock_activation_file.read_text(encoding="utf-8"))
     assert "trial_start" in data
@@ -114,7 +114,7 @@ def test_is_trial_expired(mock_activation_file):
     # A-16
     ActivationManager.start_trial()
     data = json.loads(mock_activation_file.read_text(encoding="utf-8"))
-    data["trial_start"] = time.time() - (8 * 86400) # 8 days ago
+    data["trial_start"] = time.time() - (4 * 86400) # 4 days ago
     mock_activation_file.write_text(json.dumps(data), encoding="utf-8")
     
     assert ActivationManager.is_trial_expired() is True
@@ -123,17 +123,17 @@ def test_get_trial_days_remaining(mock_activation_file):
     # A-17
     ActivationManager.start_trial()
     data = json.loads(mock_activation_file.read_text(encoding="utf-8"))
-    data["trial_start"] = time.time() - (2 * 86400) # 2 days ago
+    data["trial_start"] = time.time() - (1 * 86400) # 1 day ago
     mock_activation_file.write_text(json.dumps(data), encoding="utf-8")
     
     days = ActivationManager.get_trial_days_remaining()
-    assert 4 <= days <= 6  # ~5 days
+    assert 1 <= days <= 3  # ~2 days
 
 def test_needs_activation_trial_expired(mock_activation_file):
     # A-18
     ActivationManager.start_trial()
     data = json.loads(mock_activation_file.read_text(encoding="utf-8"))
-    data["trial_start"] = time.time() - (8 * 86400) # 8 days ago
+    data["trial_start"] = time.time() - (4 * 86400) # 4 days ago
     mock_activation_file.write_text(json.dumps(data), encoding="utf-8")
     
     assert ActivationManager.needs_activation() is True
@@ -142,7 +142,7 @@ def test_needs_activation_trial_active(mock_activation_file):
     # A-19
     ActivationManager.start_trial()
     data = json.loads(mock_activation_file.read_text(encoding="utf-8"))
-    data["trial_start"] = time.time() - (3 * 86400) # 3 days ago
+    data["trial_start"] = time.time() - (1 * 86400) # 1 day ago
     mock_activation_file.write_text(json.dumps(data), encoding="utf-8")
     
     assert ActivationManager.needs_activation() is False
