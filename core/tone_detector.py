@@ -220,7 +220,18 @@ class ToneDetector:
                 print(f"   ✅ EMA blending (α={alpha})")
             else:
                 chroma_for_analysis = chroma_avg
+                
+            return ToneDetector._detect_key_from_chroma_impl(chroma_for_analysis, cqt_normalized)
+
+        except Exception as e:
+            print(f"[DÒ TONE] Lỗi phân tích: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return None
             
+    @staticmethod
+    def _detect_key_from_chroma_impl(chroma_for_analysis, cqt_normalized):
+        try:
             # === BƯỚC 3: Weighted Multi-profile correlation ===
             W = ToneDetector.PROFILE_WEIGHTS
             
@@ -344,7 +355,7 @@ class ToneDetector:
                 print(f"   {r['key']}: {r['correlation']:.4f}")
             
             # Giải phóng mảng trung gian trước khi return
-            del chroma_avg, cqt_normalized, chroma_for_analysis, all_results
+            del all_results
             try:
                 from core.memory import MemoryGuard
                 MemoryGuard.force_cleanup()
@@ -473,9 +484,18 @@ class ToneDetector:
                 print("[DÒ TONE] Không phát hiện âm thanh! Hãy đảm bảo đang phát nhạc.")
                 return None
             
-            
+            # Resample to 22050Hz for faster CQT processing without losing low-frequency resolution
+            target_sr = 22050
+            if device_sr > target_sr:
+                import librosa
+                audio_data = librosa.resample(audio_data, orig_sr=device_sr, target_sr=target_sr)
+                analyze_sr = target_sr
+                print(f"[DÒ TONE] Đã downsample loopback từ {device_sr}Hz xuống {target_sr}Hz (Đảm bảo độ chính xác)")
+            else:
+                analyze_sr = device_sr
+
             # Phân tích key
-            result = ToneDetector.detect_key_from_audio(audio_data, device_sr)
+            result = ToneDetector.detect_key_from_audio(audio_data, analyze_sr)
             del audio_data  # Giải phóng audio data ngay sau khi dò tone
             try:
                 from core.memory import MemoryGuard
@@ -615,7 +635,18 @@ class ToneDetector:
         boundaries = sorted(list(set(boundaries)))
         print(f"🎯 [NOVELTY] Refined {len(refined_boundaries)} điểm chuyển cấu trúc")
         
-        # 3. Detect tone cho mỗi phân đoạn
+        # 3. Detect tone cho mỗi phân đoạn bằng cách slice từ chroma tổng
+        # Tính CQT cho toàn bộ track một lần duy nhất (nhanh gấp nhiều lần gọi lại hàm detect)
+        print("[TIMELINE] Bắt đầu tính ma trận CQT tổng...")
+        # Tối ưu RAM: Xoá mean và giới hạn độ lớn (in-place)
+        audio_data -= np.mean(audio_data)
+        audio_data = np.clip(audio_data, -1.0, 1.0)
+        
+        # Use fine-grained hop_length for the actual detection
+        detect_hop_length = 512
+        full_chroma_cqt = librosa.feature.chroma_cqt(y=audio_data, sr=sr, hop_length=detect_hop_length)
+        full_rms = librosa.feature.rms(y=audio_data, hop_length=detect_hop_length)[0]
+        
         segments = []
         for i in range(len(boundaries) - 1):
             start = boundaries[i]
@@ -625,18 +656,39 @@ class ToneDetector:
                 pct = int((i + 1) / (len(boundaries) - 1) * 100)
                 on_progress(f"Dò tone {i+1}/{len(boundaries)-1} ({pct}%)...")
                 
-            seg_audio = audio_data[int(start*sr):int(end*sr)]
-            if len(seg_audio) < sr * 2:
-                continue
-                
-            rms = np.sqrt(np.mean(seg_audio ** 2))
-            if rms < 0.005:
-                del seg_audio  # Giải phóng segment audio
+            start_frame = int(start * sr / detect_hop_length)
+            end_frame = int(end * sr / detect_hop_length)
+            
+            if (end - start) < 2.0 or start_frame >= end_frame:
                 segments.append({'start': start, 'end': end, 'key_display': 'Silence', 'result': None})
                 continue
                 
-            result = ToneDetector.detect_key_from_audio(seg_audio, sr)
-            del seg_audio  # Giải phóng segment audio ngay sau khi dò tone
+            # Extract slice from precomputed RMS to check volume
+            rms_slice = full_rms[start_frame:end_frame]
+            if np.mean(rms_slice) < 0.005:
+                segments.append({'start': start, 'end': end, 'key_display': 'Silence', 'result': None})
+                continue
+                
+            # Extract slice from precomputed CQT
+            chroma_slice = full_chroma_cqt[:, start_frame:end_frame]
+            
+            # Energy weighted average
+            rms_sum = np.sum(rms_slice)
+            if rms_sum > 0:
+                chroma_avg = np.average(chroma_slice, axis=1, weights=rms_slice / rms_sum)
+            else:
+                chroma_avg = np.mean(chroma_slice, axis=1)
+                
+            # Normalize
+            cs = np.sum(chroma_avg)
+            if cs > 0:
+                chroma_avg = chroma_avg / cs
+                
+            cqt_normalized = chroma_avg.copy()
+            
+            # Re-use the extracted correlation logic
+            result = ToneDetector._detect_key_from_chroma_impl(chroma_avg, cqt_normalized)
+            
             if result:
                 segments.append({
                     'start': start, 'end': end,
@@ -646,6 +698,9 @@ class ToneDetector:
                 print(f"   🎵 Phân đoạn [{start:.1f}s - {end:.1f}s]: {result['key_display']} (conf={result.get('confidence',0):.3f})")
             else:
                 segments.append({'start': start, 'end': end, 'key_display': 'Unknown', 'result': None})
+                
+        # Giải phóng biến lớn
+        del full_chroma_cqt, full_rms
                 
         # 4. Merge adjacent segments (bỏ Silence/Unknown)
         merged_segments = []

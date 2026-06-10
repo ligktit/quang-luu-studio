@@ -271,7 +271,7 @@ class TestDetectTone:
 class TestToneCacheHelpers:
 
     def test_check_tone_cache_hit(self, engine, mocker):
-        """E-17: _check_tone_cache returns result when cache has entry"""
+        """E-17: _build_cache_result returns result when cache has entry"""
         cached_data = {
             "primary_key": "D",
             "key_timeline": [{
@@ -280,19 +280,16 @@ class TestToneCacheHelpers:
             }],
             "title": "Test Song",
         }
-        mocker.patch("core.engine._tone.ToneCacheManager.get_cached_tone", return_value=cached_data)
         mocker.patch("core.engine._tone._ToneMixin._send_tone_midi")
 
-        result = engine._check_tone_cache("https://www.youtube.com/watch?v=test")
+        result = engine._build_cache_result(cached_data)
         assert result is not None
         assert result["key_display"] == "D"
         assert result["from_cache"] is True
 
     def test_check_tone_cache_miss(self, engine, mocker):
-        """E-18: _check_tone_cache returns None when no cache"""
-        mocker.patch("core.engine._tone.ToneCacheManager.get_cached_tone", return_value=None)
-
-        result = engine._check_tone_cache("https://www.youtube.com/watch?v=miss")
+        """E-18: _build_cache_result returns None when timeline is empty"""
+        result = engine._build_cache_result({"key_timeline": []})
         assert result is None
 
     def test_save_tone_to_cache(self, engine, mocker):

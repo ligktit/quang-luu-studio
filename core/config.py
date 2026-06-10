@@ -69,6 +69,7 @@ SONGS_FILE = os.path.join(DATA_DIR, "saved_songs.json")
 ACTIVATION_FILE = os.path.join(DATA_DIR, "activation.json")
 MANUAL_TIMELINES_FILE = os.path.join(DATA_DIR, "manual_timelines.json")
 TONE_CACHE_FILE = os.path.join(DATA_DIR, "tone_cache.json")
+UI_CONFIG_FILE = os.path.join(DATA_DIR, "ui_config.json")
 
 # --- APP CONFIG (read-only, nằm cạnh exe → APP_DIR) ---
 APP_CONFIG_FILE = "app_config.json"
@@ -103,6 +104,12 @@ _DEFAULT_APP_CONFIG = {
     },
     "mode_midi_map": {
         "Fix Méo": 127
+    },
+    "mode_config": {
+        "Dân Ca":       {"cc": 30, "on_value": 127, "off_value": 0},
+        "Lofi":         {"cc": 37, "on_value": 127, "off_value": 0},
+        "Remix":        {"cc": 38, "on_value": 127, "off_value": 0},
+        "Đa Thể Loại":  {"cc": 39, "on_value": 127, "off_value": 0}
     },
     "mute_multi_cc": {
         "mix_music":   [],
@@ -204,6 +211,11 @@ class AppConfig:
         return cls.load().get("mode_midi_map", _DEFAULT_APP_CONFIG["mode_midi_map"])
 
     @classmethod
+    def get_mode_config(cls):
+        """Lấy cấu hình MIDI chi tiết của các chế độ (CC, on_value, off_value)"""
+        return cls.load().get("mode_config", _DEFAULT_APP_CONFIG["mode_config"])
+
+    @classmethod
     def get_accessibility(cls):
         """Lấy accessibility config (TTS, voice command, theme...)."""
         return cls.load().get("accessibility", _DEFAULT_APP_CONFIG["accessibility"])
@@ -299,4 +311,60 @@ class ConfigManager:
             return True
         except Exception as e:
             print(f"Lỗi lưu settings: {e}")
+            return False
+
+class UiConfigManager:
+    """Quản lý file ui_config.json cho Dev Mode"""
+    
+    _DEFAULT_UI_CONFIG = {
+        "mixer": [
+            {
+                "id": "mix_music", "type": "slider", "label": "Nhạc", "icon": "♪", "color": "#14b8a6",
+                "cc": "mix_music", "range": [0, 100], "default": 70, "unit": "", "has_mute": True, "has_inf_bottom": False, "hidden": False
+            },
+            {
+                "id": "mix_mic", "type": "slider", "label": "Mic", "icon": "☉", "color": "#f97316",
+                "cc": "mix_mic", "range": [-10, 10], "default": 0, "unit": "", "has_mute": True, "has_inf_bottom": True, "hidden": False
+            },
+            {
+                "id": "mix_reverb", "type": "slider", "label": "Vang", "icon": "≡", "color": "#eab308",
+                "cc": "mix_reverb", "range": [-10, 10], "default": 0, "unit": "", "has_mute": True, "has_inf_bottom": True, "hidden": False
+            },
+            {
+                "id": "tone_music", "type": "slider", "label": "Giọng", "icon": "↕", "color": "#8b5cf6",
+                "cc": "tone_music", "range": [-12, 12], "default": 0, "unit": "", "has_mute": False, "has_inf_bottom": False, "hidden": False
+            }
+        ],
+        "tools": [
+            {"id": "btn_fast_mode", "type": "button", "label": "Chế độ: Nhanh", "color": "#f97316", "action": "toggle_scan_mode", "desc": "Chuyển chế độ dò tone giữa Nhanh và Full", "hidden": False},
+            {"id": "btn_rescan", "type": "button", "label": "Dò Lại", "color": "#14b8a6", "action": "force_rescan", "desc": "Buộc dò lại tone bài hát đang phát", "hidden": False},
+            {"id": "btn_autotune", "type": "button", "label": "Auto-Tune", "color": "#ec4899", "action": "tone_auto", "desc": "Bật tắt Auto-Tune trên Studio One", "hidden": False},
+            {"id": "btn_fixmeo", "type": "button", "label": "Fix Méo", "color": "#8b5cf6", "action": "fix_meo", "desc": "Bật tắt chế độ chống méo giọng", "hidden": False}
+        ],
+        "mode": [
+            {"id": "mode_danca", "type": "button", "label": "Dân Ca", "color": "#ec4899", "action": "set_mode_danca", "hidden": False},
+            {"id": "mode_lofi", "type": "button", "label": "Lofi", "color": "#14b8a6", "action": "set_mode_lofi", "hidden": False},
+            {"id": "mode_remix", "type": "button", "label": "Remix", "color": "#f97316", "action": "set_mode_remix", "hidden": False},
+            {"id": "mode_datheloai", "type": "button", "label": "Đa Thể Loại", "color": "#8b5cf6", "action": "set_mode_datheloai", "hidden": False}
+        ]
+    }
+
+    @staticmethod
+    def load_ui_config():
+        if os.path.exists(UI_CONFIG_FILE):
+            try:
+                with open(UI_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return copy.deepcopy(UiConfigManager._DEFAULT_UI_CONFIG)
+    
+    @staticmethod
+    def save_ui_config(ui_config):
+        try:
+            with open(UI_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(ui_config, f, indent=4, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print(f"Lỗi lưu ui_config: {e}")
             return False

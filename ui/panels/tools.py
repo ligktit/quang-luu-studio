@@ -124,17 +124,52 @@ def build_panel_tools(dashboard) -> GlassPanel:
     grid = QGridLayout()
     grid.setSpacing(3)
 
-    func_btns = [
-        ("Chế độ: Nhanh", C["orange"],      dashboard._on_toggle_scan_mode,
-         "Chuyển chế độ dò tone giữa Nhanh và Full"),
-        ("Dò Lại",        C["teal"],         dashboard._on_force_rescan,
-         "Buộc dò lại tone bài hát đang phát. Phím tắt Ctrl+D"),
-        ("Auto-Tune",     C["pink"],         dashboard._on_tone_auto,
-         "Bật tắt Auto-Tune trên Studio One"),
-        ("Fix Méo",       C["deep_purple"],  dashboard._on_fix_meo,
-         "Bật tắt chế độ chống méo giọng"),
-    ]
-    for i, (text, color, cb, desc) in enumerate(func_btns):
+    ui_config = backend.UiConfigManager.load_ui_config()
+    tools_config = ui_config.get("tools", [])
+
+    func_btns = []
+    for t_cfg in tools_config:
+        if t_cfg.get("hidden", False):
+            continue
+        
+        text = t_cfg.get("label", "Unknown")
+        c_val = t_cfg.get("color", "#ffffff")
+        if c_val in C:
+            c_val = C[c_val]
+            
+        action_name = t_cfg.get("action", "")
+        # Get callback from dashboard. Custom action might need a generic handler later.
+        cb = getattr(dashboard, f"_on_{action_name}", None)
+        if not cb:
+            # If no built-in method, it's a custom dev-mode button sending a CC
+            cc_val = t_cfg.get("cc")
+            on_val = t_cfg.get("on_value", 127)
+            off_val = t_cfg.get("off_value", 0)
+            is_toggle = t_cfg.get("is_toggle", False)
+            
+            # Use default args pattern to avoid late binding issues in loops
+            def make_custom_cb(c=cc_val, on=on_val, off=off_val, toggle=is_toggle, text_key=text):
+                def _do_action():
+                    btn = dashboard._func_buttons.get(text_key)
+                    if btn and toggle:
+                        # Toggle state
+                        is_active = not getattr(btn, "_is_active", False)
+                        btn.setActive(is_active)
+                        val = on if is_active else off
+                    else:
+                        # Momentary state
+                        val = on
+                        # Wait, we might need to send off_value on release for momentary?
+                        # For now just send on_val
+                    dashboard.engine.send_midi(c, val)
+                return _do_action
+            
+            cb = make_custom_cb()
+            
+        desc = t_cfg.get("desc", "")
+        func_btns.append((text, c_val, cb, desc, t_cfg))
+        
+    for i, (text, color, cb, desc, t_cfg) in enumerate(func_btns):
         btn = PainterButton(text, color=color, height=26, radius=8, font_size=9)
         btn.setAccessibleName(text)
         btn.setAccessibleDescription(desc)
@@ -147,8 +182,44 @@ def build_panel_tools(dashboard) -> GlassPanel:
             btn.setActive(getattr(dashboard, "tune_state", True))
         elif text == "Fix Méo":
             btn.setActive(getattr(dashboard, "fix_meo_state", False))
+            
+        # --- Dev Mode Context Menu ---
+        if getattr(dashboard, "is_dev_mode", False):
+            from PySide6.QtCore import Qt
+            btn.setContextMenuPolicy(Qt.CustomContextMenu)
+            
+            def make_ctx_cb(cfg=t_cfg, b=btn):
+                def show_ctx(pos):
+                    from PySide6.QtWidgets import QMenu
+                    from PySide6.QtGui import QAction
+                    menu = QMenu(b)
+                    menu.setStyleSheet("QMenu { background: #1e1e1e; color: white; }")
+                    
+                    edit_act = QAction("Sửa", menu)
+                    edit_act.triggered.connect(lambda: dashboard._on_edit_widget("tools", cfg))
+                    
+                    hide_act = QAction("Ẩn", menu)
+                    hide_act.triggered.connect(lambda: dashboard._on_hide_widget("tools", cfg))
+                    
+                    menu.addAction(edit_act)
+                    menu.addAction(hide_act)
+                    menu.exec(b.mapToGlobal(pos))
+                return show_ctx
+                
+            btn.customContextMenuRequested.connect(make_ctx_cb())
 
     panel.body_layout.addLayout(grid)
+    
+    # --- Dev Mode Add Button ---
+    if getattr(dashboard, "is_dev_mode", False):
+        from PySide6.QtWidgets import QPushButton
+        from PySide6.QtCore import Qt
+        add_btn = QPushButton("+ Thêm Nút")
+        add_btn.setStyleSheet(f"background-color: transparent; border: 1px dashed {C['teal']}; color: {C['teal']};")
+        add_btn.setCursor(Qt.PointingHandCursor)
+        add_btn.clicked.connect(lambda: dashboard._on_add_widget("tools", "button"))
+        panel.body_layout.addWidget(add_btn)
+        
     panel.body_layout.addSpacing(16)
 
     hl = QHBoxLayout()

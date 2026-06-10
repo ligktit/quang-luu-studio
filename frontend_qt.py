@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QFrame, QDialog, QLineEdit, QFileDialog, QGraphicsDropShadowEffect,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QSignalBlocker
-from PySide6.QtGui import QColor, QIcon, QFontDatabase
+from PySide6.QtGui import QColor, QIcon, QFontDatabase, QKeySequence
 import backend
 
 # ─── Design System (Single Source of Truth) ───
@@ -131,6 +131,7 @@ class MainDashboard(QMainWindow):
         self.tune_state = True
         self.fix_meo_state = False
         self.current_scale = "Major"
+        self.is_dev_mode = False
 
         self._mixer_channels = {}
 
@@ -168,13 +169,26 @@ class MainDashboard(QMainWindow):
 
         # Build UI — V5.0: Performance Stage (waveform hero + tabbed dock)
         root.addWidget(self._build_header())
-        root.addWidget(self._build_body(), 1)
+        
+        self._body_wrapper = QWidget()
+        self._body_layout = QVBoxLayout(self._body_wrapper)
+        self._body_layout.setContentsMargins(0, 0, 0, 0)
+        self._body_layout.addWidget(self._build_body())
+        root.addWidget(self._body_wrapper, 1)
+        
         root.addWidget(self._build_bottom_bar())
 
         compact_min_h = max(200, self.minimumSizeHint().height())
         self.setMinimumHeight(compact_min_h)
         self.setMinimumWidth(780)
-        self.resize(850, max(compact_min_h + 20, 280))
+        
+        # Restore window geometry or use default
+        geom = self.settings.get("window_geometry")
+        if geom:
+            self.resize(geom.get("width", 850), geom.get("height", max(compact_min_h + 20, 280)))
+            self.move(geom.get("x", 100), geom.get("y", 100))
+        else:
+            self.resize(850, max(compact_min_h + 20, 280))
 
         # MIDI
         self.engine.register_midi_callback(self.on_midi_status_changed)
@@ -207,6 +221,66 @@ class MainDashboard(QMainWindow):
 
         # Accessibility — TTS, theme, shortcuts (sau khi UI đã build xong)
         self._init_accessibility()
+
+        # Đồng bộ chế độ mặc định lúc khởi động
+        self._on_mode_selected(self.current_mode, toggle=False)
+        
+        # Dev Mode Shortcut
+        from PySide6.QtGui import QShortcut, QKeySequence
+        self._dev_mode_shortcut = QShortcut(QKeySequence("Ctrl+Shift+D"), self)
+        self._dev_mode_shortcut.activated.connect(self._toggle_dev_mode)
+
+    def _toggle_dev_mode(self):
+        self.is_dev_mode = not self.is_dev_mode
+        self._show_message(f"Dev Mode: {'ON' if self.is_dev_mode else 'OFF'}")
+        self.refresh_ui()
+
+    def refresh_ui(self):
+        # Clear body layout
+        for i in reversed(range(self._body_layout.count())):
+            widget = self._body_layout.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
+                widget.deleteLater()
+        
+        # Rebuild body
+        self._body_layout.addWidget(self._build_body())
+
+    def _on_add_widget(self, panel_name, widget_type):
+        from ui.dialogs.widget_builder import WidgetBuilderDialog
+        dialog = WidgetBuilderDialog(self, panel_name=panel_name, widget_type=widget_type)
+        if dialog.exec() == QDialog.Accepted and dialog.result_data:
+            ui_config = backend.UiConfigManager.load_ui_config()
+            panel_list = ui_config.get(panel_name, [])
+            panel_list.append(dialog.result_data)
+            ui_config[panel_name] = panel_list
+            backend.UiConfigManager.save_ui_config(ui_config)
+            self.refresh_ui()
+
+    def _on_edit_widget(self, panel_name, widget_data):
+        from ui.dialogs.widget_builder import WidgetBuilderDialog
+        dialog = WidgetBuilderDialog(self, panel_name=panel_name, widget_type=widget_data.get("type", "slider"), existing_data=widget_data)
+        if dialog.exec() == QDialog.Accepted and dialog.result_data:
+            ui_config = backend.UiConfigManager.load_ui_config()
+            panel_list = ui_config.get(panel_name, [])
+            for i, item in enumerate(panel_list):
+                if item.get("id") == widget_data.get("id"):
+                    panel_list[i] = dialog.result_data
+                    break
+            ui_config[panel_name] = panel_list
+            backend.UiConfigManager.save_ui_config(ui_config)
+            self.refresh_ui()
+            
+    def _on_hide_widget(self, panel_name, widget_data):
+        ui_config = backend.UiConfigManager.load_ui_config()
+        panel_list = ui_config.get(panel_name, [])
+        for i, item in enumerate(panel_list):
+            if item.get("id") == widget_data.get("id"):
+                panel_list[i]["hidden"] = True
+                break
+        ui_config[panel_name] = panel_list
+        backend.UiConfigManager.save_ui_config(ui_config)
+        self.refresh_ui()
 
     # ─────────────────────────────────────────
     #  HEADER (55px — Golden Ratio compact)
@@ -381,6 +455,50 @@ class MainDashboard(QMainWindow):
                 self.fix_meo_state = (value >= 64)
                 btn = self._func_buttons.get("Fix Méo")
                 if btn: btn.setActive(self.fix_meo_state)
+
+            # --- Xử lý phản hồi Chế độ (Mode) từ MIDI ---
+            try:
+                mode_config = backend.AppConfig.get_mode_config()
+            except Exception:
+                mode_config = {
+                    "Dân Ca": {"cc": 30, "on_value": 127, "off_value": 0},
+                    "Lofi": {"cc": 37, "on_value": 127, "off_value": 0},
+                    "Remix": {"cc": 38, "on_value": 127, "off_value": 0},
+                    "Đa Thể Loại": {"cc": 39, "on_value": 127, "off_value": 0}
+                }
+
+            mode_changed = False
+            for m_name, cfg in mode_config.items():
+                m_cc = int(cfg.get("cc", 30))
+                if cc == m_cc:
+                    on_val = int(cfg.get("on_value", 127))
+                    off_val = int(cfg.get("off_value", 0))
+
+                    if value == on_val:
+                        self.current_mode = m_name
+                        mode_changed = True
+                        break
+                    elif value == off_val and self.current_mode == m_name:
+                        self.current_mode = None
+                        mode_changed = True
+                        break
+
+            if mode_changed:
+                for m, btn in self._mode_buttons.items():
+                    base = self._mode_colors.get(m, C["card_hover"])
+                    if m == self.current_mode:
+                        btn.setStyleSheet(f"""
+                            QPushButton {{
+                                background-color: {_lighten(base, 0.25)};
+                                color: white; border: 2px solid white;
+                                border-radius: 10px; font-size: 10px; font-weight: 700;
+                                font-family: {FONT};
+                            }}
+                            QPushButton:hover {{ background-color: {_lighten(base, 0.3)}; }}
+                        """)
+                    else:
+                        btn.setStyleSheet(pill_btn_qss(base, _lighten(base, 0.15), 10, 10))
+                print(f"[MIDI SYNC] Cập nhật Mode thành: {self.current_mode}")
 
         except Exception as e:
             print(f"[MIDI SYNC] UI MIDI Sync Error: {e}")
@@ -1124,28 +1242,46 @@ class MainDashboard(QMainWindow):
                 err = getattr(self.engine.recorder, 'last_error', None) or "Không tìm thấy thiết bị WASAPI Loopback"
                 self._show_message(f"❌ Không thể ghi âm: {err[:80]}", is_error=True)
 
-    def _on_mode_selected(self, mode):
-        self.current_mode = mode
+    def _on_mode_selected(self, mode, toggle=False):
+        old_mode = self.current_mode
+        if toggle and old_mode == mode:
+            self.current_mode = None
+        else:
+            self.current_mode = mode
 
-        # Gửi MIDI CC khi chọn mode (ON = 127, OFF = 0)
-        mode_cc_mapping = {
-            "Dân Ca": int(MIDI_CC.get("mode_danca", 30)),
-            "Lofi": int(MIDI_CC.get("mode_lofi", 37)),
-            "Remix": int(MIDI_CC.get("mode_remix", 38)),
-            "Đa Thể Loại": int(MIDI_CC.get("mode_datheloai", 39))
-        }
+        # Load mode config từ AppConfig
+        try:
+            mode_config = backend.AppConfig.get_mode_config()
+        except Exception:
+            mode_config = {
+                "Dân Ca": {"cc": 30, "on_value": 127, "off_value": 0},
+                "Lofi": {"cc": 37, "on_value": 127, "off_value": 0},
+                "Remix": {"cc": 38, "on_value": 127, "off_value": 0},
+                "Đa Thể Loại": {"cc": 39, "on_value": 127, "off_value": 0}
+            }
 
-        # Send 127 to the selected mode, 0 to the others
-        for m_name, cc_num in mode_cc_mapping.items():
-            val = 127 if m_name == mode else 0
-            self.engine.send_midi(cc_num, val)
-            if m_name == mode:
-                print(f"🎭 [MODE] {mode} -> MIDI CC {cc_num} Value {val}")
+        # Gửi DUY NHẤT 1 tin nhắn MIDI CC tương ứng với sự thay đổi của nút vừa bấm
+        if toggle and old_mode == mode:
+            # Tắt chế độ đang chọn
+            cfg = mode_config.get(mode)
+            if cfg:
+                cc_num = int(cfg.get("cc", 30))
+                off_val = int(cfg.get("off_value", 0))
+                self.engine.send_midi(cc_num, off_val)
+                print(f"🎭 [MODE] Tắt {mode} -> MIDI CC {cc_num} Value {off_val}")
+        else:
+            # Bật chế độ mới
+            cfg = mode_config.get(mode)
+            if cfg:
+                cc_num = int(cfg.get("cc", 30))
+                on_val = int(cfg.get("on_value", 127))
+                self.engine.send_midi(cc_num, on_val)
+                print(f"🎭 [MODE] Bật {mode} -> MIDI CC {cc_num} Value {on_val}")
 
-        # Visual feedback — use the single source defined in _build_panel_mode.
+        # Cập nhật style trên UI cho tất cả các nút
         for m, btn in self._mode_buttons.items():
             base = self._mode_colors.get(m, C["card_hover"])
-            if m == mode:
+            if m == self.current_mode:
                 btn.setStyleSheet(f"""
                     QPushButton {{
                         background-color: {_lighten(base, 0.25)};
@@ -1735,6 +1871,15 @@ class MainDashboard(QMainWindow):
             for cc_key, slider in getattr(self, '_mixer_sliders', {}).items():
                 mixer_levels[cc_key] = slider.value()
             self.settings["mixer_levels"] = mixer_levels
+            
+            # Save window position and size
+            self.settings["window_geometry"] = {
+                "x": self.x(),
+                "y": self.y(),
+                "width": self.width(),
+                "height": self.height()
+            }
+            
             backend.ConfigManager.save_settings(self.settings)
         except Exception as e:
             print(f"Lỗi lưu mixer levels: {e}")

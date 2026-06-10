@@ -25,6 +25,7 @@ from core.config import (
     MANUAL_TIMELINES_FILE,
     TONE_CACHE_FILE,
     APP_CONFIG_FILE,
+    UI_CONFIG_FILE,
     MIDI_PORT_NAME,
     FFMPEG_LOCATION,
     APP_DIR,
@@ -32,6 +33,7 @@ from core.config import (
     RECORDINGS_DIR,
     AppConfig,
     ConfigManager,
+    UiConfigManager,
 )
 from core.activation import ActivationManager
 
@@ -85,7 +87,7 @@ __all__ = [
     "MIDI_PORT_NAME", "FFMPEG_LOCATION",
     "APP_DIR", "DATA_DIR", "RECORDINGS_DIR",
     # Eager classes
-    "AppConfig", "ConfigManager", "ActivationManager",
+    "AppConfig", "ConfigManager", "ActivationManager", "UiConfigManager",
     # Lazy classes / functions
     *_LAZY_EXPORTS.keys(),
 ]

@@ -57,6 +57,28 @@
     "mode_midi_map": {
         "Fix Méo": 127
     },
+    "mode_config": {
+        "Dân Ca": {
+            "cc": 30,
+            "on_value": 127,
+            "off_value": 0
+        },
+        "Lofi": {
+            "cc": 37,
+            "on_value": 127,
+            "off_value": 0
+        },
+        "Remix": {
+            "cc": 38,
+            "on_value": 127,
+            "off_value": 0
+        },
+        "Đa Thể Loại": {
+            "cc": 39,
+            "on_value": 127,
+            "off_value": 0
+        }
+    },
     "mute_multi_cc": {
         "mix_music": [],
         "mix_mic": [],
@@ -85,7 +107,7 @@
         "mix_backing": []
     },
     "accessibility": {
-        "tts_enabled": false,
+        "tts_enabled": true,
         "tts_voice": "",
         "tts_rate": 180,
         "voice_command_enabled": true,

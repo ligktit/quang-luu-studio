@@ -76,12 +76,33 @@ def build_panel_mixer(dashboard) -> GlassPanel:
             return 0
         return val
 
-    channels = [
-        {"label": "Nhạc", "icon": "♪", "color": C["teal"],   "cc": "mix_music",  "range": (0, 100),  "default": _get_level("mix_music", 70), "unit": "", "has_mute": True, "has_inf_bottom": False},
-        {"label": "Mic",  "icon": "☉", "color": C["orange"], "cc": "mix_mic",    "range": (-10, 10), "default": _get_level("mix_mic", 0), "unit": "", "has_mute": True, "has_inf_bottom": True},
-        {"label": "Vang", "icon": "≡", "color": C["accent"], "cc": "mix_reverb", "range": (-10, 10), "default": _get_level("mix_reverb", 0), "unit": "", "has_mute": True, "has_inf_bottom": True},
-        {"label": "Giọng", "icon": "↕", "color": C["deep_purple"], "cc": "tone_music", "range": (-12, 12), "default": _get_level("tone_music", 0), "unit": "", "has_mute": False, "has_inf_bottom": False},
-    ]
+    ui_config = backend.UiConfigManager.load_ui_config()
+    channels_config = ui_config.get("mixer", [])
+
+    channels = []
+    for ch_cfg in channels_config:
+        if ch_cfg.get("hidden", False):
+            continue
+        
+        # Resolve dynamic color if it's a token name
+        c_val = ch_cfg.get("color", "#ffffff")
+        if c_val in C:
+            c_val = C[c_val]
+
+        cc_key = ch_cfg.get("cc", "mix_music")
+        
+        channels.append({
+            "label": ch_cfg.get("label", ""),
+            "icon": ch_cfg.get("icon", ""),
+            "color": c_val,
+            "cc": cc_key,
+            "range": tuple(ch_cfg.get("range", [0, 100])),
+            "default": _get_level(cc_key, ch_cfg.get("default", 0)),
+            "unit": ch_cfg.get("unit", ""),
+            "has_mute": ch_cfg.get("has_mute", False),
+            "has_inf_bottom": ch_cfg.get("has_inf_bottom", False),
+            "id": ch_cfg.get("id", cc_key)
+        })
 
     dashboard._mixer_sliders = {}
     dashboard._mixer_val_labels = {}
@@ -136,11 +157,46 @@ def build_panel_mixer(dashboard) -> GlassPanel:
                 announcer.announce_slider(cc_key, value)
         ch_view.slider.valueChanged.connect(_announce_slider_value)
 
+        # --- Dev Mode Context Menu ---
+        if getattr(dashboard, "is_dev_mode", False):
+            ch_view.setContextMenuPolicy(Qt.CustomContextMenu)
+            
+            # Using default argument for early binding
+            def make_ctx_cb(cfg=ch_cfg):
+                def show_ctx(pos):
+                    from PySide6.QtWidgets import QMenu
+                    from PySide6.QtGui import QAction
+                    menu = QMenu(ch_view)
+                    menu.setStyleSheet("QMenu { background: #1e1e1e; color: white; }")
+                    
+                    edit_act = QAction("Sửa", menu)
+                    edit_act.triggered.connect(lambda: dashboard._on_edit_widget("mixer", cfg))
+                    
+                    hide_act = QAction("Ẩn", menu)
+                    hide_act.triggered.connect(lambda: dashboard._on_hide_widget("mixer", cfg))
+                    
+                    menu.addAction(edit_act)
+                    menu.addAction(hide_act)
+                    menu.exec(ch_view.mapToGlobal(pos))
+                return show_ctx
+                
+            ch_view.customContextMenuRequested.connect(make_ctx_cb())
+
         vl.addWidget(ch_view)
         dashboard._mixer_sliders[ch["cc"]] = ch_view.slider
         dashboard._mixer_val_labels[ch["cc"]] = ch_view.val_label
         dashboard._mixer_icon_btns[ch["cc"]] = ch_view.mute_btn
         dashboard._mixer_channels[ch["cc"]] = ch_view
+
+    # --- Dev Mode Add Button ---
+    if getattr(dashboard, "is_dev_mode", False):
+        from PySide6.QtWidgets import QPushButton
+        from PySide6.QtCore import Qt
+        add_btn = QPushButton("+ Thêm")
+        add_btn.setStyleSheet(f"background-color: transparent; border: 1px dashed {C['teal']}; color: {C['teal']};")
+        add_btn.setCursor(Qt.PointingHandCursor)
+        add_btn.clicked.connect(lambda: dashboard._on_add_widget("mixer", "slider"))
+        vl.addWidget(add_btn)
 
     vl.addStretch()
     return panel

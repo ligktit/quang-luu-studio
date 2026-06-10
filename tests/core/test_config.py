@@ -147,3 +147,12 @@ def test_configmanager_round_trip(tmp_path):
         ConfigManager.save_settings(original)
         loaded = ConfigManager.load_settings()
         assert loaded == original
+
+
+def test_appconfig_get_mode_config():
+    with patch("core.config.AppConfig._get_config_path", return_value="dummy"):
+        mode_cfg = AppConfig.get_mode_config()
+        assert "Lofi" in mode_cfg
+        assert "cc" in mode_cfg["Lofi"]
+        assert mode_cfg["Lofi"]["cc"] == 37
+

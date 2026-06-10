@@ -304,7 +304,10 @@ class TestDetectTimelineAdvanced:
             "confidence": 0.8, "key_display": "C",
         }
 
-        with patch.object(ToneDetector, "detect_key_from_audio", return_value=stub_result), \
+        fake_lib = _make_fake_librosa()
+        with patch.dict("sys.modules", {"librosa": fake_lib}), \
+             patch.object(ToneDetector, "_detect_key_from_chroma_impl", return_value=stub_result), \
+             patch.object(ToneDetector, "detect_key_from_audio", return_value=stub_result), \
              patch("core.memory.MemoryGuard.force_cleanup", MagicMock()):
             result = ToneDetector.detect_timeline_advanced(
                 audio, sr, on_progress=None
