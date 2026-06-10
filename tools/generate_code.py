@@ -9,32 +9,43 @@ import sys
 
 import os
 
-# Secret key - NÊN THAY ĐỔI TRONG MÔI TRƯỜNG THỰC TẾ
-SECRET_KEY = os.environ.get("QUANGLUU_STUDIO_SECRET_KEY", "QUANGLUU_STUDIO_2026_SECRET_KEY_CHANGE_THIS")
+# Secret key - PHẢI GIỐNG VỚI core/activation.py
+# Key cũ (placeholder) đã bị lộ trên GitHub → key mới làm mọi code cũ mất hiệu lực.
+SECRET_KEY = os.environ.get(
+    "QUANGLUU_STUDIO_SECRET_KEY",
+    "936c3f6655acc46ba5c41603446addb7e5b25df85c953d003eba554527e267e4"
+)
 
 def generate_activation_code():
     """
     Tạo activation code với format: XXXX-XXXX-XXXX-XXXX
     Bao gồm checksum để validate
     """
-    # Tạo 4 nhóm, mỗi nhóm 4 ký tự
-    groups = []
-    for _ in range(4):
-        # Mỗi nhóm: 2 chữ cái + 2 số
-        group = ''.join(random.choices(string.ascii_uppercase, k=2))
-        group += ''.join(random.choices(string.digits, k=2))
-        groups.append(group)
-    
-    # Tạo code base
-    base_code = '-'.join(groups)
-    
-    # Tính checksum (hash của base_code + secret key)
-    checksum_input = base_code + SECRET_KEY
-    checksum = hashlib.md5(checksum_input.encode()).hexdigest()[:4].upper()
-    
+    while True:
+        # Tạo 4 nhóm, mỗi nhóm 4 ký tự
+        groups = []
+        for _ in range(4):
+            # Mỗi nhóm: 2 chữ cái + 2 số
+            group = ''.join(random.choices(string.ascii_uppercase, k=2))
+            group += ''.join(random.choices(string.digits, k=2))
+            groups.append(group)
+
+        # Tạo code base
+        base_code = '-'.join(groups)
+
+        # Tính checksum (hash của base_code + secret key)
+        checksum_input = base_code + SECRET_KEY
+        checksum = hashlib.md5(checksum_input.encode()).hexdigest()[:4].upper()
+
+        # Checksum hex có thể toàn chữ hoặc toàn số → app sẽ từ chối
+        # (validate_code_structure yêu cầu mỗi phần có cả chữ lẫn số).
+        # Tạo lại code khác nếu rơi vào trường hợp đó.
+        if any(c.isalpha() for c in checksum) and any(c.isdigit() for c in checksum):
+            break
+
     # Thêm checksum vào cuối code
     full_code = f"{base_code}-{checksum}"
-    
+
     return full_code, base_code, checksum
 
 def validate_code_structure(code):

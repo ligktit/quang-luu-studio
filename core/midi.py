@@ -2,6 +2,7 @@
 Quang Lưu Studio — MIDI Handler
 Class: MidiHandler
 """
+import time
 import threading
 
 from core.config import MIDI_PORT_NAME
@@ -30,6 +31,14 @@ class MidiHandler:
         """Kết nối tới MIDI output port (loopMIDI)"""
         import mido
         try:
+            # Đóng port cũ trước khi mở port mới — tránh leak khi reconnect
+            if self.outport:
+                try:
+                    self.outport.close()
+                except Exception:
+                    pass
+                self.outport = None
+
             available = mido.get_output_names()
             for name in available:
                 if MIDI_PORT_NAME in name:
@@ -65,6 +74,14 @@ class MidiHandler:
         if self._is_listening:
             return
         try:
+            # Đóng inport cũ trước khi mở mới — tránh leak khi reconnect
+            if self.inport:
+                try:
+                    self.inport.close()
+                except Exception:
+                    pass
+                self.inport = None
+
             available = mido.get_input_names()
             for name in available:
                 if MIDI_PORT_NAME in name:
@@ -94,8 +111,37 @@ class MidiHandler:
                 for msg in self.inport.iter_pending():
                     if msg.type == 'control_change' and self.on_cc_received:
                         self.on_cc_received(msg.control, msg.value)
+            except Exception as e:
+                # Nuốt exception để listener không chết, nhưng vẫn log lại
+                print(f"[MIDI] Lỗi xử lý MIDI message/callback: {e}")
+            time.sleep(0.01)  # 10ms polling
+
+    def stop_listening(self):
+        """Dừng listener thread và đóng input port"""
+        self._is_listening = False
+        if self._listen_thread:
+            try:
+                self._listen_thread.join(timeout=1.0)
             except Exception:
                 pass
-            import time
-            time.sleep(0.01)  # 10ms polling
+            self._listen_thread = None
+        if self.inport:
+            try:
+                self.inport.close()
+            except Exception:
+                pass
+            self.inport = None
+
+    def close(self):
+        """Đóng toàn bộ kết nối MIDI (output + input) và dừng listener"""
+        self.stop_listening()
+        if self.outport:
+            try:
+                self.outport.close()
+            except Exception:
+                pass
+            self.outport = None
+
+    # Alias — gọi disconnect() tương đương close()
+    disconnect = close
 

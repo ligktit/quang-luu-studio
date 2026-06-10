@@ -2,6 +2,8 @@
 Quang Luu Studio - Send ALL MIDI Keys
 Gui toan bo MIDI CC tu app_config.json qua port QuangLuuMIDI
 """
+import json
+import os
 import time
 import sys
 
@@ -13,8 +15,8 @@ except ImportError:
     print("      Goi: .venv\\Scripts\\pip install python-rtmidi")
     sys.exit(1)
 
-# -- Toan bo MIDI CC map tu app_config.json --
-CC_MAP = {
+# -- Fallback neu khong doc duoc app_config.json --
+_FALLBACK_CC_MAP = {
     "tone_music"   : 10,
     "tone_voice"   : 11,
     "mix_music"    : 20,
@@ -34,6 +36,25 @@ CC_MAP = {
     "mute_backing" : 53,
     "mix_reverb_ex": 41,
 }
+
+_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_config.json")
+
+
+def _load_cc_map():
+    """Doc midi_cc tu app_config.json — fallback ve map hardcoded neu loi."""
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        cc_map = config.get("midi_cc")
+        if isinstance(cc_map, dict) and cc_map:
+            print(f"[INFO] Da doc {len(cc_map)} MIDI CC tu app_config.json")
+            return {name: int(cc) for name, cc in cc_map.items()}
+    except Exception as e:
+        print(f"[WARN] Khong doc duoc app_config.json ({e}) — dung map mac dinh.")
+    return dict(_FALLBACK_CC_MAP)
+
+
+CC_MAP = _load_cc_map()
 
 PORT_NAME = "QuangLuuMIDI"
 CHANNEL   = 0  # MIDI channel 1 (0-indexed)

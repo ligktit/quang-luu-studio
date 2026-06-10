@@ -86,15 +86,16 @@ class MainDashboard(QMainWindow):
     """Cửa sổ chính Quang Lưu Studio — PySide6"""
 
     # Signal cho thread-safe UI updates
-    _autokey_signal = Signal(dict)
     _tone_result_signal = Signal(dict)
     _midi_cc_signal = Signal(int, int)
-    
+
     _midi_status_signal = Signal()
     _browser_status_signal = Signal()
     _message_signal = Signal(str, bool)
     _score_report_signal = Signal(dict)
     _score_btn_reset_signal = Signal()
+    _marquee_signal = Signal(str)
+    _voice_intent_signal = Signal(object)
 
     @property
     def _marquee_text(self):
@@ -195,8 +196,11 @@ class MainDashboard(QMainWindow):
         self._update_midi_status()
 
         # Signal connections (for thread-safe UI updates)
-        self._autokey_signal.connect(self._update_autokey_ui)
         self._tone_result_signal.connect(self._handle_tone_result)
+        self._marquee_signal.connect(self._set_marquee_text)
+        # Queued: intent handler có thể mở dialog (exec) — không được chạy
+        # trực tiếp bên trong key-event handler / callback của voice input.
+        self._voice_intent_signal.connect(self._a11y_on_voice_intent, Qt.QueuedConnection)
         
         self.engine.on_midi_cc_callback = lambda cc, v: self._midi_cc_signal.emit(cc, v)
         self._midi_cc_signal.connect(self._on_midi_cc_received)
@@ -237,14 +241,35 @@ class MainDashboard(QMainWindow):
 
     def refresh_ui(self):
         # Clear body layout
+        removed_roots = []
         for i in reversed(range(self._body_layout.count())):
             widget = self._body_layout.itemAt(i).widget()
             if widget:
+                removed_roots.append(widget)
                 widget.setParent(None)
                 widget.deleteLater()
-        
+
+        # Xóa các ref cũ trong registry trỏ tới widget vừa bị xóa — nếu giữ lại
+        # sẽ crash "Internal C++ object already deleted" khi _set_rescan_button_state
+        # / _reset_score_btn truy cập. Chỉ xóa entry thuộc body (bottom bar giữ nguyên).
+        for key, btn in list(self._func_buttons.items()):
+            try:
+                if any(w is btn or w.isAncestorOf(btn) for w in removed_roots):
+                    del self._func_buttons[key]
+            except RuntimeError:
+                # Wrapped C++ object đã bị xóa → ref chắc chắn stale
+                del self._func_buttons[key]
+        # Mode buttons nằm hoàn toàn trong body → clear toàn bộ (mode.py sẽ thêm lại)
+        self._mode_buttons = {}
+
         # Rebuild body
         self._body_layout.addWidget(self._build_body())
+
+        # Tab order tham chiếu widget cũ — thiết lập lại sau khi rebuild
+        try:
+            self._setup_tab_order()
+        except Exception as e:
+            print(f"[A11Y] Tab order lỗi: {e}")
 
     def _on_add_widget(self, panel_name, widget_type):
         from ui.dialogs.widget_builder import WidgetBuilderDialog
@@ -347,7 +372,7 @@ class MainDashboard(QMainWindow):
         self.current_tone = value
         key_midi_map = backend.AppConfig.get_key_midi_map()
         key_midi = key_midi_map.get(value, 0)
-        self.engine.send_midi(MIDI_CC["key_root"], key_midi)
+        self.engine.send_midi(MIDI_CC.get("key_root", 33), key_midi)
 
     def _on_scale_selected(self, value):
         self.current_scale = value
@@ -402,7 +427,7 @@ class MainDashboard(QMainWindow):
         # Khi MIDI CC đến → cập nhật UI combobox mà KHÔNG re-emit send_midi.
         # Dùng QSignalBlocker (RAII) thay vì flag toàn cục — đúng idiom Qt.
         try:
-            if cc == int(MIDI_CC.get("key_root", 34)):
+            if cc == int(MIDI_CC.get("key_root", 33)):
                 # Reverse-lookup: tìm key có MIDI value gần nhất trong KEY_MIDI_MAP
                 keys = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
                 best_key = "C"
@@ -549,15 +574,21 @@ class MainDashboard(QMainWindow):
             self._tone_result_signal.emit({'error': msg, 'auto_detected': True})
 
         def _auto_on_progress(text):
-            # Chỉ hiện "Đang dò..." trên marquee, không hiện chi tiết
+            # Chỉ hiện "Đang dò..." trên marquee, không hiện chi tiết.
+            # Callback chạy từ worker thread → route qua signal (không được
+            # set self._marquee_text trực tiếp vì setter đụng QWidget).
             if not getattr(self, '_do_tone_running', False):
-                self._marquee_text = "♪ Đang dò... ♪"
+                self._marquee_signal.emit("♪ Đang dò... ♪")
         
         self.engine.on_auto_tone_complete = _auto_on_complete
         self.engine.on_tone_detected_callback = _auto_on_complete
         self.engine.on_auto_tone_error = _auto_on_error
         self.engine.on_auto_tone_progress = _auto_on_progress
         self.engine.start_youtube_watcher()
+
+    def _set_marquee_text(self, text):
+        """Slot main-thread cho _marquee_signal — cập nhật marquee an toàn."""
+        self._marquee_text = text
 
     # ── Menu Button Callbacks ──
     def _on_toggle_scan_mode(self):
@@ -646,28 +677,6 @@ class MainDashboard(QMainWindow):
             )
 
 
-    def _update_autokey_ui(self, result):
-        """Cập nhật UI khi AutoKey phát hiện tone mới (nếu dùng AutoKey ở nơi khác)"""
-        key = result.get("key", "")
-        scale = result.get("scale", "")
-        if key and self.tone_combo.currentText() != key:
-            self.tone_combo.setCurrentText(key)
-            self.current_tone = key
-        if scale:
-            if self.scale_combo.currentText() != scale:
-                self.scale_combo.setCurrentText(scale)
-            self.current_scale = scale
-            self.scale_is_major = (scale == "Major")
-            # Đồng bộ nút Major/Minor toggle button
-            scale_btn = self._func_buttons.get("Major") or self._func_buttons.get("Minor")
-            if scale_btn:
-                if self.scale_is_major:
-                    scale_btn.setText("Major")
-                    scale_btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 11, 14))
-                else:
-                    scale_btn.setText("Minor")
-                    scale_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
-
     def _handle_tone_result(self, result):
         """Slot xử lý kết quả dò tone trên main thread (thread-safe via Signal)"""
         
@@ -690,14 +699,8 @@ class MainDashboard(QMainWindow):
         
         # === 1. Cập nhật Key/Scale lên UI chính ===
         key_display = result.get('key_display', 'C')
-        # Trích xuất key root chính xác: "C#m" → "C#", "Am" → "A", "D" → "D"
-        if key_display.endswith('#m'):
-            key_root = key_display[:-1]  # "C#m" → "C#"
-        elif key_display.endswith('m') and len(key_display) >= 2:
-            key_root = key_display[:-1]   # "Am" → "A", "Cm" → "C"
-        else:
-            key_root = key_display         # "D" → "D", "F#" → "F#"
-        key_root = result.get('key', key_root)
+        # Engine luôn trả 'key' = root note (đã strip 'm' suffix)
+        key_root = result.get('key', 'C')
         scale = result.get('scale', 'Major')
         title = result.get('title', '')
         
@@ -778,7 +781,6 @@ class MainDashboard(QMainWindow):
         # === 6. Auto-save vào Danh sách bài hát ===
         url = result.get('url', '')
         if url and title and key_root:
-            import backend
             def _auto_save():
                 backend.SongManager.add_song(title, url, key_root)
             threading.Thread(target=_auto_save, daemon=True).start()
@@ -786,7 +788,7 @@ class MainDashboard(QMainWindow):
     def _on_tone_auto(self):
         self.tune_state = not getattr(self, 'tune_state', True)
         val = 127 if self.tune_state else 0
-        self.engine.send_midi(MIDI_CC["tone_auto"], val)
+        self.engine.send_midi(MIDI_CC.get("tone_auto", 31), val)
         btn = self._func_buttons.get("Auto-Tune")
         if btn:
             btn.setActive(self.tune_state)
@@ -816,11 +818,11 @@ class MainDashboard(QMainWindow):
         """Toggle Major ↔ Minor"""
         self.scale_is_major = not getattr(self, 'scale_is_major', True)
         if self.scale_is_major:
-            self.engine.send_midi(MIDI_CC["scale_type"], SCALE_VALUES.get("major", 13))
+            self.engine.send_midi(MIDI_CC.get("scale_type", 35), SCALE_VALUES.get("major", 13))
             if hasattr(self, 'scale_combo'):
                 self.scale_combo.setCurrentText("Major")
         else:
-            self.engine.send_midi(MIDI_CC["scale_type"], SCALE_VALUES.get("minor", 18))
+            self.engine.send_midi(MIDI_CC.get("scale_type", 35), SCALE_VALUES.get("minor", 18))
             if hasattr(self, 'scale_combo'):
                 self.scale_combo.setCurrentText("Minor")
         btn = self._func_buttons.get("Major")
@@ -1196,7 +1198,7 @@ class MainDashboard(QMainWindow):
         if self.is_recording:
             self.is_recording = False
             self.record_button.set_recording(False)
-            self.engine.send_midi(MIDI_CC["score_trigger"], 0)
+            self.engine.send_midi(MIDI_CC.get("score_trigger", 32), 0)
             
             # Dừng ghi âm và lưu file (không blocking UI)
             def handle_save():
@@ -1223,7 +1225,7 @@ class MainDashboard(QMainWindow):
         else:
             self.is_recording = True
             self.record_button.set_recording(True)
-            self.engine.send_midi(MIDI_CC["score_trigger"], 127)
+            self.engine.send_midi(MIDI_CC.get("score_trigger", 32), 127)
             
             # Bắt đầu ghi soundcard (loopback)
             lb_idx = self.settings.get("record_loopback_device", -1)
@@ -1238,7 +1240,7 @@ class MainDashboard(QMainWindow):
                 # Rollback UI
                 self.is_recording = False
                 self.record_button.set_recording(False)
-                self.engine.send_midi(MIDI_CC["score_trigger"], 0)
+                self.engine.send_midi(MIDI_CC.get("score_trigger", 32), 0)
                 err = getattr(self.engine.recorder, 'last_error', None) or "Không tìm thấy thiết bị WASAPI Loopback"
                 self._show_message(f"❌ Không thể ghi âm: {err[:80]}", is_error=True)
 
@@ -1315,12 +1317,27 @@ class MainDashboard(QMainWindow):
             player.setSource(QUrl.fromLocalFile(file_path))
             player.play()
 
-            # Dọn dẹp khi phát xong
+            # Dọn dẹp khi phát xong HOẶC khi media lỗi — nếu chỉ dọn ở
+            # EndOfMedia thì file hỏng/decode lỗi sẽ leak player tích lũy dần.
+            _disposed = {"done": False}
+
+            def _dispose():
+                if _disposed["done"]:
+                    return
+                _disposed["done"] = True
+                player.deleteLater()
+                audio_out.deleteLater()
+
             def _cleanup(status):
-                if status == QMediaPlayer.EndOfMedia:
-                    player.deleteLater()
-                    audio_out.deleteLater()
+                if status in (QMediaPlayer.EndOfMedia, QMediaPlayer.InvalidMedia):
+                    _dispose()
+
+            def _on_media_error(error, error_string=""):
+                print(f"[SFX] Loi media: {error_string or error}")
+                _dispose()
+
             player.mediaStatusChanged.connect(_cleanup)
+            player.errorOccurred.connect(_on_media_error)
 
             print(f"[SFX] Playing: {os.path.basename(file_path)}")
         except Exception as e:
@@ -1413,8 +1430,19 @@ class MainDashboard(QMainWindow):
 
         # Voice command (lazy — chỉ tạo khi user kích hoạt vì cần Vosk model)
         self._a11y_voice = None
+        self._a11y_voice_listening = False
+        self._a11y_voice_indicator = None
         if cfg.get("voice_command_enabled", False):
             self._a11y_init_voice()
+
+        # Event filter toàn app cho push-to-talk — child widget có StrongFocus
+        # sẽ nuốt phím Space nếu chỉ dùng keyPressEvent của QMainWindow.
+        try:
+            app = QApplication.instance()
+            if app is not None:
+                app.installEventFilter(self)
+        except Exception as e:
+            print(f"[A11Y] Event filter lỗi: {e}")
 
         # Tab order — chạy theo Header → Mixer → Mode → Tools → Bottom
         try:
@@ -1478,13 +1506,19 @@ class MainDashboard(QMainWindow):
         """Tạo VoiceInput service (chỉ gọi khi user enable + có model)."""
         try:
             from core.accessibility.voice_input import VoiceInput
+            # Intent route qua signal (QueuedConnection) — handler có thể mở
+            # dialog, không được chạy trực tiếp trong callback/key handler.
             self._a11y_voice = VoiceInput(
-                on_intent=self._a11y_on_voice_intent,
+                on_intent=lambda it: self._voice_intent_signal.emit(it),
                 on_error=lambda msg: self._a11y_speak(msg, priority="high"),
             )
             if not self._a11y_voice.available:
                 self._a11y_speak("Chưa có model giọng nói. Hãy tải Vosk vi vào thư mục models.")
                 self._a11y_voice = None
+            else:
+                # Tải model Vosk trong thread nền NGAY từ đầu — load sync trong
+                # key handler lần nhấn PTT đầu tiên sẽ freeze UI nhiều giây.
+                self._a11y_voice.preload_async()
         except Exception as e:
             print(f"[A11Y] VoiceInput init lỗi: {e}")
             self._a11y_voice = None
@@ -1493,26 +1527,33 @@ class MainDashboard(QMainWindow):
 
     # ── Voice push-to-talk (Ctrl+Space hold) ──────────────────
 
-    def keyPressEvent(self, event):
-        from PySide6.QtCore import Qt
-        if (event.key() == Qt.Key_Space
-                and event.modifiers() & Qt.ControlModifier
-                and not event.isAutoRepeat()
-                and getattr(self, "_a11y_voice", None) is not None):
-            self._a11y_voice_start()
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def keyReleaseEvent(self, event):
-        from PySide6.QtCore import Qt
-        if (event.key() == Qt.Key_Space
-                and not event.isAutoRepeat()
-                and getattr(self, "_a11y_voice_listening", False)):
-            self._a11y_voice_stop()
-            event.accept()
-            return
-        super().keyReleaseEvent(event)
+    def eventFilter(self, obj, event):
+        """App-level filter cho push-to-talk — bắt Ctrl+Space bất kể widget nào
+        đang focus (child StrongFocus nuốt Space nếu dùng keyPressEvent thường).
+        """
+        from PySide6.QtCore import QEvent
+        t = event.type()
+        if t == QEvent.KeyPress:
+            if (event.key() == Qt.Key_Space
+                    and event.modifiers() & Qt.ControlModifier
+                    and not event.isAutoRepeat()
+                    and getattr(self, "_a11y_voice", None) is not None):
+                self._a11y_voice_start()
+                return True
+        elif t == QEvent.KeyRelease:
+            # Thả Space HOẶC Ctrl đều dừng nghe — tránh kẹt mic khi user
+            # thả Ctrl trước Space.
+            if (event.key() in (Qt.Key_Space, Qt.Key_Control)
+                    and not event.isAutoRepeat()
+                    and getattr(self, "_a11y_voice_listening", False)):
+                self._a11y_voice_stop()
+                if event.key() == Qt.Key_Space:
+                    return True
+        elif t in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate):
+            # Safety net: mất focus cửa sổ → không bao giờ để mic kẹt "ĐANG NGHE"
+            if getattr(self, "_a11y_voice_listening", False):
+                self._a11y_voice_stop()
+        return super().eventFilter(obj, event)
 
     def _a11y_voice_start(self):
         if self._a11y_voice is None or self._a11y_voice_listening:
@@ -1744,7 +1785,9 @@ class MainDashboard(QMainWindow):
             "open_songs":       self._show_songs_list,
             "score":            self._on_score,
             "speak_status":     self._a11y_speak_status,
-            "stop_tts":         lambda: self._a11y_speaker and self._a11y_speaker.stop(),
+            # interrupt() chỉ ngắt câu đang đọc + xoá queue — KHÔNG kill worker
+            # thread (stop() sẽ làm các announce sau bị kẹt vĩnh viễn).
+            "stop_tts":         lambda: self._a11y_speaker and self._a11y_speaker.interrupt(),
             "mute_music":       self._a11y_toggle_mute_music,
             "mute_mic":         self._a11y_toggle_mute_mic,
             "volume_up_music":  lambda: self._a11y_step_volume("mix_music", +5),
@@ -1767,7 +1810,9 @@ class MainDashboard(QMainWindow):
         try:
             print(f"[VOICE INTENT]   -> Thực hiện: {name}")
             action()
-            self._a11y_speak("Đã thực hiện", priority="high")
+            if name != "stop_tts":
+                # "im lặng" mà còn đọc "Đã thực hiện" thì phản tác dụng
+                self._a11y_speak("Đã thực hiện", priority="high")
             self._show_message(f"🎤 \"{text}\" → {name}")
         except Exception as e:
             print(f"[VOICE INTENT]   -> Lỗi: {e}")
@@ -1884,25 +1929,15 @@ class MainDashboard(QMainWindow):
         except Exception as e:
             print(f"Lỗi lưu mixer levels: {e}")
 
-        # ── BƯỚC 5: Đóng ứng dụng liên kết (Đồng bộ, trước khi os._exit) ───────
-        if self.settings.get("auto_close_browser", False):
-            try:
-                self.engine.close_youtube_windows()
-            except Exception:
-                pass
-
-        if self.settings.get("auto_close_studio_one", False):
-            try:
-                self.engine.kill_studio_one_gracefully(timeout_sec=5)
-            except Exception:
-                pass
-            
+        # ── BƯỚC 5: Accept ngay — window đóng, UI không bị block ──────────────
         event.accept()
         super().closeEvent(event)
 
-        # ── BƯỚC 6: Cleanup nặng trong daemon thread (join + Studio One) ───────
-        # Daemon thread tự bị kill khi os._exit(0) chạy trong main.py.
-        # Không cần join — chỉ cần đảm bảo các tài nguyên hệ thống được giải phóng.
+        # ── BƯỚC 6: Cleanup nặng trong daemon thread ──────────────────────────
+        # Bao gồm cả đóng browser/Studio One (kill_studio_one_gracefully chờ
+        # tới 5s — chạy sync trong closeEvent sẽ đóng băng cửa sổ lúc thoát).
+        # main.py join thread này (timeout ngắn) trước khi os._exit(0) để
+        # ffmpeg/yt-dlp con không bị orphan giữa chừng.
         settings_snap = dict(self.settings)
         engine = self.engine
 
@@ -1926,10 +1961,24 @@ class MainDashboard(QMainWindow):
                     engine._memory_guard.stop()
                 except Exception:
                     pass
+            # Đóng ứng dụng liên kết — chuyển từ closeEvent xuống đây để UI
+            # thread không bị treo 5s+ khi thoát.
+            if settings_snap.get("auto_close_browser", False):
+                try:
+                    engine.close_youtube_windows()
+                except Exception:
+                    pass
+            if settings_snap.get("auto_close_studio_one", False):
+                try:
+                    engine.kill_studio_one_gracefully(timeout_sec=5)
+                except Exception:
+                    pass
             import gc
             gc.collect()
 
-        threading.Thread(target=_bg_shutdown, daemon=True, name="bg-shutdown").start()
+        self._bg_shutdown_thread = threading.Thread(
+            target=_bg_shutdown, daemon=True, name="bg-shutdown")
+        self._bg_shutdown_thread.start()
 
 
 # ══════════════════════════════════════════════════════

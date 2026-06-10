@@ -185,7 +185,8 @@ def build_panel_tools(dashboard) -> GlassPanel:
             
         # --- Dev Mode Context Menu ---
         if getattr(dashboard, "is_dev_mode", False):
-            from PySide6.QtCore import Qt
+            # KHÔNG import Qt cục bộ ở đây — sẽ shadow import module-level
+            # và gây UnboundLocalError ở mọi chỗ dùng Qt trong hàm này.
             btn.setContextMenuPolicy(Qt.CustomContextMenu)
             
             def make_ctx_cb(cfg=t_cfg, b=btn):
@@ -213,7 +214,6 @@ def build_panel_tools(dashboard) -> GlassPanel:
     # --- Dev Mode Add Button ---
     if getattr(dashboard, "is_dev_mode", False):
         from PySide6.QtWidgets import QPushButton
-        from PySide6.QtCore import Qt
         add_btn = QPushButton("+ Thêm Nút")
         add_btn.setStyleSheet(f"background-color: transparent; border: 1px dashed {C['teal']}; color: {C['teal']};")
         add_btn.setCursor(Qt.PointingHandCursor)

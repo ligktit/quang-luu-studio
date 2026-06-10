@@ -142,21 +142,23 @@ class ToneDetector:
             
             # Stage 1: Clip extreme outliers (corrupted samples, VD: max=1.8e29)
             audio_data = np.clip(audio_data, -1e6, 1e6)
-            
-            # Stage 2: Percentile-based normalize (tránh 1 sample lỗi phá hủy signal)
-            p999 = np.percentile(np.abs(audio_data), 99.9)
-            if p999 > 0:
-                audio_data = audio_data / p999
-            audio_data = np.clip(audio_data, -1.0, 1.0)
-            
-            # Stage 3: DC offset removal
-            audio_data = audio_data - np.mean(audio_data)
-            
-            # Stage 4: Quality validation
+
+            # Stage 2: Silence gate trên audio THÔ — phải kiểm tra TRƯỚC khi
+            # normalize, vì percentile normalize sẽ khuếch đại noise im lặng
+            # lên full scale và bị "detect" nhầm thành nhạc.
             rms_check = np.sqrt(np.mean(audio_data ** 2))
             if rms_check < 0.001:
                 print("   Audio quá nhỏ hoặc im lặng, bỏ qua")
                 return None
+
+            # Stage 3: Percentile-based normalize (tránh 1 sample lỗi phá hủy signal)
+            p999 = np.percentile(np.abs(audio_data), 99.9)
+            if p999 > 0:
+                audio_data = audio_data / p999
+            audio_data = np.clip(audio_data, -1.0, 1.0)
+
+            # Stage 4: DC offset removal
+            audio_data = audio_data - np.mean(audio_data)
             
             # Stage 5: Adaptive hum removal (PYIN detect → notch filter)
             # Skipped for YouTube audio (encoder already cleaned) to save ~100–200 ms
@@ -439,15 +441,37 @@ class ToneDetector:
             print(f"[DÒ TONE] Sử dụng loopback: {loopback_dev['name']}")
             print(f"[DÒ TONE] Đang thu âm {duration} giây...")
             
-            stream = pa.open(
-                format=pyaudio.paFloat32,
-                channels=1,
-                rate=device_sr,
-                input=True,
-                input_device_index=loopback_dev["index"],
-                frames_per_buffer=chunk_size
-            )
-            
+            # Mở stream với fallback channels (giống recorder_worker.py):
+            # nhiều thiết bị WASAPI loopback từ chối mono → thử số kênh của
+            # device trước, rồi 2, rồi 1. Downmix về mono sau khi thu.
+            dev_channels = int(loopback_dev.get("maxInputChannels", 2) or 2)
+            channels_used = None
+            last_err = None
+            for attempt_ch in dict.fromkeys([dev_channels, 2, 1]):
+                if attempt_ch < 1:
+                    continue
+                try:
+                    stream = pa.open(
+                        format=pyaudio.paFloat32,
+                        channels=attempt_ch,
+                        rate=device_sr,
+                        input=True,
+                        input_device_index=loopback_dev["index"],
+                        frames_per_buffer=chunk_size
+                    )
+                    channels_used = attempt_ch
+                    break
+                except Exception as e:
+                    last_err = e
+                    print(f"[DÒ TONE] Mở stream thất bại với channels={attempt_ch}: {e}")
+
+            if channels_used is None:
+                print(f"[DÒ TONE] Không mở được loopback stream: {last_err}")
+                return None
+
+            if channels_used > 1:
+                print(f"[DÒ TONE] Thu {channels_used} kênh, sẽ downmix về mono")
+
             # Thu âm theo từng giây để cập nhật progress
             audio_chunks = []
             for sec in range(duration):
@@ -456,6 +480,10 @@ class ToneDetector:
                 while frames_read < frames_needed:
                     data = stream.read(chunk_size, exception_on_overflow=False)
                     chunk_np = np.frombuffer(data, dtype=np.float32)
+                    if channels_used > 1:
+                        # Downmix về mono: trung bình các kênh interleaved
+                        usable = (len(chunk_np) // channels_used) * channels_used
+                        chunk_np = chunk_np[:usable].reshape(-1, channels_used).mean(axis=1)
                     audio_chunks.append(chunk_np)
                     frames_read += len(chunk_np)
                 
@@ -638,8 +666,9 @@ class ToneDetector:
         # 3. Detect tone cho mỗi phân đoạn bằng cách slice từ chroma tổng
         # Tính CQT cho toàn bộ track một lần duy nhất (nhanh gấp nhiều lần gọi lại hàm detect)
         print("[TIMELINE] Bắt đầu tính ma trận CQT tổng...")
-        # Tối ưu RAM: Xoá mean và giới hạn độ lớn (in-place)
-        audio_data -= np.mean(audio_data)
+        # Xoá mean và giới hạn độ lớn — thao tác trên BẢN SAO, không mutate
+        # in-place mảng audio_data của caller (caller có thể còn dùng tiếp)
+        audio_data = audio_data - np.mean(audio_data)
         audio_data = np.clip(audio_data, -1.0, 1.0)
         
         # Use fine-grained hop_length for the actual detection

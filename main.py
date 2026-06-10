@@ -65,7 +65,25 @@ import frontend_qt
 
 # ── Update check ──────────────────────────────────────────────────────────────
 
-def _schedule_update_check():
+from PySide6.QtCore import QObject, Signal
+
+
+class _UpdateNotifier(QObject):
+    """Cầu nối thread: worker emit signal → slot chạy trên main thread (queued)."""
+    update_available = Signal(object)
+
+
+def _show_update_dialog(release):
+    """Slot main-thread: hiển thị dialog cập nhật."""
+    try:
+        from ui.dialogs.update_dialog import UpdateDialog
+        dlg = UpdateDialog(release)
+        dlg.exec()
+    except Exception as e:
+        log.warning("Could not show update dialog: %s", e)
+
+
+def _schedule_update_check(notifier):
     """
     Chạy sau khi MainDashboard đã hiển thị (non-blocking background thread).
     Nếu có phiên bản mới, emit signal để show dialog ở main thread.
@@ -92,28 +110,9 @@ def _schedule_update_check():
         if UpdateDialog.should_skip(release.version):
             log.info("Update %s skipped by user preference", release.version)
             return
-
-        # Marshal to Qt main thread via QMetaObject.invokeMethod / signal
-        try:
-            from PySide6.QtCore import QMetaObject, Qt
-            from PySide6.QtWidgets import QApplication
-
-            def _show():
-                app = QApplication.instance()
-                if app:
-                    dlg = UpdateDialog(release)
-                    dlg.exec()
-
-            QMetaObject.invokeMethod(
-                QApplication.instance(),
-                "invokeMethod",
-                Qt.QueuedConnection,
-            )
-            # Simpler fallback: schedule via singleShot
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(0, _show)
-        except Exception as e:
-            log.warning("Could not show update dialog: %s", e)
+        # Marshal sang main thread: emit signal từ worker → AutoConnection
+        # thành queued vì notifier thuộc main thread → slot show dialog an toàn.
+        notifier.update_available.emit(release)
 
     check_and_notify_update(on_update_available=_on_update_available)
 
@@ -161,10 +160,21 @@ def main():
 
         # 3. Route
         if settings:
-            # Launch update check in background after dashboard shows
-            threading.Thread(target=_schedule_update_check, daemon=True).start()
-            frontend_qt.MainDashboard(settings).mainloop()
+            # Tạo dashboard TRƯỚC (đảm bảo QApplication tồn tại) rồi mới tạo
+            # notifier + thread check update — signal queued về main thread.
+            dashboard = frontend_qt.MainDashboard(settings)
+            notifier = _UpdateNotifier()
+            notifier.update_available.connect(_show_update_dialog)
+            threading.Thread(
+                target=_schedule_update_check, args=(notifier,), daemon=True
+            ).start()
+            dashboard.mainloop()
             log.info("Dashboard closed, exiting")
+            # Chờ bg-shutdown (closeEvent) xong với timeout ngắn — os._exit(0)
+            # trong finally sẽ kill daemon thread giữa chừng, orphan ffmpeg/yt-dlp.
+            t = getattr(dashboard, "_bg_shutdown_thread", None)
+            if t is not None and t.is_alive():
+                t.join(timeout=4.0)
             return
         else:
             setup = frontend_qt.SetupView()

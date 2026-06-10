@@ -10,12 +10,19 @@ python-rtmidi>=1.5
 # Audio
 pyaudiowpatch>=0.2.12
 sounddevice>=0.4
-librosa>=0.10
+# librosa 1.0 xoá librosa.beat.tempo và đổi API — pin <1.0 cho tới khi migrate xong
+librosa>=0.10,<1.0
 numpy>=1.24
 scipy>=1.10
+# Điều khiển âm lượng thiết bị Windows (core/engine/_recording.py)
+pycaw>=20240210
 
 # YouTube
 yt-dlp>=2024.1
+# CDP WebSocket client (core/cdp_monitor.py)
+websocket-client>=1.6
+# Tự tải ffmpeg cho detect_youtube.py (tuỳ chọn — có fallback nếu thiếu)
+static_ffmpeg>=2.5
 
 # Windows APIs
 pywin32>=306

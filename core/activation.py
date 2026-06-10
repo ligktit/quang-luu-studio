@@ -19,8 +19,14 @@ class ActivationManager:
     # Thời hạn dùng thử: 3 ngày
     TRIAL_DURATION_DAYS = 3
     
-    # Secret key - PHẢI GIỐNG VỚI generate_code.py
-    SECRET_KEY = "QUANGLUU_STUDIO_2026_SECRET_KEY_CHANGE_THIS"
+    # Secret key - PHẢI GIỐNG VỚI tools/generate_code.py
+    # Key cũ (placeholder) đã bị lộ trên GitHub → đổi key mới làm mọi code
+    # đã phát hành trước đó (kể cả code bị leak) mất hiệu lực.
+    # Có thể override qua biến môi trường QUANGLUU_STUDIO_SECRET_KEY.
+    SECRET_KEY = os.environ.get(
+        "QUANGLUU_STUDIO_SECRET_KEY",
+        "936c3f6655acc46ba5c41603446addb7e5b25df85c953d003eba554527e267e4"
+    )
     
     @staticmethod
     def _validate_code_structure(code):

@@ -56,7 +56,7 @@ class MemoryGuard:
     1. Periodic GC: Mỗi `interval` giây, kiểm tra RSS. Nếu tăng > `gc_threshold_mb` 
        so với lần cleanup trước → gọi gc.collect() + trim working set.
     2. Cache Cleanup: Xóa các entry cũ trong PWA title cache (> `cache_ttl_seconds`).
-    3. Temp File Cleanup: Xóa file .wav/.m4a/.webm tạm trong thư mục temp_audio/.
+    3. Temp File Cleanup: Xóa file audio tạm (prefix qls_tmp_) do app tải về.
     4. Emergency Mode: Nếu RSS > `emergency_threshold_mb` → force gc + trim + xóa mọi cache.
     
     Sử dụng:
@@ -218,14 +218,20 @@ class MemoryGuard:
             pass
     
     def _cleanup_temp_files(self):
-        """Xóa file tạm cũ trong thư mục recordings"""
-        from core.config import RECORDINGS_DIR
+        """Xóa file audio TẠM cũ do app tải về (yt-dlp/scoring).
+
+        QUAN TRỌNG: chỉ xóa file có TEMP_AUDIO_PREFIX — RECORDINGS_DIR
+        (Documents/QuangLuuStudio khi frozen) chứa cả recording của user,
+        tuyệt đối KHÔNG được xóa file không có prefix (VD: recording_*.wav).
+        """
+        from core.config import RECORDINGS_DIR, TEMP_AUDIO_PREFIX
         temp_dir = RECORDINGS_DIR
         if not os.path.isdir(temp_dir):
             return
         try:
             now = time.time()
-            patterns = ["*.wav", "*.m4a", "*.webm", "*.mp3"]
+            patterns = [TEMP_AUDIO_PREFIX + "*.wav", TEMP_AUDIO_PREFIX + "*.m4a",
+                        TEMP_AUDIO_PREFIX + "*.webm", TEMP_AUDIO_PREFIX + "*.mp3"]
             for pattern in patterns:
                 for fpath in glob.glob(os.path.join(temp_dir, pattern)):
                     try:

@@ -22,8 +22,8 @@ def test_checkpoint_logs(mock_psutil, capsys):
     mock_proc, mock_mem_info = mock_psutil
     profiler = MemoryProfiler("TEST")
     
-    # Tăng 10MB
-    mock_mem_info.rss += 10 * 1024 * 1024
+    # Tăng 30MB (vượt ngưỡng log 20MB)
+    mock_mem_info.rss += 30 * 1024 * 1024
     profiler.checkpoint("label")
     
     captured = capsys.readouterr()
@@ -71,16 +71,22 @@ def test_cleanup_temp_files(tmp_path):
     # Patch RECORDINGS_DIR to use tmp_path
     with patch("core.config.RECORDINGS_DIR", str(tmp_path)):
         guard = MemoryGuard(cache_ttl_seconds=1)
-        
-        # Create a temp file
-        test_file = tmp_path / "test.wav"
-        test_file.write_text("dummy", encoding="utf-8")
-        
+
+        # File tạm của app (prefix qls_tmp_) → bị xóa
+        temp_file = tmp_path / "qls_tmp_abc123.wav"
+        temp_file.write_text("dummy", encoding="utf-8")
+
+        # Recording của user (KHÔNG có prefix) → phải được giữ lại
+        user_file = tmp_path / "recording_12345.wav"
+        user_file.write_text("dummy", encoding="utf-8")
+
         # Set mtime to past
-        os.utime(test_file, (time.time() - 10, time.time() - 10))
-        
+        os.utime(temp_file, (time.time() - 10, time.time() - 10))
+        os.utime(user_file, (time.time() - 10, time.time() - 10))
+
         guard._cleanup_temp_files()
-        assert not test_file.exists()
+        assert not temp_file.exists()
+        assert user_file.exists()
 
 def test_get_status(mock_psutil):
     # MM-07

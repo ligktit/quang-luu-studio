@@ -1,16 +1,38 @@
 """Mixer panel builder for MainDashboard."""
 import backend
+from PySide6.QtCore import Qt
 from ui.design_tokens import C
 from ui.components.painter_panel import GlassPanel
 from ui.components.hmixer_channel import HMixerChannel
 
 
-def _make_mute_callback(dashboard, cc_key, mute_cc_map):
+def _resolve_cc_number(dashboard, cc_key):
+    """cc của kênh có thể là tên built-in (tra MIDI_CC) hoặc số CC thô (slider custom từ Dev Mode)."""
+    if isinstance(cc_key, int):
+        return cc_key
+    return dashboard.MIDI_CC.get(cc_key)
+
+
+def _make_mute_callback(dashboard, cc_key, mute_cc_map, val_range=(0, 100)):
+    min_v, max_v = val_range
     def toggle(is_muted):
         dashboard.mute_states[cc_key] = is_muted
-        mute_cc = mute_cc_map[cc_key]
-        dashboard.engine.send_midi(dashboard.MIDI_CC[mute_cc], 127 if is_muted else 0)
-        
+        mute_cc = mute_cc_map.get(cc_key)
+        if mute_cc is not None:
+            dashboard.engine.send_midi(dashboard.MIDI_CC[mute_cc], 127 if is_muted else 0)
+        else:
+            # Slider custom không có CC mute riêng: gửi 0 khi mute,
+            # khôi phục giá trị hiện tại của slider khi bật lại
+            cc_num = _resolve_cc_number(dashboard, cc_key)
+            if cc_num is not None:
+                if is_muted:
+                    dashboard.engine.send_midi(cc_num, 0)
+                else:
+                    slider = dashboard._mixer_sliders.get(cc_key)
+                    val = slider.value() if slider is not None else min_v
+                    normalized = (val - min_v) / (max_v - min_v) if max_v > min_v else 0
+                    dashboard.engine.send_midi(cc_num, max(0, min(127, int(normalized * 127))))
+
         # Mute browser volume if it's the music channel
         if cc_key == "mix_music":
             if is_muted:
@@ -34,22 +56,22 @@ def _make_mute_callback(dashboard, cc_key, mute_cc_map):
 def _make_value_changed_callback(dashboard, cc_key, range_tuple, unit):
     min_v, max_v = range_tuple
     def cb(raw_value):
+        cc_num = _resolve_cc_number(dashboard, cc_key)
+        if cc_num is None:
+            return
         if cc_key in ["mix_mic", "mix_reverb"]:
             # UI -10..+10 là dB thật. Calibrate với Studio One: 0 dB = MIDI 76, +10 dB = MIDI 100
             # (tuyến tính trong dải UI: 2.4 MIDI / dB)
             db = float(raw_value)
             midi = int(round(76 + db * 2.4))
             midi = max(0, min(127, midi))
-        elif cc_key == "tone_music":
-            # Transpose: -12 to 12
+        else:
+            # tone_music, mix_music và slider custom: tuyến tính min..max -> 0..127
             normalized = (raw_value - min_v) / (max_v - min_v) if max_v > min_v else 0
             midi = int(normalized * 127)
             midi = max(0, min(127, midi))
-        else:
-            # mix_music: 0 to 100
-            midi = int((raw_value / 100.0) * 127)
-            
-        dashboard.engine.send_midi(dashboard.MIDI_CC[cc_key], midi)
+
+        dashboard.engine.send_midi(cc_num, midi)
         if cc_key == "mix_music":
             dashboard.engine.set_browser_volume(int(raw_value))
     return cb
@@ -137,10 +159,10 @@ def build_panel_mixer(dashboard) -> GlassPanel:
         except Exception:
             pass
 
-        def _bind_mute(channel_view, cc_key=ch["cc"]):
+        def _bind_mute(channel_view, cc_key=ch["cc"], val_range=ch["range"]):
             def _do_toggle():
                 is_muted = channel_view.toggle_mute()
-                _make_mute_callback(dashboard, cc_key, mute_cc_map)(is_muted)
+                _make_mute_callback(dashboard, cc_key, mute_cc_map, val_range)(is_muted)
             return _do_toggle
 
         if ch["has_mute"]:
@@ -190,8 +212,9 @@ def build_panel_mixer(dashboard) -> GlassPanel:
 
     # --- Dev Mode Add Button ---
     if getattr(dashboard, "is_dev_mode", False):
+        # KHÔNG import Qt cục bộ ở đây — sẽ shadow import module-level
+        # và gây UnboundLocalError ở block context-menu phía trên.
         from PySide6.QtWidgets import QPushButton
-        from PySide6.QtCore import Qt
         add_btn = QPushButton("+ Thêm")
         add_btn.setStyleSheet(f"background-color: transparent; border: 1px dashed {C['teal']}; color: {C['teal']};")
         add_btn.setCursor(Qt.PointingHandCursor)

@@ -54,6 +54,37 @@ def test_main_dashboard_tone_result_signal(qapp, mock_engine, qtbot):
         assert dashboard.tone_combo.currentText() == "C"
         assert dashboard.scale_combo.currentText() == "Major"
 
+def test_toggle_dev_mode_rebuilds_with_context_menus(qapp, mock_engine, qtbot):
+    # UI-04: Bật Dev Mode không được crash (regression: UnboundLocalError Qt
+    # do import cục bộ trong panel builder) và phải gắn CustomContextMenu
+    # lên các widget của 3 panel mixer/tools/mode.
+    from PySide6.QtCore import Qt
+    with patch("frontend_qt.backend.SongManager.load_songs", return_value=[]), \
+         patch("frontend_qt.backend.ActivationManager.is_activated", return_value=True), \
+         patch("frontend_qt.backend.ActivationManager.needs_activation", return_value=False), \
+         patch("frontend_qt.QTimer.start"):
+
+        dashboard = MainDashboard()
+        qtbot.addWidget(dashboard)
+
+        dashboard._toggle_dev_mode()  # crash ở đây nếu panel builder lỗi
+        assert dashboard.is_dev_mode is True
+
+        for ch_view in dashboard._mixer_channels.values():
+            assert ch_view.contextMenuPolicy() == Qt.CustomContextMenu
+        for btn in dashboard._mode_buttons.values():
+            assert btn.contextMenuPolicy() == Qt.CustomContextMenu
+        panel_btns = [b for b in dashboard._func_buttons.values()
+                      if b.contextMenuPolicy() == Qt.CustomContextMenu]
+        assert panel_btns, "Panel TOOLS phải có nút gắn context menu trong dev mode"
+
+        # Tắt dev mode → rebuild lại bình thường
+        dashboard._toggle_dev_mode()
+        assert dashboard.is_dev_mode is False
+        for ch_view in dashboard._mixer_channels.values():
+            assert ch_view.contextMenuPolicy() == Qt.DefaultContextMenu
+
+
 def test_quick_score_button(qapp, mock_engine, qtbot):
     # UI-03
     with patch("frontend_qt.backend.SongManager.load_songs", return_value=[]), \

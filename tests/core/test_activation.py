@@ -105,7 +105,7 @@ def test_is_trial_active(mock_activation_file):
     # A-15
     ActivationManager.start_trial()
     data = json.loads(mock_activation_file.read_text(encoding="utf-8"))
-    data["trial_start"] = time.time() - (3 * 86400) # 3 days ago
+    data["trial_start"] = time.time() - (2 * 86400) # 2 days ago (còn trong hạn trial 3 ngày)
     mock_activation_file.write_text(json.dumps(data), encoding="utf-8")
     
     assert ActivationManager.is_trial_active() is True

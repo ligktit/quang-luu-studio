@@ -15,8 +15,9 @@ import os
 import sys
 import json
 import copy
+import threading
 
-from core.utils import find_ffmpeg
+from core.utils import find_ffmpeg, atomic_write_json
 
 
 # ── Path Helpers ─────────────────────────────────────────
@@ -70,6 +71,13 @@ ACTIVATION_FILE = os.path.join(DATA_DIR, "activation.json")
 MANUAL_TIMELINES_FILE = os.path.join(DATA_DIR, "manual_timelines.json")
 TONE_CACHE_FILE = os.path.join(DATA_DIR, "tone_cache.json")
 UI_CONFIG_FILE = os.path.join(DATA_DIR, "ui_config.json")
+# Accessibility overrides của user → DATA_DIR (user-writable, không nằm cạnh exe)
+ACCESSIBILITY_OVERRIDES_FILE = os.path.join(DATA_DIR, "accessibility_overrides.json")
+
+# Prefix cho file audio TẠM do app tải về (yt-dlp/scoring).
+# MemoryGuard chỉ được phép xóa file có prefix này — KHÔNG BAO GIỜ đụng
+# tới recording của user (recording_*.wav) trong RECORDINGS_DIR.
+TEMP_AUDIO_PREFIX = "qls_tmp_"
 
 # --- APP CONFIG (read-only, nằm cạnh exe → APP_DIR) ---
 APP_CONFIG_FILE = "app_config.json"
@@ -141,6 +149,9 @@ class AppConfig:
     """
     _instance = None
     _data = None
+    # RLock bảo vệ _data khỏi mutation đồng thời từ nhiều thread
+    # (GUI thread + voice command thread đều gọi set_accessibility/update)
+    _lock = threading.RLock()
 
     @classmethod
     def _get_config_path(cls):
@@ -150,34 +161,48 @@ class AppConfig:
     @classmethod
     def load(cls):
         """Load config từ file, merge với defaults"""
-        if cls._data is not None:
-            return cls._data
+        with cls._lock:
+            if cls._data is not None:
+                return cls._data
 
-        cls._data = copy.deepcopy(_DEFAULT_APP_CONFIG)
-        config_path = cls._get_config_path()
+            cls._data = copy.deepcopy(_DEFAULT_APP_CONFIG)
+            config_path = cls._get_config_path()
 
-        if os.path.exists(config_path):
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    user_config = json.load(f)
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        user_config = json.load(f)
 
-                # Merge: user config ghi đè defaults
-                for key, value in user_config.items():
-                    if isinstance(value, dict) and key in cls._data and isinstance(cls._data[key], dict):
-                        cls._data[key].update(value)
-                    else:
-                        cls._data[key] = value
+                    # Merge: user config ghi đè defaults
+                    for key, value in user_config.items():
+                        if isinstance(value, dict) and key in cls._data and isinstance(cls._data[key], dict):
+                            cls._data[key].update(value)
+                        else:
+                            cls._data[key] = value
 
+                    import logging
+                    logging.getLogger("config").info(f"App config loaded: {config_path}")
+                except Exception as e:
+                    import logging
+                    logging.getLogger("config").warning(f"Lỗi đọc {APP_CONFIG_FILE}: {e} — dùng giá trị mặc định")
+            else:
                 import logging
-                logging.getLogger("config").info(f"App config loaded: {config_path}")
+                logging.getLogger("config").info(f"{APP_CONFIG_FILE} không tìm thấy — dùng giá trị mặc định")
+
+            # Merge accessibility overrides của user (DATA_DIR, user-writable)
+            # đè lên defaults + app_config — app_config.json cạnh exe có thể
+            # read-only (Program Files) nên overrides phải lưu chỗ khác.
+            try:
+                if os.path.exists(ACCESSIBILITY_OVERRIDES_FILE):
+                    with open(ACCESSIBILITY_OVERRIDES_FILE, "r", encoding="utf-8") as f:
+                        overrides = json.load(f)
+                    if isinstance(overrides, dict):
+                        cls._data.setdefault("accessibility", {}).update(overrides)
             except Exception as e:
                 import logging
-                logging.getLogger("config").warning(f"Lỗi đọc {APP_CONFIG_FILE}: {e} — dùng giá trị mặc định")
-        else:
-            import logging
-            logging.getLogger("config").info(f"{APP_CONFIG_FILE} không tìm thấy — dùng giá trị mặc định")
+                logging.getLogger("config").warning(f"Lỗi đọc accessibility overrides: {e}")
 
-        return cls._data
+            return cls._data
 
     @classmethod
     def get(cls, key, default=None):
@@ -222,11 +247,33 @@ class AppConfig:
 
     @classmethod
     def set_accessibility(cls, **kwargs):
-        """Cập nhật một hoặc nhiều field accessibility và lưu file."""
-        data = cls.load()
-        a11y = data.setdefault("accessibility", dict(_DEFAULT_APP_CONFIG["accessibility"]))
-        a11y.update(kwargs)
-        cls.save()
+        """Cập nhật một hoặc nhiều field accessibility và lưu overrides.
+
+        Overrides được lưu vào DATA_DIR (user-writable) thay vì ghi đè
+        app_config.json cạnh exe — file đó có thể read-only (Program Files).
+        """
+        with cls._lock:
+            data = cls.load()
+            a11y = data.setdefault("accessibility", dict(_DEFAULT_APP_CONFIG["accessibility"]))
+            a11y.update(kwargs)
+
+            # Đọc overrides hiện có, merge thêm kwargs, ghi atomic
+            overrides = {}
+            try:
+                if os.path.exists(ACCESSIBILITY_OVERRIDES_FILE):
+                    with open(ACCESSIBILITY_OVERRIDES_FILE, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        overrides = loaded
+            except Exception:
+                pass
+            overrides.update(kwargs)
+            try:
+                atomic_write_json(ACCESSIBILITY_OVERRIDES_FILE, overrides)
+                return True
+            except Exception as e:
+                print(f"Lỗi lưu accessibility overrides: {e}")
+                return False
 
     @classmethod
     def get_mute_multi_cc(cls):
@@ -241,32 +288,34 @@ class AppConfig:
     @classmethod
     def reload(cls):
         """Force reload config từ file (VD: sau khi user sửa file)"""
-        cls._data = None
-        return cls.load()
+        with cls._lock:
+            cls._data = None
+            return cls.load()
 
     @classmethod
     def update(cls, key, value):
         """Cập nhật một key trong config (merge nếu là dict)"""
-        data = cls.load()
-        if isinstance(value, dict) and key in data and isinstance(data[key], dict):
-            data[key].update(value)
-        else:
-            data[key] = value
+        with cls._lock:
+            data = cls.load()
+            if isinstance(value, dict) and key in data and isinstance(data[key], dict):
+                data[key].update(value)
+            else:
+                data[key] = value
 
     @classmethod
     def save(cls):
         """Ghi config hiện tại ra file app_config.json"""
-        if cls._data is None:
-            return False
-        config_path = cls._get_config_path()
-        try:
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(cls._data, f, indent=4, ensure_ascii=False)
-            print(f"App config saved: {config_path}")
-            return True
-        except Exception as e:
-            print(f"Lỗi ghi {APP_CONFIG_FILE}: {e}")
-            return False
+        with cls._lock:
+            if cls._data is None:
+                return False
+            config_path = cls._get_config_path()
+            try:
+                atomic_write_json(config_path, cls._data)
+                print(f"App config saved: {config_path}")
+                return True
+            except Exception as e:
+                print(f"Lỗi ghi {APP_CONFIG_FILE}: {e}")
+                return False
 
 
 # Load config ngay khi import module
@@ -306,8 +355,7 @@ class ConfigManager:
     @staticmethod
     def save_settings(settings):
         try:
-            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump(settings, f, indent=4, ensure_ascii=False)
+            atomic_write_json(SETTINGS_FILE, settings)
             return True
         except Exception as e:
             print(f"Lỗi lưu settings: {e}")
@@ -362,8 +410,7 @@ class UiConfigManager:
     @staticmethod
     def save_ui_config(ui_config):
         try:
-            with open(UI_CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(ui_config, f, indent=4, ensure_ascii=False)
+            atomic_write_json(UI_CONFIG_FILE, ui_config)
             return True
         except Exception as e:
             print(f"Lỗi lưu ui_config: {e}")

@@ -1,6 +1,7 @@
 import sys
 import logging
 import logging.handlers
+import threading
 from pathlib import Path
 
 
@@ -13,22 +14,31 @@ class _StreamToLogger:
         self._logger = logger
         self._level  = level
         self._buf    = ""
+        # Nhiều thread cùng print() → phải lock buffer để không trộn/mất dòng
+        self._lock   = threading.Lock()
 
     def write(self, msg: str):
         if not msg:
             return
-        self._buf += msg
-        # Flush mỗi khi gặp newline
-        while "\n" in self._buf:
-            line, self._buf = self._buf.split("\n", 1)
-            line = line.rstrip()
-            if line:
-                self._logger.log(self._level, line)
+        lines = []
+        with self._lock:
+            self._buf += msg
+            # Flush mỗi khi gặp newline
+            while "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                line = line.rstrip()
+                if line:
+                    lines.append(line)
+        # Log ngoài lock — tránh giữ lock khi handler ghi file
+        for line in lines:
+            self._logger.log(self._level, line)
 
     def flush(self):
-        if self._buf.strip():
-            self._logger.log(self._level, self._buf.rstrip())
+        with self._lock:
+            remainder = self._buf.rstrip()
             self._buf = ""
+        if remainder:
+            self._logger.log(self._level, remainder)
 
     def isatty(self):
         return False

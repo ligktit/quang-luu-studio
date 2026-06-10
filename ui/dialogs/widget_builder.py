@@ -166,6 +166,11 @@ class WidgetBuilderDialog(QDialog):
         cc = d.get("cc", 0)
         if isinstance(cc, int):
             self.cc_input.setValue(cc)
+        else:
+            # CC dạng tên (built-in, tra trong app_config.json -> midi_cc):
+            # khoá spinbox để khi Lưu không ghi đè tên bằng số
+            self.cc_input.setEnabled(False)
+            self.cc_input.setToolTip(f'CC built-in: "{cc}" — giữ nguyên khi lưu')
             
         if d.get("type") == "slider":
             self.icon_input.setText(d.get("icon", ""))
@@ -180,29 +185,34 @@ class WidgetBuilderDialog(QDialog):
             
     def _on_save(self):
         t = self.type_combo.currentText()
-        wid = self.existing_data.get("id", f"custom_{uuid.uuid4().hex[:8]}") if self.existing_data else f"custom_{uuid.uuid4().hex[:8]}"
-        
-        self.result_data = {
+        # Khi sửa widget có sẵn: xuất phát từ bản copy của entry gốc để giữ nguyên
+        # các field dialog không quản lý (action, desc, unit, has_inf_bottom, ...).
+        base = dict(self.existing_data) if self.existing_data else {"hidden": False}
+        wid = base.get("id") or f"custom_{uuid.uuid4().hex[:8]}"
+
+        base.update({
             "id": wid,
             "type": t,
             "label": self.label_input.text(),
             "color": self.color_input.text() or "#ffffff",
-            "cc": self.cc_input.value(),
-            "hidden": False
-        }
-        
+        })
+        # CC dạng tên (built-in) bị khoá trong _load_data — chỉ ghi số khi sửa được
+        if self.cc_input.isEnabled():
+            base["cc"] = self.cc_input.value()
+
         if t == "slider":
-            self.result_data.update({
+            base.update({
                 "icon": self.icon_input.text(),
                 "range": [self.min_val.value(), self.max_val.value()],
                 "has_mute": self.has_mute_cb.isChecked(),
-                "default": 0
             })
+            base.setdefault("default", 0)
         else:
-            self.result_data.update({
+            base.update({
                 "on_value": self.on_val.value(),
                 "off_value": self.off_val.value(),
                 "is_toggle": self.is_toggle_cb.isChecked()
             })
-            
+
+        self.result_data = base
         self.accept()

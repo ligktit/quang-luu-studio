@@ -6,17 +6,22 @@ import os
 import json
 import time
 import re
+import threading
 
-from core.utils import extract_video_id
+from core.utils import extract_video_id, atomic_write_json
 from core.config import MANUAL_TIMELINES_FILE, TONE_CACHE_FILE
+
+# Lock bảo vệ chu trình read-modify-write trên các file JSON cache
+_cache_lock = threading.Lock()
+_timeline_lock = threading.Lock()
 
 
 class ToneCacheManager:
     """Quản lý cache kết quả dò tone YouTube — tránh dò lại bài đã biết"""
-    
+
     CACHE_FILE = TONE_CACHE_FILE
     CACHE_TTL_DAYS = 30  # Hết hạn sau 30 ngày
-    
+
     @staticmethod
     def _load_cache():
         if os.path.exists(ToneCacheManager.CACHE_FILE):
@@ -26,12 +31,21 @@ class ToneCacheManager:
             except Exception:
                 return {}
         return {}
-    
+
+    @staticmethod
+    def _prune_expired(cache):
+        """Loại bỏ entry đã hết hạn TTL — tránh file cache phình to vô hạn."""
+        now = time.time()
+        ttl = ToneCacheManager.CACHE_TTL_DAYS * 86400
+        return {
+            vid: entry for vid, entry in cache.items()
+            if isinstance(entry, dict) and now - entry.get("cached_at", 0) <= ttl
+        }
+
     @staticmethod
     def _save_cache(cache):
         try:
-            with open(ToneCacheManager.CACHE_FILE, "w", encoding="utf-8") as f:
-                json.dump(cache, f, indent=2, ensure_ascii=False)
+            atomic_write_json(ToneCacheManager.CACHE_FILE, cache, indent=2)
         except Exception as e:
             print(f"Lỗi lưu tone cache: {e}")
     
@@ -61,17 +75,21 @@ class ToneCacheManager:
         video_id = extract_video_id(youtube_url)
         if not video_id:
             return
-        
-        cache = ToneCacheManager._load_cache()
-        tone_data["cached_at"] = time.time()
-        cache[video_id] = tone_data
-        ToneCacheManager._save_cache(cache)
+
+        with _cache_lock:
+            cache = ToneCacheManager._load_cache()
+            # Prune entry hết hạn khi save — file không phình to vô hạn
+            cache = ToneCacheManager._prune_expired(cache)
+            tone_data["cached_at"] = time.time()
+            cache[video_id] = tone_data
+            ToneCacheManager._save_cache(cache)
         print(f"[CACHE] Đã lưu tone cho video {video_id}")
-    
+
     @staticmethod
     def clear_cache():
         """Xóa toàn bộ cache"""
-        ToneCacheManager._save_cache({})
+        with _cache_lock:
+            ToneCacheManager._save_cache({})
 
 
 class ManualToneTimeline:
@@ -90,8 +108,7 @@ class ManualToneTimeline:
     @staticmethod
     def _save_all(data):
         try:
-            with open(MANUAL_TIMELINES_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+            atomic_write_json(MANUAL_TIMELINES_FILE, data, indent=2)
             return True
         except Exception as e:
             print(f"Lỗi lưu manual timelines: {e}")
@@ -120,15 +137,16 @@ class ManualToneTimeline:
         video_id = extract_video_id(youtube_url)
         if not video_id:
             return False
-        
-        all_data = ManualToneTimeline._load_all()
-        all_data[video_id] = {
-            "title": title,
-            "url": youtube_url,
-            "timeline": timeline_entries,
-            "updated_at": time.time()
-        }
-        return ManualToneTimeline._save_all(all_data)
+
+        with _timeline_lock:
+            all_data = ManualToneTimeline._load_all()
+            all_data[video_id] = {
+                "title": title,
+                "url": youtube_url,
+                "timeline": timeline_entries,
+                "updated_at": time.time()
+            }
+            return ManualToneTimeline._save_all(all_data)
     
     @staticmethod
     def delete_timeline(youtube_url):
@@ -136,12 +154,13 @@ class ManualToneTimeline:
         video_id = extract_video_id(youtube_url)
         if not video_id:
             return False
-        
-        all_data = ManualToneTimeline._load_all()
-        if video_id in all_data:
-            del all_data[video_id]
-            return ManualToneTimeline._save_all(all_data)
-        return False
+
+        with _timeline_lock:
+            all_data = ManualToneTimeline._load_all()
+            if video_id in all_data:
+                del all_data[video_id]
+                return ManualToneTimeline._save_all(all_data)
+            return False
     
     @staticmethod
     def list_all_timelines():

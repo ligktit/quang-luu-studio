@@ -1,10 +1,37 @@
 """
 Quang Lưu Studio — Shared Utilities
-Consolidated: find_ffmpeg(), extract_video_id()
+Consolidated: find_ffmpeg(), extract_video_id(), atomic_write_json()
 """
 import os
 import sys
 import re
+import json
+import tempfile
+
+
+def atomic_write_json(path, data, indent=4):
+    """Ghi JSON an toàn (atomic): ghi ra file tạm cùng thư mục rồi os.replace().
+
+    Tránh hỏng file khi app crash/mất điện giữa chừng — os.replace là atomic
+    trên cùng volume (Windows + POSIX).
+    """
+    path = os.path.abspath(path)
+    dir_name = os.path.dirname(path)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=".tmp_" + os.path.basename(path) + ".",
+        dir=dir_name
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=indent, ensure_ascii=False)
+        os.replace(tmp_path, path)
+    except Exception:
+        # Dọn file tạm nếu ghi/replace thất bại
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def find_ffmpeg():

@@ -120,7 +120,7 @@ class CDPYouTubeMonitor:
         if self._ws:
             try:
                 self._ws.close()
-            except:
+            except Exception:
                 pass
         if self._thread:
             self._thread.join(timeout=2.0)
@@ -129,29 +129,32 @@ class CDPYouTubeMonitor:
         if not self._ws or not self.is_connected:
             return None
 
+        # FIX: giữ _lock suốt cả send + recv-loop — _send_command được gọi
+        # từ cả monitor thread lẫn GUI thread (set_player_volume); nếu chỉ
+        # lock id counter thì 2 thread recv() xen kẽ sẽ "cướp" response của nhau.
         with self._lock:
             msg_id = self._message_id
             self._message_id += 1
 
-        payload = {
-            "id": msg_id,
-            "method": method,
-            "params": params or {}
-        }
+            payload = {
+                "id": msg_id,
+                "method": method,
+                "params": params or {}
+            }
 
-        try:
-            self._ws.send(json.dumps(payload))
-            # Giới hạn số lần recv để tránh vòng lặp vô hạn khi response không đến
-            for _ in range(50):
-                raw = self._ws.recv()
-                response = json.loads(raw)
-                if 'id' in response and response['id'] == msg_id:
-                    return response
-                # CDP events (không có 'id') → bỏ qua, đọc tiếp
-            return None
-        except Exception:
-            self.is_connected = False
-            return None
+            try:
+                self._ws.send(json.dumps(payload))
+                # Giới hạn số lần recv để tránh vòng lặp vô hạn khi response không đến
+                for _ in range(50):
+                    raw = self._ws.recv()
+                    response = json.loads(raw)
+                    if 'id' in response and response['id'] == msg_id:
+                        return response
+                    # CDP events (không có 'id') → bỏ qua, đọc tiếp
+                return None
+            except Exception:
+                self.is_connected = False
+                return None
 
     def _evaluate_js(self, expression):
         response = self._send_command("Runtime.evaluate", {
@@ -219,7 +222,7 @@ class CDPYouTubeMonitor:
                 self.is_playing = False
                 if self._ws:
                     try: self._ws.close()
-                    except: pass
+                    except Exception: pass
                     self._ws = None
                 time.sleep(1.0)
             except Exception as e:

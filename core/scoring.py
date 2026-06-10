@@ -8,9 +8,32 @@ Scores range ~65-98 with encouraging feedback and actionable tips.
 import os
 import math
 import time
+import uuid
 
-from core.config import RECORDINGS_DIR
+from core.config import RECORDINGS_DIR, TEMP_AUDIO_PREFIX
 from core.ytdlp_support import download_with_auth, extract_info_with_auth, make_ydl_opts
+
+
+def _make_temp_audio_path(output_dir):
+    """Tạo đường dẫn file .wav tạm KHÔNG tạo file trước.
+
+    QUAN TRỌNG: không dùng NamedTemporaryFile(delete=False) — file 0-byte
+    tồn tại sẵn tại đúng path mà FFmpegExtractAudio nhắm tới khiến
+    postprocessor bỏ qua bước convert → trả về wav 0-byte như thành công.
+    """
+    return os.path.join(output_dir, f"{TEMP_AUDIO_PREFIX}{uuid.uuid4().hex}.wav")
+
+
+def _cleanup_temp_candidates(temp_path):
+    """Xóa các file dở dang quanh temp_path khi download thất bại."""
+    base_path = temp_path[:-4] if temp_path.endswith('.wav') else temp_path
+    for ext in ['.wav', '.mp3', '.m4a', '.webm', '.part']:
+        try:
+            candidate = base_path + ext
+            if os.path.exists(candidate):
+                os.remove(candidate)
+        except Exception:
+            pass
 
 
 # ── Musical constants ────────────────────────────────────────────────────────
@@ -77,12 +100,10 @@ class ScoringEngine:
             except ImportError:
                 raise ImportError("Thu vien 'yt-dlp' chua duoc cai dat.")
 
-            import tempfile
             os.makedirs(output_dir, exist_ok=True)
 
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav', dir=output_dir)
-            temp_path = temp_file.name
-            temp_file.close()
+            # Tạo path tạm KHÔNG tạo file (tránh file 0-byte chặn FFmpegExtractAudio)
+            temp_path = _make_temp_audio_path(output_dir)
 
             ydl_opts = make_ydl_opts(
                 format='bestaudio/best',
@@ -115,6 +136,11 @@ class ScoringEngine:
             raise
         except Exception as e:
             print(f"[SCORING] Download error: {e}")
+            # Dọn file dở dang nếu download thất bại giữa chừng
+            try:
+                _cleanup_temp_candidates(temp_path)
+            except NameError:
+                pass
             return None
 
     def download_youtube_audio_with_info(self, youtube_url, output_dir=None):
@@ -128,12 +154,10 @@ class ScoringEngine:
             except ImportError:
                 raise ImportError("Thu vien 'yt-dlp' chua duoc cai dat.")
 
-            import tempfile
             os.makedirs(output_dir, exist_ok=True)
 
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav', dir=output_dir)
-            temp_path = temp_file.name
-            temp_file.close()
+            # Tạo path tạm KHÔNG tạo file (tránh file 0-byte chặn FFmpegExtractAudio)
+            temp_path = _make_temp_audio_path(output_dir)
 
             ydl_opts = make_ydl_opts(
                 format='bestaudio/best',
@@ -166,6 +190,11 @@ class ScoringEngine:
             raise
         except Exception as e:
             print(f"[SCORING] Download+info error: {e}")
+            # Dọn file dở dang nếu download thất bại giữa chừng
+            try:
+                _cleanup_temp_candidates(temp_path)
+            except NameError:
+                pass
             return None, ""
 
     def cleanup_temp_file(self):

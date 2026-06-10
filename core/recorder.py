@@ -4,6 +4,7 @@ Class: AudioRecorder
 """
 import os
 import sys
+import queue
 import subprocess
 import threading
 import tempfile
@@ -152,43 +153,74 @@ class AudioRecorder:
                 self.recording = False
                 return False
             
+            # ── Reader threads: đọc stdout/stderr NGAY để pipe không bị đầy ──
+            # FIX: readline() trên Windows pipe là blocking (select không hoạt
+            # động với pipe) → có thể treo GUI thread vĩnh viễn. Thay bằng
+            # thread đọc stdout đẩy vào queue; health-check chỉ poll queue.
+            proc = self._process
+            stdout_queue = queue.Queue()
+
+            def _stdout_reader():
+                # Thread này đọc stdout cho tới EOF — vừa phục vụ health-check
+                # (qua queue) vừa là drain thường trực để worker không bị block.
+                try:
+                    for raw_line in proc.stdout:
+                        s = raw_line.strip()
+                        if s:
+                            print(f"[RECORDER] Worker: {s}")
+                        stdout_queue.put(raw_line)
+                except Exception:
+                    pass
+
+            stderr_lines = []
+
+            def _stderr_drain():
+                # FIX: stderr=PIPE không được đọc → buffer đầy → worker block
+                # giữa chừng. Drain liên tục + giữ lại vài dòng cuối cho error_msg.
+                try:
+                    for raw_line in proc.stderr:
+                        s = raw_line.strip()
+                        if s:
+                            stderr_lines.append(s)
+                            print(f"[RECORDER] Worker stderr: {s}")
+                except Exception:
+                    pass
+
+            threading.Thread(target=_stdout_reader, daemon=True).start()
+            threading.Thread(target=_stderr_drain, daemon=True).start()
+
             # ── Health-check: chờ worker gửi "STARTED" hoặc "ERROR" trong 5s ──
             started_ok = False
             error_msg = None
-            import time, select
+            import time
             deadline = time.time() + 5.0
             while time.time() < deadline:
-                # Kiểm tra process còn sống không
+                # Thử lấy 1 dòng stdout từ queue (non-blocking với timeout ngắn)
+                try:
+                    line = stdout_queue.get(timeout=0.1).strip()
+                except queue.Empty:
+                    line = None
+
+                if line:
+                    if line == "STARTED":
+                        started_ok = True
+                        break
+                    elif line.startswith("ERROR"):
+                        error_msg = line
+                        break
+                    continue  # Còn dòng khác có thể đang chờ
+
+                # Kiểm tra process còn sống không (sau khi queue đã cạn)
                 ret = self._process.poll()
                 if ret is not None:
-                    # Process đã thoát sớm → thất bại
-                    stderr_out = ""
-                    try:
-                        stderr_out = self._process.stderr.read()
-                    except Exception:
-                        pass
-                    error_msg = f"Worker thoát với exit code {ret}. {stderr_out.strip()[:200]}"
+                    # Process đã thoát sớm → thất bại. Chờ chút cho stderr drain.
+                    time.sleep(0.2)
+                    stderr_out = " | ".join(stderr_lines[-3:])
+                    error_msg = f"Worker thoát với exit code {ret}. {stderr_out[:200]}"
                     if ret == 3:
                         error_msg += "\n💡 Gợi ý: Thiết bị ghi âm có thể đang bị ứng dụng khác (như Studio One) chiếm quyền sử dụng (Exclusive Mode). Hãy chọn thiết bị khác hoặc dùng ASIOVADPRO."
                     break
-                
-                # Thử đọc 1 dòng stdout (non-blocking)
-                try:
-                    line = self._process.stdout.readline()
-                    if line:
-                        line = line.strip()
-                        print(f"[RECORDER] Worker: {line}")
-                        if line == "STARTED":
-                            started_ok = True
-                            break
-                        elif line.startswith("ERROR"):
-                            error_msg = line
-                            break
-                except Exception:
-                    pass
-                
-                time.sleep(0.1)
-            
+
             if not started_ok:
                 if error_msg is None:
                     error_msg = "Timeout: worker không phản hồi trong 5 giây"
@@ -207,18 +239,10 @@ class AudioRecorder:
                     pass
                 self.recording = False
                 return False
-            
-            # Drain stdout trong background để không block pipe
-            def _drain_stdout():
-                try:
-                    for line in self._process.stdout:
-                        line = line.strip()
-                        if line:
-                            print(f"[RECORDER] Worker: {line}")
-                except Exception:
-                    pass
-            threading.Thread(target=_drain_stdout, daemon=True).start()
-        
+
+            # _stdout_reader thread vẫn chạy tới EOF → đóng vai trò drain
+            # thường trực, không cần thread drain riêng nữa.
+
         return True
     
     def stop_recording(self, save_path=None):
@@ -306,14 +330,23 @@ class AudioRecorder:
         _patch_lock = _threading.Lock()
 
         def _patched_print(*args, **kwargs):
-            _orig_print(*args, **kwargs)
-            msg = ' '.join(str(a) for a in args)
-            clean = msg.strip()
-            with _patch_lock:
-                if clean == 'STARTED':
-                    self._started_event.set()
-                elif clean.startswith('ERROR:') and not self._worker_error:
-                    self._worker_error = clean
+            # FIX: patch là process-wide — nếu logic bắt message lỗi thì
+            # mọi print trong app chết theo. Bọc try/except, fallback về
+            # print gốc khi có sự cố.
+            try:
+                _orig_print(*args, **kwargs)
+                msg = ' '.join(str(a) for a in args)
+                clean = msg.strip()
+                with _patch_lock:
+                    if clean == 'STARTED':
+                        self._started_event.set()
+                    elif clean.startswith('ERROR:') and not self._worker_error:
+                        self._worker_error = clean
+            except Exception:
+                try:
+                    _orig_print(*args, **kwargs)
+                except Exception:
+                    pass
 
         builtins.print = _patched_print
 
@@ -329,6 +362,14 @@ class AudioRecorder:
             }
             exec(compile(code, worker_path, 'exec'), ns)
 
+        except SystemExit as e:
+            # FIX: worker gọi sys.exit(2/3) khi lỗi thiết bị — `except Exception`
+            # không bắt SystemExit → thread chết mà không restore print/argv.
+            code_val = e.code if e.code is not None else 0
+            if code_val != 0:
+                if not self._worker_error:
+                    self._worker_error = f"ERROR: Worker thoát với exit code {code_val}"
+                _orig_print(f"[RECORDER] Inline worker exited: code={code_val}", flush=True)
         except Exception as e:
             _orig_print(f"[RECORDER] Inline worker error: {e}", flush=True)
             import traceback

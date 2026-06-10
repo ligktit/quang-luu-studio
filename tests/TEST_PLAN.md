@@ -288,8 +288,8 @@ def mock_midi_handler(mocker):
 
 | # | Test case | Setup | Expected |
 |---|---|---|---|
-| MM-01 | `checkpoint()` ghi log khi RAM tăng >5MB | Mock psutil trả về tăng 10MB | Log message chứa delta |
-| MM-02 | `checkpoint()` không log khi RAM tăng <5MB | Delta = 2MB | Không log |
+| MM-01 | `checkpoint()` ghi log khi RAM tăng >20MB | Mock psutil trả về tăng 30MB | Log message chứa delta |
+| MM-02 | `checkpoint()` không log khi RAM tăng <20MB | Delta = 2MB | Không log |
 | MM-03 | `summary()` không raise | Sau 3 checkpoints | Không exception |
 
 ### 11.2 `MemoryGuard`

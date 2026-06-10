@@ -74,6 +74,17 @@ def test_update_song(mock_songs_file):
     song = SongManager.get_song_by_id(1)
     assert song["title"] == "New Title"
 
+def test_add_song_no_id_collision_after_delete(mock_songs_file):
+    # S-12: ID mới = max(id)+1, không trùng sau khi xóa
+    SongManager.add_song("Song 1", "http://yt.com/1", "C Major")
+    SongManager.add_song("Song 2", "http://yt.com/2", "D Major")
+    SongManager.delete_song(1)
+    SongManager.add_song("Song 3", "http://yt.com/3", "E Minor")
+    songs = SongManager.load_songs()
+    ids = [s["id"] for s in songs]
+    assert len(ids) == len(set(ids))  # Không trùng ID
+    assert SongManager.get_song_by_id(3)["title"] == "Song 3"
+
 def test_save_and_load_round_trip(mock_songs_file):
     # S-11
     songs_to_save = [

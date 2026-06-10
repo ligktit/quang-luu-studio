@@ -180,6 +180,9 @@ class VoiceInput:
         self._recognizer = None
         self._lock = threading.Lock()
         self._listening = False
+        # Model loading: lock riêng + flag để load nền không đụng PTT lock
+        self._model_lock = threading.Lock()
+        self._model_loading = False
 
     @property
     def available(self) -> bool:
@@ -195,18 +198,35 @@ class VoiceInput:
         return os.path.join(base, "models", "vosk-vi")
 
     def _ensure_model(self) -> bool:
+        """Load model Vosk (BLOCKING, có thể mất vài giây). Thread-safe."""
         if self._model is not None:
             return True
         if not self.available:
             return False
-        try:
-            self._model = Model(self._model_path)
-            return True
-        except Exception as e:
-            log.warning("Không load được Vosk model %s: %s", self._model_path, e)
-            if self._on_error:
-                self._on_error(f"Không load được model giọng nói: {e}")
-            return False
+        with self._model_lock:
+            if self._model is not None:
+                return True
+            self._model_loading = True
+            try:
+                self._model = Model(self._model_path)
+                print(f"[VOICE] Model Vosk đã sẵn sàng: {self._model_path}")
+                return True
+            except Exception as e:
+                log.warning("Không load được Vosk model %s: %s", self._model_path, e)
+                if self._on_error:
+                    self._on_error(f"Không load được model giọng nói: {e}")
+                return False
+            finally:
+                self._model_loading = False
+
+    def preload_async(self):
+        """Tải model trong thread nền — gọi lúc init để lần nhấn PTT đầu tiên
+        không phải load sync (freeze UI nhiều giây)."""
+        if self._model is not None or not self.available:
+            return
+        threading.Thread(
+            target=self._ensure_model, daemon=True, name="vosk-model-load"
+        ).start()
 
     # ── Push-to-talk API ────────────────────────────────────
 
@@ -214,8 +234,22 @@ class VoiceInput:
         with self._lock:
             if self._listening:
                 return
-            if not self._ensure_model():
-                print("[VOICE] start_listening bỏ qua — model chưa sẵn sàng")
+            # KHÔNG load model sync ở đây (block key handler nhiều giây).
+            # Model được preload_async() lúc init — nếu chưa xong thì báo và thoát.
+            if self._model is None:
+                if self._model_loading:
+                    print("[VOICE] start_listening bỏ qua — model đang tải, thử lại sau")
+                    if self._on_error:
+                        self._on_error("Model giọng nói đang tải, vui lòng chờ vài giây")
+                    return
+                if not self.available:
+                    print("[VOICE] start_listening bỏ qua — model chưa sẵn sàng")
+                    return
+                # Chưa preload (hiếm) — kick tải nền rồi thoát, không block
+                print("[VOICE] Model chưa tải — bắt đầu tải nền")
+                self.preload_async()
+                if self._on_error:
+                    self._on_error("Model giọng nói đang tải, vui lòng chờ vài giây")
                 return
             self._listening = True
             # Grammar-constrained recognizer: tăng độ chính xác đáng kể vì
@@ -242,6 +276,10 @@ class VoiceInput:
                 print(f"[VOICE] !!! Lỗi mở mic: {e}")
 
     def stop_listening(self):
+        # Tính kết quả + chọn intent BÊN TRONG lock, nhưng gọi on_intent
+        # SAU KHI nhả lock — handler có thể mở dialog (exec) và user nhấn
+        # Ctrl+Space tiếp → start_listening chờ cùng lock = deadlock UI.
+        intent: Optional[Intent] = None
         with self._lock:
             if not self._listening:
                 return
@@ -269,25 +307,33 @@ class VoiceInput:
             print(f"[VOICE] <<< Dừng nghe. Transcript: {transcript!r}")
             if not transcript:
                 print(f"[VOICE]     (raw JSON: {raw_json})")
-                if self._on_intent:
-                    self._on_intent(Intent(name="empty", text=""))
-                return
-
-            if self._on_intent:
+                intent = Intent(name="empty", text="")
+            else:
                 intent = match_intent(transcript)
                 if intent is not None:
                     intent.text = transcript
                     print(f"[VOICE]     -> Match intent: {intent.name}")
-                    self._on_intent(intent)
                 else:
                     print(f"[VOICE]     -> Không match intent nào")
-                    self._on_intent(Intent(name="unknown", text=transcript))
+                    intent = Intent(name="unknown", text=transcript)
+
+        # Ngoài lock — an toàn cho handler chạy lâu / mở dialog
+        if self._on_intent and intent is not None:
+            self._on_intent(intent)
 
     # ── sounddevice callback ────────────────────────────────
 
     def _on_audio(self, indata, frames, time_info, status):
+        # Đọc recognizer dưới lock — stop_listening gọi FinalResult() rồi null
+        # recognizer; đọc không lock có thể crash native (race với PortAudio
+        # thread). Acquire non-blocking: nếu lock bận thì bỏ chunk (callback
+        # phải nhanh, không được chờ).
+        if not self._lock.acquire(blocking=False):
+            return
         try:
             if self._recognizer is not None:
                 self._recognizer.AcceptWaveform(bytes(indata))
         except Exception as e:
             log.debug("Voice input audio callback lỗi: %s", e)
+        finally:
+            self._lock.release()

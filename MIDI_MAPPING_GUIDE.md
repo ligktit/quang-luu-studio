@@ -13,7 +13,7 @@
 Chạy script install:
 
 ```bash
-python install_studio_one_surface.py
+install_surface.bat
 ```
 
 Hoặc copy thủ công:
@@ -111,7 +111,7 @@ Từ:  studio_one\QuangLuuMIDI.surface.xml
 
 ### Control không xuất hiện trong danh sách?
 - Kiểm tra file `.surface.xml` đã nằm đúng thư mục
-- Chạy lại `python install_studio_one_surface.py`
+- Chạy lại `install_surface.bat`
 - Restart Studio One
 
 ### MIDI Learn không hoạt động?

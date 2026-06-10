@@ -101,8 +101,29 @@ class Speaker:
         self._last_text = text
         self._queue.put(text)
 
+    def interrupt(self):
+        """Ngắt câu đang đọc + xoá hàng đợi — KHÔNG dừng worker thread.
+
+        Dùng cho lệnh "im lặng": speaker vẫn sống, các announce sau vẫn
+        hoạt động bình thường. stop() chỉ dành cho shutdown thật.
+        """
+        # Xoá các câu đang chờ
+        try:
+            while True:
+                self._queue.get_nowait()
+        except queue.Empty:
+            pass
+        # Ngắt câu đang phát (SAPI5 engine.stop() an toàn gọi từ thread khác)
+        eng = self._engine
+        if eng is not None:
+            try:
+                eng.stop()
+            except Exception as e:
+                log.debug("TTS interrupt error: %s", e)
+        self._last_text = ""
+
     def stop(self):
-        """Dừng worker thread + engine. Idempotent."""
+        """Dừng hẳn worker thread + engine (shutdown). Idempotent."""
         self._stop_flag.set()
         try:
             self._queue.put_nowait(None)

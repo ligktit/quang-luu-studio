@@ -3,7 +3,7 @@ import os
 from PySide6.QtWidgets import QHBoxLayout, QLabel
 from PySide6.QtCore import Qt
 
-from ui.design_tokens import C, SP, FONT
+from ui.design_tokens import C, SP, FONT, lighten
 from ui.components.painter_button import PainterButton
 from ui.components.painter_panel import GlassPanel
 from ui.components.sfx_button_area import SfxButtonArea
@@ -85,7 +85,8 @@ def build_panel_mode(dashboard) -> GlassPanel:
         
         # --- Dev Mode Context Menu ---
         if getattr(dashboard, "is_dev_mode", False):
-            from PySide6.QtCore import Qt
+            # KHÔNG import Qt cục bộ ở đây — sẽ shadow import module-level
+            # và gây UnboundLocalError ở mọi chỗ dùng Qt trong hàm này.
             mbtn.setContextMenuPolicy(Qt.CustomContextMenu)
             
             def make_ctx_cb(cfg=m_cfg, b=mbtn):
@@ -115,7 +116,6 @@ def build_panel_mode(dashboard) -> GlassPanel:
     # --- Dev Mode Add Button ---
     if getattr(dashboard, "is_dev_mode", False):
         from PySide6.QtWidgets import QPushButton
-        from PySide6.QtCore import Qt
         add_btn = QPushButton("+ Thêm Mode")
         add_btn.setStyleSheet(f"background-color: transparent; border: 1px dashed {C['teal']}; color: {C['teal']}; margin-top: 5px;")
         add_btn.setCursor(Qt.PointingHandCursor)

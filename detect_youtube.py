@@ -51,7 +51,7 @@ MINOR_PROFILE = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53,
 def get_browser_windows():
     """Find all open browser windows and their handles."""
     browser_keywords = [
-        "Google Chrome", "Microsoft​ Edge", "Mozilla Firefox",
+        "Google Chrome", "Microsoft Edge", "Mozilla Firefox",
         "Brave", "Opera", "Vivaldi", "Edge",
     ]
 
@@ -316,7 +316,12 @@ def analyze_audio(filepath):
 
     # --- Tempo / BPM ---
     print("  ⏳ Detecting tempo...")
-    tempo = librosa.beat.tempo(y=y, sr=sr)
+    try:
+        # librosa >= 1.0: API mới
+        tempo = librosa.feature.rhythm.tempo(y=y, sr=sr)
+    except (ImportError, AttributeError):
+        # librosa < 1.0: API cũ (deprecated từ 0.10, xoá ở 1.0)
+        tempo = librosa.beat.tempo(y=y, sr=sr)
     bpm = float(tempo[0]) if len(tempo) > 0 else 0.0
 
     # --- Additional info ---

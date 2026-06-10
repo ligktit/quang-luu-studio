@@ -86,6 +86,9 @@ def test_app_config_accessibility_round_trip(tmp_path, monkeypatch):
     from core import config as cfg_mod
     monkeypatch.setattr(cfg_mod.AppConfig, "_data", None)
     monkeypatch.setattr(cfg_mod, "APP_DIR", str(tmp_path))
+    # Overrides giờ lưu file riêng trong DATA_DIR → isolate vào tmp_path
+    monkeypatch.setattr(cfg_mod, "ACCESSIBILITY_OVERRIDES_FILE",
+                        str(tmp_path / "accessibility_overrides.json"))
     # Force reload với defaults
     cfg_mod.AppConfig.reload()
     cfg = cfg_mod.AppConfig.get_accessibility()
