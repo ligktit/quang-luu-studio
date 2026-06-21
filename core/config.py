@@ -67,6 +67,7 @@ RECORDINGS_DIR = _get_recordings_dir()
 # --- CẤU HÌNH CỐT LÕI (user-writable → DATA_DIR) ---
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 SONGS_FILE = os.path.join(DATA_DIR, "saved_songs.json")
+PLAYLISTS_FILE = os.path.join(DATA_DIR, "playlists.json")
 ACTIVATION_FILE = os.path.join(DATA_DIR, "activation.json")
 MANUAL_TIMELINES_FILE = os.path.join(DATA_DIR, "manual_timelines.json")
 TONE_CACHE_FILE = os.path.join(DATA_DIR, "tone_cache.json")
@@ -85,6 +86,9 @@ APP_CONFIG_FILE = "app_config.json"
 # Defaults nếu file không tồn tại hoặc thiếu field
 _DEFAULT_APP_CONFIG = {
     "midi_port_name": "QuangLuuMIDI",
+    # URL server license/update/crash. Rỗng = chế độ kích hoạt offline cũ (fallback).
+    # VD: "https://license.quangluustudio.com"
+    "license_server_url": "",
     "youtube_cookie_browser": "auto",
     "youtube_cookie_profile": "",
     "youtube_cookie_file": "",

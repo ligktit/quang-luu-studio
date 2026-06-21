@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/admin/crashes">← Danh sách lỗi</a></p>
+{% if not crash %}
+<p>Không tìm thấy báo lỗi.</p>
+{% else %}
+<h1>Lỗi #{{ crash.id }} <span class="badge {{ crash.status }}">{{ crash.status }}</span></h1>
+<div class="card">
+  <p><b>Version:</b> {{ crash.app_version or '—' }} · <b>Số lần:</b> {{ crash.count }} · <b>OS:</b> {{ crash.os_info or '—' }}</p>
+  <p><b>Thiết bị:</b> <code>{{ crash.device_fp or '—' }}</code> · <b>Mã:</b> <code>{{ crash.license_code or '—' }}</code></p>
+  <p><b>Lần đầu:</b> {{ crash.first_seen }} · <b>Lần cuối:</b> {{ crash.last_seen }}</p>
+  <form method="post" action="/admin/crashes/{{ crash.id }}/resolve"><button>Đánh dấu đã xử lý</button></form>
+</div>
+<h3>Traceback</h3>
+<pre>{{ crash.traceback }}</pre>
+{% if crash.log_excerpt %}
+<h3>Log trích đoạn</h3>
+<pre>{{ crash.log_excerpt }}</pre>
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Optional
@@ -37,11 +38,53 @@ def is_newer(remote: str, local: str = __version__) -> bool:
         return False
 
 
+def _check_server_release(timeout: int = 10) -> Optional[ReleaseInfo]:
+    """
+    Hỏi server license/update nội bộ (khi app_config.json có 'license_server_url').
+    Server đã so version + tôn trọng rollout %, chỉ trả khi có bản mới hơn.
+    """
+    try:
+        from core.config import AppConfig
+        base = str(AppConfig.get("license_server_url", "") or "").rstrip("/")
+        if not base:
+            return None
+        try:
+            from core.licensing.device import get_fingerprint
+            fp = get_fingerprint()
+        except Exception:
+            fp = ""
+
+        params = urllib.parse.urlencode({"version": __version__, "channel": "stable", "fingerprint": fp})
+        url = f"{base}/api/v1/updates/check?{params}"
+        req = urllib.request.Request(url, headers={"User-Agent": f"QuangLuuStudio/{__version__}"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        log.warning("Server update check failed: %s", e)
+        return None
+
+    if not data.get("update_available"):
+        return None
+    return ReleaseInfo(
+        version=data["version"],
+        tag_name=f"v{data['version']}",
+        download_url=data["download_url"],
+        sha256=data.get("sha256"),
+        body=data.get("release_notes", ""),
+        published_at=data.get("published_at", ""),
+        size_bytes=data.get("size_bytes", 0),
+    )
+
+
 def check_latest_release(timeout: int = 10) -> Optional[ReleaseInfo]:
     """
-    Query GitHub Releases API.
+    Ưu tiên server nội bộ nếu được cấu hình; ngược lại fallback GitHub Releases.
     Returns ReleaseInfo for the latest release, or None on error / no update.
     """
+    server_release = _check_server_release(timeout)
+    if server_release is not None:
+        return server_release
+
     req = urllib.request.Request(
         GITHUB_RELEASES_API,
         headers={

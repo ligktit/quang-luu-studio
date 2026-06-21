@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Tổng quan</h1>
+<div class="grid">
+  <div class="stat"><div class="n">{{ stats.users }}</div><div class="l">Người dùng</div></div>
+  <div class="stat"><div class="n">{{ stats.licenses }}</div><div class="l">Mã kích hoạt</div></div>
+  <div class="stat"><div class="n">{{ stats.active }}</div><div class="l">Đang hoạt động</div></div>
+  <div class="stat"><div class="n">{{ stats.devices }}</div><div class="l">Thiết bị</div></div>
+  <div class="stat"><div class="n">{{ stats.versions }}</div><div class="l">Phiên bản</div></div>
+  <div class="stat"><div class="n">{{ stats.crashes_new }}</div><div class="l">Lỗi mới</div></div>
+</div>
+{% endblock %}

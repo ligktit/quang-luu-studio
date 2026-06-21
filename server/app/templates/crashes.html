@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Báo lỗi</h1>
+<table>
+  <tr><th>ID</th><th>Trạng thái</th><th>Version</th><th>Số lần</th><th>OS</th><th>Lần cuối</th><th></th></tr>
+  {% for c in crashes %}
+  <tr>
+    <td>{{ c.id }}</td>
+    <td><span class="badge {{ c.status }}">{{ c.status }}</span></td>
+    <td>{{ c.app_version or '' }}</td>
+    <td>{{ c.count }}</td>
+    <td>{{ c.os_info or '' }}</td>
+    <td>{{ c.last_seen.strftime('%Y-%m-%d %H:%M') if c.last_seen else '' }}</td>
+    <td><a href="/admin/crashes/{{ c.id }}">Xem</a></td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

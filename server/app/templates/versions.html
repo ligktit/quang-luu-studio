@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Phiên bản</h1>
+<div class="card">
+  <form method="post" action="/admin/versions/upload" enctype="multipart/form-data" class="row">
+    <div><label>Version (vd 1.5.2)</label><input name="version" required></div>
+    <div><label>Kênh</label>
+      <select name="channel"><option value="stable">stable</option><option value="beta">beta</option></select>
+    </div>
+    <div><label>Rollout %</label><input name="rollout_percent" type="number" value="100" min="0" max="100"></div>
+    <div><label>Bắt buộc</label><br><input name="mandatory" type="checkbox" value="true"></div>
+    <div style="flex:1"><label>Ghi chú phát hành</label><input name="release_notes" style="width:100%"></div>
+    <div><label>File .exe</label><input name="file" type="file" accept=".exe" required></div>
+    <button type="submit">Tải lên</button>
+  </form>
+</div>
+<table>
+  <tr><th>Version</th><th>Kênh</th><th>SHA256</th><th>Kích thước</th><th>Rollout</th><th>Bắt buộc</th><th>Active</th><th></th></tr>
+  {% for v in versions %}
+  <tr>
+    <td>{{ v.version }}</td><td>{{ v.channel }}</td>
+    <td><code>{{ v.sha256[:16] }}…</code></td>
+    <td>{{ (v.size_bytes/1048576)|round(1) }} MB</td>
+    <td>{{ v.rollout_percent }}%</td>
+    <td>{{ '✓' if v.mandatory else '' }}</td>
+    <td>{{ '🟢' if v.is_active else '⚪' }}</td>
+    <td><form method="post" action="/admin/versions/{{ v.id }}/toggle"><button class="ghost">{{ 'Tắt' if v.is_active else 'Bật' }}</button></form></td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

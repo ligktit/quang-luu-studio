@@ -10,9 +10,23 @@ import hashlib
 from core.config import ACTIVATION_FILE
 
 
+def _online():
+    """Trả module core.licensing.client nếu server được cấu hình, ngược lại None.
+
+    Import lazy để tránh chi phí/khả năng circular import lúc nạp module.
+    Khi app_config.json KHÔNG có 'license_server_url' → trả None → giữ nguyên
+    luồng kích hoạt offline cũ (tương thích ngược hoàn toàn).
+    """
+    try:
+        from core.licensing import client
+        return client if client.server_configured() else None
+    except Exception:
+        return None
+
+
 class ActivationManager:
     """Quản lý activation code, thời hạn sử dụng, và bản dùng thử"""
-    
+
     # Thời hạn sử dụng: 1 năm (365 ngày)
     LICENSE_DURATION_DAYS = 365
     
@@ -116,19 +130,30 @@ class ActivationManager:
     @staticmethod
     def is_activated():
         """Kiểm tra xem app đã được kích hoạt chưa"""
+        # Online mode: đã kích hoạt nếu có license token cache.
+        online = _online()
+        if online is not None and online.has_online_license():
+            return True
+
         activation = ActivationManager.load_activation()
         if not activation:
             return False
-        
+
         # Kiểm tra xem có activation_date không
         if "activation_date" not in activation:
             return False
-        
+
         return True
     
     @staticmethod
     def is_expired():
         """Kiểm tra xem activation đã hết hạn chưa (sau 1 năm)"""
+        # Online mode: hết hạn nếu có license nhưng grace đã lapse hoặc license
+        # quá hạn theo server. is_grace_valid() bao cả 2 trường hợp.
+        online = _online()
+        if online is not None and online.has_online_license():
+            return not online.is_grace_valid()
+
         activation = ActivationManager.load_activation()
         if not activation:
             return True  # Chưa kích hoạt = hết hạn
@@ -159,6 +184,10 @@ class ActivationManager:
     @staticmethod
     def get_days_remaining():
         """Lấy số ngày còn lại của license"""
+        online = _online()
+        if online is not None and online.has_online_license():
+            return online.days_remaining()
+
         activation = ActivationManager.load_activation()
         if not activation:
             return 0
@@ -186,9 +215,18 @@ class ActivationManager:
     @staticmethod
     def activate(code):
         """Kích hoạt app với code được cung cấp. Returns dict: {success: bool, error: str}"""
+        # Online mode: server là thẩm quyền — kiểm format trước cho phản hồi nhanh,
+        # rồi kích hoạt + ràng máy qua server.
+        online = _online()
+        if online is not None:
+            if not ActivationManager._validate_code_structure(code):
+                return {"success": False, "error": "Mã kích hoạt không hợp lệ. Vui lòng kiểm tra lại."}
+            return online.activate_online(code)
+
+        # Offline mode (server chưa cấu hình): checksum cục bộ như cũ.
         if not ActivationManager._validate_code(code):
             return {"success": False, "error": "Mã kích hoạt không hợp lệ. Vui lòng kiểm tra lại."}
-        
+
         # Lưu activation
         if ActivationManager.save_activation(code):
             return {"success": True, "error": ""}

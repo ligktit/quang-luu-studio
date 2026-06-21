@@ -42,9 +42,18 @@ _LOG_DIR = Path(_get_data_dir()) / "logs"
 setup_logging(_LOG_DIR, level=logging.INFO)
 log = get_logger(__name__)
 
+# Gửi crash về server (best-effort, không raise nếu reporter lỗi)
+def _report_crash(exc_type, exc_value, exc_tb):
+    try:
+        from core.crash_reporter import report_exception
+        report_exception(exc_type, exc_value, exc_tb)
+    except Exception:
+        pass
+
 # Bắt crash không được xử lý từ bất kỳ thread nào
 def _excepthook(exc_type, exc_value, exc_tb):
     log.critical("Unhandled exception", exc_info=(exc_type, exc_value, exc_tb))
+    _report_crash(exc_type, exc_value, exc_tb)
     flush_logs()
 sys.excepthook = _excepthook
 
@@ -53,6 +62,7 @@ def _thread_excepthook(args):
         return
     log.critical("Unhandled exception in thread '%s'", args.thread, exc_info=(
         args.exc_type, args.exc_value, args.exc_tb))
+    _report_crash(args.exc_type, args.exc_value, args.exc_tb)
     flush_logs()
 threading.excepthook = _thread_excepthook
 
@@ -136,6 +146,23 @@ def _license_or_trial_expired():
     return (am.is_activated() and am.is_expired()) or am.is_trial_expired()
 
 
+def _background_maintenance():
+    """Nền (daemon): flush crash queue + re-verify license online để làm mới grace."""
+    try:
+        from core.crash_reporter import flush_queue
+        flush_queue()
+    except Exception as e:
+        log.debug("crash flush skipped: %s", e)
+    try:
+        from core.licensing import client as _lic
+        if _lic.server_configured() and _lic.has_online_license():
+            result = _lic.verify_online()
+            if result.get("status") == "revoked":
+                log.warning("License đã bị thu hồi từ server")
+    except Exception as e:
+        log.debug("license re-verify skipped: %s", e)
+
+
 def main():
     """
     App lifecycle loop — avoid recursion to prevent stack accumulation
@@ -168,6 +195,8 @@ def main():
             threading.Thread(
                 target=_schedule_update_check, args=(notifier,), daemon=True
             ).start()
+            # Nền: gửi lại crash report tồn đọng + re-verify license (làm mới grace).
+            threading.Thread(target=_background_maintenance, daemon=True).start()
             dashboard.mainloop()
             log.info("Dashboard closed, exiting")
             # Chờ bg-shutdown (closeEvent) xong với timeout ngắn — os._exit(0)
