@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quang Lưu Studio — Hướng dẫn sử dụng</title>
+<style>
+  :root{
+    --bg:#0b1220; --bg2:#0f172a; --card:#1e293b; --card2:#16233b;
+    --border:#334155; --text:#e2e8f0; --muted:#94a3b8;
+    --teal:#14b8a6; --orange:#f97316; --pink:#ec4899; --purple:#8b5cf6;
+    --blue:#38bdf8; --green:#22c55e; --yellow:#eab308;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:"Be Vietnam Pro","Segoe UI",system-ui,Roboto,Arial,sans-serif;
+    line-height:1.65; font-size:16px;
+  }
+  a{color:var(--teal); text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  /* Layout */
+  .layout{display:flex; max-width:1280px; margin:0 auto}
+  nav.toc{
+    position:sticky; top:0; align-self:flex-start; height:100vh; overflow-y:auto;
+    width:280px; flex:0 0 280px; padding:24px 18px; background:var(--bg2);
+    border-right:1px solid var(--border);
+  }
+  nav.toc h2{font-size:13px; text-transform:uppercase; letter-spacing:1px; color:var(--muted); margin:18px 0 8px}
+  nav.toc a{display:block; color:var(--text); padding:5px 10px; border-radius:8px; font-size:14px}
+  nav.toc a:hover{background:var(--card); text-decoration:none}
+  .brand{display:flex; align-items:center; gap:10px; font-weight:800; font-size:18px; color:var(--teal); margin-bottom:6px}
+  .brand .dot{width:14px;height:14px;border-radius:50%;background:var(--orange)}
+  .ver{font-size:12px;color:var(--muted)}
+
+  main{flex:1 1 auto; padding:40px 48px; min-width:0; max-width:920px}
+  @media(max-width:900px){
+    nav.toc{display:none}
+    main{padding:24px 18px}
+  }
+
+  h1{font-size:34px; font-weight:900; letter-spacing:-1px; margin:0 0 4px; background:linear-gradient(90deg,var(--teal),var(--blue)); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent}
+  .subtitle{color:var(--muted); font-size:17px; margin-bottom:30px}
+  section{scroll-margin-top:20px; padding:26px 0; border-top:1px solid var(--border)}
+  section:first-of-type{border-top:none}
+  h2{font-size:24px; font-weight:800; margin:0 0 14px; display:flex; align-items:center; gap:10px}
+  h3{font-size:18px; font-weight:700; margin:22px 0 8px; color:var(--blue)}
+  .badge{display:inline-block; font-size:12px; font-weight:700; color:#031018; background:var(--teal); border-radius:999px; padding:2px 10px}
+
+  /* Figures */
+  figure{margin:18px 0; background:var(--bg2); border:1px solid var(--border); border-radius:14px; padding:12px; box-shadow:0 8px 24px rgba(0,0,0,.35)}
+  figure img{width:100%; height:auto; display:block; border-radius:8px; cursor:zoom-in}
+  figcaption{color:var(--muted); font-size:13px; margin-top:10px; text-align:center}
+
+  /* Cards / callouts */
+  .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin:16px 0}
+  .card{background:var(--card); border:1px solid var(--border); border-radius:12px; padding:14px 16px}
+  .card .t{font-weight:700; margin-bottom:4px}
+  .pill{display:inline-block; width:12px;height:12px;border-radius:50%;margin-right:6px;vertical-align:middle}
+
+  .note,.warn,.tip{border-radius:12px; padding:14px 16px; margin:16px 0; border-left:4px solid}
+  .note{background:rgba(56,189,248,.08); border-color:var(--blue)}
+  .warn{background:rgba(249,115,22,.10); border-color:var(--orange)}
+  .tip{background:rgba(34,197,94,.10); border-color:var(--green)}
+  .note b,.warn b,.tip b{color:#fff}
+
+  table{width:100%; border-collapse:collapse; margin:14px 0; font-size:15px}
+  th,td{text-align:left; padding:10px 12px; border-bottom:1px solid var(--border)}
+  th{color:var(--muted); font-size:13px; text-transform:uppercase; letter-spacing:.5px}
+  td kbd{background:#0b1220; border:1px solid var(--border); border-bottom-width:2px; border-radius:6px; padding:2px 8px; font-family:Consolas,monospace; font-size:13px}
+  tr:hover td{background:rgba(255,255,255,.02)}
+
+  ol li,ul li{margin:6px 0}
+  .step{counter-reset:none}
+  code{background:#0b1220; border:1px solid var(--border); border-radius:6px; padding:1px 6px; font-family:Consolas,monospace; font-size:14px; color:var(--yellow)}
+
+  footer{color:var(--muted); font-size:13px; text-align:center; padding:30px 0 50px; border-top:1px solid var(--border); margin-top:20px}
+
+  /* Lightbox */
+  #lb{position:fixed; inset:0; background:rgba(0,0,0,.9); display:none; align-items:center; justify-content:center; z-index:99; cursor:zoom-out}
+  #lb img{max-width:94vw; max-height:94vh; border-radius:10px}
+</style>
+</head>
+<body>
+
+<div class="layout">
+<nav class="toc">
+  <div class="brand"><span class="dot"></span> Quang Lưu Studio</div>
+  <div class="ver">Hướng dẫn sử dụng · v1.5.1</div>
+  <h2>Bắt đầu</h2>
+  <a href="#gioi-thieu">1. Giới thiệu</a>
+  <a href="#cai-dat">2. Cài đặt & kích hoạt</a>
+  <a href="#thiet-lap-dau">3. Thiết lập lần đầu</a>
+  <h2>Màn hình chính</h2>
+  <a href="#tong-quan">4. Tổng quan giao diện</a>
+  <a href="#header">5. Thanh trên (Header)</a>
+  <a href="#mixer">6. MIXER — trộn âm</a>
+  <a href="#tools">7. TOOLS & Tone</a>
+  <a href="#mode">8. MODE & SFX</a>
+  <a href="#bottom">9. Thanh dưới</a>
+  <h2>Cửa sổ chức năng</h2>
+  <a href="#songs">10. Danh sách bài hát</a>
+  <a href="#edit-song">11. Chỉnh sửa chuỗi tone</a>
+  <a href="#scoring">12. Chấm điểm Star Score</a>
+  <a href="#settings">13. Thiết lập hệ thống</a>
+  <a href="#calibration">14. Cân chỉnh Auto-Tune</a>
+  <a href="#a11y">15. Trợ năng</a>
+  <a href="#devmode">16. Dev Mode</a>
+  <h2>Tham khảo</h2>
+  <a href="#phim-tat">17. Phím tắt</a>
+  <a href="#su-co">18. Xử lý sự cố</a>
+</nav>
+
+<main>
+  <h1>Quang Lưu Studio</h1>
+  <div class="subtitle">Hướng dẫn sử dụng đầy đủ — dành cho ca sĩ &amp; kỹ thuật viên phòng thu · Phiên bản 1.5.1</div>
+
+  <!-- 1 -->
+  <section id="gioi-thieu">
+    <h2>1. Giới thiệu</h2>
+    <p><b>Quang Lưu Studio</b> là phần mềm điều khiển buổi hát/live: tự động dò tone bài hát đang phát trên YouTube, chỉnh tone nhạc &amp; tone giọng theo thời gian thực, trộn âm (nhạc/mic/vang), điều khiển hiệu ứng Auto-Tune và các "mode" thể loại trên Studio One qua tín hiệu MIDI, đồng thời ghi âm và chấm điểm giọng hát.</p>
+    <div class="grid">
+      <div class="card"><div class="t">🎚️ Trộn âm</div>Cân bằng Nhạc – Mic – Vang – Giọng chỉ bằng thanh trượt.</div>
+      <div class="card"><div class="t">🎯 Tự dò tone</div>Nhận diện tone bài hát YouTube và đồng bộ theo lời.</div>
+      <div class="card"><div class="t">🎤 Auto-Tune & Mode</div>Bật/tắt hiệu ứng, đổi thể loại Dân Ca / Lofi / Remix.</div>
+      <div class="card"><div class="t">⭐ Ghi âm & chấm điểm</div>Thu giọng và nhận điểm Star Score kèm nhận xét.</div>
+    </div>
+    <div class="note">Phần mềm gửi lệnh sang <b>Studio One</b> qua cổng MIDI ảo <code>QuangLuuMIDI</code> và đồng bộ với <b>trình duyệt YouTube</b>. Để dùng hết tính năng cần cài đặt sẵn hai phần này (xem mục 2–3).</div>
+  </section>
+
+  <!-- 2 -->
+  <section id="cai-dat">
+    <h2>2. Cài đặt &amp; kích hoạt</h2>
+    <ol>
+      <li>Chạy bộ cài <code>QuangLuuStudio_Setup.exe</code> và làm theo hướng dẫn trên màn hình.</li>
+      <li>Mở phần mềm bằng biểu tượng <b>Quang Lưu Studio</b> trên Desktop.</li>
+      <li>Lần đầu chạy, cửa sổ <b>Kích hoạt Quang Lưu Studio</b> hiện ra: nhập <b>Activation Code</b> được cấp rồi bấm <b>✓ Kích hoạt</b>.</li>
+    </ol>
+    <div class="warn">Bản quyền có hạn <b>1 năm</b>. Khi hết hạn, phần mềm sẽ yêu cầu nhập mã mới khi khởi động. Liên hệ nơi cung cấp để gia hạn.</div>
+  </section>
+
+  <!-- 3 -->
+  <section id="thiet-lap-dau">
+    <h2>3. Thiết lập lần đầu</h2>
+    <p>Sau khi kích hoạt, hãy khai báo đường dẫn để phần mềm điều khiển đúng công cụ. Mở <b>Thiết lập</b> (biểu tượng ⚙️ góc trên phải, hoặc <kbd>Ctrl</kbd>+<kbd>,</kbd>) → tab <b>Hệ thống</b>:</p>
+    <figure>
+      <img src="img/10a_settings_system.png" alt="Tab Hệ thống">
+      <figcaption>Tab <b>Hệ thống</b>: khai báo đường dẫn Studio One, trình duyệt và tuỳ chọn tự mở/đóng.</figcaption>
+    </figure>
+    <ul>
+      <li><b>Studio One</b> — trỏ tới file <code>.song</code> mẫu hoặc file <code>Studio One.exe</code>.</li>
+      <li><b>Trình duyệt (YouTube)</b> — trỏ tới <code>chrome.exe</code> (hoặc trình duyệt bạn dùng để mở YouTube).</li>
+      <li><b>Khởi động / Tắt tự động</b> — tích chọn để tự mở Studio One và YouTube khi mở app, tự đóng khi thoát.</li>
+    </ul>
+    <p>Bấm <b>💾 Lưu thiết lập</b> để hoàn tất.</p>
+  </section>
+
+  <!-- 4 -->
+  <section id="tong-quan">
+    <h2>4. Tổng quan giao diện</h2>
+    <p>Màn hình chính chia làm 3 cột chức năng, kèm thanh trên (header) và thanh dưới (điều khiển ghi âm).</p>
+    <figure>
+      <img src="img/01_dashboard.png" alt="Màn hình chính">
+      <figcaption>Màn hình chính: <b>MIXER</b> (trái) · <b>MODE + SFX</b> (giữa) · <b>TOOLS + Tone</b> (phải).</figcaption>
+    </figure>
+    <div class="grid">
+      <div class="card"><div class="t"><span class="pill" style="background:var(--teal)"></span>Cột trái — MIXER</div>Thanh trượt âm lượng Nhạc, Mic, Vang, Giọng.</div>
+      <div class="card"><div class="t"><span class="pill" style="background:var(--purple)"></span>Cột giữa — MODE</div>Chọn thể loại &amp; các nút hiệu ứng SFX.</div>
+      <div class="card"><div class="t"><span class="pill" style="background:var(--orange)"></span>Cột phải — TOOLS</div>Công cụ dò tone, Auto-Tune và chỉnh Tone Nhạc/Giọng.</div>
+    </div>
+  </section>
+
+  <!-- 5 -->
+  <section id="header">
+    <h2>5. Thanh trên (Header)</h2>
+    <p>Từ trái sang phải trên thanh tiêu đề:</p>
+    <table>
+      <tr><th>Thành phần</th><th>Ý nghĩa</th></tr>
+      <tr><td><b>Đèn MIDI</b></td><td>Trạng thái kết nối với Studio One. <b>Xanh</b> = đã kết nối, <b>đỏ</b> = mất kết nối.</td></tr>
+      <tr><td><b>Đèn trình duyệt</b></td><td>Đồng bộ với YouTube. <b>Xanh lá</b> = CDP đã kết nối, <b>vàng</b> = WinRT, <b>đỏ</b> = chưa kết nối.</td></tr>
+      <tr><td><b>Bảng chạy chữ</b></td><td>Hiển thị tên bài hát và tone đang phát.</td></tr>
+      <tr><td><b>Đèn dò tone</b></td><td><b>Xanh lá</b> = đã phát hiện tone, <b>xám</b> = đang chờ.</td></tr>
+      <tr><td><b>Ô chọn Tone</b> (C…B)</td><td>Chọn/đổi thủ công nốt gốc của bài hát.</td></tr>
+      <tr><td><b>Ô chọn thể</b> (Major/Minor)</td><td>Chọn trưởng (Major) hoặc thứ (Minor).</td></tr>
+      <tr><td><b>⚙️ Thiết lập</b></td><td>Mở hộp thoại Thiết lập hệ thống (<kbd>Ctrl</kbd>+<kbd>,</kbd>).</td></tr>
+      <tr><td><b>👁️ Con mắt</b></td><td>Ẩn/hiện cửa sổ Studio One và các plugin.</td></tr>
+    </table>
+  </section>
+
+  <!-- 6 -->
+  <section id="mixer">
+    <h2>6. MIXER — trộn âm</h2>
+    <p>Bốn thanh trượt điều khiển âm lượng, gửi thẳng sang Studio One:</p>
+    <table>
+      <tr><th>Kênh</th><th>Dải</th><th>Công dụng</th></tr>
+      <tr><td><b>♪ Nhạc</b></td><td>0 – 100</td><td>Âm lượng nhạc nền (beat/karaoke).</td></tr>
+      <tr><td><b>☉ Mic</b></td><td>−10 – +10</td><td>Tăng/giảm âm lượng micro.</td></tr>
+      <tr><td><b>≡ Vang</b></td><td>−10 – +10</td><td>Lượng vang (reverb) cho giọng.</td></tr>
+      <tr><td><b>↕ Giọng</b></td><td>−12 – +12</td><td>Dịch cao độ giọng (theo bán cung).</td></tr>
+    </table>
+    <p>Biểu tượng <b>loa 🔊</b> bên phải mỗi kênh (Nhạc/Mic/Vang) là nút <b>tắt tiếng</b> nhanh — bấm để mute/unmute mà không mất vị trí thanh trượt.</p>
+    <div class="tip"><b>Mẹo:</b> kéo thanh trượt bằng chuột, hoặc click vào thanh rồi dùng phím mũi tên để chỉnh từng nấc.</div>
+  </section>
+
+  <!-- 7 -->
+  <section id="tools">
+    <h2>7. TOOLS &amp; chỉnh Tone</h2>
+    <h3>Nhóm nút công cụ</h3>
+    <table>
+      <tr><th>Nút</th><th>Chức năng</th></tr>
+      <tr><td><b>Chế độ: Nhanh</b></td><td>Chuyển chế độ dò tone giữa <b>Nhanh</b> và <b>Full</b> (đầy đủ, chính xác hơn nhưng chậm hơn).</td></tr>
+      <tr><td><b>Dò Lại</b></td><td>Buộc dò lại tone của bài đang phát (<kbd>Ctrl</kbd>+<kbd>D</kbd>).</td></tr>
+      <tr><td><b>Auto-Tune</b></td><td>Bật/tắt hiệu ứng Auto-Tune trên Studio One.</td></tr>
+      <tr><td><b>Fix Méo</b></td><td>Bật/tắt chế độ chống méo giọng.</td></tr>
+    </table>
+    <h3>Tone Nhạc &amp; Tone Giọng</h3>
+    <p>Hai bộ nút <b>−&nbsp;/&nbsp;0&nbsp;/&nbsp;+</b> để dịch cao độ theo từng <b>bán cung</b> (dải −12…+12):</p>
+    <ul>
+      <li><b>Tone Nhạc</b> — dịch cao độ phần nhạc nền.</li>
+      <li><b>Tone Giọng</b> — dịch cao độ giọng hát.</li>
+    </ul>
+    <p>Số ở giữa là giá trị hiện tại; bấm số <b>0</b> để đưa về gốc.</p>
+  </section>
+
+  <!-- 8 -->
+  <section id="mode">
+    <h2>8. MODE &amp; SFX</h2>
+    <p>Khu <b>MODE</b> chọn thể loại trình diễn — mỗi nút áp một bộ thiết lập hiệu ứng tương ứng trên Studio One:</p>
+    <div class="grid">
+      <div class="card"><div class="t"><span class="pill" style="background:var(--pink)"></span>Dân Ca</div></div>
+      <div class="card"><div class="t"><span class="pill" style="background:var(--teal)"></span>Lofi</div></div>
+      <div class="card"><div class="t"><span class="pill" style="background:var(--orange)"></span>Remix</div></div>
+      <div class="card"><div class="t"><span class="pill" style="background:var(--purple)"></span>Đa Thể Loại</div></div>
+    </div>
+    <p>Bên dưới là khu <b>SFX</b> — các nút hiệu ứng âm thanh bấm nhanh (vỗ tay, tiếng cười…). Bấm dấu <b>+</b> để thêm SFX mới.</p>
+  </section>
+
+  <!-- 9 -->
+  <section id="bottom">
+    <h2>9. Thanh dưới — Ghi âm</h2>
+    <table>
+      <tr><th>Nút</th><th>Chức năng</th><th>Phím tắt</th></tr>
+      <tr><td>💾 <b>Lưu</b></td><td>Lưu bài đang phát vào danh sách.</td><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td></tr>
+      <tr><td>📋 <b>Danh sách</b></td><td>Mở danh sách bài hát đã lưu.</td><td><kbd>Ctrl</kbd>+<kbd>O</kbd></td></tr>
+      <tr><td>🔴 <b>THU ÂM</b></td><td>Bắt đầu / dừng ghi âm.</td><td><kbd>Ctrl</kbd>+<kbd>R</kbd></td></tr>
+      <tr><td>⭐ <b>Chấm điểm</b></td><td>Bắt đầu / huỷ chấm điểm Star Score.</td><td><kbd>Ctrl</kbd>+<kbd>P</kbd></td></tr>
+      <tr><td>📁 <b>Thư mục</b></td><td>Mở thư mục chứa các file đã ghi âm.</td><td>—</td></tr>
+    </table>
+  </section>
+
+  <!-- 10 -->
+  <section id="songs">
+    <h2>10. Danh sách bài hát</h2>
+    <p>Bấm 📋 ở thanh dưới (hoặc <kbd>Ctrl</kbd>+<kbd>O</kbd>) để mở danh sách bài đã lưu.</p>
+    <figure>
+      <img src="img/12_songs_list.png" alt="Danh sách bài hát">
+      <figcaption>Tìm kiếm theo tên, lọc theo <b>Playlist</b>, phát ▶ hoặc mở menu <b>···</b> để sửa/xoá.</figcaption>
+    </figure>
+    <ul>
+      <li><b>Ô tìm kiếm</b> — gõ tên để lọc nhanh.</li>
+      <li><b>Tất cả bài hát / + Playlist</b> — chuyển giữa toàn bộ và từng playlist.</li>
+      <li>Nút <b>▶ xanh</b> — phát lại bài; nút <b>···</b> — sửa chuỗi tone, đổi tên hoặc xoá.</li>
+      <li>Ngôi sao ⭐ trước mỗi bài — đánh dấu yêu thích.</li>
+    </ul>
+  </section>
+
+  <!-- 11 -->
+  <section id="edit-song">
+    <h2>11. Chỉnh sửa chuỗi tone (theo thời gian)</h2>
+    <p>Nhiều bài đổi tone giữa chừng. Cửa sổ <b>Chỉnh sửa chuỗi tone</b> cho phép khai báo mốc thời gian → tone, để phần mềm tự đổi đúng lúc khi phát.</p>
+    <figure>
+      <img src="img/13_edit_song.png" alt="Chỉnh sửa chuỗi tone">
+      <figcaption>Mỗi dòng là một mốc: <b>Thời gian (MM:SS)</b> + <b>Key / Scale</b>.</figcaption>
+    </figure>
+    <ol>
+      <li>Bấm <b>+ Thêm mốc</b> để tạo dòng mới.</li>
+      <li>Nhập thời điểm (định dạng phút:giây) và chọn tone tại mốc đó.</li>
+      <li>Dùng <b>Xem trước</b> ở đầu cửa sổ để kiểm tra; nút <b>✕ đỏ</b> để xoá dòng.</li>
+      <li>Bấm <b>Lưu thay đổi</b>.</li>
+    </ol>
+  </section>
+
+  <!-- 12 -->
+  <section id="scoring">
+    <h2>12. Chấm điểm Star Score</h2>
+    <p>Bấm ⭐ ở thanh dưới (<kbd>Ctrl</kbd>+<kbd>P</kbd>) để chấm điểm phần trình diễn. Sau khi xử lý, bảng kết quả hiện ra:</p>
+    <figure>
+      <img src="img/16_scoring_report.png" alt="Kết quả Star Score">
+      <figcaption>Điểm tổng, xếp hạng (số sao), chi tiết các tiêu chí và nhận xét + gợi ý cải thiện.</figcaption>
+    </figure>
+    <p>Điểm gồm nhiều tiêu chí (cao độ, nhịp điệu, độ ổn định…). Phần <b>Nhận xét</b> đưa ra lời khuyên cụ thể để hát tốt hơn.</p>
+  </section>
+
+  <!-- 13 -->
+  <section id="settings">
+    <h2>13. Thiết lập hệ thống</h2>
+    <p>Mở bằng ⚙️ hoặc <kbd>Ctrl</kbd>+<kbd>,</kbd>. Có 4 tab:</p>
+
+    <h3>Tab Âm thanh</h3>
+    <figure>
+      <img src="img/10b_settings_audio.png" alt="Tab Âm thanh">
+      <figcaption>Chọn nguồn nhạc (Loopback/ASIO) và micro; mở nhanh cân chỉnh Auto-Tune.</figcaption>
+    </figure>
+    <div class="warn"><b>Lưu ý quan trọng:</b> khi dùng qua Studio One, Loopback đã chứa giọng đã xử lý (Auto-Tune + Reverb). <b>Chỉ bật thêm Mic khi KHÔNG đi qua Studio One</b> — nếu không giọng sẽ bị lặp/đôi.</div>
+
+    <h3>Tab Công cụ</h3>
+    <figure>
+      <img src="img/10c_settings_tools.png" alt="Tab Công cụ">
+      <figcaption>Xuất cookie YouTube, sửa lỗi đồng bộ trình duyệt (CDP) và kiểm tra cập nhật.</figcaption>
+    </figure>
+    <ul>
+      <li><b>YouTube Cookie</b> — xuất cookie ra file khi gặp lỗi đọc cookie của Chrome.</li>
+      <li><b>Sửa lỗi đồng bộ (CDP)</b> — nếu app không nhảy theo lời bài hát: bấm <b>1. Force Kill Trình Duyệt Ngầm</b> rồi <b>2. Thêm Flag vào Shortcut</b>, sau đó <b>Kiểm tra</b>.</li>
+      <li><b>Cập nhật phần mềm</b> — xem phiên bản hiện tại và <b>Kiểm tra cập nhật</b>.</li>
+    </ul>
+
+    <h3>Tab Trợ năng</h3>
+    <p>Xem mục <a href="#a11y">15. Trợ năng</a>.</p>
+  </section>
+
+  <!-- 14 -->
+  <section id="calibration">
+    <h2>14. Cân chỉnh Auto-Tune (Calibration)</h2>
+    <p>Bước này khớp giá trị MIDI của app với plugin Auto-Tune trên Studio One, làm <b>một lần</b> khi setup. Mở từ tab <b>Âm thanh → Mở Calibration Auto-Tune</b>.</p>
+    <figure>
+      <img src="img/11_calibration.png" alt="Cân chỉnh Auto-Tune">
+      <figcaption>Kéo thanh trượt tới khi plugin hiển thị đúng giá trị, rồi bấm nút "bắt" tương ứng.</figcaption>
+    </figure>
+    <ol>
+      <li>Chọn nhóm cần canh: <b>Kiểu Scale</b>, <b>Nốt gốc</b> hoặc <b>Chế độ</b>.</li>
+      <li>Kéo thanh trượt (hoặc dùng <code>−10/−1/+1/+10</code>, hoặc <b>Quét tự động → Bắt đầu</b>) đến khi plugin hiển thị đúng giá trị.</li>
+      <li>Bấm nút bắt tương ứng (vd <b>Bắt Major</b> / <b>Bắt Minor</b>).</li>
+      <li>Làm tương tự cho 12 nốt và các chế độ, sau đó bấm <b>Lưu tất cả</b>.</li>
+    </ol>
+  </section>
+
+  <!-- 15 -->
+  <section id="a11y">
+    <h2>15. Trợ năng (cho người khiếm thị)</h2>
+    <p>Tab <b>Trợ năng</b> trong Thiết lập bật các hỗ trợ đọc màn hình và điều khiển bằng giọng nói:</p>
+    <figure>
+      <img src="img/10d_settings_accessibility.png" alt="Tab Trợ năng">
+      <figcaption>Giọng đọc nội bộ (TTS) và lệnh giọng nói (Vosk, tiếng Việt, offline).</figcaption>
+    </figure>
+    <ul>
+      <li><b>TTS</b> — đọc trạng thái, tên control khi Tab tới, thông báo. Bật/tắt nhanh: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>. Chỉnh giọng và tốc độ đọc, bấm <b>Thử giọng nói</b>.</li>
+      <li><b>Lệnh giọng nói (Vosk)</b> — giữ <kbd>Ctrl</kbd>+<kbd>Space</kbd> để nói lệnh. Cần tải model tiếng Việt vào <code>models/vosk-vi/</code>.</li>
+      <li><b>Tương phản cao</b>: <kbd>Ctrl</kbd>+<kbd>H</kbd> · <b>Cỡ chữ</b>: <kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>Ctrl</kbd>+<kbd>−</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd>.</li>
+    </ul>
+  </section>
+
+  <!-- 16 -->
+  <section id="devmode">
+    <h2>16. Dev Mode — tuỳ biến nút &amp; slider <span class="badge">Kỹ thuật viên</span></h2>
+    <p>Dành cho người setup app cho từng phòng thu. Nhấn <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> để bật/tắt. Khi bật, các panel MIXER / TOOLS / MODE hiện thêm nút <b>+ Thêm</b> và menu chuột phải <b>Sửa / Ẩn</b>.</p>
+    <figure>
+      <img src="img/02_dashboard_devmode.png" alt="Dashboard ở Dev Mode">
+      <figcaption>Dev Mode bật: xuất hiện <b>+ Thêm</b>, <b>+ Thêm Nút</b>, <b>+ Thêm Mode</b>.</figcaption>
+    </figure>
+    <p>Bấm các nút "+ Thêm" mở <b>Widget Builder</b> để tạo nút hoặc thanh trượt mới gửi MIDI CC tự chọn:</p>
+    <div class="grid">
+      <figure><img src="img/14_widget_builder_button.png" alt="Widget Builder - nút"><figcaption>Tạo <b>nút</b> (button) — On/Off Value, toggle.</figcaption></figure>
+      <figure><img src="img/15_widget_builder_slider.png" alt="Widget Builder - slider"><figcaption>Tạo <b>thanh trượt</b> (slider) — icon, Min/Max, mute.</figcaption></figure>
+    </div>
+    <div class="note">Trạng thái Dev Mode <b>không lưu lại</b> — khởi động lại app là tắt. Chi tiết kỹ thuật xem file <code>docs/DEV_MODE_GUIDE.md</code>.</div>
+  </section>
+
+  <!-- 17 -->
+  <section id="phim-tat">
+    <h2>17. Bảng phím tắt</h2>
+    <table>
+      <tr><th>Phím tắt</th><th>Chức năng</th></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>D</kbd></td><td>Dò lại tone</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>R</kbd></td><td>Bật/tắt ghi âm</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Lưu bài hát</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>O</kbd></td><td>Mở danh sách bài</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>P</kbd></td><td>Chấm điểm</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>,</kbd></td><td>Mở thiết lập</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd></td><td>Bật/tắt giọng đọc TTS</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>H</kbd></td><td>Bật/tắt tương phản cao</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>Ctrl</kbd>+<kbd>−</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd></td><td>Tăng / giảm / khôi phục cỡ chữ</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Space</kbd> (giữ)</td><td>Nói lệnh giọng nói (Vosk)</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd></td><td>Bật/tắt Dev Mode</td></tr>
+    </table>
+  </section>
+
+  <!-- 18 -->
+  <section id="su-co">
+    <h2>18. Xử lý sự cố thường gặp</h2>
+    <table>
+      <tr><th>Hiện tượng</th><th>Cách xử lý</th></tr>
+      <tr><td>Đèn MIDI đỏ, nút không tác dụng</td><td>Kiểm tra Studio One đã mở và cổng <code>QuangLuuMIDI</code> đã bật. Đảm bảo đường dẫn Studio One đúng trong Thiết lập.</td></tr>
+      <tr><td>App không nhảy theo lời bài hát</td><td>Thiết lập → <b>Công cụ → Sửa lỗi đồng bộ (CDP)</b>: Force Kill trình duyệt ngầm → Thêm Flag vào Shortcut → Kiểm tra.</td></tr>
+      <tr><td>Lỗi "Could not copy Chrome cookie database"</td><td>Đóng hẳn Chrome rồi <b>Xuất Cookie ra File</b>, hoặc chuyển sang Firefox (Thiết lập → Công cụ).</td></tr>
+      <tr><td>Giọng bị đôi/lặp khi hát</td><td>Tắt tuỳ chọn bật Mic ở tab Âm thanh khi đang đi qua Studio One (Loopback đã có giọng).</td></tr>
+      <tr><td>Không dò được tone</td><td>Bấm <b>Dò Lại</b> (<kbd>Ctrl</kbd>+<kbd>D</kbd>); thử chuyển <b>Chế độ: Full</b> để dò chính xác hơn.</td></tr>
+      <tr><td>Hết hạn bản quyền</td><td>Nhập mã kích hoạt mới khi khởi động; liên hệ nơi cung cấp để gia hạn.</td></tr>
+    </table>
+  </section>
+
+  <footer>
+    Quang Lưu Studio · Hướng dẫn sử dụng v1.5.1 · Ảnh chụp trực tiếp từ phần mềm.<br>
+    Tài liệu kỹ thuật bổ sung: <code>docs/DEV_MODE_GUIDE.md</code>, <code>docs/ACCESSIBILITY_GUIDE.md</code>.
+  </footer>
+</main>
+</div>
+
+<div id="lb"><img src="" alt=""></div>
+<script>
+  // Lightbox phóng to ảnh
+  const lb = document.getElementById('lb'), lbImg = lb.querySelector('img');
+  document.querySelectorAll('figure img').forEach(img=>{
+    img.addEventListener('click',()=>{ lbImg.src = img.src; lb.style.display='flex'; });
+  });
+  lb.addEventListener('click',()=>{ lb.style.display='none'; lbImg.src=''; });
+  // Highlight mục đang xem trên TOC
+  const links = [...document.querySelectorAll('nav.toc a')];
+  const map = {}; links.forEach(a=>{ const id=a.getAttribute('href').slice(1); map[id]=a; });
+  const obs = new IntersectionObserver(es=>{
+    es.forEach(e=>{ if(e.isIntersecting){ links.forEach(l=>l.style.background=''); const a=map[e.target.id]; if(a) a.style.background='var(--card)'; }});
+  },{rootMargin:'-20% 0px -70% 0px'});
+  document.querySelectorAll('section[id]').forEach(s=>obs.observe(s));
+</script>
+</body>
+</html>
