@@ -90,3 +90,14 @@ def extract_video_id(url):
         if m:
             return m.group(1)
     return None
+
+
+def song_match_key(url):
+    """Khóa nhận dạng bài hát / timeline tone của một bài.
+
+    Ưu tiên YouTube video_id (để cùng 1 video nhưng khác định dạng link vẫn
+    coi là MỘT bài), fallback về URL nguyên văn cho các nguồn không phải
+    YouTube (file local, link /live/, URL khác...). Nhờ vậy MỌI bài hát có
+    URL đều lưu được chuỗi tone, không chỉ link YouTube chuẩn.
+    """
+    return extract_video_id(url) or (url or "").strip()

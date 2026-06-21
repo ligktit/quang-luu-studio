@@ -394,3 +394,139 @@ class TestYouTubeWatcher:
 
         assert thread_1 is thread_2  # same thread, no duplicate
         engine.stop_youtube_watcher()
+
+
+# ──────────────────────────────────────────────────────────────
+# E-25..E-27 — Loopback fallback khi yt-dlp tải thất bại
+# ──────────────────────────────────────────────────────────────
+
+class TestLoopbackFallback:
+
+    def test_loopback_fallback_detect_marks_result(self, engine, mocker):
+        """_loopback_fallback_detect đánh dấu from_loopback=True khi thu được tone."""
+        mocker.patch(
+            "core.engine._tone.ToneDetector.detect_key_from_system_audio",
+            return_value={"key_display": "G", "key_index": 7, "scale": "Major"},
+        )
+        res = engine._loopback_fallback_detect(duration=1)
+        assert res is not None and res["from_loopback"] is True
+
+    def test_loopback_fallback_returns_none_when_silent(self, engine, mocker):
+        """Không có âm thanh (RMS thấp) → detect trả None → fallback trả None."""
+        mocker.patch(
+            "core.engine._tone.ToneDetector.detect_key_from_system_audio",
+            return_value=None,
+        )
+        assert engine._loopback_fallback_detect(duration=1) is None
+
+    def test_browser_falls_back_to_loopback_when_download_fails(self, engine, mocker):
+        """E-25: download yt-dlp trả None → dò tone bằng loopback, on_complete vẫn chạy."""
+        fake = {"key_display": "A", "key_index": 9, "scale": "Major", "confidence": 0.8}
+
+        se = mocker.patch("core.engine._tone.ScoringEngine")
+        se_inst = se.return_value
+        se_inst.download_youtube_audio_with_info.return_value = (None, "")  # tải thất bại
+        se_inst.cleanup_temp_file.return_value = None
+
+        loop = mocker.patch(
+            "core.engine._tone.ToneDetector.detect_key_from_system_audio",
+            return_value=dict(fake),
+        )
+        mocker.patch("core.engine._tone._ToneMixin._send_tone_midi")
+        mocker.patch("core.engine._tone._ToneMixin._save_tone_to_cache")
+        mocker.patch("core.engine._tone.MemoryGuard.force_cleanup")
+        mocker.patch("core.engine._tone._ToneMixin._resolve_tone", return_value=(None, None))
+
+        engine._tone_session = MagicMock()
+        engine._tone_session.start_scanning.return_value = threading.Event()  # not set
+        engine._tone_session.transition_to_replaying.return_value = None      # bỏ qua replay
+        engine.media_monitor.current_title = "Live Title"
+
+        done = threading.Event()
+        on_complete = MagicMock(side_effect=lambda r: done.set())
+        engine.detect_tone_from_browser(
+            url="https://youtu.be/abcdefghijk",
+            on_complete=on_complete,
+            on_error=MagicMock(),
+        )
+        assert done.wait(timeout=5)
+
+        loop.assert_called_once()
+        res = on_complete.call_args[0][0]
+        assert res.get("from_loopback") is True
+        assert res["title"] == "Live Title"
+
+
+# ──────────────────────────────────────────────────────────────
+# E-28..E-29 — Tự động thử lại 3 lần + báo nguyên nhân
+# ──────────────────────────────────────────────────────────────
+
+class TestAutoDetectRetry:
+
+    def test_retries_then_surfaces_cause(self, engine, mocker):
+        """E-28: dò tone tự động lỗi → thử lại đủ 3 lần rồi báo rõ nguyên nhân."""
+        import time as _time
+        import weakref
+        mocker.patch("core.engine._youtube.time.sleep", return_value=None)
+        engine.tone_scan_mode = "fast"
+
+        calls = []
+
+        def fake_detect(on_complete=None, on_error=None, on_progress=None,
+                        url=None, skip_resolve=False):
+            calls.append(skip_resolve)
+            on_error("Loa im lặng")
+
+        mocker.patch.object(engine, "detect_tone_from_browser", side_effect=fake_detect)
+
+        errors = []
+        engine.on_auto_tone_error = lambda m: errors.append(m)
+        engine.on_auto_tone_progress = MagicMock()
+
+        engine._dispatch_auto_detect("https://youtu.be/abcdefghijk", weakref.ref(engine))
+
+        deadline = _time.time() + 5
+        while not errors and _time.time() < deadline:
+            _time.sleep(0.01)
+
+        assert len(calls) == 3                 # dò đúng 3 lần
+        assert calls[0] is False               # lần đầu giữ skip_resolve gốc
+        assert calls[1] is True and calls[2] is True   # các lần sau bỏ cache
+        assert len(errors) == 1                # chỉ báo lỗi 1 lần (cuối cùng)
+        assert "3 lần" in errors[0]
+        assert "Loa im lặng" in errors[0]      # giữ nguyên nhân gốc
+
+    def test_success_on_retry_no_error(self, engine, mocker):
+        """E-29: lần 1 lỗi, lần 2 thành công → on_complete chạy, không báo lỗi."""
+        import time as _time
+        import weakref
+        mocker.patch("core.engine._youtube.time.sleep", return_value=None)
+        engine.tone_scan_mode = "fast"
+
+        attempts = {"n": 0}
+
+        def fake_detect(on_complete=None, on_error=None, on_progress=None,
+                        url=None, skip_resolve=False):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                on_error("lỗi tạm thời")
+            else:
+                on_complete({"key_display": "C", "scale": "Major"})
+
+        mocker.patch.object(engine, "detect_tone_from_browser", side_effect=fake_detect)
+
+        completes, errors = [], []
+        engine.on_auto_tone_complete = lambda r: completes.append(r)
+        engine.on_auto_tone_error = lambda m: errors.append(m)
+        engine.on_auto_tone_progress = MagicMock()
+
+        engine._dispatch_auto_detect("https://youtu.be/abcdefghijk", weakref.ref(engine))
+
+        deadline = _time.time() + 5
+        while not completes and _time.time() < deadline:
+            _time.sleep(0.01)
+
+        assert attempts["n"] == 2
+        assert len(completes) == 1
+        assert completes[0].get("auto_detected") is True
+        assert errors == []

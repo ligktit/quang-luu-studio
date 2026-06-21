@@ -26,6 +26,11 @@ from core.ytdlp_support import extract_info_with_auth, make_ydl_opts
 # Module-level ctypes callback type (cached once — prevents ctypes ref leaks on poll)
 _WNDENUMPROC_TYPE = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
 
+# Tự động thử lại khi dò tone TỰ ĐỘNG thất bại — áp dụng cho CẢ 2 chế độ (fast/full).
+# Sau khi hết số lần thử, hiển thị rõ nguyên nhân lỗi cho người dùng.
+_AUTO_DETECT_MAX_ATTEMPTS    = 3
+_AUTO_DETECT_RETRY_DELAY_SEC = 3
+
 
 # ── Pure URL utility functions (no self needed) ──────────────────────────────
 
@@ -563,8 +568,9 @@ class _YouTubeMixin:
 
     # ── Dispatch helper ──────────────────────────────────────────────────────────
 
-    def _dispatch_auto_detect(self, url, engine_ref, skip_resolve=False):
-        print(f"[YT WATCHER] Phát hiện YouTube mới: {url}")
+    def _dispatch_auto_detect(self, url, engine_ref, skip_resolve=False, _attempt=1):
+        max_attempts = _AUTO_DETECT_MAX_ATTEMPTS
+        print(f"[YT WATCHER] Dò tone tự động: {url} (lần {_attempt}/{max_attempts})")
 
         def _on_complete(result):
             eng = engine_ref()
@@ -579,8 +585,40 @@ class _YouTubeMixin:
             if eng is None:
                 return
             eng._tone_session.stop()
+
+            # Còn lượt thử → tự động dò lại sau một khoảng chờ ngắn.
+            if _attempt < max_attempts:
+                print(f"[YT WATCHER] Dò tone lỗi (lần {_attempt}/{max_attempts}): {msg} → thử lại...")
+                if eng.on_auto_tone_progress:
+                    eng.on_auto_tone_progress(
+                        f"⚠️ Dò tone lỗi, đang thử lại lần {_attempt + 1}/{max_attempts}…"
+                    )
+
+                def _retry():
+                    time.sleep(_AUTO_DETECT_RETRY_DELAY_SEC)
+                    eng2 = engine_ref()
+                    if eng2 is None:
+                        return
+                    # Nếu đã có phiên dò khác chạy (user mở video mới) → bỏ thử lại.
+                    if eng2._tone_session.is_active:
+                        print("[YT WATCHER] Có phiên dò khác đang chạy → hủy thử lại.")
+                        return
+                    # Lần thử lại luôn bỏ qua cache (đã miss ở lần đầu) và dò tươi.
+                    eng2._dispatch_auto_detect(
+                        url, engine_ref, skip_resolve=True, _attempt=_attempt + 1,
+                    )
+
+                threading.Thread(target=_retry, daemon=True).start()
+                return
+
+            # Hết lượt thử → báo lỗi rõ nguyên nhân.
+            final_msg = (
+                f"Dò tone thất bại sau {max_attempts} lần thử.\n"
+                f"Nguyên nhân: {msg}"
+            )
+            print(f"[YT WATCHER] {final_msg}")
             if eng.on_auto_tone_error:
-                eng.on_auto_tone_error(msg)
+                eng.on_auto_tone_error(final_msg)
 
         def _on_progress(text):
             eng = engine_ref()
@@ -603,14 +641,15 @@ class _YouTubeMixin:
                 raw_key     = first_entry.get('key_display', 'C')
                 key_root    = _extract_key_root(raw_key)
                 flat_result = {
-                    'full_scan':   True,
-                    'url':         data.get('url', ''),
-                    'title':       data.get('title', ''),
-                    'timeline':    timeline,
-                    'key_display': raw_key,
-                    'key':         key_root,
-                    'scale':       first_entry.get('scale', 'Major'),
-                    'confidence':  first_entry.get('confidence', 0),
+                    'full_scan':    True,
+                    'url':          data.get('url', ''),
+                    'title':        data.get('title', ''),
+                    'timeline':     timeline,
+                    'key_display':  raw_key,
+                    'key':          key_root,
+                    'scale':        first_entry.get('scale', 'Major'),
+                    'confidence':   first_entry.get('confidence', 0),
+                    'from_loopback': data.get('from_loopback', False),
                 }
                 _on_complete(flat_result)
 

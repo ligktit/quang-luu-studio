@@ -44,27 +44,9 @@ class _AutokeyMixin:
                     self.autokey_active = False
                     return
 
-                pa         = pyaudio.PyAudio()
-                wasapi_info = None
-                for i in range(pa.get_host_api_count()):
-                    info = pa.get_host_api_info_by_index(i)
-                    if "wasapi" in info.get("name", "").lower():
-                        wasapi_info = info
-                        break
-
-                if not wasapi_info:
-                    print("[AUTOKEY] Không tìm thấy WASAPI host API!")
-                    pa.terminate()
-                    self.autokey_active = False
-                    return
-
-                loopback_dev = None
-                for i in range(pa.get_device_count()):
-                    dev = pa.get_device_info_by_index(i)
-                    if dev.get("isLoopbackDevice") and dev.get("hostApi") == wasapi_info["index"]:
-                        loopback_dev = dev
-                        break
-
+                pa           = pyaudio.PyAudio()
+                # Chọn loopback của loa MẶC ĐỊNH đang phát (không lấy cái đầu tiên)
+                loopback_dev = ToneDetector._find_loopback_device(pa)
                 if not loopback_dev:
                     print("[AUTOKEY] Không tìm thấy thiết bị loopback!")
                     pa.terminate()
@@ -259,26 +241,9 @@ class _AutokeyMixin:
             return
 
         try:
-            pa = pyaudio.PyAudio()
-            wasapi_info = None
-            for i in range(pa.get_host_api_count()):
-                info = pa.get_host_api_info_by_index(i)
-                if "wasapi" in info.get("name", "").lower():
-                    wasapi_info = info
-                    break
-
-            if not wasapi_info:
-                print("[TONE CONTINUOUS] Không tìm thấy WASAPI!")
-                self.tone_detection_active = False
-                return
-
-            loopback_dev = None
-            for i in range(pa.get_device_count()):
-                dev = pa.get_device_info_by_index(i)
-                if dev.get("isLoopbackDevice") and dev.get("hostApi") == wasapi_info["index"]:
-                    loopback_dev = dev
-                    break
-
+            pa           = pyaudio.PyAudio()
+            # Chọn loopback của loa MẶC ĐỊNH đang phát (không lấy cái đầu tiên)
+            loopback_dev = ToneDetector._find_loopback_device(pa)
             if not loopback_dev:
                 print("[TONE CONTINUOUS] Không tìm thấy thiết bị loopback!")
                 self._tone_session.stop()

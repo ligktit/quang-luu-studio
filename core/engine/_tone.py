@@ -22,6 +22,11 @@ _CAMELOT_MINOR = ["5A", "12A", "7A", "2A", "9A", "4A", "11A", "6A", "1A", "8A", 
 _FAST_SCAN_TIMEOUT_SEC = 90
 _FULL_SCAN_TIMEOUT_SEC = 300
 
+# Thời lượng thu loopback (giây) cho PHƯƠNG ÁN DỰ PHÒNG khi yt-dlp tải thất bại.
+# Bài hát phải đang phát trên loa để thu được — đây là cách dò tone cho các
+# video không tải được (chặn vùng miền, đăng nhập, lỗi định dạng...).
+_LOOPBACK_FALLBACK_SEC = 12
+
 
 def _install_watchdog(timeout_sec, on_complete, on_error, label, on_timeout_hook=None):
     """Wrap detection callbacks with a once-only timeout guard.
@@ -163,6 +168,47 @@ class _ToneMixin:
     @staticmethod
     def _extract_key_root(key_display):
         return _extract_key_root(key_display)
+
+    # ── Loopback fallback (yt-dlp tải thất bại) ──────────────────────────────────
+
+    def _loopback_fallback_detect(self, on_progress=None, cancel=None,
+                                  duration=_LOOPBACK_FALLBACK_SEC, reason_out=None):
+        """Dò tone bằng cách NGHE TRỰC TIẾP âm thanh đang phát trên loa.
+
+        Dùng làm phương án dự phòng khi yt-dlp KHÔNG tải được audio (video bị
+        chặn, cần đăng nhập, lỗi định dạng...). Chỉ hiệu quả khi bài hát đang
+        thực sự phát. Trả về result dict (đánh dấu ``from_loopback``) hoặc None.
+
+        ``reason_out``: list (tùy chọn) — khi thất bại sẽ chứa câu mô tả nguyên nhân.
+        """
+        if cancel is not None and cancel.is_set():
+            return None
+        if on_progress:
+            on_progress(f"⚠️ Không tải được YouTube — đang nghe trực tiếp từ loa ({duration}s)…")
+        print("[DÒ TONE] yt-dlp thất bại → chuyển sang thu loopback từ loa")
+
+        def _cap_progress(remaining):
+            if on_progress:
+                try:
+                    on_progress(f"Đang nghe từ loa… còn {remaining}s")
+                except Exception:
+                    pass
+
+        if cancel is not None and cancel.is_set():
+            return None
+        result = ToneDetector.detect_key_from_system_audio(
+            duration=duration, on_progress=_cap_progress, reason_out=reason_out
+        )
+        if result:
+            result['from_loopback'] = True
+        return result
+
+    def _current_media_title(self):
+        """Best-effort: tên bài đang phát từ media monitor (cho fallback loopback)."""
+        try:
+            return self.media_monitor.current_title or ''
+        except Exception:
+            return ''
 
     def _send_tone_midi(self, result):
         from core.config import AppConfig
@@ -404,33 +450,49 @@ class _ToneMixin:
                 if cancel.is_set():
                     return
 
-                if not audio_path:
-                    if on_error:
-                        on_error("Không thể tải audio từ YouTube.")
-                    return
-
-                if on_progress:
-                    on_progress("Đang phân tích âm điệu...")
-
-                # 5. Load + detect (sr=16000 for fast scan — CQT chroma only needs ≤4 kHz)
                 result = None
-                try:
-                    import librosa
+                fail_reason = None  # nguyên nhân cụ thể khi thất bại
+                if audio_path:
+                    if on_progress:
+                        on_progress("Đang phân tích âm điệu...")
 
-                    if cancel.is_set():
-                        return
-                    audio_data, sr = librosa.load(audio_path, sr=16000, mono=True, duration=45)
+                    # 5. Load + detect (sr=16000 for fast scan — CQT chroma only needs ≤4 kHz)
+                    try:
+                        import librosa
 
-                    if cancel.is_set():
+                        if cancel.is_set():
+                            return
+                        audio_data, sr = librosa.load(audio_path, sr=16000, mono=True, duration=45)
+
+                        if cancel.is_set():
+                            del audio_data
+                            return
+                        result = ToneDetector.detect_key_from_audio(audio_data, sr, skip_hum_detection=True)
                         del audio_data
-                        return
-                    result = ToneDetector.detect_key_from_audio(audio_data, sr, skip_hum_detection=True)
-                    del audio_data
-                except Exception as e:
-                    print(f"[DÒ TONE] Lỗi load/detect audio: {e}")
-                finally:
-                    scoring_engine.cleanup_temp_file()
+                        if not result:
+                            fail_reason = ("Đã tải được audio từ YouTube nhưng không nhận diện "
+                                           "được tone (bài quá nhiễu / không có giai điệu rõ).")
+                    except Exception as e:
+                        print(f"[DÒ TONE] Lỗi load/detect audio: {e}")
+                        fail_reason = f"Lỗi khi phân tích audio đã tải: {e}"
+                    finally:
+                        scoring_engine.cleanup_temp_file()
+                        del scoring_engine
+                else:
+                    # PHƯƠNG ÁN DỰ PHÒNG: yt-dlp tải thất bại → nghe trực tiếp từ loa
+                    try:
+                        scoring_engine.cleanup_temp_file()
+                    except Exception:
+                        pass
                     del scoring_engine
+                    _reasons = []
+                    result = self._loopback_fallback_detect(on_progress, cancel, reason_out=_reasons)
+                    if result and not video_title:
+                        video_title = self._current_media_title()
+                    if not result:
+                        lb_reason = _reasons[0] if _reasons else "không nghe được âm thanh từ loa."
+                        fail_reason = ("Không tải được audio từ YouTube (video bị chặn / cần đăng "
+                                       "nhập / lỗi mạng) và phương án nghe loa cũng thất bại: " + lb_reason)
 
                 if cancel.is_set():
                     return
@@ -470,7 +532,8 @@ class _ToneMixin:
                         on_complete(result)
                 else:
                     if on_error:
-                        on_error("Không thể dò tone. Âm nhạc chưa đủ rõ ràng.")
+                        on_error(fail_reason or "Không thể dò tone. Hãy đảm bảo bài hát đang phát "
+                                 "(phương án nghe từ loa cần có âm thanh).")
 
             except Exception as e:
                 import traceback
@@ -549,43 +612,66 @@ class _ToneMixin:
 
                 scoring_engine = ScoringEngine()
                 audio_path     = scoring_engine.download_youtube_audio(url)
-                if not audio_path:
-                    if on_error:
-                        on_error("Không thể tải audio từ YouTube.")
-                    return
 
                 if cancel.is_set():
                     return
 
-                if on_progress:
-                    on_progress("Đang load file âm thanh...")
+                total_seconds    = 0
+                timeline_entries = None
+                fail_reason      = None  # nguyên nhân cụ thể khi thất bại
 
-                if cancel.is_set():
-                    return
+                if audio_path:
+                    if on_progress:
+                        on_progress("Đang load file âm thanh...")
 
-                audio_data, sr = librosa.load(audio_path, sr=22050, mono=True)
-                total_seconds  = len(audio_data) / sr
-                num_segments   = math.ceil(total_seconds / SEGMENT_DURATION)
-                print(f"[AUTO TIMELINE] Audio: {total_seconds:.1f}giây, {num_segments} đoạn")
+                    if cancel.is_set():
+                        return
 
-                if cancel.is_set():
+                    audio_data, sr = librosa.load(audio_path, sr=22050, mono=True)
+                    total_seconds  = len(audio_data) / sr
+                    num_segments   = math.ceil(total_seconds / SEGMENT_DURATION)
+                    print(f"[AUTO TIMELINE] Audio: {total_seconds:.1f}giây, {num_segments} đoạn")
+
+                    if cancel.is_set():
+                        del audio_data
+                        audio_data = None
+                        return
+
+                    timeline_entries = ToneDetector.detect_timeline_advanced(audio_data, sr, on_progress)
+
                     del audio_data
                     audio_data = None
-                    return
-
-                timeline_entries = ToneDetector.detect_timeline_advanced(audio_data, sr, on_progress)
-
-                del audio_data
-                audio_data = None
-                gc.collect()
-                MemoryGuard.force_cleanup()
+                    gc.collect()
+                    MemoryGuard.force_cleanup()
+                    if not timeline_entries:
+                        fail_reason = ("Đã tải được audio từ YouTube nhưng không nhận diện được "
+                                       "tone nào (bài quá nhiễu / không có giai điệu rõ).")
+                else:
+                    # PHƯƠNG ÁN DỰ PHÒNG: yt-dlp tải thất bại → nghe trực tiếp từ loa.
+                    # Không tải được toàn bài nên chỉ dò được MỘT tone (timeline 1 mốc).
+                    _reasons = []
+                    fb = self._loopback_fallback_detect(on_progress, cancel, reason_out=_reasons)
+                    if fb:
+                        timeline_entries = [{
+                            'time':        0,
+                            'key_display': fb.get('key_display', 'C'),
+                            'key_index':   fb.get('key_index', 0),
+                            'scale':       fb.get('scale', 'Major'),
+                            'confidence':  fb.get('confidence', 0),
+                        }]
+                        if not video_title or video_title == "Bài hát không tên":
+                            video_title = self._current_media_title() or video_title
+                    else:
+                        lb_reason = _reasons[0] if _reasons else "không nghe được âm thanh từ loa."
+                        fail_reason = ("Không tải được audio từ YouTube (video bị chặn / cần đăng "
+                                       "nhập / lỗi mạng) và phương án nghe loa cũng thất bại: " + lb_reason)
 
                 if cancel.is_set():
                     return
 
                 if not timeline_entries:
                     if on_error:
-                        on_error("Không phát hiện được tone nào trong bài hát.")
+                        on_error(fail_reason or "Không phát hiện được tone nào trong bài hát.")
                     return
 
                 if on_progress:
@@ -615,6 +701,7 @@ class _ToneMixin:
                         'title':          video_title,
                         'timeline':       timeline_entries,
                         'total_duration': total_seconds,
+                        'from_loopback':  audio_path is None,
                     })
 
             except Exception as e:

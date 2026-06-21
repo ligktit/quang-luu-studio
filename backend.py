@@ -21,6 +21,7 @@ from core.version import __version__ as APP_VERSION
 from core.config import (
     SETTINGS_FILE,
     SONGS_FILE,
+    PLAYLISTS_FILE,
     ACTIVATION_FILE,
     MANUAL_TIMELINES_FILE,
     TONE_CACHE_FILE,
@@ -56,6 +57,7 @@ _LAZY_EXPORTS = {
     "ToneCacheManager":    ("core.tone_cache",    "ToneCacheManager"),
     "ManualToneTimeline":  ("core.tone_cache",    "ManualToneTimeline"),
     "SongManager":         ("core.songs",         "SongManager"),
+    "PlaylistManager":     ("core.songs",         "PlaylistManager"),
     "ScoringEngine":       ("core.scoring",       "ScoringEngine"),
     "ToneDetector":        ("core.tone_detector", "ToneDetector"),
     # engine — heaviest, pulls most of the others transitively
@@ -82,7 +84,7 @@ __all__ = [
     # Version
     "APP_VERSION",
     # Constants
-    "SETTINGS_FILE", "SONGS_FILE", "ACTIVATION_FILE",
+    "SETTINGS_FILE", "SONGS_FILE", "PLAYLISTS_FILE", "ACTIVATION_FILE",
     "MANUAL_TIMELINES_FILE", "TONE_CACHE_FILE", "APP_CONFIG_FILE",
     "MIDI_PORT_NAME", "FFMPEG_LOCATION",
     "APP_DIR", "DATA_DIR", "RECORDINGS_DIR",

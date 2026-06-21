@@ -8,7 +8,7 @@ import time
 import re
 import threading
 
-from core.utils import extract_video_id, atomic_write_json
+from core.utils import extract_video_id, atomic_write_json, song_match_key
 from core.config import MANUAL_TIMELINES_FILE, TONE_CACHE_FILE
 
 # Lock bảo vệ chu trình read-modify-write trên các file JSON cache
@@ -116,13 +116,14 @@ class ManualToneTimeline:
     
     @staticmethod
     def load_timeline(youtube_url):
-        """Load timeline cho 1 bài YouTube (theo video ID)"""
-        video_id = extract_video_id(youtube_url)
-        if not video_id:
+        """Load timeline cho 1 bài (theo video_id, fallback URL nguyên văn)."""
+        key = song_match_key(youtube_url)
+        if not key:
             return None
-        
+
         all_data = ManualToneTimeline._load_all()
-        return all_data.get(video_id)
+        # Tương thích ngược: dữ liệu cũ key theo video_id thuần
+        return all_data.get(key) or all_data.get(extract_video_id(youtube_url))
     
     @staticmethod
     def save_timeline(youtube_url, title, timeline_entries):
@@ -134,13 +135,13 @@ class ManualToneTimeline:
             title: Tên bài hát
             timeline_entries: list of {time, key_display, key_index, scale}
         """
-        video_id = extract_video_id(youtube_url)
-        if not video_id:
+        key = song_match_key(youtube_url)
+        if not key:
             return False
 
         with _timeline_lock:
             all_data = ManualToneTimeline._load_all()
-            all_data[video_id] = {
+            all_data[key] = {
                 "title": title,
                 "url": youtube_url,
                 "timeline": timeline_entries,
@@ -150,15 +151,20 @@ class ManualToneTimeline:
     
     @staticmethod
     def delete_timeline(youtube_url):
-        """Xóa timeline của 1 bài"""
-        video_id = extract_video_id(youtube_url)
-        if not video_id:
+        """Xóa timeline của 1 bài (theo video_id, fallback URL nguyên văn)."""
+        key = song_match_key(youtube_url)
+        if not key:
             return False
 
         with _timeline_lock:
             all_data = ManualToneTimeline._load_all()
-            if video_id in all_data:
-                del all_data[video_id]
+            # Tương thích ngược: xóa cả key cũ (video_id thuần) nếu có
+            removed = False
+            for k in {key, extract_video_id(youtube_url)}:
+                if k and k in all_data:
+                    del all_data[k]
+                    removed = True
+            if removed:
                 return ManualToneTimeline._save_all(all_data)
             return False
     

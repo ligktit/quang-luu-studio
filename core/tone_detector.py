@@ -379,22 +379,98 @@ class ToneDetector:
             return None
     
     @staticmethod
-    def detect_key_from_system_audio(duration=10, sample_rate=48000, on_progress=None):
+    def _find_loopback_device(pa):
+        """Chọn WASAPI loopback device tốt nhất để thu âm.
+
+        Thứ tự ưu tiên:
+          1. Loopback analogue của WASAPI default output (loa ĐANG phát nhạc)
+          2. Bất kỳ WASAPI loopback device nào còn lại
+
+        Lý do: máy có nhiều loa (Speakers, Headset, HDMI...) thì phải lấy đúng
+        loopback của loa mặc định đang phát, không phải loopback đầu tiên trong
+        danh sách — nếu lấy nhầm sẽ thu được im lặng dù nhạc vẫn đang phát.
+        (Cùng logic với recorder_worker.find_loopback_device.)
+        """
+        wasapi_info = None
+        for i in range(pa.get_host_api_count()):
+            info = pa.get_host_api_info_by_index(i)
+            if "wasapi" in info.get("name", "").lower():
+                wasapi_info = info
+                break
+
+        if not wasapi_info:
+            print("[DÒ TONE] Không tìm thấy WASAPI host API!")
+            return None
+
+        wasapi_api_idx = wasapi_info["index"]
+
+        all_loopbacks = []
+        for i in range(pa.get_device_count()):
+            try:
+                dev = pa.get_device_info_by_index(i)
+                if dev.get("isLoopbackDevice", False) and dev.get("hostApi") == wasapi_api_idx:
+                    all_loopbacks.append(dev)
+            except Exception:
+                continue
+
+        if not all_loopbacks:
+            print("[DÒ TONE] Không tìm thấy thiết bị loopback!")
+            return None
+
+        # Ưu tiên 1: loopback của default output device
+        try:
+            default_out_idx = wasapi_info.get("defaultOutputDevice", -1)
+            if default_out_idx is not None and default_out_idx >= 0:
+                default_out = pa.get_device_info_by_index(default_out_idx)
+                default_out_name = default_out.get("name", "").lower()
+                print(f"[DÒ TONE] Loa mặc định: {default_out.get('name', '?')}")
+
+                for lb in all_loopbacks:
+                    lb_base = lb.get("name", "").lower().replace("[loopback]", "").strip()
+                    if lb_base and (lb_base in default_out_name or default_out_name in lb_base):
+                        return lb
+
+                # Thử helper API của pyaudiowpatch nếu khớp tên thất bại
+                try:
+                    analogue = pa.get_wasapi_loopback_analogue_by_index(default_out_idx)
+                    if analogue:
+                        return analogue
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[DÒ TONE] Không xác định được loopback của loa mặc định: {e}")
+
+        # Ưu tiên 2: loopback đầu tiên
+        fallback = all_loopbacks[0]
+        print(f"[DÒ TONE] Dùng loopback dự phòng: {fallback['name']}")
+        return fallback
+
+    @staticmethod
+    def detect_key_from_system_audio(duration=10, sample_rate=48000, on_progress=None,
+                                     reason_out=None):
         """
         Thu âm loopback từ hệ thống (bắt âm thanh đang phát trên loa)
         và phát hiện tone bài hát. Không cần tải từ YouTube.
-        
+
         Sử dụng WASAPI Loopback (Windows) qua thư viện pyaudiowpatch.
+
+        ``reason_out``: nếu truyền vào 1 list, khi thất bại (trả None) hàm sẽ
+        append một câu mô tả NGUYÊN NHÂN cụ thể (để hiển thị cho người dùng).
         """
         import numpy as np
-        
+
+        def _fail(reason):
+            if reason_out is not None:
+                reason_out.append(reason)
+            return None
+
         # Import pyaudiowpatch (thay thế soundcard)
         try:
             import pyaudiowpatch as pyaudio
         except ImportError:
             print("[DÒ TONE] Thư viện 'pyaudiowpatch' chưa được cài đặt.")
             print("   Chạy: pip install pyaudiowpatch")
-            return None
+            return _fail("Thiếu thư viện thu âm (pyaudiowpatch) — không thể nghe từ loa.")
         
         # Khởi tạo COM cho background thread (WASAPI yêu cầu COM per-thread)
         com_initialized = False
@@ -410,31 +486,13 @@ class ToneDetector:
             print(f"Thu âm loopback từ hệ thống ({duration}s)...")
             
             pa = pyaudio.PyAudio()
-            
-            # Tìm WASAPI loopback device
-            wasapi_info = None
-            for i in range(pa.get_host_api_count()):
-                info = pa.get_host_api_info_by_index(i)
-                if "wasapi" in info.get("name", "").lower():
-                    wasapi_info = info
-                    break
-            
-            if not wasapi_info:
-                print("[DÒ TONE] Không tìm thấy WASAPI host API!")
-                return None
-            
-            loopback_dev = None
-            for i in range(pa.get_device_count()):
-                dev = pa.get_device_info_by_index(i)
-                if dev.get("isLoopbackDevice", False):
-                    if dev.get("hostApi") == wasapi_info["index"]:
-                        loopback_dev = dev
-                        break
-            
+
+            # Chọn đúng loopback của loa MẶC ĐỊNH đang phát (không phải cái đầu tiên)
+            loopback_dev = ToneDetector._find_loopback_device(pa)
             if not loopback_dev:
-                print("[DÒ TONE] Không tìm thấy thiết bị loopback!")
-                return None
-            
+                return _fail("Không tìm thấy thiết bị loopback (loa) trên hệ thống — "
+                             "kiểm tra driver âm thanh / loa mặc định.")
+
             device_sr = int(loopback_dev["defaultSampleRate"])
             chunk_size = 1024
             
@@ -467,7 +525,7 @@ class ToneDetector:
 
             if channels_used is None:
                 print(f"[DÒ TONE] Không mở được loopback stream: {last_err}")
-                return None
+                return _fail(f"Không mở được luồng thu từ loa ({loopback_dev['name']}): {last_err}")
 
             if channels_used > 1:
                 print(f"[DÒ TONE] Thu {channels_used} kênh, sẽ downmix về mono")
@@ -510,7 +568,9 @@ class ToneDetector:
             
             if rms < 0.001:
                 print("[DÒ TONE] Không phát hiện âm thanh! Hãy đảm bảo đang phát nhạc.")
-                return None
+                return _fail(f"Loa '{loopback_dev['name']}' không phát ra âm thanh (im lặng). "
+                             "Kiểm tra: bài hát có đang phát không, và loa đang phát có đúng "
+                             "là loa MẶC ĐỊNH của Windows không.")
             
             # Resample to 22050Hz for faster CQT processing without losing low-frequency resolution
             target_sr = 22050
@@ -530,13 +590,16 @@ class ToneDetector:
                 MemoryGuard.force_cleanup()
             except Exception:
                 pass
+            if not result:
+                return _fail("Đã nghe được âm thanh từ loa nhưng không nhận diện được tone "
+                             "(âm thanh quá nhiễu hoặc không có giai điệu rõ ràng).")
             return result
-            
+
         except Exception as e:
             print(f"[DÒ TONE] Lỗi thu âm: {e}")
             import traceback
             print(traceback.format_exc())
-            return None
+            return _fail(f"Lỗi khi thu âm từ loa: {e}")
         finally:
             if stream:
                 try:

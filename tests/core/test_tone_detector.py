@@ -235,6 +235,86 @@ class TestDetectKeyFromSystemAudio:
         mock_detect.assert_called_once()
         assert result == expected_result
 
+    def test_reason_out_populated_on_silence(self):
+        """reason_out nhận nguyên nhân cụ thể khi loa im lặng (RMS < 0.001)."""
+        silent_chunk = np.zeros(1024, dtype=np.float32).tobytes()
+
+        mock_pa = MagicMock()
+        mock_pa.get_host_api_count.return_value = 1
+        mock_pa.get_host_api_info_by_index.return_value = {
+            "name": "Windows WASAPI", "index": 0, "defaultOutputDevice": -1,
+        }
+        mock_pa.get_device_count.return_value = 1
+        mock_pa.get_device_info_by_index.return_value = {
+            "isLoopbackDevice": True, "hostApi": 0, "name": "Speakers",
+            "defaultSampleRate": 16000, "index": 0, "maxInputChannels": 1,
+        }
+        mock_pa.get_wasapi_loopback_analogue_by_index.side_effect = AttributeError
+        mock_stream = MagicMock()
+        mock_stream.read.return_value = silent_chunk
+        mock_pa.open.return_value = mock_stream
+        mock_pa.paFloat32 = 1
+
+        fake_pyaudio = types.ModuleType("pyaudiowpatch")
+        fake_pyaudio.PyAudio = lambda: mock_pa
+        fake_pyaudio.paFloat32 = 1
+
+        reasons = []
+        with patch.dict("sys.modules", {"pyaudiowpatch": fake_pyaudio}), \
+             patch("ctypes.windll.ole32.CoInitializeEx", return_value=0), \
+             patch("ctypes.windll.ole32.CoUninitialize"), \
+             patch("core.memory.MemoryGuard.force_cleanup", MagicMock()):
+            result = ToneDetector.detect_key_from_system_audio(duration=1, reason_out=reasons)
+
+        assert result is None
+        assert reasons and "im lặng" in reasons[0]
+
+
+class TestFindLoopbackDevice:
+    """TD-10b — _find_loopback_device() picks the DEFAULT output's loopback."""
+
+    def _make_pa(self, devices, default_output_idx):
+        mock_pa = MagicMock()
+        mock_pa.get_host_api_count.return_value = 1
+        mock_pa.get_host_api_info_by_index.return_value = {
+            "name": "Windows WASAPI", "index": 0,
+            "defaultOutputDevice": default_output_idx,
+        }
+        mock_pa.get_device_count.return_value = len(devices)
+        mock_pa.get_device_info_by_index.side_effect = lambda i: devices[i]
+        # No analogue helper available → must rely on name matching
+        mock_pa.get_wasapi_loopback_analogue_by_index.side_effect = AttributeError
+        return mock_pa
+
+    def test_prefers_default_output_loopback(self):
+        """When multiple loopbacks exist, pick the one matching default output."""
+        devices = [
+            {"index": 0, "name": "Headset (USB)", "hostApi": 0,
+             "isLoopbackDevice": False, "maxOutputChannels": 2},
+            {"index": 1, "name": "Speakers (Realtek)", "hostApi": 0,
+             "isLoopbackDevice": False, "maxOutputChannels": 2},
+            {"index": 2, "name": "Headset (USB) [Loopback]", "hostApi": 0,
+             "isLoopbackDevice": True, "defaultSampleRate": 48000},
+            {"index": 3, "name": "Speakers (Realtek) [Loopback]", "hostApi": 0,
+             "isLoopbackDevice": True, "defaultSampleRate": 48000},
+        ]
+        # Default output is "Speakers (Realtek)" (index 1)
+        pa = self._make_pa(devices, default_output_idx=1)
+        dev = ToneDetector._find_loopback_device(pa)
+        assert dev is not None
+        assert dev["index"] == 3  # Speakers loopback, NOT the first loopback (index 2)
+
+    def test_falls_back_to_first_loopback(self):
+        """No default output info → use first available loopback."""
+        devices = [
+            {"index": 0, "name": "Stereo Mix [Loopback]", "hostApi": 0,
+             "isLoopbackDevice": True, "defaultSampleRate": 44100},
+        ]
+        pa = self._make_pa(devices, default_output_idx=-1)
+        dev = ToneDetector._find_loopback_device(pa)
+        assert dev is not None
+        assert dev["index"] == 0
+
 
 class TestDetectKeyFromYouTube:
     """TD-11 — detect_key_from_youtube() with mocked ScoringEngine + librosa"""

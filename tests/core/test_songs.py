@@ -1,12 +1,14 @@
 import pytest
 import json
 from unittest.mock import patch
-from core.songs import SongManager
+from core.songs import SongManager, PlaylistManager
 
 @pytest.fixture(autouse=True)
 def mock_songs_file(tmp_path):
     songs_file = tmp_path / "saved_songs.json"
-    with patch("core.songs.SONGS_FILE", str(songs_file)):
+    playlists_file = tmp_path / "playlists.json"
+    with patch("core.songs.SONGS_FILE", str(songs_file)), \
+         patch("core.songs.PLAYLISTS_FILE", str(playlists_file)):
         yield songs_file
 
 def test_load_songs_empty_file(mock_songs_file):
@@ -84,6 +86,69 @@ def test_add_song_no_id_collision_after_delete(mock_songs_file):
     ids = [s["id"] for s in songs]
     assert len(ids) == len(set(ids))  # Không trùng ID
     assert SongManager.get_song_by_id(3)["title"] == "Song 3"
+
+def test_add_song_dedup_by_video_id(mock_songs_file):
+    # S-13: cùng video YouTube nhưng khác định dạng URL → không lưu trùng
+    SongManager.add_song("Song", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "C")
+    SongManager.add_song("Song", "https://youtu.be/dQw4w9WgXcQ?t=30", "Am")
+    songs = SongManager.load_songs()
+    assert len(songs) == 1
+    assert songs[0]["tone"] == "Am"
+
+def test_add_song_default_favorite_false(mock_songs_file):
+    SongManager.add_song("Song", "http://yt.com/1", "C")
+    assert SongManager.load_songs()[0]["favorite"] is False
+
+def test_toggle_favorite(mock_songs_file):
+    SongManager.add_song("Song", "http://yt.com/1", "C")
+    assert SongManager.toggle_favorite(1) is True
+    assert SongManager.get_song_by_id(1)["favorite"] is True
+    assert SongManager.toggle_favorite(1) is False
+    assert SongManager.get_song_by_id(1)["favorite"] is False
+
+def test_add_song_preserves_favorite_on_update(mock_songs_file):
+    SongManager.add_song("Song", "http://yt.com/1", "C")
+    SongManager.toggle_favorite(1)
+    SongManager.add_song("Song updated", "http://yt.com/1", "D")  # update path
+    assert SongManager.get_song_by_id(1)["favorite"] is True
+
+def test_sort_for_display_favorites_first(mock_songs_file):
+    SongManager.add_song("A", "http://yt.com/1", "C")
+    SongManager.add_song("B", "http://yt.com/2", "C")
+    SongManager.add_song("C", "http://yt.com/3", "C")
+    SongManager.toggle_favorite(3)
+    ordered = SongManager.sort_for_display(SongManager.load_songs())
+    assert ordered[0]["id"] == 3
+
+def test_create_and_get_playlist(mock_songs_file):
+    pl = PlaylistManager.create_playlist("Nhạc trẻ")
+    assert pl["id"] == 1
+    assert PlaylistManager.get_playlist(1)["name"] == "Nhạc trẻ"
+
+def test_create_playlist_rejects_duplicate_name(mock_songs_file):
+    PlaylistManager.create_playlist("List")
+    assert PlaylistManager.create_playlist("list") is None  # case-insensitive
+
+def test_add_remove_song_in_playlist(mock_songs_file):
+    PlaylistManager.create_playlist("List")
+    assert PlaylistManager.add_song_to_playlist(1, 5) is True
+    assert 1 in PlaylistManager.playlists_containing(5)
+    PlaylistManager.remove_song_from_playlist(1, 5)
+    assert 1 not in PlaylistManager.playlists_containing(5)
+
+def test_delete_song_removes_from_playlists(mock_songs_file):
+    SongManager.add_song("Song", "http://yt.com/1", "C")
+    PlaylistManager.create_playlist("List")
+    PlaylistManager.add_song_to_playlist(1, 1)
+    SongManager.delete_song(1)
+    assert PlaylistManager.get_playlist(1)["song_ids"] == []
+
+def test_rename_and_delete_playlist(mock_songs_file):
+    PlaylistManager.create_playlist("Old")
+    assert PlaylistManager.rename_playlist(1, "New") is True
+    assert PlaylistManager.get_playlist(1)["name"] == "New"
+    assert PlaylistManager.delete_playlist(1) is True
+    assert PlaylistManager.get_playlist(1) is None
 
 def test_save_and_load_round_trip(mock_songs_file):
     # S-11
