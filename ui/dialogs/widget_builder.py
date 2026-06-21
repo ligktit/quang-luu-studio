@@ -63,9 +63,12 @@ class WidgetBuilderDialog(QDialog):
         chl.addWidget(self.color_btn)
         self.vl.addLayout(chl)
         
-        # CC
+        # CC — giá trị -1 = "không gán" (special value), phân biệt với CC 0 hợp lệ.
+        # Nhờ vậy nút built-in chỉ bị override khi kỹ thuật viên chủ động chọn một CC.
         self.cc_input = QSpinBox()
-        self.cc_input.setRange(0, 127)
+        self.cc_input.setRange(-1, 127)
+        self.cc_input.setSpecialValueText("— (không gán)")
+        self.cc_input.setValue(-1)
         self._add_row("MIDI CC:", self.cc_input)
         
         # --- Slider Specific ---
@@ -162,15 +165,17 @@ class WidgetBuilderDialog(QDialog):
         self.label_input.setText(d.get("label", ""))
         self.color_input.setText(d.get("color", ""))
         
-        # CC could be a string if built-in, but custom ones should be numbers
-        cc = d.get("cc", 0)
+        # CC: số (custom hoặc override) → hiển thị; tên chuỗi (built-in slider) → khoá;
+        # không có cc → để ở "— (không gán)" (-1), không override action gốc.
+        cc = d.get("cc")
         if isinstance(cc, int):
             self.cc_input.setValue(cc)
-        else:
+        elif isinstance(cc, str):
             # CC dạng tên (built-in, tra trong app_config.json -> midi_cc):
             # khoá spinbox để khi Lưu không ghi đè tên bằng số
             self.cc_input.setEnabled(False)
             self.cc_input.setToolTip(f'CC built-in: "{cc}" — giữ nguyên khi lưu')
+        # cc is None → giữ nguyên -1 (không gán)
             
         if d.get("type") == "slider":
             self.icon_input.setText(d.get("icon", ""))
@@ -196,9 +201,14 @@ class WidgetBuilderDialog(QDialog):
             "label": self.label_input.text(),
             "color": self.color_input.text() or "#ffffff",
         })
-        # CC dạng tên (built-in) bị khoá trong _load_data — chỉ ghi số khi sửa được
+        # CC dạng tên (built-in) bị khoá trong _load_data — giữ nguyên.
+        # Sửa được: >=0 ghi đè CC số (override action gốc); -1 = không gán → bỏ key cc.
         if self.cc_input.isEnabled():
-            base["cc"] = self.cc_input.value()
+            v = self.cc_input.value()
+            if v >= 0:
+                base["cc"] = v
+            else:
+                base.pop("cc", None)
 
         if t == "slider":
             base.update({

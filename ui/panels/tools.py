@@ -138,32 +138,35 @@ def build_panel_tools(dashboard) -> GlassPanel:
             c_val = C[c_val]
             
         action_name = t_cfg.get("action", "")
-        # Get callback from dashboard. Custom action might need a generic handler later.
-        cb = getattr(dashboard, f"_on_{action_name}", None)
+        cc_val = t_cfg.get("cc")
+        # Dev-mode override: nếu entry có CC dạng SỐ → gửi thẳng CC đó và bỏ qua
+        # action built-in. Cho phép kỹ thuật viên map lại cả nút có sẵn.
+        if isinstance(cc_val, int):
+            cb = None
+        else:
+            cb = getattr(dashboard, f"_on_{action_name}", None)
         if not cb:
-            # If no built-in method, it's a custom dev-mode button sending a CC
-            cc_val = t_cfg.get("cc")
+            # Không có method built-in (hoặc bị CC số override) → gửi CC thô
             on_val = t_cfg.get("on_value", 127)
             off_val = t_cfg.get("off_value", 0)
             is_toggle = t_cfg.get("is_toggle", False)
-            
+
             # Use default args pattern to avoid late binding issues in loops
             def make_custom_cb(c=cc_val, on=on_val, off=off_val, toggle=is_toggle, text_key=text):
                 def _do_action():
                     btn = dashboard._func_buttons.get(text_key)
                     if btn and toggle:
-                        # Toggle state
-                        is_active = not getattr(btn, "_is_active", False)
+                        # Toggle: đọc/ghi cùng thuộc tính _active mà setActive dùng
+                        # (trước đây đọc nhầm "_is_active" → luôn gửi On, không gửi Off)
+                        is_active = not getattr(btn, "_active", False)
                         btn.setActive(is_active)
                         val = on if is_active else off
                     else:
-                        # Momentary state
+                        # Momentary: chỉ gửi On Value
                         val = on
-                        # Wait, we might need to send off_value on release for momentary?
-                        # For now just send on_val
                     dashboard.engine.send_midi(c, val)
                 return _do_action
-            
+
             cb = make_custom_cb()
             
         desc = t_cfg.get("desc", "")

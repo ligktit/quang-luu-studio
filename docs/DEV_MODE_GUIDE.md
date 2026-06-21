@@ -52,7 +52,9 @@ Bấm **Lưu** → widget được ghi vào `ui_config.json` với `id` dạng `
 
 ## 3. Sửa / Ẩn widget
 
-- **Chuột phải → Sửa**: mở lại Widget Builder với dữ liệu hiện tại. Với widget built-in, ô MIDI CC bị khoá (CC dạng tên giữ nguyên) và các field hệ thống (`action`, `desc`…) được bảo toàn khi lưu — chỉ label/màu/tham số hiển thị là chỉnh được.
+- **Chuột phải → Sửa**: mở lại Widget Builder với dữ liệu hiện tại. Các field hệ thống (`action`, `desc`…) được bảo toàn khi lưu.
+  - **Nút TOOLS/MODE built-in** (Dò Lại, Auto-Tune, Dân Ca…): có thể **ghi đè bằng MIDI CC số**. Chọn một số CC (0–127) ở ô MIDI CC + đặt On/Off Value → nút sẽ **gửi thẳng CC đó và bỏ qua chức năng gốc** (`tools.py` / `mode.py`: `cc` dạng số → override `action`). Để ô ở **"— (không gán)"** (giá trị -1) thì giữ nguyên chức năng built-in.
+  - **Slider MIXER built-in**: ô MIDI CC vẫn bị **khoá** (CC dạng tên giữ nguyên) — chỉ label/màu/tham số hiển thị chỉnh được.
 - **Chuột phải → Ẩn**: set `"hidden": true` trong config — widget biến mất khỏi UI nhưng **không bị xoá**.
 - **Hiện lại widget đã ẩn**: chưa có UI — mở `ui_config.json`, đổi `"hidden": true` → `false`, lưu rồi bấm Ctrl+Shift+D hai lần (hoặc khởi động lại app).
 
@@ -100,6 +102,8 @@ Phân biệt 2 loại entry:
 3. **Mute trên slider custom** không có CC mute riêng: app gửi giá trị 0 trên chính CC của kênh khi mute và khôi phục giá trị slider khi bật lại — khác cơ chế mute của 3 kênh built-in (có CC mute riêng `mute_music/mute_mic/mute_reverb`).
 
 > Lịch sử: 3 lỗi từng tồn tại (Sửa built-in làm mất `action`/`cc`; slider custom KeyError không gửi MIDI; nút custom panel MODE crash do thiếu import `lighten`) — **đã sửa ngày 2026-06-11** trong `widget_builder.py`, `mixer.py`, `mode.py`.
+>
+> Cập nhật 2026-06-12: (a) nút TOOLS/MODE built-in nay **override được bằng CC số** (trước đây bị bỏ qua); (b) nút toggle custom trước đọc nhầm thuộc tính `_is_active` nên **luôn gửi On Value, không gửi Off** — đã sửa sang `_active`; (c) ô MIDI CC dùng giá trị **-1 = "không gán"** để tránh vô tình ghi đè nút built-in về CC 0 khi chỉ mở Sửa rồi Lưu.
 
 ---
 *Các file liên quan: `frontend_qt.py:232-308` (shortcut + add/edit/hide), `ui/dialogs/widget_builder.py`, `ui/panels/{mixer,tools,mode}.py`, `core/config.py:364-417` (`UiConfigManager`).*

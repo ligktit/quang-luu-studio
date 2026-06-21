@@ -43,10 +43,14 @@ def build_panel_mode(dashboard) -> GlassPanel:
         
         # Determine callback: built-in mode or custom?
         action_name = m_cfg.get("action", "")
-        cb = getattr(dashboard, f"_on_{action_name}", None)
+        cc_val = m_cfg.get("cc")
+        # Dev-mode override: CC dạng SỐ → gửi thẳng CC, bỏ qua action built-in.
+        if isinstance(cc_val, int):
+            cb = None
+        else:
+            cb = getattr(dashboard, f"_on_{action_name}", None)
         if not cb:
-            # Custom action
-            cc_val = m_cfg.get("cc")
+            # Custom action (hoặc built-in bị CC số override)
             on_val = m_cfg.get("on_value", 127)
             off_val = m_cfg.get("off_value", 0)
             
