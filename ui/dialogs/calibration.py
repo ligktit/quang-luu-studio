@@ -1,14 +1,14 @@
 import backend
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QProgressBar, QFrame, QTabWidget, QGridLayout, QWidget,
-    QSpinBox,
+    QFrame, QTabWidget, QGridLayout, QWidget, QSpinBox, QSlider,
+    QComboBox,
 )
 from PySide6.QtCore import Qt, QTimer, QSize, QByteArray
 from PySide6.QtGui import QIcon, QPixmap, QPainter
 
 from ui.design_tokens import C, FONT
-from ui.components.svg_icons import SVG_SAVE, SVG_SEARCH, SVG_SETTINGS, SVG_MUSIC, SVG_WRENCH
+from ui.components.svg_icons import SVG_SAVE, SVG_SETTINGS, SVG_MUSIC, SVG_WRENCH
 from frontend_qt import pill_btn_qss, add_shadow, _lighten, MIDI_CC
 
 
@@ -17,7 +17,11 @@ class CalibrationWizardDialog(QDialog):
     Calibration Wizard cho Auto-Tune.
     Tab 1 — Scale Type (Major / Minor)
     Tab 2 — Key Root (12 keys)
-    Tab 3 — Mode (Dân Ca, Lofi, Remix, Đa Thể Loại, Fix Méo)
+    Tab 3 — Mode (Fix Méo)
+
+    Luồng: một "live tuner" dùng chung (slider 0-127 + nhích nhanh + auto-sweep)
+    gửi MIDI trực tiếp; người dùng canh đúng giá trị trên plugin rồi bấm nút
+    "bắt giá trị" ở tab tương ứng. Giá trị bắt = đúng số đang gửi (không off-by-one).
 
     Caller phải reload SCALE_VALUES sau khi exec() trả về:
         dlg = CalibrationWizardDialog(self)
@@ -27,25 +31,30 @@ class CalibrationWizardDialog(QDialog):
 
     ALL_KEYS  = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
     ALL_MODES = ["Fix Méo"]
+    BLACK_KEYS = {"C#", "D#", "F#", "G#", "A#"}
+
+    # Auto-sweep: nhãn -> chu kỳ (ms). Càng lớn càng chậm, càng dễ canh.
+    SWEEP_SPEEDS = {"Chậm": 450, "Vừa": 280, "Nhanh": 140}
 
     def __init__(self, parent):
         super().__init__(parent)
         self._dashboard = parent
         self.setWindowTitle("Cân chỉnh Auto-Tune")
-        self.setMinimumSize(800, 680)
-        self.resize(820, 720)
+        self.setMinimumSize(800, 660)
+        self.resize(820, 700)
         self.setStyleSheet(self._dialog_qss())
 
         self._state = {
-            "scanning": False,
             "current_value": 0,
-            "timer": None,
+            "sweep_timer": None,
             "major_value": None,
             "minor_value": None,
             "key_values": {},
             "mode_values": {},
         }
         self._build_ui()
+        self._set_value(0)
+        self._refresh_progress()
 
     @staticmethod
     def _svg_icon(svg_content, color="white", size=18):
@@ -93,6 +102,14 @@ class CalibrationWizardDialog(QDialog):
                 background-color: rgba(15, 23, 42, 242);
                 border-top: 1px solid rgba(148, 163, 184, 45);
             }}
+            QLabel#progressChip {{
+                background-color: rgba(15, 23, 42, 180);
+                border: 1px solid rgba(148, 163, 184, 55);
+                border-radius: 11px;
+                padding: 3px 12px;
+                font-size: 12px;
+                font-weight: 700;
+            }}
             QTabWidget::pane {{
                 border: none;
                 background: transparent;
@@ -127,6 +144,17 @@ class CalibrationWizardDialog(QDialog):
                 background-color: rgba(51, 65, 85, 210);
                 border-color: rgba(148, 163, 184, 80);
             }}
+            QComboBox {{
+                background-color: {C['bg']}; color: {C['text']};
+                border: 1px solid {C['border']}; border-radius: 8px;
+                padding: 4px 10px; font-size: 12px; font-weight: 700; font-family: {FONT};
+            }}
+            QComboBox::drop-down {{ border: none; }}
+            QComboBox QAbstractItemView {{
+                background-color: {C['card']}; color: {C['text']};
+                selection-background-color: {C['primary']};
+                border: 1px solid {C['border']}; font-size: 12px;
+            }}
         """
 
     # ── Build UI ──────────────────────────────────────────────
@@ -136,11 +164,24 @@ class CalibrationWizardDialog(QDialog):
         lay.setSpacing(0)
         lay.setContentsMargins(0, 0, 0, 0)
 
+        lay.addWidget(self._build_header())
+
+        body = QWidget()
+        body_lay = QVBoxLayout(body)
+        body_lay.setContentsMargins(22, 16, 22, 0)
+        body_lay.setSpacing(12)
+        body_lay.addWidget(self._build_tuner())
+        body_lay.addWidget(self._build_tabs(), 1)
+        lay.addWidget(body, 1)
+
+        lay.addWidget(self._build_bottom_row())
+
+    def _build_header(self):
         header = QFrame()
         header.setObjectName("calibrationHeader")
         header_lay = QVBoxLayout(header)
-        header_lay.setContentsMargins(24, 16, 24, 14)
-        header_lay.setSpacing(4)
+        header_lay.setContentsMargins(24, 14, 24, 12)
+        header_lay.setSpacing(6)
 
         title = QLabel("Cân chỉnh Plugin Auto-Tune")
         title.setStyleSheet(
@@ -150,84 +191,152 @@ class CalibrationWizardDialog(QDialog):
         title.setAlignment(Qt.AlignCenter)
         header_lay.addWidget(title)
 
-        subtitle = QLabel("Quét MIDI CC 0-127, nhấn nút tương ứng khi thấy đúng giá trị trên plugin")
+        subtitle = QLabel("Kéo thanh trượt tới khi plugin hiển thị đúng giá trị, rồi bấm nút bắt tương ứng")
         subtitle.setStyleSheet(
             f"font-size: 12px; font-weight: 600; color: {C['text_muted']};"
             f" font-family: {FONT}; background: transparent; border: none;"
         )
         subtitle.setAlignment(Qt.AlignCenter)
         header_lay.addWidget(subtitle)
-        lay.addWidget(header)
 
-        body = QWidget()
-        body_lay = QVBoxLayout(body)
-        body_lay.setContentsMargins(22, 16, 22, 0)
-        body_lay.setSpacing(12)
+        # ── Progress chips ──
+        chip_row = QHBoxLayout()
+        chip_row.setSpacing(8)
+        chip_row.addStretch()
+        self._chip_scale = self._make_chip("Scale")
+        self._chip_key   = self._make_chip("Key")
+        self._chip_mode  = self._make_chip("Chế độ")
+        chip_row.addWidget(self._chip_scale)
+        chip_row.addWidget(self._chip_key)
+        chip_row.addWidget(self._chip_mode)
+        chip_row.addStretch()
+        header_lay.addLayout(chip_row)
+        return header
 
-        body_lay.addWidget(self._build_scan_controls())
-        body_lay.addWidget(self._build_tabs(), 1)
-        lay.addWidget(body, 1)
-        lay.addWidget(self._build_bottom_row())
+    def _make_chip(self, text):
+        chip = QLabel(text)
+        chip.setObjectName("progressChip")
+        chip.setAlignment(Qt.AlignCenter)
+        return chip
 
-    def _build_scan_controls(self):
+    def _build_tuner(self):
         frame = QFrame()
         frame.setObjectName("calibrationCard")
         sf = QVBoxLayout(frame)
-        sf.setContentsMargins(18, 12, 18, 12)
-        sf.setSpacing(10)
+        sf.setContentsMargins(18, 14, 18, 14)
+        sf.setSpacing(12)
 
-        self._value_label = QLabel("CC Value: ---")
-        self._value_label.setStyleSheet(
-            f"font-size: 26px; font-weight: 900; color: {C['primary']};"
+        # Big readout: CC + value
+        head = QHBoxLayout()
+        head.addStretch()
+        self._cc_label = QLabel("CC 35")
+        self._cc_label.setStyleSheet(
+            f"font-size: 13px; font-weight: 700; color: {C['text_muted']};"
             " font-family: Consolas; background: transparent; border: none;"
         )
-        self._value_label.setAlignment(Qt.AlignCenter)
-        sf.addWidget(self._value_label)
+        head.addWidget(self._cc_label, 0, Qt.AlignBottom)
+        self._value_label = QLabel("0")
+        self._value_label.setStyleSheet(
+            f"font-size: 40px; font-weight: 900; color: {C['primary']};"
+            " font-family: Consolas; background: transparent; border: none;"
+        )
+        head.addWidget(self._value_label, 0, Qt.AlignVCenter)
+        self._value_max = QLabel("/ 127")
+        self._value_max.setStyleSheet(
+            f"font-size: 13px; font-weight: 700; color: {C['text_muted']};"
+            " font-family: Consolas; background: transparent; border: none;"
+        )
+        head.addWidget(self._value_max, 0, Qt.AlignBottom)
+        head.addStretch()
+        sf.addLayout(head)
 
-        self._progress = QProgressBar()
-        self._progress.setRange(0, 127)
-        self._progress.setValue(0)
-        self._progress.setStyleSheet(f"""
-            QProgressBar {{
-                border: none; background-color: rgba(15, 23, 42, 235);
-                border-radius: 5px; min-height: 10px; max-height: 10px;
+        # Slider
+        self._slider = QSlider(Qt.Horizontal)
+        self._slider.setRange(0, 127)
+        self._slider.setValue(0)
+        self._slider.setStyleSheet(f"""
+            QSlider::groove:horizontal {{
+                height: 10px; border-radius: 5px;
+                background-color: rgba(15, 23, 42, 235);
             }}
-            QProgressBar::chunk {{
+            QSlider::sub-page:horizontal {{
+                height: 10px; border-radius: 5px;
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 {C['orange']}, stop:1 {C['primary']});
-                border-radius: 5px;
+            }}
+            QSlider::handle:horizontal {{
+                width: 20px; height: 20px; margin: -6px 0; border-radius: 10px;
+                background: {C['text']};
+                border: 2px solid {C['primary']};
+            }}
+            QSlider::handle:horizontal:hover {{
+                border-color: {_lighten(C['primary'], 0.2)};
             }}
         """)
-        sf.addWidget(self._progress)
+        self._slider.valueChanged.connect(self._set_value)
+        sf.addWidget(self._slider)
 
-        row = QHBoxLayout()
-        self._start_btn = QPushButton("Bắt đầu quét")
-        self._start_btn.setIcon(self._svg_icon(SVG_SEARCH, "white", 16))
-        self._start_btn.setIconSize(QSize(16, 16))
-        self._start_btn.setCursor(Qt.PointingHandCursor)
-        self._start_btn.setFixedHeight(36)
-        self._start_btn.setStyleSheet(pill_btn_qss(C["primary"], _lighten(C["primary"], 0.12), 13, 18))
-        add_shadow(self._start_btn, C["primary"], 6, (0, 2))
-        self._start_btn.clicked.connect(self._start_scan)
-        row.addWidget(self._start_btn)
+        # Nudge row: -10 -1 [spin] +1 +10
+        nudge = QHBoxLayout()
+        nudge.setSpacing(8)
+        nudge.addStretch()
+        for delta, label in ((-10, "−10"), (-1, "−1")):
+            nudge.addWidget(self._make_nudge_btn(delta, label))
 
-        self._stop_btn = QPushButton("Dừng")
-        self._stop_btn.setCursor(Qt.PointingHandCursor)
-        self._stop_btn.setFixedHeight(36)
-        self._stop_btn.setStyleSheet(pill_btn_qss(C["card_hover"], _lighten(C["card_hover"], 0.1), 13, 18))
-        self._stop_btn.setEnabled(False)
-        self._stop_btn.clicked.connect(self._stop_scan)
-        row.addWidget(self._stop_btn)
+        self._spin = QSpinBox()
+        self._spin.setRange(0, 127)
+        self._spin.setFixedSize(78, 34)
+        self._spin.setAlignment(Qt.AlignCenter)
+        self._spin.setStyleSheet(f"""
+            QSpinBox {{
+                background-color: {C['bg']}; color: {C['text']};
+                border: 1px solid {C['border']}; border-radius: 8px;
+                padding: 2px 6px; font-size: 15px; font-weight: 700; font-family: Consolas;
+            }}
+            QSpinBox::up-button, QSpinBox::down-button {{
+                background-color: {C['card_hover']}; border: none; width: 16px;
+            }}
+        """)
+        self._spin.valueChanged.connect(self._set_value)
+        nudge.addWidget(self._spin)
 
-        reset_btn = QPushButton("Reset 0")
-        reset_btn.setCursor(Qt.PointingHandCursor)
-        reset_btn.setFixedHeight(36)
-        reset_btn.setStyleSheet(pill_btn_qss(C["card_hover"], _lighten(C["card_hover"], 0.1), 13, 18))
-        reset_btn.clicked.connect(self._reset_scan)
-        row.addWidget(reset_btn)
+        for delta, label in ((1, "+1"), (10, "+10")):
+            nudge.addWidget(self._make_nudge_btn(delta, label))
+        nudge.addStretch()
+        sf.addLayout(nudge)
 
-        sf.addLayout(row)
+        # Auto-sweep row
+        sweep = QHBoxLayout()
+        sweep.setSpacing(8)
+        sweep.addStretch()
+
+        sweep_lbl = QLabel("Quét tự động:")
+        sweep_lbl.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: {FONT};")
+        sweep.addWidget(sweep_lbl)
+
+        self._speed_combo = QComboBox()
+        self._speed_combo.addItems(list(self.SWEEP_SPEEDS.keys()))
+        self._speed_combo.setCurrentText("Vừa")
+        self._speed_combo.setFixedWidth(96)
+        sweep.addWidget(self._speed_combo)
+
+        self._sweep_btn = QPushButton("▶  Bắt đầu")
+        self._sweep_btn.setCursor(Qt.PointingHandCursor)
+        self._sweep_btn.setFixedHeight(32)
+        self._sweep_btn.setStyleSheet(pill_btn_qss(C["card_hover"], _lighten(C["card_hover"], 0.12), 12, 14))
+        self._sweep_btn.clicked.connect(self._toggle_sweep)
+        sweep.addWidget(self._sweep_btn)
+        sweep.addStretch()
+        sf.addLayout(sweep)
         return frame
+
+    def _make_nudge_btn(self, delta, label):
+        btn = QPushButton(label)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setFixedSize(48, 34)
+        btn.setStyleSheet(pill_btn_qss(C["card_hover"], _lighten(C["card_hover"], 0.12), 13, 10))
+        btn.clicked.connect(lambda: self._nudge(delta))
+        return btn
 
     def _build_tabs(self):
         self._tabs = QTabWidget()
@@ -241,72 +350,46 @@ class CalibrationWizardDialog(QDialog):
     def _build_scale_tab(self):
         tab = QWidget()
         lay = QVBoxLayout(tab)
-        lay.setSpacing(10)
-        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(12)
+        lay.setContentsMargins(16, 16, 16, 16)
 
-        instr = QLabel("Quét MIDI hoặc nhập số thủ công (0-127).")
+        instr = QLabel("Canh giá trị tương ứng từng kiểu scale trên plugin rồi bấm nút bên dưới.")
         instr.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: {FONT};")
         instr.setWordWrap(True)
         lay.addWidget(instr)
 
         btn_row = QHBoxLayout()
-        self._major_btn = QPushButton("Đây là Major")
+        btn_row.setSpacing(12)
+        self._major_btn = QPushButton("Bắt Major")
         self._major_btn.setCursor(Qt.PointingHandCursor)
-        self._major_btn.setFixedHeight(44)
+        self._major_btn.setFixedHeight(48)
         self._major_btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 14, 16))
-        self._major_btn.setEnabled(False)
         self._major_btn.clicked.connect(self._capture_major)
         add_shadow(self._major_btn, C["green"], 6, (0, 2))
         btn_row.addWidget(self._major_btn)
 
-        self._minor_btn = QPushButton("Đây là Minor")
+        self._minor_btn = QPushButton("Bắt Minor")
         self._minor_btn.setCursor(Qt.PointingHandCursor)
-        self._minor_btn.setFixedHeight(44)
+        self._minor_btn.setFixedHeight(48)
         self._minor_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 14, 16))
-        self._minor_btn.setEnabled(False)
         self._minor_btn.clicked.connect(self._capture_minor)
         add_shadow(self._minor_btn, C["orange"], 6, (0, 2))
         btn_row.addWidget(self._minor_btn)
         lay.addLayout(btn_row)
 
         result_frame = QFrame()
-        result_frame.setStyleSheet(f"background-color: {C['bg']}; border-radius: 8px; padding: 6px;")
+        result_frame.setStyleSheet(f"background-color: {C['bg']}; border-radius: 10px;")
         rf_lay = QHBoxLayout(result_frame)
-        rf_lay.setContentsMargins(12, 8, 12, 8)
+        rf_lay.setContentsMargins(14, 12, 14, 12)
         self._major_result = QLabel("Major: ---")
-        self._major_result.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {C['green']}; font-family: Consolas;")
+        self._major_result.setStyleSheet(self._scale_result_qss(C["green"], filled=False))
         self._major_result.setAlignment(Qt.AlignCenter)
         rf_lay.addWidget(self._major_result)
         self._minor_result = QLabel("Minor: ---")
-        self._minor_result.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {C['orange']}; font-family: Consolas;")
+        self._minor_result.setStyleSheet(self._scale_result_qss(C["orange"], filled=False))
         self._minor_result.setAlignment(Qt.AlignCenter)
         rf_lay.addWidget(self._minor_result)
         lay.addWidget(result_frame)
-
-        # ── Manual input ──
-        manual_lbl = QLabel("Nhập thủ công:")
-        manual_lbl.setStyleSheet(f"font-size: 11px; color: {C['text_muted']}; font-family: {FONT};")
-        lay.addWidget(manual_lbl)
-
-        mr = QHBoxLayout()
-        self._major_spin = self._make_spinbox()
-        maj_apply = QPushButton("Set Major")
-        maj_apply.setFixedHeight(30)
-        maj_apply.setCursor(Qt.PointingHandCursor)
-        maj_apply.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 11, 8))
-        maj_apply.clicked.connect(lambda: self._manual_set_scale("major"))
-        mr.addWidget(self._major_spin)
-        mr.addWidget(maj_apply)
-
-        self._minor_spin = self._make_spinbox()
-        min_apply = QPushButton("Set Minor")
-        min_apply.setFixedHeight(30)
-        min_apply.setCursor(Qt.PointingHandCursor)
-        min_apply.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 8))
-        min_apply.clicked.connect(lambda: self._manual_set_scale("minor"))
-        mr.addWidget(self._minor_spin)
-        mr.addWidget(min_apply)
-        lay.addLayout(mr)
 
         lay.addStretch()
         return tab
@@ -314,58 +397,27 @@ class CalibrationWizardDialog(QDialog):
     def _build_key_tab(self):
         tab = QWidget()
         lay = QVBoxLayout(tab)
-        lay.setSpacing(8)
-        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(10)
+        lay.setContentsMargins(16, 16, 16, 16)
 
-        instr = QLabel("Quét MIDI hoặc nhập số (0-127) cho từng nốt.")
+        instr = QLabel("Canh giá trị từng nốt trên plugin rồi bấm phím tương ứng để bắt.")
         instr.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: {FONT};")
         instr.setWordWrap(True)
         lay.addWidget(instr)
 
-        black_keys = {"C#", "D#", "F#", "G#", "A#"}
         grid = QGridLayout()
-        grid.setSpacing(4)
+        grid.setSpacing(8)
         self._key_buttons = {}
-        self._key_result_labels = {}
-        self._key_spinboxes = {}
 
         for idx, key_name in enumerate(self.ALL_KEYS):
-            btn_color = C["deep_purple"] if key_name in black_keys else C["primary"]
-            cell = QWidget()
-            cl = QVBoxLayout(cell)
-            cl.setContentsMargins(0, 0, 0, 0)
-            cl.setSpacing(2)
-
-            kbtn = QPushButton(key_name)
+            btn_color = C["deep_purple"] if key_name in self.BLACK_KEYS else C["primary"]
+            kbtn = QPushButton(f"{key_name}\n—")
             kbtn.setCursor(Qt.PointingHandCursor)
-            kbtn.setFixedHeight(30)
-            kbtn.setStyleSheet(pill_btn_qss(btn_color, _lighten(btn_color, 0.12), 12, 6))
-            kbtn.setEnabled(False)
+            kbtn.setFixedHeight(54)
+            kbtn.setStyleSheet(self._key_btn_qss(btn_color, captured=False))
             kbtn.clicked.connect(self._make_key_capture(key_name))
-            cl.addWidget(kbtn)
-
-            # Manual spinbox row
-            spin_row = QHBoxLayout()
-            spin_row.setSpacing(2)
-            kspin = self._make_spinbox(width=48)
-            spin_row.addWidget(kspin)
-            kapply = QPushButton("Set")
-            kapply.setFixedSize(30, 24)
-            kapply.setCursor(Qt.PointingHandCursor)
-            kapply.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 9, 2))
-            kapply.clicked.connect(self._make_key_manual_set(key_name))
-            spin_row.addWidget(kapply)
-            cl.addLayout(spin_row)
-
-            klbl = QLabel("---")
-            klbl.setStyleSheet(f"font-size: 10px; color: {C['text_muted']}; font-family: Consolas;")
-            klbl.setAlignment(Qt.AlignCenter)
-            cl.addWidget(klbl)
-
-            grid.addWidget(cell, idx // 4, idx % 4)
+            grid.addWidget(kbtn, idx // 4, idx % 4)
             self._key_buttons[key_name] = kbtn
-            self._key_result_labels[key_name] = klbl
-            self._key_spinboxes[key_name] = kspin
 
         lay.addLayout(grid)
         self._key_counter = QLabel("Đã ghi nhận: 0 / 12 phím")
@@ -378,52 +430,24 @@ class CalibrationWizardDialog(QDialog):
     def _build_mode_tab(self):
         tab = QWidget()
         lay = QVBoxLayout(tab)
-        lay.setSpacing(10)
-        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(12)
+        lay.setContentsMargins(16, 16, 16, 16)
 
-        instr = QLabel("Quét MIDI hoặc nhập số (0-127) cho từng mode.")
+        instr = QLabel("Canh giá trị từng chế độ trên plugin rồi bấm nút tương ứng để bắt.")
         instr.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: {FONT};")
         instr.setWordWrap(True)
         lay.addWidget(instr)
 
-        grid = QGridLayout()
-        grid.setSpacing(6)
         self._mode_buttons = {}
-        self._mode_result_labels = {}
-        self._mode_spinboxes = {}
-
-        for idx, m_name in enumerate(self.ALL_MODES):
-            mbtn = QPushButton(m_name)
+        for m_name in self.ALL_MODES:
+            mbtn = QPushButton(f"Bắt: {m_name}  —")
             mbtn.setCursor(Qt.PointingHandCursor)
-            mbtn.setFixedHeight(38)
-            mbtn.setStyleSheet(pill_btn_qss(C["primary"], _lighten(C["primary"], 0.12), 13, 14))
-            mbtn.setEnabled(False)
+            mbtn.setFixedHeight(46)
+            mbtn.setStyleSheet(pill_btn_qss(C["primary"], _lighten(C["primary"], 0.12), 14, 14))
             mbtn.clicked.connect(self._make_mode_capture(m_name))
-
-            # Manual spinbox row
-            spin_row = QHBoxLayout()
-            mspin = self._make_spinbox(width=60)
-            mapply = QPushButton("Set")
-            mapply.setFixedSize(36, 26)
-            mapply.setCursor(Qt.PointingHandCursor)
-            mapply.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 10, 4))
-            mapply.clicked.connect(self._make_mode_manual_set(m_name))
-            spin_row.addWidget(mspin)
-            spin_row.addWidget(mapply)
-
-            mres = QLabel("---")
-            mres.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: Consolas;")
-            mres.setAlignment(Qt.AlignCenter)
-
-            row, col = divmod(idx, 2)
-            grid.addWidget(mbtn, row * 3,     col)
-            grid.addLayout(spin_row, row * 3 + 1, col)
-            grid.addWidget(mres, row * 3 + 2, col)
+            lay.addWidget(mbtn)
             self._mode_buttons[m_name] = mbtn
-            self._mode_result_labels[m_name] = mres
-            self._mode_spinboxes[m_name] = mspin
 
-        lay.addLayout(grid)
         lay.addStretch()
         return tab
 
@@ -455,75 +479,76 @@ class CalibrationWizardDialog(QDialog):
         row.addWidget(self._save_btn)
         return footer
 
-    # ── Scan logic ────────────────────────────────────────────
+    # ── Value control (shared live tuner) ─────────────────────
 
-    def _get_active_cc(self):
-        idx = self._tabs.currentIndex()
-        if idx == 0: return int(MIDI_CC.get("scale_type", 35))
+    def _active_cc(self):
+        idx = self._tabs.currentIndex() if hasattr(self, "_tabs") else 0
         if idx == 1: return int(MIDI_CC.get("key_root", 33))
-        return int(MIDI_CC.get("mode", 30))
+        if idx == 2: return int(MIDI_CC.get("mode", 30))
+        return int(MIDI_CC.get("scale_type", 35))
 
-    def _start_scan(self):
-        s = self._state
-        s["scanning"] = True
-        if s["current_value"] > 127:
-            s["current_value"] = 0
-        self._start_btn.setEnabled(False)
-        self._stop_btn.setEnabled(True)
-        self._major_btn.setEnabled(True)
-        self._minor_btn.setEnabled(True)
-        for b in self._key_buttons.values():
-            b.setEnabled(True)
-        for b in self._mode_buttons.values():
-            b.setEnabled(True)
+    def _set_value(self, v):
+        """Single source of truth: clamp, sync widgets, push MIDI live."""
+        v = max(0, min(127, int(v)))
+        self._state["current_value"] = v
+        for w in (self._slider, self._spin):
+            w.blockSignals(True)
+            w.setValue(v)
+            w.blockSignals(False)
+        cc = self._active_cc()
+        self._cc_label.setText(f"CC {cc}")
+        self._value_label.setText(str(v))
+        try:
+            self._dashboard.engine.send_midi(cc, v)
+        except Exception:
+            pass
 
+    def _nudge(self, delta):
+        self._set_value(self._state["current_value"] + delta)
+
+    # ── Auto-sweep ────────────────────────────────────────────
+
+    def _toggle_sweep(self):
+        if self._state["sweep_timer"]:
+            self._stop_sweep()
+        else:
+            self._start_sweep()
+
+    def _start_sweep(self):
+        if self._state["current_value"] >= 127:
+            self._set_value(0)
+        interval = self.SWEEP_SPEEDS.get(self._speed_combo.currentText(), 280)
         timer = QTimer(self)
-        timer.timeout.connect(self._step_scan)
-        timer.start(300)
-        s["timer"] = timer
+        timer.timeout.connect(self._sweep_step)
+        timer.start(interval)
+        self._state["sweep_timer"] = timer
+        self._speed_combo.setEnabled(False)
+        self._sweep_btn.setText("⏸  Dừng")
+        self._sweep_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 12, 14))
 
-    def _stop_scan(self):
-        s = self._state
-        s["scanning"] = False
-        if s["timer"]:
-            s["timer"].stop()
-            s["timer"] = None
-        self._start_btn.setEnabled(True)
-        self._stop_btn.setEnabled(False)
-        self._start_btn.setText("Tiếp tục quét")
+    def _stop_sweep(self):
+        t = self._state["sweep_timer"]
+        if t:
+            t.stop()
+            self._state["sweep_timer"] = None
+        self._speed_combo.setEnabled(True)
+        self._sweep_btn.setText("▶  Bắt đầu")
+        self._sweep_btn.setStyleSheet(pill_btn_qss(C["card_hover"], _lighten(C["card_hover"], 0.12), 12, 14))
 
-    def _reset_scan(self):
-        self._stop_scan()
-        self._state["current_value"] = 0
-        self._value_label.setText("CC Value: ---")
-        self._progress.setValue(0)
-        self._start_btn.setText("Bắt đầu quét")
-
-    def _step_scan(self):
-        s = self._state
-        if not s["scanning"]:
-            return
-        v = s["current_value"]
+    def _sweep_step(self):
+        v = self._state["current_value"] + 1
         if v > 127:
-            self._stop_scan()
-            self._value_label.setText("Quét xong (0-127)")
+            self._set_value(127)
+            self._stop_sweep()
             return
-        cc = self._get_active_cc()
-        self._dashboard.engine.send_midi(cc, v)
-        self._value_label.setText(f"CC {cc}  Value: {v}")
-        self._progress.setValue(v)
-        s["current_value"] = v + 1
+        self._set_value(v)
 
     def _on_tab_changed(self, _index):
-        if self._state["scanning"]:
-            self._stop_scan()
-            self._state["current_value"] = 0
-            self._value_label.setText("CC Value: ---")
-            self._progress.setValue(0)
-            self._start_btn.setText("Bắt đầu quét")
+        # Push current value on the newly active CC so plugin stays in sync.
+        self._set_value(self._state["current_value"])
 
     def closeEvent(self, event):
-        self._stop_scan()
+        self._stop_sweep()
         event.accept()
 
     # ── Capture ───────────────────────────────────────────────
@@ -539,64 +564,92 @@ class CalibrationWizardDialog(QDialog):
         self._save_btn.setEnabled(ok)
 
     def _capture_major(self):
-        v = max(0, self._state["current_value"] - 1)
+        v = self._state["current_value"]
         self._state["major_value"] = v
         self._major_result.setText(f"Major: {v}")
-        self._major_result.setStyleSheet(
-            f"font-size: 15px; font-weight: bold; color: {C['green']}; font-family: Consolas;"
-            f" background-color: rgba(16,185,129,0.15); border-radius: 6px; padding: 4px;"
-        )
-        self._check_save_enabled()
+        self._major_result.setStyleSheet(self._scale_result_qss(C["green"], filled=True))
+        self._after_capture()
 
     def _capture_minor(self):
-        v = max(0, self._state["current_value"] - 1)
+        v = self._state["current_value"]
         self._state["minor_value"] = v
         self._minor_result.setText(f"Minor: {v}")
-        self._minor_result.setStyleSheet(
-            f"font-size: 15px; font-weight: bold; color: {C['orange']}; font-family: Consolas;"
-            f" background-color: rgba(245,158,11,0.15); border-radius: 6px; padding: 4px;"
-        )
-        self._check_save_enabled()
+        self._minor_result.setStyleSheet(self._scale_result_qss(C["orange"], filled=True))
+        self._after_capture()
 
     def _make_key_capture(self, key_name):
         def _capture():
-            v = max(0, self._state["current_value"] - 1)
+            v = self._state["current_value"]
             self._state["key_values"][key_name] = v
-            self._key_result_labels[key_name].setText(str(v))
-            self._key_result_labels[key_name].setStyleSheet(
-                f"font-size: 11px; font-weight: bold; color: {C['green']}; font-family: Consolas;"
-            )
-            self._key_buttons[key_name].setStyleSheet(
-                pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 13, 8)
-            )
-            self._key_buttons[key_name].setText(key_name)
+            self._key_buttons[key_name].setText(f"{key_name}\n{v}")
+            self._key_buttons[key_name].setStyleSheet(self._key_btn_qss(C["green"], captured=True))
             n = len(self._state["key_values"])
             self._key_counter.setText(f"Đã ghi nhận: {n} / 12 phím")
-            if n == 12:
-                self._key_counter.setStyleSheet(
-                    f"font-size: 12px; color: {C['green']}; font-weight: bold; font-family: {FONT};"
-                )
-            self._check_save_enabled()
+            self._key_counter.setStyleSheet(
+                f"font-size: 12px; color: {C['green'] if n == 12 else C['text_muted']};"
+                f" font-weight: {'bold' if n == 12 else 'normal'}; font-family: {FONT};"
+            )
+            self._after_capture()
         return _capture
 
     def _make_mode_capture(self, m_name):
         def _capture():
-            v = max(0, self._state["current_value"] - 1)
+            v = self._state["current_value"]
             self._state["mode_values"][m_name] = v
-            self._mode_result_labels[m_name].setText(str(v))
-            self._mode_result_labels[m_name].setStyleSheet(
-                f"font-size: 14px; font-weight: bold; color: {C['primary']}; font-family: Consolas;"
-            )
-            self._mode_buttons[m_name].setStyleSheet(
-                pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 14, 16)
-            )
-            self._check_save_enabled()
+            self._mode_buttons[m_name].setText(f"Bắt: {m_name}  →  {v}")
+            self._mode_buttons[m_name].setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 14, 14))
+            self._after_capture()
         return _capture
+
+    def _after_capture(self):
+        self._check_save_enabled()
+        self._refresh_progress()
+
+    # ── Progress indicators ───────────────────────────────────
+
+    def _refresh_progress(self):
+        s = self._state
+        scale_done = (s["major_value"] is not None) + (s["minor_value"] is not None)
+        n_key = len(s["key_values"])
+        n_mode = len(s["mode_values"])
+
+        self._set_chip(self._chip_scale, "Scale", scale_done, 2)
+        self._set_chip(self._chip_key, "Key", n_key, 12)
+        self._set_chip(self._chip_mode, "Chế độ", n_mode, len(self.ALL_MODES))
+
+        self._tabs.setTabText(0, self._tab_label("Kiểu Scale", scale_done, 2))
+        self._tabs.setTabText(1, self._tab_label("Nốt gốc", n_key, 12))
+        self._tabs.setTabText(2, self._tab_label("Chế độ", n_mode, len(self.ALL_MODES)))
+
+    @staticmethod
+    def _tab_label(name, done, total):
+        if done >= total:
+            return f"{name} ✓"
+        if done == 0:
+            return name
+        return f"{name} ({done}/{total})"
+
+    def _set_chip(self, chip, name, done, total):
+        complete = done >= total
+        chip.setText(f"{name} ✓" if complete else f"{name} {done}/{total}")
+        if complete:
+            chip.setStyleSheet(
+                f"QLabel#progressChip {{ background-color: rgba(16,185,129,0.18);"
+                f" border: 1px solid {C['green']}; border-radius: 11px; padding: 3px 12px;"
+                f" font-size: 12px; font-weight: 700; color: {C['green']}; }}"
+            )
+        else:
+            color = C["text_muted"] if done == 0 else C["text"]
+            chip.setStyleSheet(
+                f"QLabel#progressChip {{ background-color: rgba(15,23,42,180);"
+                f" border: 1px solid rgba(148,163,184,55); border-radius: 11px; padding: 3px 12px;"
+                f" font-size: 12px; font-weight: 700; color: {color}; }}"
+            )
 
     # ── Save ──────────────────────────────────────────────────
 
     def _save_calibration(self):
-        self._stop_scan()
+        self._stop_sweep()
         s = self._state
 
         if s["major_value"] is not None and s["minor_value"] is not None:
@@ -621,102 +674,29 @@ class CalibrationWizardDialog(QDialog):
             backend.AppConfig.update("mode_midi_map", s["mode_values"])
 
         backend.AppConfig.save()
-
-        parts = []
-        if s["major_value"] is not None:
-            parts.append(f"Maj={s['major_value']}")
-        if s["minor_value"] is not None:
-            parts.append(f"Min={s['minor_value']}")
-        if s["key_values"]:
-            parts.append(f"Phím: {len(s['key_values'])}/12")
-        if s["mode_values"]:
-            parts.append(f"Chế độ: {len(s['mode_values'])}/5")
-
         self._dashboard._show_message("Đã lưu cân chỉnh")
         self.close()
 
-    # ── Helpers ───────────────────────────────────────────────
+    # ── Style helpers ─────────────────────────────────────────
 
-    def _make_spinbox(self, width=70):
-        """Create a styled QSpinBox (0-127) for manual CC input."""
-        spin = QSpinBox()
-        spin.setRange(0, 127)
-        spin.setFixedWidth(width)
-        spin.setFixedHeight(28)
-        spin.setStyleSheet(f"""
-            QSpinBox {{
-                background-color: {C['bg']};
-                color: {C['text']};
-                border: 1px solid {C['border']};
-                border-radius: 6px;
-                padding: 2px 6px;
-                font-size: 13px;
-                font-family: Consolas;
+    @staticmethod
+    def _scale_result_qss(color, filled):
+        bg = ""
+        if filled:
+            rgba = {C["green"]: "16,185,129", C["orange"]: "245,158,11"}.get(color, "148,163,184")
+            bg = f" background-color: rgba({rgba},0.15); border-radius: 6px; padding: 6px;"
+        return (
+            f"font-size: 16px; font-weight: bold; color: {color};"
+            f" font-family: Consolas;{bg}"
+        )
+
+    @staticmethod
+    def _key_btn_qss(color, captured):
+        return f"""
+            QPushButton {{
+                background-color: {color};
+                color: white; border: none; border-radius: 10px;
+                font-size: 13px; font-weight: 800; font-family: {FONT};
             }}
-            QSpinBox::up-button, QSpinBox::down-button {{
-                background-color: {C['card_hover']};
-                border: none;
-                width: 16px;
-            }}
-        """)
-        return spin
-
-    def _manual_set_scale(self, scale_type):
-        """Set scale value from manual spinbox input."""
-        if scale_type == "major":
-            v = self._major_spin.value()
-            self._state["major_value"] = v
-            self._major_result.setText(f"Major: {v}")
-            self._major_result.setStyleSheet(
-                f"font-size: 15px; font-weight: bold; color: {C['green']}; font-family: Consolas;"
-                f" background-color: rgba(16,185,129,0.15); border-radius: 6px; padding: 4px;"
-            )
-        else:
-            v = self._minor_spin.value()
-            self._state["minor_value"] = v
-            self._minor_result.setText(f"Minor: {v}")
-            self._minor_result.setStyleSheet(
-                f"font-size: 15px; font-weight: bold; color: {C['orange']}; font-family: Consolas;"
-                f" background-color: rgba(245,158,11,0.15); border-radius: 6px; padding: 4px;"
-            )
-        self._check_save_enabled()
-
-    def _make_key_manual_set(self, key_name):
-        """Return a closure that sets a key value from its spinbox."""
-        def _set():
-            if key_name not in getattr(self, '_key_spinboxes', {}):
-                return
-            v = self._key_spinboxes[key_name].value()
-            self._state["key_values"][key_name] = v
-            self._key_result_labels[key_name].setText(str(v))
-            self._key_result_labels[key_name].setStyleSheet(
-                f"font-size: 10px; font-weight: bold; color: {C['green']}; font-family: Consolas;"
-            )
-            self._key_buttons[key_name].setStyleSheet(
-                pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 12, 8)
-            )
-            n = len(self._state["key_values"])
-            self._key_counter.setText(f"Đã ghi nhận: {n} / 12 phím")
-            if n == 12:
-                self._key_counter.setStyleSheet(
-                    f"font-size: 12px; color: {C['green']}; font-weight: bold; font-family: {FONT};"
-                )
-            self._check_save_enabled()
-        return _set
-
-    def _make_mode_manual_set(self, m_name):
-        """Return a closure that sets a mode value from its spinbox."""
-        def _set():
-            if m_name not in getattr(self, '_mode_spinboxes', {}):
-                return
-            v = self._mode_spinboxes[m_name].value()
-            self._state["mode_values"][m_name] = v
-            self._mode_result_labels[m_name].setText(str(v))
-            self._mode_result_labels[m_name].setStyleSheet(
-                f"font-size: 14px; font-weight: bold; color: {C['primary']}; font-family: Consolas;"
-            )
-            self._mode_buttons[m_name].setStyleSheet(
-                pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 13, 16)
-            )
-            self._check_save_enabled()
-        return _set
+            QPushButton:hover {{ background-color: {_lighten(color, 0.12)}; }}
+        """

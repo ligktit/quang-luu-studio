@@ -1,39 +1,57 @@
 import backend
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QScrollArea, QWidget, QMessageBox,
+    QScrollArea, QWidget, QMessageBox, QLineEdit, QComboBox,
+    QMenu, QInputDialog,
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction
 
-from ui.design_tokens import C, FONT, card_qss, scrollarea_qss, header_card_qss, footer_card_qss
+from ui.design_tokens import C, FONT, card_qss, scrollarea_qss, header_card_qss, footer_card_qss, combo_qss, input_field_qss
 from ui.components.painter_button import PainterButton
 from ui.components.svg_icons import SVG_PLAY, SVG_EDIT, SVG_TRASH
-from frontend_qt import add_shadow
+
+_SAVE_KEYS = [
+    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    "Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "A#m", "Bm",
+]
 
 
 class SongsListDialog(QDialog):
-    """Dialog danh sách bài hát đã lưu."""
+    """Dialog danh sách bài hát đã lưu — tìm kiếm, yêu thích, playlist."""
 
     def __init__(self, parent):
         super().__init__(parent)
         self._dashboard = parent
+        self._search_text = ""
+        self._filter = ("all", None)   # ("all"|"fav"|"playlist", playlist_id)
         self.setWindowTitle("Danh sách bài hát")
-        self.setMinimumHeight(520)
-        self.setMinimumWidth(780)
+        self.setMinimumHeight(560)
+        self.setMinimumWidth(820)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
+        self._refresh_data()
         self._build_ui()
         self.adjustSize()
 
+    # ── Data ──────────────────────────────────────────────────
+
+    def _refresh_data(self):
+        self._songs = backend.SongManager.load_songs()
+        self._playlists = backend.PlaylistManager.load_playlists()
+
+    # ── Build UI ──────────────────────────────────────────────
+
     def _build_ui(self):
-        songs = backend.SongManager.load_songs()
         outer = QVBoxLayout(self)
         outer.setSpacing(0)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(self._build_header(len(songs)))
-        outer.addWidget(self._build_scroll(songs), 1)
+        outer.addWidget(self._build_header())
+        outer.addWidget(self._build_filter_bar())
+        outer.addWidget(self._build_scroll(), 1)
         outer.addWidget(self._build_footer())
+        self._rebuild_list()
 
-    def _build_header(self, count):
+    def _build_header(self):
         hdr = QFrame()
         hdr.setStyleSheet(header_card_qss())
         lay = QHBoxLayout(hdr)
@@ -47,31 +65,122 @@ class SongsListDialog(QDialog):
         lay.addWidget(title)
         lay.addStretch()
 
-        count_lbl = QLabel(f"{count} bài")
-        count_lbl.setStyleSheet(f"font-size: 13px; color: {C['text_muted']}; font-family: {FONT}; background: transparent; border: none;")
-        lay.addWidget(count_lbl)
+        self._count_lbl = QLabel("")
+        self._count_lbl.setStyleSheet(f"font-size: 13px; color: {C['text_muted']}; font-family: {FONT}; background: transparent; border: none;")
+        lay.addWidget(self._count_lbl)
         return hdr
 
-    def _build_scroll(self, songs):
+    def _build_filter_bar(self):
+        bar = QFrame()
+        bar.setStyleSheet(f"background-color: {C['bg']}; border-bottom: 1px solid {C['border']};")
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(16, 10, 16, 10)
+        lay.setSpacing(8)
+
+        self._search_input = QLineEdit()
+        self._search_input.setPlaceholderText("🔍  Tìm theo tên bài hát...")
+        self._search_input.setStyleSheet(input_field_qss())
+        self._search_input.textChanged.connect(self._on_search)
+        lay.addWidget(self._search_input, 1)
+
+        self._playlist_combo = QComboBox()
+        self._playlist_combo.setMinimumWidth(180)
+        self._playlist_combo.setStyleSheet(combo_qss(color=C["primary"], font_size=12))
+        self._populate_playlist_combo()
+        self._playlist_combo.currentIndexChanged.connect(self._on_playlist_filter)
+        lay.addWidget(self._playlist_combo)
+
+        new_pl_btn = PainterButton("+ Playlist", color=C["teal"], height=34, radius=12, font_size=12, fixed_width=96)
+        new_pl_btn.setToolTip("Tạo playlist mới")
+        new_pl_btn.clicked.connect(self._create_playlist)
+        lay.addWidget(new_pl_btn)
+
+        self._rename_pl_btn = PainterButton("✎", color=C["card_hover"], height=34, radius=8, font_size=14, fixed_width=38)
+        self._rename_pl_btn.setToolTip("Đổi tên playlist đang chọn")
+        self._rename_pl_btn.clicked.connect(self._rename_playlist)
+        lay.addWidget(self._rename_pl_btn)
+
+        self._del_pl_btn = PainterButton("🗑", color=C["card_hover"], height=34, radius=8, font_size=13, fixed_width=38)
+        self._del_pl_btn.setToolTip("Xóa playlist đang chọn")
+        self._del_pl_btn.clicked.connect(self._delete_playlist)
+        lay.addWidget(self._del_pl_btn)
+
+        self._update_playlist_btns()
+        return bar
+
+    def _populate_playlist_combo(self, select=None):
+        """Dựng lại combo playlist. select = ('all'|'fav'|'playlist', id) để chọn lại."""
+        combo = self._playlist_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("🎵  Tất cả bài hát", ("all", None))
+        combo.addItem("⭐  Yêu thích", ("fav", None))
+        for p in self._playlists:
+            combo.addItem(f"📂  {p.get('name', '')}", ("playlist", p.get("id")))
+        # Chọn lại
+        target = select or self._filter
+        idx = 0
+        for i in range(combo.count()):
+            if combo.itemData(i) == target:
+                idx = i
+                break
+        combo.setCurrentIndex(idx)
+        self._filter = combo.itemData(idx)
+        combo.blockSignals(False)
+
+    def _update_playlist_btns(self):
+        is_pl = self._filter[0] == "playlist"
+        self._rename_pl_btn.setEnabled(is_pl)
+        self._del_pl_btn.setEnabled(is_pl)
+
+    def _build_scroll(self):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet(scrollarea_qss(width=6))
         content = QWidget()
-        content.setMinimumWidth(740)
+        content.setMinimumWidth(780)
         content.setStyleSheet(f"background-color: {C['bg']};")
-        lay = QVBoxLayout(content)
-        lay.setSpacing(8)
-        lay.setContentsMargins(16, 14, 16, 14)
-
-        if not songs:
-            lay.addWidget(self._build_empty_state())
-        else:
-            for idx, song in enumerate(songs):
-                lay.addWidget(self._build_song_card(idx, song))
-
-        lay.addStretch()
+        self._list_layout = QVBoxLayout(content)
+        self._list_layout.setSpacing(8)
+        self._list_layout.setContentsMargins(16, 14, 16, 14)
         scroll.setWidget(content)
         return scroll
+
+    # ── List rebuild ──────────────────────────────────────────
+
+    def _filtered_songs(self):
+        mode, pid = self._filter
+        if mode == "playlist":
+            pl = next((p for p in self._playlists if p.get("id") == pid), None)
+            ids = pl.get("song_ids", []) if pl else []
+            by_id = {s.get("id"): s for s in self._songs}
+            songs = [by_id[i] for i in ids if i in by_id]   # giữ thứ tự playlist
+        else:
+            songs = backend.SongManager.sort_for_display(self._songs)
+            if mode == "fav":
+                songs = [s for s in songs if s.get("favorite")]
+        if self._search_text:
+            q = self._search_text.lower()
+            songs = [s for s in songs if q in s.get("title", "").lower()]
+        return songs
+
+    def _clear_list(self):
+        while self._list_layout.count():
+            item = self._list_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    def _rebuild_list(self):
+        self._clear_list()
+        songs = self._filtered_songs()
+        self._count_lbl.setText(f"{len(songs)} / {len(self._songs)} bài")
+        if not songs:
+            self._list_layout.addWidget(self._build_empty_state())
+        else:
+            for idx, song in enumerate(songs):
+                self._list_layout.addWidget(self._build_song_card(idx, song))
+        self._list_layout.addStretch()
 
     def _build_empty_state(self):
         frame = QFrame()
@@ -90,35 +199,51 @@ class SongsListDialog(QDialog):
         icon.setAlignment(Qt.AlignCenter)
         lay.addWidget(icon)
 
-        lbl = QLabel("Chưa có bài hát nào được lưu")
+        if self._search_text or self._filter[0] != "all":
+            msg = "Không có bài hát phù hợp bộ lọc"
+            hint = "Thử xóa tìm kiếm hoặc chọn 'Tất cả bài hát'"
+        else:
+            msg = "Chưa có bài hát nào được lưu"
+            hint = "Nhấn nút 💾 để lưu bài hát từ YouTube"
+
+        lbl = QLabel(msg)
         lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 15px; font-family: {FONT}; background: transparent; border: none;")
         lbl.setAlignment(Qt.AlignCenter)
         lay.addWidget(lbl)
 
-        hint = QLabel("Nhấn nút 💾 để lưu bài hát từ YouTube")
-        hint.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px; font-style: italic; font-family: {FONT}; background: transparent; border: none;")
-        hint.setAlignment(Qt.AlignCenter)
-        lay.addWidget(hint)
+        h = QLabel(hint)
+        h.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px; font-style: italic; font-family: {FONT}; background: transparent; border: none;")
+        h.setAlignment(Qt.AlignCenter)
+        lay.addWidget(h)
         return frame
 
     def _build_song_card(self, idx, song):
         card = QFrame()
         card.setStyleSheet(card_qss(radius=10, border_left=C["green"]))
         lay = QHBoxLayout(card)
-        lay.setContentsMargins(14, 10, 10, 10)
-        lay.setSpacing(10)
+        lay.setContentsMargins(12, 10, 10, 10)
+        lay.setSpacing(8)
 
         num = QLabel(f"{idx + 1}")
-        num.setFixedSize(24, 24)
+        num.setFixedSize(22, 22)
         num.setAlignment(Qt.AlignCenter)
         num.setStyleSheet("color: #64748b; font-size: 11px; font-weight: 700; background: transparent; border: none;")
         lay.addWidget(num)
+
+        is_fav = bool(song.get("favorite"))
+        fav_btn = PainterButton("★" if is_fav else "☆",
+                                color=C["orange"] if is_fav else C["card_hover"],
+                                height=32, radius=8, font_size=15, fixed_width=34)
+        fav_btn.setToolTip("Bỏ yêu thích" if is_fav else "Đánh dấu yêu thích")
+        fav_btn.clicked.connect(self._make_toggle_fav(song.get("id")))
+        lay.addWidget(fav_btn)
 
         info = QVBoxLayout()
         info.setSpacing(3)
 
         song_url = song.get("url", "")
         has_timeline = False
+        tl_data = None
         if song_url:
             tl_data = backend.ManualToneTimeline.load_timeline(song_url)
             has_timeline = tl_data is not None and bool(tl_data.get("timeline"))
@@ -133,8 +258,7 @@ class SongsListDialog(QDialog):
 
         tone_text = f"Tone: {song.get('tone', 'N/A')}"
         if has_timeline:
-            tl_entries = tl_data.get("timeline", [])
-            tone_text += f"  |  {len(tl_entries)} đoạn tone"
+            tone_text += f"  |  {len(tl_data.get('timeline', []))} đoạn tone"
         date_str = song.get("date_added", "")
         if date_str:
             tone_text += f"  |  {date_str}"
@@ -148,19 +272,12 @@ class SongsListDialog(QDialog):
         play_btn.setToolTip("Phát")
         play_btn.clicked.connect(self._make_play(song))
 
-        edit_btn = PainterButton("", color=C["primary"], height=36, radius=8,
-                                  svg_content=SVG_EDIT, svg_size=16, fixed_width=40)
-        edit_btn.setToolTip("Chỉnh sửa chuỗi tone")
-        edit_btn.clicked.connect(self._make_edit(song))
-
-        del_btn = PainterButton("", color=C["accent"], height=36, radius=8,
-                                 svg_content=SVG_TRASH, svg_size=16, fixed_width=40)
-        del_btn.setToolTip("Xóa")
-        del_btn.clicked.connect(self._make_del(song.get("id")))
+        more_btn = PainterButton("⋯", color=C["card_hover"], height=36, radius=8, font_size=18, fixed_width=40)
+        more_btn.setToolTip("Tùy chọn")
+        more_btn.clicked.connect(self._make_menu(song, more_btn))
 
         lay.addWidget(play_btn)
-        lay.addWidget(edit_btn)
-        lay.addWidget(del_btn)
+        lay.addWidget(more_btn)
         return card
 
     def _build_footer(self):
@@ -174,7 +291,81 @@ class SongsListDialog(QDialog):
         lay.addWidget(close_btn)
         return footer
 
-    # ── Callbacks ─────────────────────────────────────────────
+    # ── Filter callbacks ──────────────────────────────────────
+
+    def _on_search(self, text):
+        self._search_text = text.strip()
+        self._rebuild_list()
+
+    def _on_playlist_filter(self, _idx):
+        data = self._playlist_combo.currentData()
+        if data:
+            self._filter = data
+        self._update_playlist_btns()
+        self._rebuild_list()
+
+    # ── Playlist management ───────────────────────────────────
+
+    def _create_playlist(self):
+        name, ok = QInputDialog.getText(self, "Tạo playlist", "Tên playlist:")
+        if not ok:
+            return
+        pl = backend.PlaylistManager.create_playlist(name)
+        if pl is None:
+            self._dashboard._show_message("⚠️ Tên playlist rỗng hoặc đã tồn tại", is_error=True)
+            return
+        self._refresh_data()
+        self._populate_playlist_combo(select=("playlist", pl["id"]))
+        self._filter = ("playlist", pl["id"])
+        self._update_playlist_btns()
+        self._rebuild_list()
+
+    def _rename_playlist(self):
+        if self._filter[0] != "playlist":
+            return
+        pid = self._filter[1]
+        pl = next((p for p in self._playlists if p.get("id") == pid), None)
+        if not pl:
+            return
+        name, ok = QInputDialog.getText(self, "Đổi tên playlist", "Tên mới:", text=pl.get("name", ""))
+        if not ok:
+            return
+        if not backend.PlaylistManager.rename_playlist(pid, name):
+            self._dashboard._show_message("⚠️ Tên rỗng hoặc trùng playlist khác", is_error=True)
+            return
+        self._refresh_data()
+        self._populate_playlist_combo(select=("playlist", pid))
+        self._rebuild_list()
+
+    def _delete_playlist(self):
+        if self._filter[0] != "playlist":
+            return
+        pid = self._filter[1]
+        pl = next((p for p in self._playlists if p.get("id") == pid), None)
+        if not pl:
+            return
+        reply = QMessageBox.question(
+            self, "Xác nhận",
+            f"Xóa playlist '{pl.get('name', '')}'?\n(Các bài hát KHÔNG bị xóa.)",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        backend.PlaylistManager.delete_playlist(pid)
+        self._refresh_data()
+        self._filter = ("all", None)
+        self._populate_playlist_combo(select=("all", None))
+        self._update_playlist_btns()
+        self._rebuild_list()
+
+    # ── Song callbacks ────────────────────────────────────────
+
+    def _make_toggle_fav(self, song_id):
+        def _toggle():
+            backend.SongManager.toggle_favorite(song_id)
+            self._refresh_data()
+            self._rebuild_list()
+        return _toggle
 
     def _make_play(self, song):
         def _play():
@@ -201,21 +392,151 @@ class SongsListDialog(QDialog):
             self.close()
         return _play
 
-    def _make_del(self, song_id):
-        def _del():
-            reply = QMessageBox.question(
-                self, "Xác nhận", "Bạn có chắc chắn muốn xóa bài hát này?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-            )
-            if reply == QMessageBox.Yes:
-                backend.SongManager.delete_song(song_id)
-                self.close()
-                SongsListDialog(self._dashboard).exec()
-        return _del
+    def _make_menu(self, song, anchor_btn):
+        def _open_menu():
+            menu = QMenu(self)
+            menu.setStyleSheet(f"""
+                QMenu {{ background-color: {C['card']}; color: {C['text']};
+                         border: 1px solid {C['border']}; font-family: {FONT}; font-size: 13px; }}
+                QMenu::item {{ padding: 7px 22px; }}
+                QMenu::item:selected {{ background-color: {C['primary']}; color: #ffffff; }}
+                QMenu::separator {{ height: 1px; background: {C['border']}; margin: 4px 8px; }}
+            """)
 
-    def _make_edit(self, song):
-        def _edit():
-            from ui.dialogs.edit_song import EditSongDialog
-            self.close()
-            EditSongDialog(self._dashboard, song).exec()
-        return _edit
+            act_info = QAction("✏️  Sửa thông tin", menu)
+            act_info.triggered.connect(lambda: self._edit_info(song))
+            menu.addAction(act_info)
+
+            act_tone = QAction("🎚️  Sửa chuỗi tone", menu)
+            act_tone.triggered.connect(lambda: self._edit_tone(song))
+            menu.addAction(act_tone)
+
+            # Submenu playlist
+            pl_menu = menu.addMenu("📂  Playlist")
+            containing = backend.PlaylistManager.playlists_containing(song.get("id"))
+            if self._playlists:
+                for p in self._playlists:
+                    a = QAction(p.get("name", ""), pl_menu)
+                    a.setCheckable(True)
+                    a.setChecked(p.get("id") in containing)
+                    a.triggered.connect(self._make_toggle_playlist(p.get("id"), song.get("id")))
+                    pl_menu.addAction(a)
+                pl_menu.addSeparator()
+            new_a = QAction("➕  Playlist mới…", pl_menu)
+            new_a.triggered.connect(lambda: self._add_to_new_playlist(song.get("id")))
+            pl_menu.addAction(new_a)
+
+            menu.addSeparator()
+            act_del = QAction("🗑️  Xóa bài hát", menu)
+            act_del.triggered.connect(lambda: self._delete_song(song.get("id")))
+            menu.addAction(act_del)
+
+            menu.exec(anchor_btn.mapToGlobal(anchor_btn.rect().bottomLeft()))
+        return _open_menu
+
+    def _make_toggle_playlist(self, playlist_id, song_id):
+        def _toggle(checked=False):
+            containing = backend.PlaylistManager.playlists_containing(song_id)
+            if playlist_id in containing:
+                backend.PlaylistManager.remove_song_from_playlist(playlist_id, song_id)
+            else:
+                backend.PlaylistManager.add_song_to_playlist(playlist_id, song_id)
+            self._refresh_data()
+            self._rebuild_list()
+        return _toggle
+
+    def _add_to_new_playlist(self, song_id):
+        name, ok = QInputDialog.getText(self, "Tạo playlist", "Tên playlist:")
+        if not ok:
+            return
+        pl = backend.PlaylistManager.create_playlist(name)
+        if pl is None:
+            self._dashboard._show_message("⚠️ Tên playlist rỗng hoặc đã tồn tại", is_error=True)
+            return
+        backend.PlaylistManager.add_song_to_playlist(pl["id"], song_id)
+        self._refresh_data()
+        self._populate_playlist_combo(select=self._filter)
+        self._rebuild_list()
+
+    def _delete_song(self, song_id):
+        reply = QMessageBox.question(
+            self, "Xác nhận", "Bạn có chắc chắn muốn xóa bài hát này?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            backend.SongManager.delete_song(song_id)
+            self._refresh_data()
+            self._rebuild_list()
+
+    def _edit_tone(self, song):
+        from ui.dialogs.edit_song import EditSongDialog
+        self.close()
+        EditSongDialog(self._dashboard, song).exec()
+
+    # ── Edit basic info ───────────────────────────────────────
+
+    def _edit_info(self, song):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("✏️ Sửa thông tin bài hát")
+        dlg.setFixedSize(520, 320)
+        dlg.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
+
+        outer = QVBoxLayout(dlg)
+        outer.setContentsMargins(20, 18, 20, 18)
+        outer.setSpacing(8)
+
+        def _lbl(text):
+            l = QLabel(text)
+            l.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: {FONT}; background: transparent; border: none;")
+            return l
+
+        outer.addWidget(_lbl("Tên bài hát"))
+        title_input = QLineEdit(song.get("title", ""))
+        title_input.setStyleSheet(input_field_qss())
+        outer.addWidget(title_input)
+
+        outer.addWidget(_lbl("Tone"))
+        tone_combo = QComboBox()
+        tone_combo.addItems(_SAVE_KEYS)
+        cur_tone = song.get("tone", "C")
+        if cur_tone in _SAVE_KEYS:
+            tone_combo.setCurrentText(cur_tone)
+        tone_combo.setStyleSheet(combo_qss(color=C["green"], font_size=13))
+        outer.addWidget(tone_combo)
+
+        outer.addWidget(_lbl("URL YouTube"))
+        url_input = QLineEdit(song.get("url", ""))
+        url_input.setStyleSheet(input_field_qss())
+        outer.addWidget(url_input)
+
+        outer.addStretch()
+
+        btn_box = QHBoxLayout()
+        btn_box.setSpacing(8)
+        save_btn = PainterButton("Lưu thay đổi", color=C["green"], height=40, radius=16, font_size=14)
+        cancel_btn = PainterButton("Hủy", color=C["card_hover"], height=40, radius=16, font_size=14, fixed_width=90)
+
+        def _do_save():
+            new_title = title_input.text().strip()
+            new_url = url_input.text().strip()
+            if not new_title:
+                self._dashboard._show_message("⚠️ Tên bài hát không được để trống", is_error=True)
+                return
+            backend.SongManager.update_song(
+                song.get("id"),
+                title=new_title,
+                url=new_url,
+                tone=tone_combo.currentText(),
+            )
+            dlg.accept()
+            self._dashboard._show_message("✅ Đã cập nhật thông tin bài hát")
+            self._refresh_data()
+            self._rebuild_list()
+
+        save_btn.clicked.connect(_do_save)
+        cancel_btn.clicked.connect(dlg.reject)
+        btn_box.addWidget(save_btn, 1)
+        btn_box.addWidget(cancel_btn)
+        outer.addLayout(btn_box)
+
+        dlg.exec()

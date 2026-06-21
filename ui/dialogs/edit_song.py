@@ -80,6 +80,7 @@ class EditSongDialog(QDialog):
         body = QVBoxLayout()
         body.setContentsMargins(16, 12, 16, 10)
         body.setSpacing(8)
+        body.addWidget(self._build_preview())
         body.addWidget(self._build_col_headers())
 
         scroll = QScrollArea()
@@ -102,6 +103,48 @@ class EditSongDialog(QDialog):
         wrapper.setStyleSheet(f"background: {C['bg']}; border: none;")
         wrapper.setLayout(body)
         return wrapper, scroll, entries_layout
+
+    def _build_preview(self):
+        """Khung xem trước chuỗi chuyển tone, cập nhật trực tiếp khi sửa."""
+        frame = QFrame()
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: rgba(34,197,94,0.08);
+                border-radius: 8px; border: 1px solid {C['border']};
+            }}
+        """)
+        lay = QHBoxLayout(frame)
+        lay.setContentsMargins(14, 8, 14, 8)
+        lay.setSpacing(8)
+
+        tag = QLabel("Xem trước")
+        tag.setStyleSheet(
+            f"font-size: 11px; font-weight: bold; color: {C['green']};"
+            f" font-family: {FONT}; background: transparent; border: none;"
+        )
+        lay.addWidget(tag)
+
+        self._preview_label = QLabel("")
+        self._preview_label.setWordWrap(True)
+        self._preview_label.setStyleSheet(
+            f"font-size: 13px; color: {C['text']}; font-family: {FONT};"
+            f" background: transparent; border: none;"
+        )
+        lay.addWidget(self._preview_label, 1)
+        return frame
+
+    def _update_preview(self):
+        """Dựng lại chuỗi tone từ trạng thái các dòng hiện tại (đã sort theo thời gian)."""
+        if not hasattr(self, "_preview_label"):
+            return
+        items = []
+        for time_input, key_combo, _ in self._entry_widgets:
+            secs = backend.ManualToneTimeline.parse_time_str(time_input.text().strip())
+            label = backend.ManualToneTimeline.seconds_to_time_str(secs) if secs is not None else "??:??"
+            items.append((secs if secs is not None else float("inf"), label, key_combo.currentText()))
+        items.sort(key=lambda x: x[0])
+        chain = "  →  ".join(f"{lbl} {key}" for _, lbl, key in items)
+        self._preview_label.setText(chain or "—")
 
     def _build_col_headers(self):
         frame = QFrame()
@@ -195,6 +238,7 @@ class EditSongDialog(QDialog):
         time_input.setFixedWidth(90)
         time_input.setPlaceholderText("MM:SS")
         time_input.setStyleSheet(self._time_input_qss)
+        time_input.textChanged.connect(self._update_preview)
         lay.addWidget(time_input)
 
         key_combo = QComboBox()
@@ -202,6 +246,7 @@ class EditSongDialog(QDialog):
         if key_display in _ALL_KEYS:
             key_combo.setCurrentText(key_display)
         key_combo.setStyleSheet(self._key_combo_qss)
+        key_combo.currentTextChanged.connect(self._update_preview)
         lay.addWidget(key_combo, 1)
 
         rm_btn = PainterButton("", color=C["accent"], height=32, radius=6,
@@ -212,6 +257,7 @@ class EditSongDialog(QDialog):
 
         self._entries_layout.insertWidget(stretch_idx, row)
         self._entry_widgets.append((time_input, key_combo, row))
+        self._update_preview()
 
     def _remove_row(self, row):
         if len(self._entry_widgets) <= 1:
@@ -224,6 +270,7 @@ class EditSongDialog(QDialog):
         row.setParent(None)
         row.deleteLater()
         self._refresh_numbering()
+        self._update_preview()
 
     def _refresh_numbering(self):
         for i, (_, _, rf) in enumerate(self._entry_widgets):
@@ -250,6 +297,8 @@ class EditSongDialog(QDialog):
     def _on_save(self):
         entries = []
         has_error = False
+        seen_times = {}          # time_seconds → time_input đầu tiên dùng mốc đó
+        dup_inputs = []          # các ô có thời gian trùng
 
         for time_input, key_combo, _ in self._entry_widgets:
             time_seconds = backend.ManualToneTimeline.parse_time_str(time_input.text().strip())
@@ -257,6 +306,16 @@ class EditSongDialog(QDialog):
                 time_input.setStyleSheet(self._time_error_qss)
                 has_error = True
                 continue
+
+            # Phát hiện mốc thời gian trùng nhau
+            if time_seconds in seen_times:
+                dup_inputs.append(time_input)
+                if seen_times[time_seconds] is not None:
+                    dup_inputs.append(seen_times[time_seconds])
+                    seen_times[time_seconds] = None  # đã đánh dấu, tránh thêm lần 2
+            else:
+                seen_times[time_seconds] = time_input
+                time_input.setStyleSheet(self._time_input_qss)
 
             key_display = key_combo.currentText()
             is_minor    = key_display.endswith("m")
@@ -276,11 +335,27 @@ class EditSongDialog(QDialog):
         if has_error:
             self._dashboard._show_message("⚠️ Vui lòng sửa thời gian không hợp lệ (MM:SS)", is_error=True)
             return
+        if dup_inputs:
+            for inp in dup_inputs:
+                inp.setStyleSheet(self._time_error_qss)
+            self._dashboard._show_message("⚠️ Có 2 mốc trùng thời gian — mỗi mốc cần thời gian khác nhau", is_error=True)
+            return
         if not entries:
             self._dashboard._show_message("⚠️ Cần ít nhất 1 entry!", is_error=True)
             return
 
         entries.sort(key=lambda x: x["time"])
+
+        # Cảnh báo nếu chuỗi tone không bắt đầu từ 0:00 (cho phép tiếp tục)
+        if entries[0]["time"] != 0:
+            reply = QMessageBox.question(
+                self, "Mốc đầu khác 0:00",
+                "Mốc tone đầu tiên không bắt đầu từ 0:00.\n"
+                "Đoạn đầu bài hát sẽ không có tone nào áp dụng.\n\nVẫn tiếp tục lưu?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
 
         if not self._song_url:
             self._dashboard._show_message("⚠️ Bài hát không có URL!", is_error=True)

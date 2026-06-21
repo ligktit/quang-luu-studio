@@ -707,6 +707,8 @@ class MainDashboard(QMainWindow):
         # Tránh gửi MIDI trùng lặp khi set combo (backend đã gửi rồi)
         self.current_tone = key_root
         self.current_scale = scale
+        if title:
+            self.current_title = title
         with QSignalBlocker(self.tone_combo):
             self.tone_combo.setCurrentText(key_root)
         with QSignalBlocker(self.scale_combo):
@@ -778,6 +780,10 @@ class MainDashboard(QMainWindow):
             else:
                 self._marquee_text = f"🎵 {key_display} {scale}"
         
+        # Báo cho người dùng biết tone được dò từ loa (yt-dlp tải thất bại)
+        if result.get('from_loopback'):
+            self._show_message("🎤 Đã dò tone bằng cách nghe từ loa (không tải được YouTube)")
+
         # === 6. Auto-save vào Danh sách bài hát ===
         url = result.get('url', '')
         if url and title and key_root:
@@ -893,21 +899,21 @@ class MainDashboard(QMainWindow):
         lbl.show()
         QTimer.singleShot(2000 if not is_error else 4000, lbl.deleteLater)
 
+    _SAVE_KEYS = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+        "Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "A#m", "Bm",
+    ]
+
     def _on_save(self):
-        """Lưu bài hát thông minh (Quick Save)"""
-        auto_url = getattr(self.engine, 'current_youtube_url', '') or ''
-        auto_tone = getattr(self, 'current_tone', 'C')
-        
-        # Nếu có URL đang phát → lưu thẳng
-        if auto_url:
-            self._process_quick_save(auto_url, auto_tone)
-            return
-            
-        # Không có URL → mở popup
+        """Lưu bài hát — popup nhập đầy đủ Tên + Tone + URL (điền sẵn nếu đang phát)."""
+        auto_url   = getattr(self.engine, 'current_youtube_url', '') or ''
+        auto_tone  = getattr(self, 'current_tone', 'C') or 'C'
+        auto_title = getattr(self, 'current_title', '') or ''
+
         from PySide6.QtWidgets import QDialog, QLineEdit, QVBoxLayout, QHBoxLayout, QFrame as _QF
         dlg = QDialog(self)
         dlg.setWindowTitle("💾 Lưu bài hát")
-        dlg.setFixedSize(520, 210)
+        dlg.setFixedSize(520, 330)
         dlg.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 
         outer = QVBoxLayout(dlg)
@@ -919,7 +925,7 @@ class MainDashboard(QMainWindow):
         hdr.setStyleSheet(f"background-color: {C['card']}; border-bottom: 1px solid {C['border']};")
         hdr_lay = QVBoxLayout(hdr)
         hdr_lay.setContentsMargins(20, 14, 20, 12)
-        title = QLabel("💾 Nhập URL bài hát cần lưu")
+        title = QLabel("💾 Lưu bài hát")
         title.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {C['teal']}; font-family: {FONT}; background: transparent; border: none;")
         title.setAlignment(Qt.AlignCenter)
         hdr_lay.addWidget(title)
@@ -927,22 +933,51 @@ class MainDashboard(QMainWindow):
 
         body = QVBoxLayout()
         body.setContentsMargins(20, 14, 20, 14)
-        body.setSpacing(10)
+        body.setSpacing(8)
 
-        url_input = QLineEdit()
-        url_input.setPlaceholderText("https://www.youtube.com/watch?v=...")
-        url_input.setStyleSheet(f"""
+        _field_qss = f"""
             QLineEdit {{
-                background-color: {C['card']};
-                color: {C['text']};
-                border: 1px solid {C['border']};
-                border-radius: 10px;
-                padding: 10px 14px;
-                font-size: 13px;
-                font-family: {FONT};
+                background-color: {C['card']}; color: {C['text']};
+                border: 1px solid {C['border']}; border-radius: 10px;
+                padding: 9px 14px; font-size: 13px; font-family: {FONT};
             }}
             QLineEdit:focus {{ border-color: {C['teal']}; border-width: 2px; }}
+        """
+
+        def _lbl(text):
+            l = QLabel(text)
+            l.setStyleSheet(f"font-size: 12px; color: {C['text_muted']}; font-family: {FONT}; background: transparent; border: none;")
+            return l
+
+        body.addWidget(_lbl("Tên bài hát"))
+        title_input = QLineEdit(auto_title)
+        title_input.setPlaceholderText("Tự động lấy từ YouTube nếu để trống")
+        title_input.setStyleSheet(_field_qss)
+        body.addWidget(title_input)
+
+        body.addWidget(_lbl("Tone"))
+        tone_combo = QComboBox()
+        tone_combo.addItems(self._SAVE_KEYS)
+        if auto_tone in self._SAVE_KEYS:
+            tone_combo.setCurrentText(auto_tone)
+        tone_combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {C['card']}; color: {C['green']};
+                border: 1px solid {C['border']}; border-radius: 10px;
+                padding: 8px 14px; font-size: 13px; font-weight: 700; font-family: {FONT};
+            }}
+            QComboBox::drop-down {{ border: none; }}
+            QComboBox QAbstractItemView {{
+                background-color: {C['card']}; color: {C['text']};
+                selection-background-color: {C['green']};
+            }}
         """)
+        body.addWidget(tone_combo)
+
+        body.addWidget(_lbl("URL YouTube"))
+        url_input = QLineEdit(auto_url)
+        url_input.setPlaceholderText("https://www.youtube.com/watch?v=...")
+        url_input.setStyleSheet(_field_qss)
         body.addWidget(url_input)
 
         btn_box = QHBoxLayout()
@@ -957,15 +992,15 @@ class MainDashboard(QMainWindow):
         cancel_btn.setCursor(Qt.PointingHandCursor)
         cancel_btn.setStyleSheet(pill_btn_qss(C["card_hover"], _lighten(C["card_hover"], 0.1), 13, 12))
 
-        def save_from_url():
+        def save_from_form():
             url = url_input.text().strip()
             if not url or ("youtube.com" not in url and "youtu.be" not in url):
                 self._show_message("⚠️ Vui lòng nhập URL YouTube hợp lệ", is_error=True)
                 return
             dlg.accept()
-            self._process_quick_save(url, auto_tone)
-            
-        save_btn.clicked.connect(save_from_url)
+            self._process_quick_save(url, tone_combo.currentText(), title_input.text().strip())
+
+        save_btn.clicked.connect(save_from_form)
         cancel_btn.clicked.connect(dlg.reject)
 
         btn_box.addWidget(save_btn, 1)
@@ -979,34 +1014,38 @@ class MainDashboard(QMainWindow):
         dlg.exec()
 
 
-    def _process_quick_save(self, url, tone):
+    def _process_quick_save(self, url, tone, title=None):
+        """Lưu bài. Nếu title rỗng → tự lấy từ timeline manual / yt-dlp (chạy nền)."""
         def _task():
-            title = 'Bài hát không tên'
+            save_title = (title or '').strip()
             save_tone = tone
-            # Thử lấy từ timeline manual
-            timeline_data = backend.ManualToneTimeline.load_timeline(url)
-            if timeline_data:
-                title = timeline_data.get('title', title)
-                tl = timeline_data.get('timeline', [])
-                if tl:
-                    save_tone = tl[0].get('key_display', save_tone)
-            else:
-                try:
-                    info = extract_info_with_auth(
-                        url,
-                        make_ydl_opts(skip_download=True),
-                        download=False,
-                        log_prefix="[QUICK SAVE]"
-                    )
-                    title = info.get('title', title)
-                except Exception:
-                    pass
-            
-            if backend.SongManager.add_song(title, url, save_tone):
-                self._message_signal.emit(f"✅ Đã lưu: {title[:40]}", False)
+            if not save_title:
+                # Thử lấy tên + tone từ timeline manual
+                timeline_data = backend.ManualToneTimeline.load_timeline(url)
+                if timeline_data:
+                    save_title = timeline_data.get('title', '') or save_title
+                    tl = timeline_data.get('timeline', [])
+                    if tl and not tone:
+                        save_tone = tl[0].get('key_display', save_tone)
+                if not save_title:
+                    try:
+                        info = extract_info_with_auth(
+                            url,
+                            make_ydl_opts(skip_download=True),
+                            download=False,
+                            log_prefix="[QUICK SAVE]"
+                        )
+                        save_title = info.get('title', '') or save_title
+                    except Exception:
+                        pass
+            if not save_title:
+                save_title = 'Bài hát không tên'
+
+            if backend.SongManager.add_song(save_title, url, save_tone):
+                self._message_signal.emit(f"✅ Đã lưu: {save_title[:40]}", False)
             else:
                 self._message_signal.emit("❌ Lỗi khi lưu bài hát", True)
-                
+
         threading.Thread(target=_task, daemon=True).start()
 
     def _on_eye_toggle_studio_one(self):
