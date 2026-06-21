@@ -12,7 +12,7 @@
 ; ============================================================
 
 #define MyAppName "Quang Luu Studio"
-#define MyAppVersion "1.5.0"
+#define MyAppVersion "1.5.1"
 #define MyAppPublisher "Quang Luu"
 #define MyAppExeName "QuangLuuStudio.exe"
 #define MyAppURL "https://github.com/ligktit/quang-luu-studio"
