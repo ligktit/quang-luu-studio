@@ -96,8 +96,8 @@ def _install_watchdog(timeout_sec, on_complete, on_error, label, on_timeout_hook
         if on_error:
             try:
                 on_error(
-                    f"Quá thời gian chờ {timeout_sec}s khi {label}. "
-                    "YouTube có thể đang chặn yêu cầu — thử xuất cookie trong Thiết lập hoặc kiểm tra mạng."
+                    f"Dò tone quá lâu (quá {timeout_sec}s khi {label}) nên đã dừng. "
+                    "Thử bấm Dò Lại; nếu video bị chặn, app sẽ tự nghe từ loa."
                 )
             except Exception:
                 pass
@@ -193,6 +193,37 @@ class _ToneMixin:
         self._tone_resolve_cache_invalidate(url)
 
     @staticmethod
+    def _representative_primary_key(timeline_entries):
+        """Chọn tone 'tiêu biểu' của bài = key_display chiếm NHIỀU thời lượng nhất.
+
+        Mỗi entry có 'time' (giây bắt đầu đoạn). Thời lượng đoạn = time đoạn sau
+        trừ time đoạn này; đoạn cuối tính bằng thời lượng trung bình các đoạn
+        trước (hoặc 1 nếu chỉ có 1 đoạn) để không bị bỏ qua. Tránh thiên vị
+        đoạn intro (entry[0]) như cách lấy timeline_entries[0] trước đây.
+        """
+        if not timeline_entries:
+            return 'C'
+        if len(timeline_entries) == 1:
+            return timeline_entries[0].get('key_display', 'C')
+
+        times     = [float(e.get('time', 0) or 0) for e in timeline_entries]
+        durations = []
+        for i in range(len(timeline_entries) - 1):
+            durations.append(max(0.0, times[i + 1] - times[i]))
+        # Đoạn cuối: dùng thời lượng trung bình các đoạn trước làm ước lượng.
+        avg_prev = (sum(durations) / len(durations)) if durations else 1.0
+        durations.append(avg_prev if avg_prev > 0 else 1.0)
+
+        totals = {}
+        order  = {}  # giữ thứ tự xuất hiện đầu tiên để phá hòa ổn định
+        for idx, (entry, dur) in enumerate(zip(timeline_entries, durations)):
+            kd = entry.get('key_display', 'C')
+            totals[kd] = totals.get(kd, 0.0) + dur
+            order.setdefault(kd, idx)
+        # Tổng thời lượng lớn nhất; hòa thì ưu tiên key xuất hiện sớm hơn.
+        return max(totals, key=lambda kd: (totals[kd], -order[kd]))
+
+    @staticmethod
     def _extract_key_root(key_display):
         return _extract_key_root(key_display)
 
@@ -245,7 +276,6 @@ class _ToneMixin:
 
         key_map   = AppConfig.get_key_midi_map()
         scale_map = AppConfig.get_scale_midi_map()
-        mode_map  = AppConfig.get_mode_midi_map()
         midi_cc   = AppConfig.get_midi_cc()
 
         # Key
@@ -260,8 +290,9 @@ class _ToneMixin:
         tone_cc  = midi_cc.get('key_root', 33)
         scale_cc = midi_cc.get('scale_type', midi_cc.get('key_scale', 35))
 
-        self.send_midi(tone_cc,  key_cc_val)
-        self.send_midi(scale_cc, scale_cc_val)
+        # Gửi NGUYÊN TỬ cặp key_root + scale_type để không thread nào chen vào
+        # giữa, tránh tình huống Live nhận key mới với scale cũ (hoặc ngược lại).
+        self.send_midi_pair(tone_cc, key_cc_val, scale_cc, scale_cc_val)
 
         print(f"[MIDI] Key={key_name} (cc={tone_cc}, val={key_cc_val}) "
               f"Scale={scale} (cc={scale_cc}, val={scale_cc_val})")
@@ -269,6 +300,16 @@ class _ToneMixin:
     # ── Detect from system audio ────────────────────────────────────────────────
 
     def detect_tone(self, duration=10, on_complete=None, on_error=None, on_progress=None):
+        on_complete, on_error, watchdog_cancel = _install_watchdog(
+            _FAST_SCAN_TIMEOUT_SEC, on_complete, on_error,
+            label="dò tone từ loa",
+            on_timeout_hook=lambda: self._tone_session.stop(),
+        )
+
+        # Đi qua session để chống bấm chồng: start_scanning() hủy phiên cũ
+        # (set cancel của nó) và cấp token mới cho phiên này.
+        cancel = self._tone_session.start_scanning(self.current_youtube_url or "")
+
         def _detect():
             try:
                 if self.current_youtube_url:
@@ -297,6 +338,9 @@ class _ToneMixin:
                                 on_complete(cached_result)
                             return
 
+                if cancel.is_set():
+                    return
+
                 result = None
                 if self.current_youtube_url:
                     print("[DÒ TONE] Dùng YouTube audio...")
@@ -307,10 +351,16 @@ class _ToneMixin:
                     except Exception as e:
                         print(f"[DÒ TONE] YouTube download thất bại: {e}")
 
+                if cancel.is_set():
+                    return
+
                 if not result:
                     result = ToneDetector.detect_key_from_system_audio(
                         duration=duration, on_progress=on_progress
                     )
+
+                if cancel.is_set():
+                    return
 
                 if result:
                     self._send_tone_midi(result)
@@ -327,6 +377,8 @@ class _ToneMixin:
                     on_error(_USER_ERR_GENERIC)
             finally:
                 MemoryGuard.force_cleanup()
+                if self._tone_session.is_scanning:
+                    self._tone_session.stop()
 
         threading.Thread(target=_detect, daemon=True).start()
 
@@ -338,6 +390,15 @@ class _ToneMixin:
             if on_error:
                 on_error("Không có YouTube URL để dò tone.")
             return
+
+        on_complete, on_error, watchdog_cancel = _install_watchdog(
+            _FAST_SCAN_TIMEOUT_SEC, on_complete, on_error,
+            label="dò tone từ YouTube",
+            on_timeout_hook=lambda: self._tone_session.stop(),
+        )
+
+        # Đi qua session để chống bấm chồng (hủy phiên cũ + cấp token mới).
+        cancel = self._tone_session.start_scanning(youtube_url)
 
         def _detect():
             try:
@@ -369,10 +430,17 @@ class _ToneMixin:
                             on_complete(cached_result)
                         return
 
+                if cancel.is_set():
+                    return
+
                 if on_progress:
                     on_progress("Đang tải audio từ YouTube...")
 
                 result = ToneDetector.detect_key_from_youtube(youtube_url, duration_limit=30)
+
+                if cancel.is_set():
+                    return
+
                 if result:
                     self._send_tone_midi(result)
                     self._save_tone_to_cache(youtube_url, result)
@@ -387,6 +455,8 @@ class _ToneMixin:
                     on_error(_USER_ERR_GENERIC)
             finally:
                 MemoryGuard.force_cleanup()
+                if self._tone_session.is_scanning:
+                    self._tone_session.stop()
 
         threading.Thread(target=_detect, daemon=True).start()
 
@@ -437,8 +507,8 @@ class _ToneMixin:
                         self._send_tone_midi(flat_result)
                         self.current_youtube_url = youtube_url
 
-                        # Transition sang REPLAYING
-                        replay_cancel = self._tone_session.transition_to_replaying()
+                        # Transition sang REPLAYING (truyền token để không chuyển nhầm phiên)
+                        replay_cancel = self._tone_session.transition_to_replaying(expected_token=cancel)
                         if replay_cancel is not None:
                             self._replay_manual_timeline(timeline, cancel_event=replay_cancel)
 
@@ -450,7 +520,7 @@ class _ToneMixin:
                         cached_result = self._build_cache_result(resolved_data)
                         if cached_result:
                             self.current_youtube_url = youtube_url
-                            replay_cancel = self._tone_session.transition_to_replaying()
+                            replay_cancel = self._tone_session.transition_to_replaying(expected_token=cancel)
                             if replay_cancel is not None:
                                 self._replay_cached_timeline(
                                     resolved_data,
@@ -544,7 +614,7 @@ class _ToneMixin:
                     self._save_tone_to_cache(youtube_url, result, title=video_title)
 
                     # Replay đơn giản (single tone) — build replay dict from result in scope
-                    replay_cancel = self._tone_session.transition_to_replaying()
+                    replay_cancel = self._tone_session.transition_to_replaying(expected_token=cancel)
                     if replay_cancel is not None:
                         replay_data = {
                             'primary_key':  result['key_display'],
@@ -586,15 +656,19 @@ class _ToneMixin:
         )
 
         if not skip_resolve:
+            # CHỈ chặn dò lại khi có timeline THỦ CÔNG do người dùng sửa tay
+            # (source='human'). Kết quả TỰ ĐỘNG nay chỉ nằm ở tone_cache (TTL)
+            # nên không còn khóa cứng tone — bấm Dò Lại / cache hết hạn đều dò mới.
             saved_manual = ManualToneTimeline.load_timeline(url)
-            if saved_manual and saved_manual.get('timeline'):
+            is_human = ManualToneTimeline.get_timeline_source(url) == 'human'
+            if saved_manual and saved_manual.get('timeline') and is_human:
                 print(f"[AUTO TIMELINE] Đã có timeline thủ công ({len(saved_manual['timeline'])} đoạn), đang phát lại")
                 timeline    = saved_manual['timeline']
                 first_entry = timeline[0]
                 self._send_tone_midi(first_entry)
 
-                self._tone_session.start_scanning(url)
-                replay_cancel = self._tone_session.transition_to_replaying()
+                cancel = self._tone_session.start_scanning(url)
+                replay_cancel = self._tone_session.transition_to_replaying(expected_token=cancel)
                 if replay_cancel is not None:
                     self._replay_manual_timeline(timeline, cancel_event=replay_cancel)
 
@@ -703,23 +777,31 @@ class _ToneMixin:
                 if on_progress:
                     on_progress("Đang lưu kết quả...")
 
-                ManualToneTimeline.save_timeline(url, video_title, timeline_entries)
-                print(f"[AUTO TIMELINE] Đã lưu: {video_title} ({len(timeline_entries)} đoạn)")
-
+                # QUYẾT ĐỊNH SẢN PHẨM: kết quả TỰ ĐỘNG chỉ ghi vào tone_cache (TTL),
+                # KHÔNG ghi vào ManualToneTimeline nữa (manual chỉ dành cho user sửa
+                # tay). Nhờ vậy tone không bị khóa cứng và có thể dò lại khi cần.
+                primary_key = self._representative_primary_key(timeline_entries)
                 cache_timeline = [{**e, **{'confidence': e.get('confidence', 0.8)}} for e in timeline_entries]
                 ToneCacheManager.save_tone(url, {
-                    'primary_key':  timeline_entries[0]['key_display'],
+                    'primary_key':  primary_key,
                     'key_timeline': cache_timeline,
+                    'title':        video_title,
                 })
+                print(f"[AUTO TIMELINE] Đã lưu cache: {video_title} "
+                      f"({len(timeline_entries)} đoạn, tone tiêu biểu {primary_key})")
                 # Invalidate in-session cache after disk writes
                 self._tone_resolve_cache_invalidate(url)
 
                 first_key = timeline_entries[0]
                 self._send_tone_midi(first_key)
 
-                replay_cancel = self._tone_session.transition_to_replaying()
+                # Kết quả tự động nằm ở cache → replay theo đường CACHE cho nhất quán.
+                replay_cancel = self._tone_session.transition_to_replaying(expected_token=cancel)
                 if replay_cancel is not None:
-                    self._replay_manual_timeline(timeline_entries, cancel_event=replay_cancel)
+                    self._replay_cached_timeline(
+                        {'primary_key': primary_key, 'key_timeline': cache_timeline},
+                        cancel_event=replay_cancel,
+                    )
 
                 if on_complete:
                     on_complete({

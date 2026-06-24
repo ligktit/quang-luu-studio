@@ -1,7 +1,7 @@
 """
 Quang Lưu Studio — Tone Detector
 Class: ToneDetector
-Pipeline: HPSS → Chroma CQT (energy-weighted) → Weighted Multi-profile (Aarden/Temperley/KS) → Disambiguation
+Pipeline: HPSS (harmonic, single-shot) → Chroma CQT (energy-weighted) → Weighted Multi-profile (Aarden/Temperley/KS) → Disambiguation
 """
 import gc
 import ctypes
@@ -10,7 +10,7 @@ import ctypes
 class ToneDetector:
     """
     Dò Tone bài hát - Phát hiện key/tonality từ audio
-    Pipeline: HPSS → Chroma CQT (energy-weighted) → Weighted Multi-profile (Aarden/Temperley/KS) → Disambiguation
+    Pipeline: HPSS (harmonic, single-shot) → Chroma CQT (energy-weighted) → Weighted Multi-profile (Aarden/Temperley/KS) → Disambiguation
     """
     
     # Krumhansl-Schmuckler key profiles (1990) - weight 20%
@@ -48,6 +48,22 @@ class ToneDetector:
     
     # Confidence threshold: chỉ chuyển tone khi chênh lệch > 5%
     KEY_CHANGE_THRESHOLD = 0.05
+
+    # Ngưỡng phân loại độ tin cậy của best correlation (single-shot).
+    # Dưới LOW → uncertain=True (UI nên cảnh báo); chỉ gắn cờ, KHÔNG chặn kết quả.
+    CONFIDENCE_LOW_THRESHOLD = 0.30   # < 0.30 → 'low'  + uncertain
+    CONFIDENCE_HIGH_THRESHOLD = 0.60  # >= 0.60 → 'high'
+
+    # Ngưỡng chênh lệch correlation giữa top candidate relative/parallel:
+    # khi |corr1 - corr2| < ngưỡng này thì correlation gần như đồng hạng,
+    # cần tonal_strength phân giải mạnh hơn (corr nuốt tín hiệu tonal nếu giữ 0.85).
+    RELATIVE_CORR_TIE_THRESHOLD = 0.05
+
+    # Ngưỡng RMS coi là im lặng — DÙNG CHUNG cho single-shot (audio thô)
+    # và detect_timeline_advanced (mean rms từng segment). Trước đây 2 chỗ
+    # dùng 2 giá trị khác nhau (0.001 vs 0.005) gây bất nhất: đoạn bị coi là
+    # Silence ở timeline lại detect được ở single-shot. Thống nhất tại đây.
+    SILENCE_RMS_THRESHOLD = 0.005
     
     # Voting window: số segments cần đồng thuận trước khi chuyển tone
     VOTING_WINDOW = 3
@@ -66,6 +82,27 @@ class ToneDetector:
     }
     
     @staticmethod
+    def _safe_corrcoef(a, b):
+        """
+        Pearson correlation an toàn: nếu một trong hai vector phẳng (std≈0,
+        VD chroma noise/silence) thì np.corrcoef trả NaN và phát
+        RuntimeWarning "invalid value in divide". Ở đây ta tự kiểm tra std
+        trước, trả 0.0 thay vì NaN để sort/disambiguation luôn xác định.
+        """
+        import numpy as np
+        a = np.asarray(a, dtype=float)
+        b = np.asarray(b, dtype=float)
+        std_a = np.std(a)
+        std_b = np.std(b)
+        if std_a == 0.0 or std_b == 0.0 or not np.isfinite(std_a) or not np.isfinite(std_b):
+            return 0.0
+        corr = float(np.corrcoef(a, b)[0, 1])
+        # Chốt chặn cuối: bất kỳ NaN/inf nào lọt qua → 0.0
+        if not np.isfinite(corr):
+            return 0.0
+        return corr
+
+    @staticmethod
     def _correlate_profiles(chroma_avg, major_profile, minor_profile):
         """
         Tính correlation cho 1 bộ profile (Major + Minor) với chroma vector.
@@ -75,7 +112,7 @@ class ToneDetector:
         results = {}
         for i in range(12):
             rotated = np.roll(chroma_avg, -i)
-            major_corr = float(np.corrcoef(rotated, major_profile)[0, 1])
+            major_corr = ToneDetector._safe_corrcoef(rotated, major_profile)
             uid_major = f"{ToneDetector.MAJOR_KEY_NAMES[i]}_Major"
             results[uid_major] = {
                 "key": ToneDetector.MAJOR_KEY_NAMES[i],
@@ -83,7 +120,7 @@ class ToneDetector:
                 "correlation": major_corr,
                 "key_index": i
             }
-            minor_corr = float(np.corrcoef(rotated, minor_profile)[0, 1])
+            minor_corr = ToneDetector._safe_corrcoef(rotated, minor_profile)
             uid_minor = f"{ToneDetector.MINOR_KEY_NAMES[i]}_Minor"
             results[uid_minor] = {
                 "key": ToneDetector.MINOR_KEY_NAMES[i],
@@ -103,34 +140,65 @@ class ToneDetector:
         return False
     
     @staticmethod
+    def _note_overlap(key1_idx, scale1, key2_idx, scale2):
+        """Số nốt chung giữa 2 scale (0..7)."""
+        major_intervals = [0, 2, 4, 5, 7, 9, 11]  # W W H W W W H
+        minor_intervals = [0, 2, 3, 5, 7, 8, 10]  # Natural minor
+
+        if scale1 == "Major":
+            notes1 = set((key1_idx + i) % 12 for i in major_intervals)
+        else:
+            notes1 = set((key1_idx + i) % 12 for i in minor_intervals)
+
+        if scale2 == "Major":
+            notes2 = set((key2_idx + i) % 12 for i in major_intervals)
+        else:
+            notes2 = set((key2_idx + i) % 12 for i in minor_intervals)
+
+        return len(notes1 & notes2)
+
+    @staticmethod
+    def _relation_level(key1_idx, scale1, key2_idx, scale2):
+        """
+        Phân loại mức độ liên quan giữa 2 key:
+          'relative' — relative pair (C↔Am, 7 nốt chung, cùng "tonic-family")
+          'parallel' — parallel pair (C↔Cm, cùng tonic root)
+          'neighbor' — lân cận trên circle of fifths (6 nốt chung, VD C↔G, C↔Dm)
+          None       — không liên quan đủ gần
+
+        Phân biệt mức độ này để disambiguation ưu tiên relative/parallel hơn
+        neighbor: đổi tonic sang quãng-5 (neighbor) chỉ khi bằng chứng tonal mạnh.
+        """
+        if ToneDetector._is_relative_pair(key1_idx, scale1, key2_idx, scale2):
+            return 'relative'
+        if key1_idx == key2_idx and scale1 != scale2:
+            return 'parallel'
+        overlap = ToneDetector._note_overlap(key1_idx, scale1, key2_idx, scale2)
+        if overlap >= 6:
+            return 'neighbor'
+        return None
+
+    @staticmethod
     def _are_closely_related(key1_idx, scale1, key2_idx, scale2):
         """
         Kiểm tra 2 key có closely related không (chia sẻ >= 6/7 nốt).
         Bao gồm: relative keys, parallel keys, và các key lân cận trên circle of fifths.
         VD: Eb Major ↔ Fm, C Major ↔ Am, C Major ↔ Dm, G Major ↔ Em, ...
         """
-        # Tạo scale degrees cho mỗi key
-        major_intervals = [0, 2, 4, 5, 7, 9, 11]  # W W H W W W H
-        minor_intervals = [0, 2, 3, 5, 7, 8, 10]  # Natural minor
-        
-        if scale1 == "Major":
-            notes1 = set((key1_idx + i) % 12 for i in major_intervals)
-        else:
-            notes1 = set((key1_idx + i) % 12 for i in minor_intervals)
-        
-        if scale2 == "Major":
-            notes2 = set((key2_idx + i) % 12 for i in major_intervals)
-        else:
-            notes2 = set((key2_idx + i) % 12 for i in minor_intervals)
-        
-        overlap = len(notes1 & notes2)
-        return overlap >= 6  # Chia sẻ ít nhất 6 nốt
+        return ToneDetector._note_overlap(key1_idx, scale1, key2_idx, scale2) >= 6
 
     @staticmethod
-    def detect_key_from_audio(audio_data, sample_rate, accumulated_chroma=None, skip_hum_detection=False):
+    def detect_key_from_audio(audio_data, sample_rate, accumulated_chroma=None,
+                              skip_hum_detection=False, use_hpss=True):
         """
         Phát hiện tone/key của bài hát từ audio data.
-        Pipeline: Robust Preprocessing → CQT chroma (energy-weighted) → Weighted Multi-profile → Disambiguation
+        Pipeline: Robust Preprocessing → HPSS (harmonic) → CQT chroma (energy-weighted)
+                  → Weighted Multi-profile → Disambiguation
+
+        use_hpss: True (mặc định cho single-shot) tách thành phần harmonic bằng
+            librosa.effects.hpss trước khi tính chroma, loại bớt percussion/transient
+            làm nhiễu chroma. Các luồng realtime/nhanh (autokey 5s/lần) có thể truyền
+            use_hpss=False để bỏ qua, tiết kiệm CPU.
         """
         try:
             import librosa
@@ -147,7 +215,7 @@ class ToneDetector:
             # normalize, vì percentile normalize sẽ khuếch đại noise im lặng
             # lên full scale và bị "detect" nhầm thành nhạc.
             rms_check = np.sqrt(np.mean(audio_data ** 2))
-            if rms_check < 0.001:
+            if rms_check < ToneDetector.SILENCE_RMS_THRESHOLD:
                 print("   Audio quá nhỏ hoặc im lặng, bỏ qua")
                 return None
 
@@ -187,11 +255,27 @@ class ToneDetector:
                     pass
             
             print(f"   Preprocessing OK (p99.9={p999:.4f}, rms={rms_check:.4f})")
-            print("🎵 [DÒ TONE] Pipeline: CQT → Weighted Multi-profile...")
-            
+            print("🎵 [DÒ TONE] Pipeline: HPSS → CQT → Weighted Multi-profile...")
+
+            # === BƯỚC 0.5: HPSS — tách thành phần harmonic ===
+            # Percussion/transient (trống, hi-hat...) tạo năng lượng broadband làm
+            # chroma "phẳng" và nhiễu tonic. Tách harmonic trước khi tính chroma giúp
+            # profile correlation rõ ràng hơn. Tắt được qua use_hpss=False cho luồng nhanh.
+            chroma_source = audio_data
+            if use_hpss:
+                try:
+                    harmonic = librosa.effects.hpss(audio_data)[0]
+                    # Chỉ dùng harmonic nếu nó còn năng lượng (tránh case suy biến)
+                    if np.any(harmonic) and np.isfinite(harmonic).all():
+                        chroma_source = harmonic
+                        print("   ✅ HPSS: dùng thành phần harmonic cho chroma")
+                    del harmonic
+                except Exception as e:
+                    print(f"   ⚠ HPSS bỏ qua ({e}) — dùng audio gốc")
+
             # === BƯỚC 1: Chroma CQT (energy-weighted) ===
-            chroma_cqt = librosa.feature.chroma_cqt(y=audio_data, sr=sample_rate)
-            rms = librosa.feature.rms(y=audio_data)[0]
+            chroma_cqt = librosa.feature.chroma_cqt(y=chroma_source, sr=sample_rate)
+            rms = librosa.feature.rms(y=chroma_source)[0]
             min_frames = min(len(rms), chroma_cqt.shape[1])
             rms = rms[:min_frames]
             rms_sum = np.sum(rms)
@@ -283,43 +367,78 @@ class ToneDetector:
                 'F#m': 0.6, 'C#m': 0.6, 'G#m': 0.3, 'D#m': 0.3,
             }
             
-            # Thu thập candidates closely-related với best
+            # Thu thập candidates closely-related với best, kèm mức độ liên quan.
+            # relation_level: 'relative'/'parallel' (mạnh) vs 'neighbor' (yếu).
             family = [best]
+            relation_of = {id(best): 'self'}
             for r in all_results[1:7]:
-                if ToneDetector._are_closely_related(
+                level = ToneDetector._relation_level(
                     best["key_index"], best["scale"],
                     r["key_index"], r["scale"]
-                ):
+                )
+                if level is not None:
                     family.append(r)
-            
+                    relation_of[id(r)] = level
+
             if len(family) >= 2:
                 print(f"   Key family ({len(family)} candidates):")
-                
-                best_candidate = None
-                best_score = -1
-                family_scores = []  # Lưu combined score cho tiebreaker
-                
+
+                # --- Trọng số động cho tonal_strength ---
+                # Khi correlation của các candidate gần đồng hạng (relative pair
+                # như C↔Am có corr gần bằng nhau), correlation 0.85 nuốt tín hiệu
+                # tonal → không phân biệt được tonic thật. Lúc đó nâng tỉ trọng
+                # tonal lên để tonic/3rd/5th quyết định.
+                corr_spread = max(c["correlation"] for c in family) - \
+                              min(c["correlation"] for c in family)
+                if corr_spread < ToneDetector.RELATIVE_CORR_TIE_THRESHOLD:
+                    corr_w, tonal_w = 0.60, 0.40
+                    print(f"   ⚖ Corr gần đồng hạng (spread={corr_spread:.3f}) → tonal weight 0.40")
+                else:
+                    corr_w, tonal_w = 0.85, 0.15
+
+                # Chuẩn hóa tonal_strength trong family để so sánh tương đối
+                # (giá trị tuyệt đối phụ thuộc phân bố chroma, không ổn định).
+                raw_tonal = {}
                 for r in family:
-                    # Tonic + 5th + 3rd strength
                     tonic = cqt_normalized[r["key_index"]]
                     fifth = cqt_normalized[(r["key_index"] + 7) % 12]
                     if r["scale"] == "Minor":
                         third = cqt_normalized[(r["key_index"] + 3) % 12]
                     else:
                         third = cqt_normalized[(r["key_index"] + 4) % 12]
-                    
-                    tonal_strength = tonic + fifth * 0.7 + third * 0.5
-                    
-                    # Combined: profile correlation (chính) + tonal strength (phụ)
-                    combined = r["correlation"] * 0.85 + tonal_strength * 0.15
+                    raw_tonal[id(r)] = (tonic + fifth * 0.7 + third * 0.5, tonic, fifth, third)
+                max_tonal = max(v[0] for v in raw_tonal.values()) or 1.0
+
+                best_candidate = None
+                best_score = -1
+                family_scores = []  # Lưu (r, combined) cho tiebreaker
+
+                for r in family:
+                    tonal_strength, tonic, fifth, third = raw_tonal[id(r)]
+                    tonal_norm = tonal_strength / max_tonal
+
+                    combined = r["correlation"] * corr_w + tonal_norm * tonal_w
+
+                    # Ưu tiên relative/parallel hơn neighbor: neighbor (đổi tonic
+                    # sang quãng-5) chỉ thắng nếu tonal vượt trội RÕ RỆT, nếu không
+                    # bị phạt nhẹ để tránh nhảy key sang quãng 5 thiếu căn cứ.
+                    level = relation_of.get(id(r), 'self')
+                    if level == 'neighbor' and tonal_norm < 0.95:
+                        combined -= 0.05
+                        neigh_tag = " (neighbor -0.05)"
+                    else:
+                        neigh_tag = ""
+
                     family_scores.append((r, combined))
-                    
-                    print(f"      {r['key']:4s}: corr={r['correlation']:.3f} T={tonic:.3f} 5={fifth:.3f} 3={third:.3f} → {combined:.4f}")
-                    
+
+                    print(f"      {r['key']:4s}[{level}]: corr={r['correlation']:.3f} "
+                          f"T={tonic:.3f} 5={fifth:.3f} 3={third:.3f} "
+                          f"tn={tonal_norm:.2f} → {combined:.4f}{neigh_tag}")
+
                     if combined > best_score:
                         best_score = combined
                         best_candidate = r
-                
+
                 # Commonality tiebreaker: chỉ khi top-2 chênh nhau < 2%
                 if best_candidate and len(family_scores) >= 2:
                     family_scores.sort(key=lambda x: x[1], reverse=True)
@@ -332,9 +451,7 @@ class ToneDetector:
                         if top2_common > top1_common:
                             best_candidate = top2
                             print(f"   Tiebreaker: {top1['key']} ({top1_common:.1f}) → {top2['key']} ({top2_common:.1f})")
-                
 
-                
                 if best_candidate and best_candidate["key"] != best["key"]:
                     print(f"   Family winner: {best['key']} → {best_candidate['key']}")
                 else:
@@ -350,12 +467,25 @@ class ToneDetector:
             else:
                 key_display = ToneDetector.MINOR_KEY_NAMES[best_key]
             
-            print(f"Kết quả: {key_display} (confidence: {best_corr:.4f})")
+            # === Confidence gating (Fix #2) ===
+            # KHÔNG chặn kết quả — chỉ gắn cờ để UI cảnh báo khi correlation thấp.
+            if best_corr < ToneDetector.CONFIDENCE_LOW_THRESHOLD:
+                confidence_level = "low"
+                uncertain = True
+            elif best_corr >= ToneDetector.CONFIDENCE_HIGH_THRESHOLD:
+                confidence_level = "high"
+                uncertain = False
+            else:
+                confidence_level = "medium"
+                uncertain = False
+
+            print(f"Kết quả: {key_display} (confidence: {best_corr:.4f} → {confidence_level}"
+                  f"{', UNCERTAIN' if uncertain else ''})")
             print(f"   📊 KS={best.get('ks_corr',0):.4f}  T={best.get('temp_corr',0):.4f}  A={best.get('aarden_corr',0):.4f}")
             print(f"Top 5:")
             for r in all_results[:5]:
                 print(f"   {r['key']}: {r['correlation']:.4f}")
-            
+
             # Giải phóng mảng trung gian trước khi return
             del all_results
             try:
@@ -363,13 +493,15 @@ class ToneDetector:
                 MemoryGuard.force_cleanup()
             except Exception:
                 pass
-            
+
             return {
                 "key": ToneDetector.MAJOR_KEY_NAMES[best_key],
                 "key_index": best_key,
                 "scale": best_scale,
                 "confidence": best_corr,
                 "key_display": key_display,
+                "confidence_level": confidence_level,
+                "uncertain": uncertain,
             }
             
         except Exception as e:
@@ -761,7 +893,7 @@ class ToneDetector:
                 
             # Extract slice from precomputed RMS to check volume
             rms_slice = full_rms[start_frame:end_frame]
-            if np.mean(rms_slice) < 0.005:
+            if np.mean(rms_slice) < ToneDetector.SILENCE_RMS_THRESHOLD:
                 segments.append({'start': start, 'end': end, 'key_display': 'Silence', 'result': None})
                 continue
                 
@@ -882,10 +1014,35 @@ class ToneDetector:
         
     @staticmethod
     def key_index_to_midi(key_index):
-        """Chuyển key index (0-11) sang MIDI CC value (0-127)"""
-        return min(127, max(0, int(key_index * 127 / 11)))
-    
+        """
+        Chuyển key index (0-11) sang MIDI CC value cho plugin Auto-Tune.
+        NGUỒN THẬT: AppConfig.get_key_midi_map() (key_midi_map trong app_config),
+        fallback hằng KEY_MIDI_MAP của class (đã đồng bộ với config) nếu import lỗi.
+        Trước đây dùng công thức tuyến tính key_index*127/11 — MÂU THUẪN với map
+        thật (VD C#: tuyến tính=11 vs config=11 trùng tình cờ, nhưng D: 23 vs 11...).
+        index ngoài [0,11] → clamp về biên.
+        """
+        idx = min(11, max(0, int(key_index)))
+        note = ToneDetector.MAJOR_KEY_NAMES[idx]  # tên nốt sharp: C, C#, D, ...
+        try:
+            from core.config import AppConfig
+            midi_map = AppConfig.get_key_midi_map()
+        except Exception:
+            midi_map = ToneDetector.KEY_MIDI_MAP
+        return int(midi_map.get(note, ToneDetector.KEY_MIDI_MAP.get(note, 0)))
+
     @staticmethod
     def scale_to_midi(scale):
-        """Chuyển scale type sang MIDI CC value (0=Major, 127=Minor)"""
-        return 127 if scale == "Minor" else 0
+        """
+        Chuyển scale type sang MIDI CC value cho plugin Auto-Tune.
+        NGUỒN THẬT: AppConfig.get_scale_midi_map() → Major=13, Minor=18
+        (fallback hằng SCALE_MIDI_MAP của class). Trước đây trả 0/127 — SAI so với
+        plugin (knob% thật: Major 13, Minor 18). Scale lạ → mặc định như Major.
+        """
+        try:
+            from core.config import AppConfig
+            scale_map = AppConfig.get_scale_midi_map()
+        except Exception:
+            scale_map = ToneDetector.SCALE_MIDI_MAP
+        default_major = scale_map.get("Major", ToneDetector.SCALE_MIDI_MAP["Major"])
+        return int(scale_map.get(scale, default_major))

@@ -21,41 +21,60 @@ from core.tone_detector import ToneDetector
 # ──────────────────────────────────────────────────────────────
 
 class TestKeyIndexToMidi:
-    """TD-01, TD-02 — key_index_to_midi()"""
+    """TD-01, TD-02 — key_index_to_midi()
+
+    NGUỒN THẬT: app_config key_midi_map (sharp notation). key_index → tên nốt
+    → MIDI CC. C=0, G=80, B=127 — TÌNH CỜ trùng công thức tuyến tính cũ ở các
+    điểm này, nhưng các nốt khác (D=23 vs 11) thì khác.
+    """
 
     def test_c_major(self):
-        """TD-01: key_idx=0 (C) → MIDI 0"""
+        """TD-01: key_idx=0 (C) → MIDI 0 (config C=0)"""
         assert ToneDetector.key_index_to_midi(0) == 0
 
     def test_g_major(self):
-        """TD-02: key_idx=7 (G) → MIDI 80 (source uses int(), not round())"""
-        result = ToneDetector.key_index_to_midi(7)
-        assert result == int(7 * 127 / 11)  # = 80
+        """TD-02: key_idx=7 (G) → MIDI 80 (config G=80)"""
+        assert ToneDetector.key_index_to_midi(7) == 80
+
+    def test_matches_config_map(self):
+        """Giá trị phải khớp app_config key_midi_map cho mọi index (sharp)."""
+        sharp_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        for idx, note in enumerate(sharp_names):
+            expected = ToneDetector.KEY_MIDI_MAP[note]
+            assert ToneDetector.key_index_to_midi(idx) == expected
+
+    def test_d_major_is_23_not_linear(self):
+        """D (idx=2) → 23 theo config, KHÁC công thức tuyến tính cũ (=11)."""
+        assert ToneDetector.key_index_to_midi(2) == 23
 
     def test_clamped_at_127(self):
-        """Clamp: any idx ≥ 11 → 127"""
+        """Clamp: any idx ≥ 11 → B = 127"""
         assert ToneDetector.key_index_to_midi(11) == 127
         assert ToneDetector.key_index_to_midi(12) == 127
 
     def test_clamped_at_0(self):
-        """Clamp: negative idx → 0"""
+        """Clamp: negative idx → C = 0"""
         assert ToneDetector.key_index_to_midi(-1) == 0
 
 
 class TestScaleToMidi:
-    """TD-03, TD-04 — scale_to_midi()"""
+    """TD-03, TD-04 — scale_to_midi()
 
-    def test_major_returns_0(self):
-        """TD-03: 'Major' → 0"""
-        assert ToneDetector.scale_to_midi("Major") == 0
+    NGUỒN THẬT: app_config scale_midi_map → Major=13, Minor=18 (knob% plugin).
+    Test cũ pin 0/127 là SAI (không khớp đường gửi MIDI thật _send_tone_midi).
+    """
 
-    def test_minor_returns_127(self):
-        """TD-04: 'Minor' → 127"""
-        assert ToneDetector.scale_to_midi("Minor") == 127
+    def test_major_returns_13(self):
+        """TD-03: 'Major' → 13 (config scale_midi_map)"""
+        assert ToneDetector.scale_to_midi("Major") == 13
+
+    def test_minor_returns_18(self):
+        """TD-04: 'Minor' → 18 (config scale_midi_map)"""
+        assert ToneDetector.scale_to_midi("Minor") == 18
 
     def test_unknown_defaults_to_major(self):
-        """Unknown scale → 0 (treat as Major)"""
-        assert ToneDetector.scale_to_midi("Dorian") == 0
+        """Unknown scale → 13 (treat as Major)"""
+        assert ToneDetector.scale_to_midi("Dorian") == 13
 
 
 class TestIsRelativePair:
@@ -106,6 +125,100 @@ class TestCorrelateProfiles:
             assert "correlation" in entry
             assert "key_index" in entry
 
+    def test_flat_chroma_no_nan_no_warning(self):
+        """
+        NaN guard (Fix #1): chroma phẳng (std=0, VD noise/silence) trước đây tạo
+        NaN + RuntimeWarning 'invalid value in divide'. Phải trả 0.0, không NaN,
+        không warning.
+        """
+        import warnings
+        flat = np.ones(12) / 12.0  # std = 0
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # bất kỳ RuntimeWarning nào → fail
+            result = ToneDetector._correlate_profiles(
+                flat, ToneDetector.KS_MAJOR, ToneDetector.KS_MINOR
+            )
+        assert len(result) == 24
+        for entry in result.values():
+            assert not np.isnan(entry["correlation"])
+            assert entry["correlation"] == 0.0
+
+
+class TestSafeCorrcoef:
+    """Fix #1 — NaN guard cho _safe_corrcoef()."""
+
+    def test_flat_vector_returns_zero(self):
+        """Vector phẳng (std=0) → 0.0, không NaN."""
+        flat = np.ones(12)
+        assert ToneDetector._safe_corrcoef(flat, ToneDetector.KS_MAJOR) == 0.0
+
+    def test_self_correlation_is_one(self):
+        """Tự tương quan của vector có biến thiên = 1.0, hữu hạn."""
+        a = np.array(ToneDetector.KS_MAJOR)
+        c = ToneDetector._safe_corrcoef(a, a)
+        assert np.isfinite(c)
+        assert abs(c - 1.0) < 1e-9
+
+
+class TestRelationLevel:
+    """Fix #4 — _relation_level() phân biệt relative/parallel/neighbor."""
+
+    def test_relative_pair(self):
+        """C Major (0) ↔ Am (9) → 'relative'."""
+        assert ToneDetector._relation_level(0, "Major", 9, "Minor") == "relative"
+
+    def test_parallel_pair(self):
+        """C Major ↔ Cm (cùng tonic root) → 'parallel'."""
+        assert ToneDetector._relation_level(0, "Major", 0, "Minor") == "parallel"
+
+    def test_neighbor_fifth(self):
+        """C Major ↔ G Major (6 nốt chung, quãng 5) → 'neighbor'."""
+        assert ToneDetector._relation_level(0, "Major", 7, "Major") == "neighbor"
+
+    def test_unrelated(self):
+        """C Major ↔ F# Major (xa) → None."""
+        assert ToneDetector._relation_level(0, "Major", 6, "Major") is None
+
+
+class TestConfidenceFlags:
+    """Fix #2 — cờ uncertain / confidence_level trong result dict."""
+
+    def test_low_corr_marks_uncertain(self):
+        """Chroma gần phẳng (corr thấp) → uncertain=True, confidence_level='low'."""
+        rng = np.random.default_rng(0)
+        chroma = np.ones(12) / 12.0 + rng.normal(0, 0.0005, 12)
+        chroma = np.clip(chroma, 0, None)
+        chroma = chroma / chroma.sum()
+        with patch("core.memory.MemoryGuard.force_cleanup", MagicMock()):
+            result = ToneDetector._detect_key_from_chroma_impl(chroma, chroma.copy())
+        assert result is not None
+        assert "uncertain" in result
+        assert "confidence_level" in result
+        if result["confidence"] < ToneDetector.CONFIDENCE_LOW_THRESHOLD:
+            assert result["uncertain"] is True
+            assert result["confidence_level"] == "low"
+
+    def test_strong_key_not_uncertain(self):
+        """Chroma C major rõ ràng → confidence cao, uncertain=False."""
+        chroma = np.array([0.30, 0.01, 0.05, 0.01, 0.20, 0.05,
+                           0.01, 0.25, 0.01, 0.05, 0.01, 0.05])
+        chroma = chroma / chroma.sum()
+        with patch("core.memory.MemoryGuard.force_cleanup", MagicMock()):
+            result = ToneDetector._detect_key_from_chroma_impl(chroma, chroma.copy())
+        assert result is not None
+        assert result["uncertain"] is False
+        assert result["confidence_level"] in ("medium", "high")
+
+    def test_result_always_has_flags(self):
+        """Mọi result đều có cả 2 field mới (UI luôn đọc được)."""
+        chroma = np.zeros(12)
+        chroma[0] = 1.0
+        chroma = chroma / chroma.sum()
+        with patch("core.memory.MemoryGuard.force_cleanup", MagicMock()):
+            result = ToneDetector._detect_key_from_chroma_impl(chroma, chroma.copy())
+        assert {"key", "key_index", "scale", "confidence", "key_display",
+                "confidence_level", "uncertain"}.issubset(result.keys())
+
 
 # ──────────────────────────────────────────────────────────────
 # Detection tests with mocked heavy deps
@@ -125,6 +238,10 @@ def _make_fake_librosa(chroma_result=None, rms_result=None):
     lib.feature = types.SimpleNamespace(
         chroma_cqt=lambda **kw: chroma_result,
         rms=lambda **kw: rms_result,
+    )
+    # HPSS (Fix #5): trả (harmonic, percussive). Stub: harmonic = bản sao input.
+    lib.effects = types.SimpleNamespace(
+        hpss=lambda y, **kw: (np.asarray(y, dtype=float), np.zeros_like(np.asarray(y, dtype=float))),
     )
     lib.pyin = lambda *a, **kw: (
         np.array([50.0] * 10),  # f0

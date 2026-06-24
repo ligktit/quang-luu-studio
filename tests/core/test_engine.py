@@ -530,3 +530,117 @@ class TestAutoDetectRetry:
         assert len(completes) == 1
         assert completes[0].get("auto_detected") is True
         assert errors == []
+
+
+# ──────────────────────────────────────────────────────────────
+# E-30 — _send_tone_midi gửi NGUYÊN TỬ qua send_midi_pair
+# ──────────────────────────────────────────────────────────────
+
+class TestSendToneMidi:
+
+    def test_send_tone_midi_uses_send_midi_pair(self, engine, mocker):
+        """E-30: _send_tone_midi gửi cặp key_root + scale_type qua send_midi_pair
+        (nguyên tử) với đúng CC và giá trị — không gọi send_midi 2 lần rời rạc."""
+        mocker.patch("core.config.AppConfig.get_key_midi_map",
+                     return_value={"D": 2})
+        mocker.patch("core.config.AppConfig.get_scale_midi_map",
+                     return_value={"Major": 13, "Minor": 14})
+        mocker.patch("core.config.AppConfig.get_midi_cc",
+                     return_value={"key_root": 33, "scale_type": 35})
+
+        engine.send_midi_pair = MagicMock()
+        engine.send_midi = MagicMock()
+
+        # key_index=2 → 'D', scale='Major'
+        engine._send_tone_midi({"key_index": 2, "scale": "Major"})
+
+        engine.send_midi_pair.assert_called_once_with(33, 2, 35, 13)
+        engine.send_midi.assert_not_called()
+
+
+# ──────────────────────────────────────────────────────────────
+# E-31 — primary_key tiêu biểu (theo thời lượng, không thiên vị intro)
+# ──────────────────────────────────────────────────────────────
+
+class TestRepresentativePrimaryKey:
+
+    def test_picks_key_with_most_duration_not_intro(self, engine):
+        """E-31: tone tiêu biểu = key chiếm nhiều thời lượng nhất, KHÔNG phải
+        đoạn intro (entry đầu). Intro 'C' chỉ 10s, 'G' chiếm phần lớn bài."""
+        timeline = [
+            {"time": 0,   "key_display": "C"},   # intro 10s
+            {"time": 10,  "key_display": "G"},   # 90s
+            {"time": 100, "key_display": "G"},   # phần đuôi
+        ]
+        assert engine._representative_primary_key(timeline) == "G"
+
+    def test_single_entry_returns_that_key(self, engine):
+        """Timeline 1 đoạn → trả luôn key đó."""
+        assert engine._representative_primary_key(
+            [{"time": 0, "key_display": "A"}]) == "A"
+
+    def test_empty_defaults_to_c(self, engine):
+        assert engine._representative_primary_key([]) == "C"
+
+
+# ──────────────────────────────────────────────────────────────
+# E-32 — auto_detect_youtube_timeline KHÔNG ghi ManualToneTimeline (ghi cache)
+# ──────────────────────────────────────────────────────────────
+
+class TestAutoDetectWritesCacheNotManual:
+
+    def test_auto_detect_writes_cache_only(self, engine, mocker):
+        """E-32: kết quả dò TỰ ĐỘNG chỉ ghi vào tone_cache (TTL), KHÔNG ghi
+        vào ManualToneTimeline (manual chỉ dành cho user sửa tay)."""
+        # Không có manual sẵn → đi nhánh dò mới
+        mocker.patch("core.engine._tone.ManualToneTimeline.load_timeline",
+                     return_value=None)
+        mocker.patch("core.engine._tone.ManualToneTimeline.get_timeline_source",
+                     return_value=None)
+        save_manual = mocker.patch(
+            "core.engine._tone.ManualToneTimeline.save_timeline")
+        save_cache = mocker.patch(
+            "core.engine._tone.ToneCacheManager.save_tone")
+
+        mocker.patch("core.engine._tone._ToneMixin._send_tone_midi")
+        engine._replay_cached_timeline = MagicMock()
+        mocker.patch("core.engine._tone._ToneMixin._tone_resolve_cache_invalidate")
+        mocker.patch("core.engine._tone.MemoryGuard.force_cleanup")
+        mocker.patch("core.engine._tone.extract_info_with_auth",
+                     return_value={"title": "Bài Test"})
+        mocker.patch("core.engine._tone.make_ydl_opts", return_value={})
+
+        timeline_entries = [
+            {"time": 0,  "key_display": "C", "key_index": 0, "scale": "Major"},
+            {"time": 10, "key_display": "G", "key_index": 7, "scale": "Major"},
+            {"time": 100,"key_display": "G", "key_index": 7, "scale": "Major"},
+        ]
+
+        se = mocker.patch("core.engine._tone.ScoringEngine")
+        se_inst = se.return_value
+        se_inst.download_youtube_audio.return_value = "C:/tmp/a.wav"
+        se_inst.cleanup_temp_file.return_value = None
+
+        fake_lib = MagicMock()
+        fake_lib.load.return_value = ([0.0] * 22050, 22050)
+        mocker.patch.dict("sys.modules", {"librosa": fake_lib})
+        mocker.patch("core.engine._tone.ToneDetector.detect_timeline_advanced",
+                     return_value=timeline_entries)
+
+        # Session thật → thread chạy tới cùng
+        done = threading.Event()
+        on_complete = MagicMock(side_effect=lambda r: done.set())
+        engine.auto_detect_youtube_timeline(
+            "https://youtu.be/abcdefghijk",
+            on_complete=on_complete,
+            on_error=MagicMock(),
+        )
+        assert done.wait(timeout=5)
+
+        # KHÔNG ghi manual
+        save_manual.assert_not_called()
+        # CÓ ghi cache, primary_key là tone tiêu biểu 'G' (không phải intro 'C')
+        save_cache.assert_called_once()
+        cache_payload = save_cache.call_args[0][1]
+        assert cache_payload["primary_key"] == "G"
+        assert cache_payload["title"] == "Bài Test"
