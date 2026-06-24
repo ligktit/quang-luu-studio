@@ -9,6 +9,14 @@ Nguồn: `core/engine/_tone.py`, `_youtube.py`, `_autokey.py`, `_session.py`, `f
 > bừa cái đầu tiên gây ra triệu chứng "không có âm thanh" dù nhạc vẫn phát khi
 > máy có nhiều ngõ ra (Speakers / Headset / HDMI).
 
+> **⚠ Cập nhật (đợt sửa điểm mù tone):** Kết quả dò **TỰ ĐỘNG** giờ CHỈ ghi vào
+> `ToneCache` (có TTL 30 ngày, tự dò lại được), **KHÔNG** còn ghi vào
+> `ManualToneTimeline`. `ManualToneTimeline` nay chỉ chứa chỉnh sửa **thủ công**
+> của người dùng (cờ `source="human"`). Nhờ vậy một lần dò sai không còn "khóa
+> cứng" bài hát vĩnh viễn. Ưu tiên resolve: **manual (human) > cache**. Skip-resolve
+> chỉ bị chặn khi có timeline thủ công thật (`get_timeline_source(url)=="human"`),
+> không chặn vì cache.
+
 ---
 
 ## 1. State machine của `ToneSession`
@@ -156,7 +164,7 @@ flowchart TD
     GSEG --> GTL{timeline_entries?}
     GLB --> GTL
     GTL -->|rỗng| GE[on_error: không phát hiện tone]
-    GTL -->|có| GSAVE["Lưu ManualToneTimeline<br/>+ ToneCache"] --> GR[transition_to_replaying<br/>_replay_manual_timeline] --> GDONE([on_complete])
+    GTL -->|có| GSAVE["Lưu ToneCache (primary_key theo<br/>thời lượng, KHÔNG ghi ManualToneTimeline)"] --> GR[transition_to_replaying<br/>_replay_cached_timeline] --> GDONE([on_complete])
 
     GDONE --> GPEND{Có pending URL?}
     GPEND -->|có| GNEXT[_dispatch_auto_detect URL kế]
