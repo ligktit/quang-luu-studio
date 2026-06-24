@@ -388,7 +388,7 @@ class _YouTubeMixin:
                 time.sleep(3)  # Chờ browser mở
                 self._send_tone_midi(manual_timeline[0])
                 cancel_ev = self._tone_session.start_scanning(url)
-                cancel_ev2 = self._tone_session.transition_to_replaying()
+                cancel_ev2 = self._tone_session.transition_to_replaying(expected_token=cancel_ev)
                 if cancel_ev2 is not None:
                     self._replay_manual_timeline(manual_timeline, cancel_event=cancel_ev2)
             threading.Thread(target=replay_manual, daemon=True).start()
@@ -572,6 +572,14 @@ class _YouTubeMixin:
         max_attempts = _AUTO_DETECT_MAX_ATTEMPTS
         print(f"[YT WATCHER] Dò tone tự động: {url} (lần {_attempt}/{max_attempts})")
 
+        # Đánh dấu URL đang được dò là URL "đang xem" ngay tại điểm dispatch DUY NHẤT
+        # này. Nhờ vậy mọi đường gọi (watcher loop, hàng đợi pending của auto_detect
+        # trong _tone.py, nút "Dò Lại" ở frontend) đều cập nhật _last_watched_url một
+        # cách thống nhất → watcher KHÔNG dò trùng lại cùng URL đó như thể URL mới.
+        # Chỉ làm ở lần thử đầu (retry giữ nguyên URL nên không cần ghi lại).
+        if _attempt == 1:
+            self._last_watched_url = url
+
         def _on_complete(result):
             eng = engine_ref()
             if eng is None:
@@ -602,6 +610,17 @@ class _YouTubeMixin:
                     # Nếu đã có phiên dò khác chạy (user mở video mới) → bỏ thử lại.
                     if eng2._tone_session.is_active:
                         print("[YT WATCHER] Có phiên dò khác đang chạy → hủy thử lại.")
+                        return
+                    # Kẽ hở: phiên mới có thể kết thúc CỰC NHANH (cache hit) → session về
+                    # IDLE trước khi _retry thức dậy. Nếu chỉ dựa is_active, ta sẽ dò lại
+                    # URL CŨ và gửi MIDI sai tone đè lên bài user đang xem. Vì vậy chỉ thử
+                    # lại khi URL đang retry VẪN là URL người dùng đang xem.
+                    current_url = eng2._last_watched_url or eng2.current_youtube_url
+                    if current_url is not None and current_url != url:
+                        print(
+                            f"[YT WATCHER] URL đã đổi (đang xem {str(current_url)[:60]}...) "
+                            f"→ hủy thử lại URL cũ {url[:60]}..."
+                        )
                         return
                     # Lần thử lại luôn bỏ qua cache (đã miss ở lần đầu) và dò tươi.
                     eng2._dispatch_auto_detect(

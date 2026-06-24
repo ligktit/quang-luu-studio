@@ -20,8 +20,27 @@ class _AutokeyMixin:
             print("[AUTOKEY] Đã đang chạy, bỏ qua.")
             return
 
+        # Chống thread MỒ CÔI: nếu vòng lặp cũ chạy detect_key_from_audio lâu hơn
+        # join(timeout) của stop_autokey, thread cũ vẫn còn alive khi ta start lại.
+        # Mở 2 loop song song (cùng loopback + cùng gửi MIDI) là sai. Từ chối khởi
+        # động và để stop_autokey/epoch lo cho thread cũ tự thoát.
+        old_thread = getattr(self, "_autokey_thread", None)
+        if old_thread is not None and old_thread.is_alive():
+            print("[AUTOKEY] Thread cũ chưa thoát hẳn — bỏ qua start lần này.")
+            return
+
+        # EPOCH/generation: mỗi lần start tăng bộ đếm. Loop nhớ epoch của mình lúc
+        # bắt đầu; trước khi gửi MIDI / cập nhật UI nó kiểm tra epoch còn khớp +
+        # autokey_active còn True. Thread mồ côi (epoch cũ) sẽ KHÔNG gửi MIDI và
+        # KHÔNG ghi đè trạng thái.
+        self._autokey_epoch = getattr(self, "_autokey_epoch", 0) + 1
+        my_epoch            = self._autokey_epoch
+
         self.autokey_active             = True
         self.on_tone_detected_callback  = on_key_update
+
+        def _is_current():
+            return self.autokey_active and getattr(self, "_autokey_epoch", None) == my_epoch
 
         def _autokey_loop():
             VOTING_WINDOW     = ToneDetector.VOTING_WINDOW
@@ -61,6 +80,11 @@ class _AutokeyMixin:
                 RECORD_CHUNK    = segment_duration
                 MAX_BUFFER_SEC  = 30
                 MAX_BUFFER_FRAMES = MAX_BUFFER_SEC * SAMPLE_RATE
+                # Cửa sổ PHÂN TÍCH: chỉ dò trên ~15s GẦN NHẤT thay vì toàn bộ 30s.
+                # Khi bài đổi tone, audio key cũ trong buffer 30s sẽ lấn át key mới
+                # khiến đổi tone trễ 10-15s. Lấy cửa sổ ngắn hơn → phản ứng nhanh,
+                # vẫn đủ ngữ cảnh cho CQT chroma; voting (VOTING_WINDOW) chống nhiễu.
+                ANALYSIS_WINDOW_FRAMES = 15 * SAMPLE_RATE
                 audio_buffer    = np.zeros(MAX_BUFFER_FRAMES, dtype=np.float32)
                 write_pos       = 0
 
@@ -74,18 +98,18 @@ class _AutokeyMixin:
                     frames_per_buffer=chunk_size,
                 )
                 try:
-                    while self.autokey_active:
+                    while _is_current():
                         try:
                             frames_needed = RECORD_CHUNK * SAMPLE_RATE
                             chunks        = []
                             frames_read   = 0
-                            while frames_read < frames_needed and self.autokey_active:
+                            while frames_read < frames_needed and _is_current():
                                 data     = stream.read(chunk_size, exception_on_overflow=False)
                                 chunk_np = np.frombuffer(data, dtype=np.float32).copy()
                                 chunks.append(chunk_np)
                                 frames_read += len(chunk_np)
 
-                            if not self.autokey_active:
+                            if not _is_current():
                                 break
 
                             chunk = np.concatenate(chunks)
@@ -94,7 +118,7 @@ class _AutokeyMixin:
 
                             rms = np.sqrt(np.mean(chunk ** 2))
                             if rms < 0.001:
-                                if on_key_update:
+                                if on_key_update and _is_current():
                                     try:
                                         on_key_update({
                                             'status': 'listening',
@@ -107,7 +131,13 @@ class _AutokeyMixin:
                                 continue
 
                             chunk_len = len(chunk)
-                            if write_pos + chunk_len <= MAX_BUFFER_FRAMES:
+                            if chunk_len >= MAX_BUFFER_FRAMES:
+                                # segment_duration > MAX_BUFFER_SEC: chunk to hơn cả
+                                # buffer → chỉ giữ MAX_BUFFER_FRAMES mẫu CUỐI của chunk.
+                                # (Nhánh else cũ tính keep = MAX-chunk_len ÂM → slicing sai.)
+                                audio_buffer[:] = chunk[chunk_len - MAX_BUFFER_FRAMES:]
+                                write_pos = MAX_BUFFER_FRAMES
+                            elif write_pos + chunk_len <= MAX_BUFFER_FRAMES:
                                 audio_buffer[write_pos:write_pos + chunk_len] = chunk
                                 write_pos += chunk_len
                             else:
@@ -117,8 +147,13 @@ class _AutokeyMixin:
                                 write_pos = MAX_BUFFER_FRAMES
                             del chunk
 
+                            # Phân tích CỬA SỔ GẦN NHẤT (~15s cuối) thay vì toàn bộ
+                            # write_pos để đổi tone realtime nhanh hơn. use_hpss=False:
+                            # realtime ưu tiên tốc độ, voting đã làm mượt nhiễu.
+                            analyze_start = max(0, write_pos - ANALYSIS_WINDOW_FRAMES)
                             result = ToneDetector.detect_key_from_audio(
-                                audio_buffer[:write_pos], SAMPLE_RATE
+                                audio_buffer[analyze_start:write_pos], SAMPLE_RATE,
+                                use_hpss=False,
                             )
                             gc_counter += 1
                             if gc_counter % 2 == 0:
@@ -166,6 +201,14 @@ class _AutokeyMixin:
                                     current_result     = voted_result
                                     key_changed        = True
 
+                            # CHỐT epoch ngay TRƯỚC khi gửi MIDI / cập nhật UI: nếu
+                            # user đã dừng (autokey_active=False) hoặc đã start lại
+                            # (epoch đổi) trong lúc detect_key_from_audio chạy lâu,
+                            # thread này là MỒ CÔI → tuyệt đối không gửi MIDI "ma",
+                            # không ghi đè trạng thái. Thoát loop luôn.
+                            if not _is_current():
+                                break
+
                             if key_changed and current_result is not None:
                                 self._send_tone_midi(current_result)
 
@@ -207,14 +250,21 @@ class _AutokeyMixin:
                         ctypes.windll.ole32.CoUninitialize()
                     except Exception:
                         pass
-                self.autokey_active = False
-                print("[AUTOKEY] Đã dừng")
                 MemoryGuard.force_cleanup()
-                if on_key_update:
-                    try:
-                        on_key_update({'status': 'stopped'})
-                    except Exception:
-                        pass
+                # Chỉ thread CÒN HIỆN HÀNH mới được dọn trạng thái + báo 'stopped'.
+                # Thread mồ côi (epoch cũ) nếu set autokey_active=False / gửi 'stopped'
+                # sẽ ghi đè & tắt nhầm loop mới vừa start. is_orphan = epoch đã đổi.
+                is_orphan = getattr(self, "_autokey_epoch", None) != my_epoch
+                if not is_orphan:
+                    self.autokey_active = False
+                    print("[AUTOKEY] Đã dừng")
+                    if on_key_update:
+                        try:
+                            on_key_update({'status': 'stopped'})
+                        except Exception:
+                            pass
+                else:
+                    print("[AUTOKEY] Thread mồ côi thoát (epoch cũ) — không đổi trạng thái")
 
         self._autokey_thread = threading.Thread(target=_autokey_loop, daemon=True)
         self._autokey_thread.start()
@@ -223,9 +273,18 @@ class _AutokeyMixin:
         if self.autokey_active:
             print("[AUTOKEY] Đang dừng...")
         self.autokey_active = False
-        if self._autokey_thread:
-            self._autokey_thread.join(timeout=6.0)
-            self._autokey_thread = None
+        # Tăng epoch: nếu loop đang kẹt trong detect_key_from_audio (CQT ~30s buffer,
+        # có thể > join timeout), epoch đổi khiến nó tự nhận MỒ CÔI ở lần kiểm tra
+        # _is_current() kế tiếp → không gửi MIDI "ma", không ghi đè trạng thái.
+        self._autokey_epoch = getattr(self, "_autokey_epoch", 0) + 1
+        thread = getattr(self, "_autokey_thread", None)
+        if thread:
+            thread.join(timeout=6.0)
+            # Chỉ nhả tham chiếu nếu thread đã thực sự thoát. Nếu vẫn alive (join hết
+            # timeout vì đang phân tích), GIỮ tham chiếu để start_autokey kế tiếp
+            # phát hiện thread cũ còn sống và từ chối mở loop thứ 2 chồng lên.
+            if not thread.is_alive():
+                self._autokey_thread = None
 
     # ── detect_tone_continuous ───────────────────────────────────────────────────
 
@@ -304,7 +363,11 @@ class _AutokeyMixin:
                         elapsed += segment_duration
                         continue
 
-                    result = ToneDetector.detect_key_from_audio(audio_data, device_sr)
+                    # use_hpss=False: realtime ưu tiên tốc độ (gọi mỗi segment_duration),
+                    # HPSS làm chậm; voting (VOTING_WINDOW) đã làm mượt nhiễu.
+                    result = ToneDetector.detect_key_from_audio(
+                        audio_data, device_sr, use_hpss=False
+                    )
                     del audio_data
 
                     _seg_count += 1

@@ -110,8 +110,19 @@ class SystemEngine(
 
     @tone_detection_active.setter
     def tone_detection_active(self, val):
-        if not val:
-            self._tone_session.stop()
+        # CỐ Ý không gọi self._tone_session.stop() ở đây.
+        #
+        # Trước đây setter `tone_detection_active = False` stop() VÔ ĐIỀU KIỆN phiên
+        # tone hiện hành. Nhưng cờ này được đặt ở những chỗ KHÔNG liên quan tới phiên
+        # đang chạy — ví dụ detect_tone_continuous khi import pyaudio lỗi đặt
+        # `tone_detection_active = False` để tự thoát. Giữa lúc nó start_scanning() và
+        # lúc đặt cờ, một thread khác có thể đã mở phiên dò/replay MỚI. stop() ở đây sẽ
+        # giết nhầm phiên mới đó (đứt MIDI/replay đang chạy hợp lệ).
+        #
+        # Setter giờ chỉ là no-op (read vẫn phản ánh ToneSession.is_active). Nơi nào
+        # thực sự cần dừng phiên phải gọi self._tone_session.stop() / stop_tone_detection()
+        # một cách TƯỜNG MINH (và nên truyền expected_token nếu muốn an toàn theo phiên).
+        pass
 
     @property
     def _auto_tone_running(self):
