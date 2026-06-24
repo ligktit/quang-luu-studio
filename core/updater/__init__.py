@@ -65,7 +65,7 @@ def download_and_install(release, on_progress=None, on_error=None, silent=False)
     except Exception as e:
         log.error("Download failed: %s", e)
         if on_error:
-            on_error(f"Tải xuống thất bại: {e}")
+            on_error("Tải bản cập nhật thất bại. Vui lòng kiểm tra kết nối mạng rồi thử lại.")
         return
 
     if release.sha256:
@@ -82,7 +82,8 @@ def download_and_install(release, on_progress=None, on_error=None, silent=False)
     except Exception as e:
         log.error("Installer launch failed: %s", e)
         if on_error:
-            on_error(f"Không thể khởi chạy installer: {e}")
+            on_error("Không mở được trình cài đặt bản cập nhật. Vui lòng tải và cài thủ công, "
+                     "hoặc thử lại sau.")
 
 
 __all__ = [

@@ -470,7 +470,8 @@ class ToneDetector:
         except ImportError:
             print("[DÒ TONE] Thư viện 'pyaudiowpatch' chưa được cài đặt.")
             print("   Chạy: pip install pyaudiowpatch")
-            return _fail("Thiếu thư viện thu âm (pyaudiowpatch) — không thể nghe từ loa.")
+            return _fail("Ứng dụng thiếu thành phần thu âm nội bộ nên không thể nghe từ loa. "
+                         "Vui lòng cài đặt lại ứng dụng.")
         
         # Khởi tạo COM cho background thread (WASAPI yêu cầu COM per-thread)
         com_initialized = False
@@ -525,7 +526,9 @@ class ToneDetector:
 
             if channels_used is None:
                 print(f"[DÒ TONE] Không mở được loopback stream: {last_err}")
-                return _fail(f"Không mở được luồng thu từ loa ({loopback_dev['name']}): {last_err}")
+                return _fail(f"Không thu được âm thanh từ loa '{loopback_dev['name']}'. "
+                             "Hãy kiểm tra loa này có đang phát nhạc và có phải là loa "
+                             "mặc định của Windows không.")
 
             if channels_used > 1:
                 print(f"[DÒ TONE] Thu {channels_used} kênh, sẽ downmix về mono")
@@ -599,7 +602,8 @@ class ToneDetector:
             print(f"[DÒ TONE] Lỗi thu âm: {e}")
             import traceback
             print(traceback.format_exc())
-            return _fail(f"Lỗi khi thu âm từ loa: {e}")
+            return _fail("Gặp lỗi khi nghe âm thanh từ loa. Vui lòng thử lại; nếu vẫn "
+                         "lỗi, kiểm tra thiết bị âm thanh trong phần Cài đặt.")
         finally:
             if stream:
                 try:

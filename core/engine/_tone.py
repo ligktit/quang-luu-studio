@@ -28,6 +28,26 @@ _FULL_SCAN_TIMEOUT_SEC = 300
 _LOOPBACK_FALLBACK_SEC = 12
 
 
+def _log_exc(label, exc):
+    """Log CHI TIẾT kỹ thuật (exception + traceback) cho DEV vào file log.
+
+    Quy ước thông báo:
+      - DEV  → dùng hàm này (đầy đủ exception + traceback) để debug.
+      - USER → on_error/on_progress với câu chữ dễ hiểu, có gợi ý xử lý;
+               TUYỆT ĐỐI không đẩy str(exc)/traceback ra giao diện.
+    """
+    import logging
+    import traceback
+    logging.getLogger(__name__).error("[%s] %s\n%s", label, exc, traceback.format_exc())
+
+
+# Thông báo chung, thân thiện cho người dùng phổ thông khi gặp lỗi không lường trước.
+_USER_ERR_GENERIC = (
+    "Đã xảy ra lỗi khi dò tone. Vui lòng thử lại sau giây lát; "
+    "nếu vẫn lỗi, hãy khởi động lại ứng dụng."
+)
+
+
 def _install_watchdog(timeout_sec, on_complete, on_error, label, on_timeout_hook=None):
     """Wrap detection callbacks with a once-only timeout guard.
 
@@ -133,12 +153,19 @@ class _ToneMixin:
 
         latest      = timeline[-1]
         key_display = cached.get('primary_key', latest.get('key_display', 'C'))
+        # Lấy entry KHỚP với key_display đang hiển thị (primary_key) để key_index/
+        # scale gửi MIDI đúng với key người dùng thấy — không lấy đại entry cuối
+        # timeline (đoạn cuối bài có thể đã chuyển sang tone khác).
+        match = next(
+            (e for e in timeline if e.get('key_display') == key_display),
+            latest,
+        )
         result = {
             'key_display': key_display,
             'key':         _extract_key_root(key_display),   # root note cho UI dropdown
-            'key_index':   latest.get('key_index', 0),
-            'scale':       latest.get('scale', 'Major'),
-            'confidence':  latest.get('confidence', 0),
+            'key_index':   match.get('key_index', 0),
+            'scale':       match.get('scale', 'Major'),
+            'confidence':  match.get('confidence', 0),
             'from_cache':  True,
             'key_timeline': timeline,
             'title':       cached.get('title', ''),
@@ -295,9 +322,9 @@ class _ToneMixin:
                     if on_error:
                         on_error("Không thể dò tone. Hãy đảm bảo đang phát nhạc.")
             except Exception as e:
-                print(f"[DÒ TONE] Lỗi: {e}")
+                _log_exc("DÒ TONE", e)
                 if on_error:
-                    on_error(str(e))
+                    on_error(_USER_ERR_GENERIC)
             finally:
                 MemoryGuard.force_cleanup()
 
@@ -355,10 +382,9 @@ class _ToneMixin:
                     if on_error:
                         on_error("Không thể dò tone từ YouTube. Hãy thử lại.")
             except Exception as e:
-                import traceback
-                print(f"[LẤY TONE YT] Lỗi: {e}\n{traceback.format_exc()}")
+                _log_exc("LẤY TONE YT", e)
                 if on_error:
-                    on_error(str(e))
+                    on_error(_USER_ERR_GENERIC)
             finally:
                 MemoryGuard.force_cleanup()
 
@@ -473,8 +499,9 @@ class _ToneMixin:
                             fail_reason = ("Đã tải được audio từ YouTube nhưng không nhận diện "
                                            "được tone (bài quá nhiễu / không có giai điệu rõ).")
                     except Exception as e:
-                        print(f"[DÒ TONE] Lỗi load/detect audio: {e}")
-                        fail_reason = f"Lỗi khi phân tích audio đã tải: {e}"
+                        _log_exc("DÒ TONE/phân tích audio", e)
+                        fail_reason = ("Đã tải được audio nhưng phân tích âm điệu bị lỗi. "
+                                       "Vui lòng thử lại sau giây lát.")
                     finally:
                         scoring_engine.cleanup_temp_file()
                         del scoring_engine
@@ -536,10 +563,9 @@ class _ToneMixin:
                                  "(phương án nghe từ loa cần có âm thanh).")
 
             except Exception as e:
-                import traceback
-                print(f"[DÒ TONE] Lỗi: {e}\n{traceback.format_exc()}")
+                _log_exc("DÒ TONE", e)
                 if on_error:
-                    on_error(str(e))
+                    on_error(_USER_ERR_GENERIC)
             finally:
                 MemoryGuard.force_cleanup()
 
@@ -705,10 +731,9 @@ class _ToneMixin:
                     })
 
             except Exception as e:
-                import traceback
-                print(f"[AUTO TIMELINE] Lỗi: {e}\n{traceback.format_exc()}")
+                _log_exc("AUTO TIMELINE", e)
                 if on_error:
-                    on_error(str(e))
+                    on_error(_USER_ERR_GENERIC)
             finally:
                 if audio_data is not None:
                     del audio_data

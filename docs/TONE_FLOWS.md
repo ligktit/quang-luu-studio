@@ -183,7 +183,7 @@ flowchart TD
 
 ---
 
-## 7. Các luồng thu loopback realtime khác (AutoKey)
+## 7. Các luồng thu loopback realtime (AutoKey & Continuous)
 
 Hai luồng này thu loopback liên tục, **không** qua yt-dlp; nay cũng dùng
 `ToneDetector._find_loopback_device`:
@@ -194,3 +194,67 @@ Hai luồng này thu loopback liên tục, **không** qua yt-dlp; nay cũng dùn
   build timeline rồi lưu `ToneCache` khi kết thúc.
 
 Cả hai dừng segment nếu `rms < 0.001` (im lặng) → báo "Đang lắng nghe...".
+
+### 7a. Vòng bỏ phiếu (voting) — `VOTING_WINDOW = 3`
+
+```mermaid
+flowchart TD
+    SEG([Mỗi segment ~5s loopback]) --> DET["result = detect_key_from_audio(buffer)"]
+    DET --> STORE["results_by_key[new_key] = result<br/>(nhớ result ĐẦY ĐỦ theo key_display)"]
+    STORE --> WIN["recent_keys.append(new_key)<br/>giữ tối đa VOTING_WINDOW<br/>tỉa results_by_key theo cửa sổ"]
+    WIN --> VOTE["voted_key = most_common(recent_keys)<br/>voted_result = results_by_key[voted_key]<br/>voted_conf  = voted_result.confidence"]
+    VOTE --> DEC{Có đổi tone?}
+    DEC -->|"current=None"| COMMIT
+    DEC -->|"voted≠current AND<br/>vote_ratio≥0.67 AND<br/>Δconf > −0.05"| COMMIT["current_key/confidence/result = voted_*"]
+    DEC -->|không| UI
+    COMMIT --> MIDI["_send_tone_midi(voted_result)"]
+    MIDI --> UI["AutoKey: callback UI = current_result<br/>Continuous: entry timeline = voted_result → ToneCache"]
+```
+
+### 7b. ⭐ Bất biến nhất quán (consistency invariant)
+
+> Trong mọi luồng, **key hiển thị = key gửi MIDI = key lưu cache** đều phải là
+> CÙNG một key. Cụ thể `key_display`, `key_index`, `scale` luôn lấy từ **cùng một
+> `result` dict**.
+
+Cạm bẫy đã sửa: voting làm mượt `key_display` (chọn `voted_key`), nhưng MIDI/cache
+lại lấy `key_index`/`scale` từ `result` của **frame mới nhất**. Khi frame mới nhất
+khác key được bầu (đúng lúc voting phát huy tác dụng) → gửi sai tone sang Studio One.
+
+```text
+recent_keys = ['C','C','Am']   (frame mới nhất = 'Am', voted = 'C')
+
+TRƯỚC:  hiển thị 'C'  ──  _send_tone_midi(result='Am')        ✗ LỆCH
+SAU:    hiển thị 'C'  ──  _send_tone_midi(voted_result='C')   ✓ KHỚP
+```
+
+Cách sửa: giữ map `results_by_key: key_display → result`, rồi tra
+`voted_result = results_by_key[voted_key]` để dùng cho cả MIDI, UI callback và
+entry timeline. Áp dụng tại 3 chỗ:
+
+| Vị trí | Trước | Sau |
+|--------|-------|-----|
+| `start_autokey` (voting) | MIDI/UI theo frame mới nhất | theo `current_result` (khớp `voted_key`) |
+| `detect_tone_continuous` | entry/MIDI/callback theo frame mới nhất | theo `voted_result` |
+| `_build_cache_result` (`_tone.py`) | hiển thị `primary_key` nhưng index/scale theo `timeline[-1]` | tìm entry **khớp `primary_key`** |
+
+> Dữ liệu cache cũ lưu trước khi sửa có thể vẫn lệch — sẽ tự đúng lại khi dò tone mới.
+
+---
+
+## 8. Lõi nhận diện 1 đoạn — `ToneDetector.detect_key_from_audio`
+
+Dùng chung cho TẤT CẢ các luồng ở trên (single-shot, timeline, voting).
+
+```mermaid
+flowchart TD
+    A([audio_data]) --> P0["BƯỚC 0 — Tiền xử lý robust<br/>clip outlier → silence gate (RMS<0.001 → None)<br/>normalize percentile 99.9 → bỏ DC offset<br/>(tùy chọn) khử hum: PYIN 50–80Hz → notch filter"]
+    P0 --> P1["BƯỚC 1 — Chroma CQT (energy-weighted theo RMS)<br/>→ vector 12 chiều<br/>(AutoKey: trộn EMA α=0.3 với chroma tích lũy)"]
+    P1 --> P3["BƯỚC 3 — Tương quan ĐA PROFILE<br/>Aarden 50% + Temperley 30% + KS 20%<br/>→ 24 key (12 major + 12 minor)"]
+    P3 --> P4["BƯỚC 4 — Phân giải họ key (disambiguation)<br/>gom top-7 key gần nhau (≥6/7 nốt chung)<br/>chấm = corr·0.85 + (tonic+5th·0.7+3rd·0.5)·0.15<br/>tiebreak theo độ phổ biến nếu chênh <2%"]
+    P4 --> OUT["result = { key (nốt gốc), key_display ('Am'),<br/>key_index 0–11, scale, confidence }"]
+```
+
+> `key` = **nốt gốc** dùng cho `KEY_MIDI_MAP` (CC#33); `key_display` = tên đầy đủ
+> cho UI ('Am'). `detect_timeline_advanced` (chế độ FULL) tái dùng BƯỚC 3–4 trên
+> từng đoạn, thêm: novelty curve → find_peaks → refine ±3s → merge → lọc đoạn <8s.

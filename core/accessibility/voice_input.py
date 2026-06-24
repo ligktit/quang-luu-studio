@@ -214,7 +214,8 @@ class VoiceInput:
             except Exception as e:
                 log.warning("Không load được Vosk model %s: %s", self._model_path, e)
                 if self._on_error:
-                    self._on_error(f"Không load được model giọng nói: {e}")
+                    self._on_error("Không tải được mô hình giọng nói. Vui lòng cài đặt lại "
+                                   "ứng dụng hoặc kiểm tra mục Trợ năng trong Cài đặt.")
                 return False
             finally:
                 self._model_loading = False
@@ -271,7 +272,8 @@ class VoiceInput:
             except Exception as e:
                 self._listening = False
                 if self._on_error:
-                    self._on_error(f"Không mở được mic: {e}")
+                    self._on_error("Không mở được micro. Hãy kiểm tra micro đã cắm và "
+                                   "ứng dụng được cấp quyền dùng micro.")
                 log.warning("Voice input mic open lỗi: %s", e)
                 print(f"[VOICE] !!! Lỗi mở mic: {e}")
 

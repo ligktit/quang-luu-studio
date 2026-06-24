@@ -27,7 +27,9 @@ class _AutokeyMixin:
             VOTING_WINDOW     = ToneDetector.VOTING_WINDOW
             current_key       = None
             current_confidence = 0
+            current_result    = None   # result dict khớp với current_key (đồng bộ MIDI/UI)
             recent_keys       = []
+            results_by_key    = {}     # key_display -> result đầy đủ (bầu ra đúng index/scale)
 
             com_initialized = False
             try:
@@ -126,41 +128,58 @@ class _AutokeyMixin:
                                 continue
 
                             new_key    = result['key_display']
-                            confidence = result.get('confidence', 0)
+
+                            # Lưu result đầy đủ theo key_display: khi "bầu" ra voted_key
+                            # ta gửi MIDI/UI bằng ĐÚNG key_index+scale của chính key đó,
+                            # không phải của frame mới nhất (frame cuối có thể là key khác).
+                            results_by_key[new_key] = result
 
                             recent_keys.append(new_key)
                             if len(recent_keys) > VOTING_WINDOW:
                                 recent_keys.pop(0)
+                            # Chỉ giữ result của các key còn trong cửa sổ bỏ phiếu
+                            results_by_key = {
+                                k: results_by_key[k]
+                                for k in set(recent_keys) if k in results_by_key
+                            }
 
                             vote_counts = Counter(recent_keys)
                             voted_key   = vote_counts.most_common(1)[0][0]
                             vote_ratio  = vote_counts[voted_key] / len(recent_keys)
 
+                            # result khớp với voted_key → display = MIDI = cùng một key
+                            voted_result = results_by_key.get(voted_key, result)
+                            voted_conf   = voted_result.get('confidence', 0)
+
                             key_changed = False
                             if current_key is None:
                                 current_key        = voted_key
-                                current_confidence = confidence
+                                current_confidence = voted_conf
+                                current_result     = voted_result
                                 key_changed        = True
                             elif voted_key != current_key:
-                                confidence_diff = confidence - current_confidence
+                                confidence_diff = voted_conf - current_confidence
                                 if (vote_ratio >= 0.67 and
                                         confidence_diff > -ToneDetector.KEY_CHANGE_THRESHOLD):
                                     current_key        = voted_key
-                                    current_confidence = confidence
+                                    current_confidence = voted_conf
+                                    current_result     = voted_result
                                     key_changed        = True
 
-                            if key_changed:
-                                self._send_tone_midi(result)
+                            if key_changed and current_result is not None:
+                                self._send_tone_midi(current_result)
 
-                            if on_key_update:
+                            # UI luôn phản ánh key ĐANG commit (current_*) kèm key_index/
+                            # scale khớp với nó — không lấy của frame mới nhất.
+                            if on_key_update and current_result is not None:
                                 try:
                                     on_key_update({
                                         'status':      'detected',
                                         'key_display': current_key,
-                                        'key':         result['key'],   # root note, no 'm' suffix
-                                        'key_index':   result['key_index'],
-                                        'scale':       result['scale'],
-                                        'confidence':  confidence,
+                                        'key':         current_result['key'],   # root note, no 'm' suffix
+                                        'key_index':   current_result['key_index'],
+                                        'scale':       current_result['scale'],
+                                        'confidence':  current_confidence,
                                         'raw_key':     new_key,
                                         'voted_key':   voted_key,
                                         'key_changed': key_changed,
@@ -219,6 +238,7 @@ class _AutokeyMixin:
         current_confidence = 0
         key_timeline    = []
         recent_keys     = []
+        results_by_key  = {}   # key_display -> result đầy đủ (bầu ra đúng index/scale)
         elapsed         = 0
         VOTING_WINDOW   = ToneDetector.VOTING_WINDOW
 
@@ -293,22 +313,33 @@ class _AutokeyMixin:
 
                     if result:
                         new_key    = result['key_display']
-                        confidence = result.get('confidence', 0)
+
+                        # Lưu result đầy đủ theo key_display để entry/MIDI/callback
+                        # dùng đúng key_index+scale của voted_key (không của frame mới nhất).
+                        results_by_key[new_key] = result
 
                         recent_keys.append(new_key)
                         if len(recent_keys) > VOTING_WINDOW:
                             recent_keys.pop(0)
+                        results_by_key = {
+                            k: results_by_key[k]
+                            for k in set(recent_keys) if k in results_by_key
+                        }
 
                         vote_counts = Counter(recent_keys)
                         voted_key   = vote_counts.most_common(1)[0][0]
                         vote_ratio  = vote_counts[voted_key] / len(recent_keys)
 
+                        # result khớp voted_key → entry/MIDI/callback cùng một key
+                        voted_result = results_by_key.get(voted_key, result)
+                        voted_conf   = voted_result.get('confidence', 0)
+
                         entry = {
-                            'time': elapsed,
+                            'time':        elapsed,
                             'key_display': voted_key,
-                            'key_index':   result['key_index'],
-                            'scale':       result['scale'],
-                            'confidence':  round(confidence, 3),
+                            'key_index':   voted_result['key_index'],
+                            'scale':       voted_result['scale'],
+                            'confidence':  round(voted_conf, 3),
                         }
                         key_timeline.append(entry)
                         if len(key_timeline) > 500:
@@ -318,18 +349,18 @@ class _AutokeyMixin:
                         if current_key is None:
                             should_change = True
                         elif voted_key != current_key:
-                            confidence_diff = confidence - current_confidence
+                            confidence_diff = voted_conf - current_confidence
                             if (vote_ratio >= 0.67 and
                                     confidence_diff > -ToneDetector.KEY_CHANGE_THRESHOLD):
                                 should_change = True
 
                         if should_change:
                             current_key        = voted_key
-                            current_confidence = confidence
-                            self._send_tone_midi(result)
+                            current_confidence = voted_conf
+                            self._send_tone_midi(voted_result)
                             if self.on_tone_detected_callback:
                                 try:
-                                    self.on_tone_detected_callback(result)
+                                    self.on_tone_detected_callback(voted_result)
                                 except Exception:
                                     pass
 

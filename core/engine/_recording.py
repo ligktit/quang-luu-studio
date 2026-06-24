@@ -55,9 +55,12 @@ class _RecordingMixin:
                     raise Exception("Không thể tải file âm thanh để chấm điểm.")
 
             except Exception as e:
-                print(f"[QUICK SCORE] Lỗi: {e}")
+                # Dev: log đầy đủ; User: thông báo dễ hiểu.
+                import traceback
+                print(f"[QUICK SCORE] Lỗi: {e}\n{traceback.format_exc()}")
                 if on_error:
-                    on_error(str(e))
+                    on_error("Không chấm điểm được lần hát này. Hãy đảm bảo đã ghi được "
+                             "âm thanh rồi thử lại.")
             finally:
                 self.quick_score_active = False
                 if scoring_engine:
