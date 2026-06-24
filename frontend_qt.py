@@ -526,7 +526,7 @@ class MainDashboard(QMainWindow):
                 btn = self._func_buttons.get("Auto-Tune")
                 if btn: btn.setActive(self.tune_state)
 
-            if cc == int(MIDI_CC.get("fix_meo", 41)):
+            if cc == int(MIDI_CC.get("fix_meo", 45)):
                 self.fix_meo_state = (value >= 64)
                 btn = self._func_buttons.get("Fix Méo")
                 if btn: btn.setActive(self.fix_meo_state)
@@ -929,7 +929,7 @@ class MainDashboard(QMainWindow):
         
         # Ưu tiên dùng giá trị cân chỉnh trong mode_midi_map nếu có
         mode_map = backend.AppConfig.get_mode_midi_map()
-        cc_num = int(MIDI_CC.get("fix_meo", 41))
+        cc_num = int(MIDI_CC.get("fix_meo", 45))
         if "Fix Méo" in mode_map:
             # Nếu dùng mode_map thì thường là giá trị cố định, nhưng ta vẫn dùng toggle logic
             midi_val = mode_map["Fix Méo"] if self.fix_meo_state else 0

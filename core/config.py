@@ -125,13 +125,13 @@ _DEFAULT_APP_CONFIG = {
         # tune_on_off (36): control "Auto-Tune bypass" cho template Studio One,
         #        không có caller Python (chỉ surface.xml + script test).
         # tone_auto (40): nút Auto-Tune thật — frontend_qt.py:474/797. TÁCH khỏi 31.
-        # fix_meo  (41): nút chống méo giọng thật — frontend_qt.py:479/809,
-        #        tools.py:187. TÁCH khỏi 36.
-        "tune_on_off": 36, "tone_auto": 40, "fix_meo": 41,
-        # mode_danca (42): TÁCH khỏi 30 để không đè live-tuner "mode".
-        #        Nút Dân Ca thật đi qua mode_config["Dân Ca"]["cc"], nay cũng = 42
+        # fix_meo  (45): nút chống méo giọng thật — frontend_qt.py:479/809,
+        #        tools.py:187. TÁCH khỏi 36. (41–44 đã bị mute_multi_cc.mix_reverb dùng)
+        "tune_on_off": 36, "tone_auto": 40, "fix_meo": 45,
+        # mode_danca (46): TÁCH khỏi 30 để không đè live-tuner "mode".
+        #        Nút Dân Ca thật đi qua mode_config["Dân Ca"]["cc"], nay cũng = 46
         #        để đồng bộ với key này (xem mode_config bên dưới).
-        "mode_danca": 42, "mode_lofi": 37, "mode_remix": 38, "mode_datheloai": 39,
+        "mode_danca": 46, "mode_lofi": 37, "mode_remix": 38, "mode_datheloai": 39,
         "mute_music": 50, "mute_mic": 51, "mute_reverb": 52, "mute_backing": 53,
     },
     # ⚠ NGUỒN TRÙNG: scale_values {major,minor} và scale_midi_map {Major,Minor}
@@ -160,7 +160,7 @@ _DEFAULT_APP_CONFIG = {
         "Fix Méo": 127
     },
     "mode_config": {
-        "Dân Ca":       {"cc": 42, "on_value": 127, "off_value": 0},
+        "Dân Ca":       {"cc": 46, "on_value": 127, "off_value": 0},
         "Lofi":         {"cc": 37, "on_value": 127, "off_value": 0},
         "Remix":        {"cc": 38, "on_value": 127, "off_value": 0},
         "Đa Thể Loại":  {"cc": 39, "on_value": 127, "off_value": 0}

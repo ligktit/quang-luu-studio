@@ -17,9 +17,9 @@
         "key_scale": 34,
         "scale_type": 35,
         "tune_on_off": 36,
-        "tone_auto": 31,
-        "fix_meo": 36,
-        "mode_danca": 30,
+        "tone_auto": 40,
+        "fix_meo": 45,
+        "mode_danca": 46,
         "mode_lofi": 37,
         "mode_remix": 38,
         "mode_datheloai": 39,
@@ -59,7 +59,7 @@
     },
     "mode_config": {
         "Dân Ca": {
-            "cc": 30,
+            "cc": 46,
             "on_value": 127,
             "off_value": 0
         },
