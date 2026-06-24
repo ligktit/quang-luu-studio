@@ -2,7 +2,7 @@ import backend
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QTabWidget, QGridLayout, QWidget, QSpinBox, QSlider,
-    QComboBox,
+    QComboBox, QMessageBox,
 )
 from PySide6.QtCore import Qt, QTimer, QSize, QByteArray
 from PySide6.QtGui import QIcon, QPixmap, QPainter
@@ -482,10 +482,20 @@ class CalibrationWizardDialog(QDialog):
     # ── Value control (shared live tuner) ─────────────────────
 
     def _active_cc(self):
+        # Đọc CC trực tiếp từ AppConfig (live) thay vì snapshot MIDI_CC lúc import —
+        # đảm bảo tab calibration sweep ĐÚNG CC mà runtime thực sự gửi.
+        try:
+            cc_map = backend.AppConfig.get_midi_cc()
+        except Exception:
+            cc_map = MIDI_CC
         idx = self._tabs.currentIndex() if hasattr(self, "_tabs") else 0
-        if idx == 1: return int(MIDI_CC.get("key_root", 33))
-        if idx == 2: return int(MIDI_CC.get("mode", 30))
-        return int(MIDI_CC.get("scale_type", 35))
+        if idx == 1:
+            return int(cc_map.get("key_root", 33))
+        if idx == 2:
+            # Tab "Chế độ" chỉ có Fix Méo → phải sweep CC fix_meo (runtime
+            # _on_fix_meo gửi cc_map["fix_meo"]), KHÔNG dùng CC "mode" (live-tuner).
+            return int(cc_map.get("fix_meo", 41))
+        return int(cc_map.get("scale_type", 35))
 
     def _set_value(self, v):
         """Single source of truth: clamp, sync widgets, push MIDI live."""
@@ -648,14 +658,89 @@ class CalibrationWizardDialog(QDialog):
 
     # ── Save ──────────────────────────────────────────────────
 
+    def _validate_before_save(self):
+        """Kiểm tra dữ liệu cân chỉnh trước khi lưu.
+
+        Trả về True nếu được phép tiếp tục lưu, False nếu user hủy.
+        Một số cảnh báo cho phép user xác nhận tiếp tục (cố ý), một số chặn cứng
+        (giá trị ngoài [0,127]).
+        """
+        s = self._state
+
+        # 1. Validate dải [0,127] — chặn cứng nếu sai (không nên xảy ra vì widget
+        #    đã clamp, nhưng vẫn phòng thủ).
+        all_vals = []
+        if s["major_value"] is not None:
+            all_vals.append(("Major", s["major_value"]))
+        if s["minor_value"] is not None:
+            all_vals.append(("Minor", s["minor_value"]))
+        all_vals += list(s["key_values"].items())
+        all_vals += list(s["mode_values"].items())
+        bad = [name for name, v in all_vals if not (0 <= int(v) <= 127)]
+        if bad:
+            QMessageBox.critical(
+                self, "Giá trị không hợp lệ",
+                "Giá trị phải nằm trong khoảng 0–127. Các mục lỗi: "
+                + ", ".join(bad),
+            )
+            return False
+
+        # 2. Cảnh báo nếu thiếu key (chưa bắt đủ 12) — hỏi lưu phần đã bắt không.
+        n_key = len(s["key_values"])
+        if 0 < n_key < 12:
+            missing = [k for k in self.ALL_KEYS if k not in s["key_values"]]
+            ret = QMessageBox.question(
+                self, "Chưa bắt đủ 12 phím",
+                f"Mới bắt {n_key}/12 phím. Các phím chưa bắt sẽ giữ giá trị cũ "
+                f"(map có thể nửa cũ nửa mới):\n{', '.join(missing)}\n\n"
+                "Vẫn lưu phần đã bắt?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if ret != QMessageBox.Yes:
+                return False
+
+        # 3. Cảnh báo nếu major == minor (reverse-lookup scale luôn ra Major).
+        if (s["major_value"] is not None and s["minor_value"] is not None
+                and s["major_value"] == s["minor_value"]):
+            ret = QMessageBox.question(
+                self, "Major trùng Minor",
+                f"Major và Minor cùng giá trị ({s['major_value']}). Khi hiển thị "
+                "ngược lại MIDI→scale sẽ luôn ra Major.\n\nVẫn tiếp tục?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if ret != QMessageBox.Yes:
+                return False
+
+        # 4. Cảnh báo nếu key_values không tăng đơn điệu theo cao độ — reverse-lookup
+        #    MIDI→key giả định map tăng dần. Chỉ xét các phím đã bắt, theo thứ tự
+        #    cao độ ALL_KEYS. Cho phép xác nhận tiếp tục nếu cố ý.
+        ordered = [s["key_values"][k] for k in self.ALL_KEYS if k in s["key_values"]]
+        non_monotonic = any(b <= a for a, b in zip(ordered, ordered[1:]))
+        if non_monotonic:
+            ret = QMessageBox.question(
+                self, "Giá trị phím không tăng dần",
+                "Giá trị các phím không tăng dần theo cao độ. Việc hiển thị ngược "
+                "lại MIDI→nốt (giả định map tăng dần) có thể sai.\n\nVẫn lưu?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if ret != QMessageBox.Yes:
+                return False
+
+        return True
+
     def _save_calibration(self):
         self._stop_sweep()
         s = self._state
 
+        if not self._validate_before_save():
+            return
+
+        maps = {}
+
         if s["major_value"] is not None and s["minor_value"] is not None:
             maj, mno = s["major_value"], s["minor_value"]
-            backend.AppConfig.update("scale_values",  {"major": maj, "minor": mno})
-            backend.AppConfig.update("scale_midi_map", {"Major": maj, "Minor": mno})
+            maps["scale_values"] = {"major": maj, "minor": mno}
+            maps["scale_midi_map"] = {"Major": maj, "Minor": mno}
 
         if s["key_values"]:
             enharmonics = {
@@ -668,14 +753,24 @@ class CalibrationWizardDialog(QDialog):
                 current_map[key_name] = midi_val
                 if key_name in enharmonics:
                     current_map[enharmonics[key_name]] = midi_val
-            backend.AppConfig.update("key_midi_map", current_map)
+            maps["key_midi_map"] = current_map
 
         if s["mode_values"]:
-            backend.AppConfig.update("mode_midi_map", s["mode_values"])
+            maps["mode_midi_map"] = s["mode_values"]
 
-        backend.AppConfig.save()
-        self._dashboard._show_message("Đã lưu cân chỉnh")
-        self.close()
+        # Ghi vào DATA_DIR (user-writable) qua set_calibration — KHÔNG ghi
+        # app_config.json cạnh exe (có thể read-only ở Program Files).
+        ok = backend.AppConfig.set_calibration(**maps) if maps else False
+
+        if ok:
+            self._dashboard._show_message("Đã lưu cân chỉnh")
+            self.close()
+        else:
+            QMessageBox.critical(
+                self, "Lưu thất bại",
+                "Không lưu được cân chỉnh — kiểm tra quyền ghi (thư mục dữ liệu "
+                "có thể bị khóa hoặc đầy).",
+            )
 
     # ── Style helpers ─────────────────────────────────────────
 

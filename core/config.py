@@ -74,6 +74,21 @@ TONE_CACHE_FILE = os.path.join(DATA_DIR, "tone_cache.json")
 UI_CONFIG_FILE = os.path.join(DATA_DIR, "ui_config.json")
 # Accessibility overrides của user → DATA_DIR (user-writable, không nằm cạnh exe)
 ACCESSIBILITY_OVERRIDES_FILE = os.path.join(DATA_DIR, "accessibility_overrides.json")
+# Calibration overrides của user (cân chỉnh Auto-Tune) → DATA_DIR (user-writable).
+# app_config.json nằm cạnh exe có thể read-only (cài ở Program Files) nên không
+# ghi calibration vào đó; thay vào đó lưu riêng và merge đè khi load() — giống
+# pattern accessibility ở trên.
+CALIBRATION_OVERRIDES_FILE = os.path.join(DATA_DIR, "calibration_overrides.json")
+
+# Các key calibration được phép ghi đè qua set_calibration() và merge khi load().
+# Mỗi key là một dict → merge nông (update) đè lên app_config/defaults.
+CALIBRATION_KEYS = (
+    "key_midi_map",
+    "scale_midi_map",
+    "scale_values",
+    "mode_midi_map",
+    "mode_config",
+)
 
 # Prefix cho file audio TẠM do app tải về (yt-dlp/scoring).
 # MemoryGuard chỉ được phép xóa file có prefix này — KHÔNG BAO GIỜ đụng
@@ -114,9 +129,8 @@ _DEFAULT_APP_CONFIG = {
         #        tools.py:187. TÁCH khỏi 36.
         "tune_on_off": 36, "tone_auto": 40, "fix_meo": 41,
         # mode_danca (42): TÁCH khỏi 30 để không đè live-tuner "mode".
-        #        LƯU Ý: nút Dân Ca thật đi qua mode_config["Dân Ca"]["cc"] (=30),
-        #        không qua key này; nếu muốn nút Dân Ca dùng CC 42 phải sửa cả
-        #        mode_config bên dưới (ngoài phạm vi thay đổi hiện tại).
+        #        Nút Dân Ca thật đi qua mode_config["Dân Ca"]["cc"], nay cũng = 42
+        #        để đồng bộ với key này (xem mode_config bên dưới).
         "mode_danca": 42, "mode_lofi": 37, "mode_remix": 38, "mode_datheloai": 39,
         "mute_music": 50, "mute_mic": 51, "mute_reverb": 52, "mute_backing": 53,
     },
@@ -146,7 +160,7 @@ _DEFAULT_APP_CONFIG = {
         "Fix Méo": 127
     },
     "mode_config": {
-        "Dân Ca":       {"cc": 30, "on_value": 127, "off_value": 0},
+        "Dân Ca":       {"cc": 42, "on_value": 127, "off_value": 0},
         "Lofi":         {"cc": 37, "on_value": 127, "off_value": 0},
         "Remix":        {"cc": 38, "on_value": 127, "off_value": 0},
         "Đa Thể Loại":  {"cc": 39, "on_value": 127, "off_value": 0}
@@ -234,6 +248,25 @@ class AppConfig:
                 import logging
                 logging.getLogger("config").warning(f"Lỗi đọc accessibility overrides: {e}")
 
+            # Merge calibration overrides của user (DATA_DIR, user-writable) đè lên
+            # defaults + app_config. Cùng lý do với accessibility: app_config.json
+            # cạnh exe có thể read-only nên cân chỉnh phải lưu chỗ khác.
+            try:
+                if os.path.exists(CALIBRATION_OVERRIDES_FILE):
+                    with open(CALIBRATION_OVERRIDES_FILE, "r", encoding="utf-8") as f:
+                        cal = json.load(f)
+                    if isinstance(cal, dict):
+                        for key, value in cal.items():
+                            if key not in CALIBRATION_KEYS:
+                                continue
+                            if isinstance(value, dict) and isinstance(cls._data.get(key), dict):
+                                cls._data[key].update(value)
+                            else:
+                                cls._data[key] = value
+            except Exception as e:
+                import logging
+                logging.getLogger("config").warning(f"Lỗi đọc calibration overrides: {e}")
+
             return cls._data
 
     @classmethod
@@ -305,6 +338,59 @@ class AppConfig:
                 return True
             except Exception as e:
                 print(f"Lỗi lưu accessibility overrides: {e}")
+                return False
+
+    @classmethod
+    def set_calibration(cls, **maps):
+        """Cập nhật các map cân chỉnh Auto-Tune và lưu overrides.
+
+        maps: chỉ chấp nhận các key trong CALIBRATION_KEYS (key_midi_map,
+        scale_midi_map, scale_values, mode_midi_map, mode_config), mỗi giá trị
+        là một dict. Merge nông vào _data (đè key trùng) và ghi atomic vào
+        DATA_DIR (user-writable) thay vì app_config.json cạnh exe — file đó có
+        thể read-only (Program Files).
+
+        Returns True nếu ghi thành công, False nếu lỗi (caller PHẢI kiểm tra để
+        không báo "đã lưu" nhầm khi không ghi được).
+        """
+        with cls._lock:
+            data = cls.load()
+
+            # Lọc chỉ những key calibration hợp lệ
+            valid = {k: v for k, v in maps.items()
+                     if k in CALIBRATION_KEYS and isinstance(v, dict)}
+            if not valid:
+                return False
+
+            # Merge vào _data trong RAM (đè key trùng, giữ key cũ)
+            for key, value in valid.items():
+                if isinstance(data.get(key), dict):
+                    data[key].update(value)
+                else:
+                    data[key] = value
+
+            # Đọc overrides hiện có, merge thêm, ghi atomic
+            overrides = {}
+            try:
+                if os.path.exists(CALIBRATION_OVERRIDES_FILE):
+                    with open(CALIBRATION_OVERRIDES_FILE, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        overrides = loaded
+            except Exception:
+                pass
+
+            for key, value in valid.items():
+                if isinstance(overrides.get(key), dict):
+                    overrides[key].update(value)
+                else:
+                    overrides[key] = dict(value)
+
+            try:
+                atomic_write_json(CALIBRATION_OVERRIDES_FILE, overrides)
+                return True
+            except Exception as e:
+                print(f"Lỗi lưu calibration overrides: {e}")
                 return False
 
     @classmethod

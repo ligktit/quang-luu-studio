@@ -133,6 +133,8 @@ class MainDashboard(QMainWindow):
         self.fix_meo_state = False
         self.current_scale = "Major"
         self.is_dev_mode = False
+        # Cờ khoá replay khi user chỉnh tone/scale tay (xem _lock_replay_for_manual_override)
+        self._manual_tone_override = False
 
         self._mixer_channels = {}
 
@@ -364,15 +366,32 @@ class MainDashboard(QMainWindow):
         if is_major:
             scale_btn.setText("Major")
             scale_btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 11, 14))
+            scale_btn.setToolTip("Đang ở thể Trưởng (Major). Bấm để đổi sang Thứ (Minor).")
         else:
             scale_btn.setText("Minor")
             scale_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
+            scale_btn.setToolTip("Đang ở thể Thứ (Minor). Bấm để đổi sang Trưởng (Major).")
+
+    # Tên 12 nốt — dùng cho relative + reverse-lookup
+    _CHROMATIC_KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+    RELATIVE_MINOR_OFFSET = 9  # Major + 9 semitone = relative Minor (đồng bộ ToneDetector)
+
+    def _lock_replay_for_manual_override(self):
+        """Khi user chỉnh tone/scale tay → dừng replay timeline để mốc kế tiếp
+        không gửi MIDI đè lên lựa chọn của user. Replay sẽ bật lại khi user
+        bấm "Dò Lại" hoặc đổi bài (đường đi dò tone mới gọi start_scanning)."""
+        try:
+            self.engine.stop_tone_detection()
+        except Exception as e:
+            print(f"[TONE] Không dừng được replay khi override tay: {e}")
+        self._manual_tone_override = True
 
     def _on_tone_selected(self, value):
         self.current_tone = value
         key_midi_map = backend.AppConfig.get_key_midi_map()
         key_midi = key_midi_map.get(value, 0)
         self.engine.send_midi(MIDI_CC.get("key_root", 33), key_midi)
+        self._lock_replay_for_manual_override()
 
     def _on_scale_selected(self, value):
         self.current_scale = value
@@ -382,6 +401,37 @@ class MainDashboard(QMainWindow):
         scale_midi = scale_midi_map.get(value, 13)
         self.engine.send_midi(MIDI_CC.get("scale_type", MIDI_CC.get("key_scale", 35)), scale_midi)
         self._sync_scale_button(self.scale_is_major)
+        self._lock_replay_for_manual_override()
+
+    def _on_toggle_relative(self):
+        """Đổi tone hiện tại sang tone tương đối (C Trưởng ↔ La Thứ).
+        Đổi CẢ nốt gốc LẪN thể trong một chạm, rồi gửi MIDI như khi user chọn tay."""
+        cur_key = getattr(self, 'current_tone', 'C') or 'C'
+        cur_scale = getattr(self, 'current_scale', 'Major') or 'Major'
+        try:
+            idx = self._CHROMATIC_KEYS.index(cur_key)
+        except ValueError:
+            idx = 0
+        if cur_scale == "Major":
+            # Major → relative Minor: index + 9
+            new_idx = (idx + self.RELATIVE_MINOR_OFFSET) % 12
+            new_scale = "Minor"
+        else:
+            # Minor → relative Major: index - 9 (== + 3)
+            new_idx = (idx - self.RELATIVE_MINOR_OFFSET) % 12
+            new_scale = "Major"
+        new_key = self._CHROMATIC_KEYS[new_idx]
+
+        # Cập nhật combo + gửi MIDI (đi qua _on_tone_selected/_on_scale_selected để
+        # phát MIDI giống hệt khi user chọn tay; cũng khoá replay luôn).
+        with QSignalBlocker(self.tone_combo):
+            self.tone_combo.setCurrentText(new_key)
+        with QSignalBlocker(self.scale_combo):
+            self.scale_combo.setCurrentText(new_scale)
+        # Phát MIDI thủ công (đã chặn signal ở trên để tránh gọi 2 lần)
+        self._on_tone_selected(new_key)
+        self._on_scale_selected(new_scale)
+        self._show_message(f"↔ Đổi sang tone tương đối: {new_key} {new_scale}")
 
     def _update_midi_status(self):
         try:
@@ -471,12 +521,12 @@ class MainDashboard(QMainWindow):
                     print(f"[MIDI SYNC] {key} -> {'MUTED' if is_muted else 'ACTIVE'} (Value {value})")
 
             # --- Xử lý phản hồi Toggles khác ---
-            if cc == int(MIDI_CC.get("tone_auto", 31)):
+            if cc == int(MIDI_CC.get("tone_auto", 40)):
                 self.tune_state = (value >= 64)
                 btn = self._func_buttons.get("Auto-Tune")
                 if btn: btn.setActive(self.tune_state)
-            
-            if cc == int(MIDI_CC.get("fix_meo", 36)):
+
+            if cc == int(MIDI_CC.get("fix_meo", 41)):
                 self.fix_meo_state = (value >= 64)
                 btn = self._func_buttons.get("Fix Méo")
                 if btn: btn.setActive(self.fix_meo_state)
@@ -574,17 +624,27 @@ class MainDashboard(QMainWindow):
             self._tone_result_signal.emit({'error': msg, 'auto_detected': True})
 
         def _auto_on_progress(text):
-            # Chỉ hiện "Đang dò..." trên marquee, không hiện chi tiết.
-            # Callback chạy từ worker thread → route qua signal (không được
-            # set self._marquee_text trực tiếp vì setter đụng QWidget).
-            if not getattr(self, '_do_tone_running', False):
-                self._marquee_signal.emit("♪ Đang dò... ♪")
+            # Relay tiến trình THẬT từ backend ra marquee, kèm spinner động cho
+            # biết app còn sống. Callback chạy từ worker thread → route qua signal
+            # (không được set self._marquee_text trực tiếp vì setter đụng QWidget).
+            self._marquee_signal.emit(self._spinner_progress_text(text))
         
         self.engine.on_auto_tone_complete = _auto_on_complete
         self.engine.on_tone_detected_callback = _auto_on_complete
         self.engine.on_auto_tone_error = _auto_on_error
         self.engine.on_auto_tone_progress = _auto_on_progress
         self.engine.start_youtube_watcher()
+
+    _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def _spinner_progress_text(self, text):
+        """Bọc chuỗi tiến trình backend bằng spinner xoay (luân phiên frame mỗi
+        lần gọi) để user thấy app đang chạy chứ không treo."""
+        idx = getattr(self, '_spinner_idx', 0)
+        self._spinner_idx = (idx + 1) % len(self._SPINNER_FRAMES)
+        frame = self._SPINNER_FRAMES[idx]
+        msg = (text or "").strip() or "Đang dò tone..."
+        return f"{frame}  {msg}  {frame}"
 
     def _set_marquee_text(self, text):
         """Slot main-thread cho _marquee_signal — cập nhật marquee an toàn."""
@@ -602,7 +662,7 @@ class MainDashboard(QMainWindow):
                 btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 11, 14))
                 if old_key in self._func_buttons:
                     self._func_buttons["Chế độ: Full"] = self._func_buttons.pop(old_key)
-            self._show_message("Chế độ: Dò Full")
+            self._show_message("Chế độ Full: quét cả bài, phát hiện đổi tone theo thời gian (chậm hơn)")
         else:
             self.engine.tone_scan_mode = 'fast'
             if btn:
@@ -611,7 +671,7 @@ class MainDashboard(QMainWindow):
                 btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
                 if old_key in self._func_buttons:
                     self._func_buttons["Chế độ: Nhanh"] = self._func_buttons.pop(old_key)
-            self._show_message("Chế độ: Dò Nhanh")
+            self._show_message("Chế độ Nhanh: chỉ nghe ~45s đầu, lấy 1 tone (nhanh)")
 
     def _set_rescan_button_state(self, state: str):
         """Centralized button state: 'idle' | 'running' | 'cancel'.
@@ -649,13 +709,18 @@ class MainDashboard(QMainWindow):
             self._on_cancel_rescan()
             return
         self._do_tone_running = True
-        
+        # User chủ động dò lại → bỏ khoá override tay (cho phép kết quả mới ghi đè).
+        self._manual_tone_override = False
+
         self._set_rescan_button_state("running")
         self.autokey_dot.setStyleSheet(f"color: {C['orange']}; font-size: 16px;")
-        self._marquee_text = "♪ Đang dò lại... ♪"
+        self._marquee_text = self._spinner_progress_text("Đang dò lại...")
 
         import weakref
         url = getattr(self.engine, 'current_youtube_url', None)
+        # Relay tiến trình thật từ backend ra marquee (thay vì vứt bỏ on_progress).
+        def _on_progress(text):
+            self._marquee_signal.emit(self._spinner_progress_text(text))
         # Single stop() — Tier 1.3: pulled before if/else to avoid double call
         self.engine._tone_session.stop()
         if url:
@@ -663,23 +728,43 @@ class MainDashboard(QMainWindow):
             self.engine._dispatch_auto_detect(url, weakref.ref(self.engine), skip_resolve=True)
         else:
             self._show_message("Đang quét trình duyệt...")
-            
+
             def _on_complete(result):
                 self._tone_result_signal.emit(result)
             def _on_error(msg):
                 self._tone_result_signal.emit({'error': msg})
-                
+
             self.engine.detect_tone_from_browser(
                 on_complete=_on_complete,
                 on_error=_on_error,
-                on_progress=lambda x: None,
+                on_progress=_on_progress,
                 skip_resolve=True
             )
 
 
     def _handle_tone_result(self, result):
         """Slot xử lý kết quả dò tone trên main thread (thread-safe via Signal)"""
-        
+
+        # === Lọc các trạng thái KHÔNG phải kết quả tone ===
+        # Callback on_key_update gửi {'status':'listening'/'stopped'} khi im lặng /
+        # dừng — KHÔNG được set combo (key_display có thể là '...' không hợp lệ →
+        # nhấp nháy/rỗng). Chỉ early-return, không chạm UI tone.
+        status = result.get('status')
+        if status in ('listening', 'stopped'):
+            return
+        # Phòng hờ: nếu CÓ key/key_display nhưng KHÔNG thuộc 12 nốt (vd '...',
+        # 'Silence', 'Unknown') → bỏ qua để combo không bị set giá trị lạ. Khi cả
+        # hai đều vắng mặt thì để nhánh thành công dùng default 'C' như cũ.
+        if 'error' not in result:
+            raw_key = result.get('key')
+            raw_disp = result.get('key_display')
+            if raw_key is not None or raw_disp is not None:
+                kd_root = (raw_key or '').rstrip('m')
+                kd_disp = (raw_disp or '').rstrip('m')
+                valid_keys = self._CHROMATIC_KEYS
+                if (kd_root not in valid_keys) and (kd_disp not in valid_keys):
+                    return
+
         # === Trường hợp LỖI ===
         if 'error' in result:
             msg = result['error']
@@ -693,9 +778,18 @@ class MainDashboard(QMainWindow):
         
         # === Trường hợp THÀNH CÔNG ===
         self._do_tone_running = False
-        
+        # Kết quả dò mới từ backend → bỏ khoá manual override (replay/auto được
+        # phép gửi MIDI lại bình thường).
+        self._manual_tone_override = False
+
         # Nếu là auto-detect → cập nhật trạng thái nút mà không cần user nhấn trước
         is_auto = result.get('auto_detected', False)
+
+        # Cờ nguồn + độ tin cậy (backend mới cung cấp)
+        from_cache = result.get('from_cache', False)
+        from_manual = result.get('from_manual', False)
+        uncertain = result.get('uncertain', False)
+        confidence_level = result.get('confidence_level', '')
         
         # === 1. Cập nhật Key/Scale lên UI chính ===
         key_display = result.get('key_display', 'C')
@@ -714,11 +808,15 @@ class MainDashboard(QMainWindow):
         with QSignalBlocker(self.scale_combo):
             self.scale_combo.setCurrentText(scale)
         
-        # Đổi style combobox → nền trong suốt, text xanh lá, viền trắng
+        # Đổi style combobox theo độ tin cậy:
+        #  - chắc chắn  → text xanh lá (green)
+        #  - chưa chắc (uncertain / confidence thấp) → text cam cảnh báo
+        is_low_conf = bool(uncertain) or (confidence_level == 'low')
+        combo_color = C['orange'] if is_low_conf else C['green']
         detected_combo_qss = f"""
             QComboBox {{
                 background-color: transparent;
-                color: {C['green']};
+                color: {combo_color};
                 border: 2px solid rgba(255, 255, 255, 0.85);
                 border-radius: 8px;
                 padding: 4px 10px;
@@ -730,7 +828,7 @@ class MainDashboard(QMainWindow):
             QComboBox QAbstractItemView {{
                 background-color: {C['card']};
                 color: {C['text']};
-                selection-background-color: {C['green']};
+                selection-background-color: {combo_color};
                 border: 1px solid rgba(255, 255, 255, 0.5);
                 font-size: 13px;
                 font-family: {FONT};
@@ -738,6 +836,16 @@ class MainDashboard(QMainWindow):
         """
         self.tone_combo.setStyleSheet(detected_combo_qss)
         self.scale_combo.setStyleSheet(detected_combo_qss)
+
+        # Tooltip giải thích nguồn/độ tin cậy của tone đang hiển thị
+        if is_low_conf:
+            _tip = "⚠️ Tone gợi ý — chưa chắc chắn. Nghe thử, sai thì bấm Dò Lại hoặc chọn tay."
+        elif from_cache or from_manual:
+            _tip = "Tone đã lưu từ lần trước. Sai? Bấm Dò Lại."
+        else:
+            _tip = "Tone vừa dò xong."
+        self.tone_combo.setToolTip(_tip)
+        self.scale_combo.setToolTip(_tip)
         
         bpm = result.get('bpm', 0)
         camelot = result.get('camelot', '?')
@@ -746,8 +854,9 @@ class MainDashboard(QMainWindow):
         # === 2. Reset nút "Dò Lại" về trạng thái ban đầu ===
         self._set_rescan_button_state("idle")
         
-        # === 3. Cập nhật dot → xanh (đã phát hiện) ===
-        self.autokey_dot.setStyleSheet(f"color: {C['green']}; font-size: 16px;")
+        # === 3. Cập nhật dot → xanh (đã phát hiện) / cam (chưa chắc) ===
+        _dot_color = C['orange'] if is_low_conf else C['green']
+        self.autokey_dot.setStyleSheet(f"color: {_dot_color}; font-size: 16px;")
         
         # === Sync waveform hero ===
         if self._waveform is not None:
@@ -764,6 +873,14 @@ class MainDashboard(QMainWindow):
                 scale_btn.setText("Minor")
                 scale_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
         
+        # Nhãn (badge) phụ cho marquee: nguồn lưu sẵn / mức tin cậy
+        if is_low_conf:
+            badge = "  ⚠️ tone gợi ý — chưa chắc"
+        elif from_cache or from_manual:
+            badge = "  (đã lưu — sai? bấm Dò Lại)"
+        else:
+            badge = ""
+
         # === 5. Hiển thị tên bài hát + kết quả lên Marquee (giữ nguyên Window Title) ===
         # Chỉ cập nhật nội dung marquee nếu đây là kết quả dò toàn bài (không phải sự kiện chuyển timeline)
         if 'time' not in result:
@@ -772,21 +889,27 @@ class MainDashboard(QMainWindow):
                 # Có nhiều đoạn chuyển tone → hiển thị chuỗi tone
                 tone_chain = " → ".join(e.get('key_display', '?') for e in timeline)
                 if title:
-                    self._marquee_text = f"🎵 {title}   ★   {tone_chain}"
+                    self._marquee_text = f"🎵 {title}   ★   {tone_chain}{badge}"
                 else:
-                    self._marquee_text = f"🎵 {tone_chain}"
+                    self._marquee_text = f"🎵 {tone_chain}{badge}"
             elif title:
-                self._marquee_text = f"🎵 {title}   ★   {key_display} {scale}"
+                self._marquee_text = f"🎵 {title}   ★   {key_display} {scale}{badge}"
             else:
-                self._marquee_text = f"🎵 {key_display} {scale}"
-        
+                self._marquee_text = f"🎵 {key_display} {scale}{badge}"
+
         # Báo cho người dùng biết tone được dò từ loa (yt-dlp tải thất bại)
         if result.get('from_loopback'):
             self._show_message("🎤 Đã dò tone bằng cách nghe từ loa (không tải được YouTube)")
+        elif is_low_conf:
+            self._show_message("⚠️ Tone gợi ý — chưa chắc. Sai thì bấm Dò Lại hoặc chọn tay.")
+        elif from_cache or from_manual:
+            self._show_message("📁 Tone đã lưu. Sai? Bấm Dò Lại.")
 
         # === 6. Auto-save vào Danh sách bài hát ===
+        # Bảo thủ: KHÔNG tự lưu khi tone chưa chắc (uncertain/low) để tránh lưu tone
+        # đoán sai. Cũng không cần lưu lại nếu tone vốn lấy từ cache/manual.
         url = result.get('url', '')
-        if url and title and key_root:
+        if url and title and key_root and not is_low_conf and not from_cache and not from_manual:
             def _auto_save():
                 backend.SongManager.add_song(title, url, key_root)
             threading.Thread(target=_auto_save, daemon=True).start()
@@ -794,7 +917,7 @@ class MainDashboard(QMainWindow):
     def _on_tone_auto(self):
         self.tune_state = not getattr(self, 'tune_state', True)
         val = 127 if self.tune_state else 0
-        self.engine.send_midi(MIDI_CC.get("tone_auto", 31), val)
+        self.engine.send_midi(MIDI_CC.get("tone_auto", 40), val)
         btn = self._func_buttons.get("Auto-Tune")
         if btn:
             btn.setActive(self.tune_state)
@@ -806,7 +929,7 @@ class MainDashboard(QMainWindow):
         
         # Ưu tiên dùng giá trị cân chỉnh trong mode_midi_map nếu có
         mode_map = backend.AppConfig.get_mode_midi_map()
-        cc_num = int(MIDI_CC.get("fix_meo", 36))
+        cc_num = int(MIDI_CC.get("fix_meo", 41))
         if "Fix Méo" in mode_map:
             # Nếu dùng mode_map thì thường là giá trị cố định, nhưng ta vẫn dùng toggle logic
             midi_val = mode_map["Fix Méo"] if self.fix_meo_state else 0
@@ -840,6 +963,8 @@ class MainDashboard(QMainWindow):
                 color = C["orange"]
                 btn.setText("Minor")
             btn.setStyleSheet(pill_btn_qss(color, _lighten(color, 0.12), 11, 14))
+        # User chỉnh thể tay → khoá replay timeline (không để mốc kế tiếp đè MIDI)
+        self._lock_replay_for_manual_override()
 
     def _on_score(self):
         btn = self._func_buttons.get("Chấm điểm")
@@ -888,16 +1013,75 @@ class MainDashboard(QMainWindow):
         ScoringReportDialog(self, result).exec()
 
     def _show_message(self, text, is_error=False):
-        """Show temporary message box in center of dashboard"""
-        lbl = QLabel(text, self)
+        """Show temporary message box in center of dashboard.
+
+        Thông báo lỗi: ở lâu hơn (8s), không cắt cụt câu dài (word-wrap, rộng
+        tối đa theo cửa sổ) và có nút ✕ để user tự đóng ngay khi đã đọc xong.
+        Thông báo info ngắn: giữ nguyên hành vi cũ (tự biến mất sau 2s)."""
         color = C["accent"] if is_error else C["green"]
         font_size = 14 if is_error else 11
-        padding = "10px 20px" if is_error else "6px 12px"
-        lbl.setStyleSheet(f"background-color: {C['card']}; color: {color}; border: 1px solid {color}; border-radius: 8px; padding: {padding}; font-size: {font_size}px; font-weight: bold; font-family: {FONT};")
-        lbl.adjustSize()
-        lbl.move(self.width()//2 - lbl.width()//2, self.height()//2 - lbl.height()//2)
-        lbl.show()
-        QTimer.singleShot(2000 if not is_error else 4000, lbl.deleteLater)
+
+        if not is_error:
+            lbl = QLabel(text, self)
+            lbl.setStyleSheet(
+                f"background-color: {C['card']}; color: {color}; border: 1px solid {color};"
+                f" border-radius: 8px; padding: 6px 12px; font-size: {font_size}px;"
+                f" font-weight: bold; font-family: {FONT};"
+            )
+            lbl.adjustSize()
+            lbl.move(self.width() // 2 - lbl.width() // 2, self.height() // 2 - lbl.height() // 2)
+            lbl.show()
+            QTimer.singleShot(2000, lbl.deleteLater)
+            return
+
+        # ── Thông báo LỖI: panel có nút đóng, ở lâu, không cắt cụt ──
+        panel = QFrame(self)
+        panel.setStyleSheet(
+            f"background-color: {C['card']}; color: {color}; border: 1px solid {color};"
+            f" border-radius: 8px;"
+        )
+        panel.setAccessibleName("Thông báo lỗi")
+        panel.setAccessibleDescription(text)
+        lay = QHBoxLayout(panel)
+        lay.setContentsMargins(16, 12, 10, 12)
+        lay.setSpacing(8)
+
+        lbl = QLabel(text, panel)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(
+            f"color: {color}; background: transparent; border: none;"
+            f" font-size: {font_size}px; font-weight: bold; font-family: {FONT};"
+        )
+        lay.addWidget(lbl, 1)
+
+        close_btn = QPushButton("✕", panel)
+        close_btn.setFixedSize(24, 24)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setToolTip("Đóng thông báo")
+        close_btn.setAccessibleName("Đóng thông báo")
+        close_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {color}; border: none;"
+            f" font-size: 15px; font-weight: 900; font-family: {FONT}; }}"
+            f"QPushButton:hover {{ color: {_lighten(color, 0.3)}; }}"
+        )
+        lay.addWidget(close_btn, 0, Qt.AlignTop)
+
+        # Rộng tối đa ~80% cửa sổ để câu dài xuống dòng thay vì bị cắt
+        max_w = max(320, int(self.width() * 0.8))
+        panel.setMaximumWidth(max_w)
+        panel.adjustSize()
+        panel.move(self.width() // 2 - panel.width() // 2,
+                   self.height() // 2 - panel.height() // 2)
+        panel.show()
+        panel.raise_()
+
+        def _close():
+            try:
+                panel.deleteLater()
+            except RuntimeError:
+                pass
+        close_btn.clicked.connect(_close)
+        QTimer.singleShot(8000, _close)
 
     _SAVE_KEYS = [
         "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",

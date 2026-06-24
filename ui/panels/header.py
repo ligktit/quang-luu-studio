@@ -48,11 +48,16 @@ def build_header(dashboard) -> PaintedHeaderBar:
     layout.addSpacing(SP.XS)
 
     dashboard.tone_combo = QComboBox()
-    dashboard.tone_combo.addItems(["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"])
+    _NOTE_VI = ["Đô", "Đô thăng", "Rê", "Rê thăng", "Mi", "Fa",
+                "Fa thăng", "Sol", "Sol thăng", "La", "La thăng", "Si"]
+    _NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+    dashboard.tone_combo.addItems(_NOTES)
+    for _i, _vi in enumerate(_NOTE_VI):
+        dashboard.tone_combo.setItemData(_i, f"{_NOTES[_i]} — {_vi}", Qt.ToolTipRole)
     dashboard.tone_combo.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
     dashboard.tone_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
     dashboard.tone_combo.setAccessibleName("Chọn tone")
-    dashboard.tone_combo.setAccessibleDescription("Chọn nốt gốc của bài hát, từ Đô đến Si")
+    dashboard.tone_combo.setAccessibleDescription("Chọn nốt gốc của bài hát, từ Đô (C) đến Si (B)")
     dashboard.tone_combo.currentTextChanged.connect(dashboard._on_tone_selected)
     layout.addWidget(dashboard.tone_combo)
     layout.addSpacing(SP.XS)
@@ -62,9 +67,29 @@ def build_header(dashboard) -> PaintedHeaderBar:
     dashboard.scale_combo.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
     dashboard.scale_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
     dashboard.scale_combo.setAccessibleName("Chọn thể")
-    dashboard.scale_combo.setAccessibleDescription("Chọn trưởng hoặc thứ")
+    dashboard.scale_combo.setAccessibleDescription("Chọn trưởng (Major) hoặc thứ (Minor)")
+    dashboard.scale_combo.setItemData(0, "Trưởng (Major)", Qt.ToolTipRole)
+    dashboard.scale_combo.setItemData(1, "Thứ (Minor)", Qt.ToolTipRole)
     dashboard.scale_combo.currentTextChanged.connect(dashboard._on_scale_selected)
     layout.addWidget(dashboard.scale_combo)
+
+    # Nút "Tương đối" — đổi C Major ↔ A Minor một chạm (đổi cả nốt gốc lẫn thể)
+    layout.addSpacing(SP.XS)
+    dashboard._relative_btn = PainterButton(
+        "↔", color=C["light_purple"], height=28, radius=6,
+        font_size=14, fixed_width=30,
+    )
+    dashboard._relative_btn.setToolTip(
+        "Đổi sang tone tương đối (vd C Trưởng ↔ La Thứ).\n"
+        "Dùng khi bài là La Thứ nhưng app hiện Đô Trưởng."
+    )
+    dashboard._relative_btn.setAccessibleName("Đổi tone tương đối")
+    dashboard._relative_btn.setAccessibleDescription(
+        "Chuyển nhanh giữa tone trưởng và tone thứ tương đối, ví dụ Đô Trưởng đổi thành La Thứ"
+    )
+    dashboard._relative_btn.setCursor(Qt.PointingHandCursor)
+    dashboard._relative_btn.clicked.connect(dashboard._on_toggle_relative)
+    layout.addWidget(dashboard._relative_btn)
 
     layout.addSpacing(SP.SM)
     dashboard._settings_btn = PainterButton(
