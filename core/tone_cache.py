@@ -6,14 +6,105 @@ import os
 import json
 import time
 import re
+import errno
 import threading
+import contextlib
 
 from core.utils import extract_video_id, atomic_write_json, song_match_key
 from core.config import MANUAL_TIMELINES_FILE, TONE_CACHE_FILE
 
-# Lock bảo vệ chu trình read-modify-write trên các file JSON cache
+# Lock bảo vệ chu trình read-modify-write trên các file JSON cache TRONG 1 process
+# (threading.Lock). Để chống lost-update GIỮA CÁC TIẾN TRÌNH (vd app + tools/
+# batch_detect_tone.py chạy song song), ta lồng thêm file-lock liên tiến trình
+# bên ngoài threading.Lock (xem _interprocess_lock).
 _cache_lock = threading.Lock()
 _timeline_lock = threading.Lock()
+
+# Cấu hình file-lock liên tiến trình
+_LOCK_TIMEOUT = 5.0       # giây — tối đa chờ lấy lock trước khi fallback ghi thẳng
+_LOCK_POLL = 0.05         # giây — khoảng giữa các lần thử
+_LOCK_STALE_AGE = 30.0    # giây — lockfile cũ hơn mức này coi là mồ côi → cướp
+
+
+@contextlib.contextmanager
+def _interprocess_lock(data_path):
+    """Khóa LIÊN TIẾN TRÌNH quanh chu trình read-modify-write của 1 file JSON.
+
+    Cơ chế: tạo file ``<data_path>.lock`` bằng O_CREAT|O_EXCL (atomic trên cả
+    Windows lẫn POSIX). Nếu file đã tồn tại → process khác đang giữ lock, retry
+    ngắn (poll) tới ``_LOCK_TIMEOUT``.
+
+    An toàn / không treo app:
+      * Lockfile mồ côi (process giữ lock bị crash, không nhả): nếu file cũ hơn
+        ``_LOCK_STALE_AGE`` thì coi là stale và cướp (xóa) — tránh deadlock vĩnh
+        viễn.
+      * Hết timeout vẫn không lấy được: KHÔNG raise, KHÔNG treo — vẫn cho caller
+        ghi (yield) nhưng log cảnh báo. Bảo toàn hành vi "luôn ghi được".
+      * Nền không hỗ trợ (thư mục read-only, lỗi OS lạ...): nuốt lỗi, yield để
+        ghi vẫn chạy.
+
+    LUÔN nhả lock trong finally (xóa lockfile nếu chính ta đã tạo).
+    """
+    lock_path = "{}.lock".format(data_path)
+    acquired = False
+    deadline = time.time() + _LOCK_TIMEOUT
+    try:
+        lock_dir = os.path.dirname(lock_path)
+        if lock_dir and not os.path.isdir(lock_dir):
+            try:
+                os.makedirs(lock_dir, exist_ok=True)
+            except OSError:
+                pass
+
+        while True:
+            try:
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                try:
+                    os.write(fd, str(os.getpid()).encode("ascii", "ignore"))
+                finally:
+                    os.close(fd)
+                acquired = True
+                break
+            except FileExistsError:
+                # Lock đang bị giữ — kiểm tra mồ côi (stale) rồi retry.
+                try:
+                    age = time.time() - os.path.getmtime(lock_path)
+                    if age > _LOCK_STALE_AGE:
+                        # Lockfile quá cũ: process giữ nó có thể đã chết. Cướp.
+                        os.remove(lock_path)
+                        print(
+                            "[CẢNH BÁO] Lockfile mồ côi {} (tuổi {:.0f}s) — đã "
+                            "xóa và thử lại.".format(lock_path, age)
+                        )
+                        continue
+                except OSError:
+                    pass
+                if time.time() >= deadline:
+                    print(
+                        "[CẢNH BÁO] Không lấy được file-lock {} sau {:.0f}s — "
+                        "ghi không có khóa liên tiến trình (có thể chạy song "
+                        "song). Dữ liệu trong 1 process vẫn an toàn.".format(
+                            lock_path, _LOCK_TIMEOUT
+                        )
+                    )
+                    break
+                time.sleep(_LOCK_POLL)
+            except OSError as e:
+                # Nền không hỗ trợ O_EXCL / thư mục read-only / lỗi lạ: đừng vỡ.
+                print(
+                    "[CẢNH BÁO] Không tạo được file-lock {} ({}) — bỏ qua khóa "
+                    "liên tiến trình.".format(lock_path, e)
+                )
+                break
+
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                os.remove(lock_path)
+            except OSError as e:
+                if getattr(e, "errno", None) != errno.ENOENT:
+                    print("[CẢNH BÁO] Không xóa được lockfile {}: {}".format(lock_path, e))
 
 
 def _backup_corrupt_file(path, err):
@@ -121,7 +212,9 @@ class ToneCacheManager:
         if not key:
             return
 
-        with _cache_lock:
+        # File-lock liên tiến trình LỒNG NGOÀI threading.Lock để chống
+        # lost-update khi app + tools/batch_detect_tone.py ghi song song.
+        with _interprocess_lock(ToneCacheManager.CACHE_FILE), _cache_lock:
             cache = ToneCacheManager._load_cache()
             # Prune entry hết hạn khi save — file không phình to vô hạn
             cache = ToneCacheManager._prune_expired(cache)
@@ -135,7 +228,7 @@ class ToneCacheManager:
     @staticmethod
     def clear_cache():
         """Xóa toàn bộ cache"""
-        with _cache_lock:
+        with _interprocess_lock(ToneCacheManager.CACHE_FILE), _cache_lock:
             ToneCacheManager._save_cache({})
 
 
@@ -148,9 +241,41 @@ class ManualToneTimeline:
     Mỗi entry có cờ "source": "human" (mặc định) để phân biệt với "auto" về sau.
     Entry CŨ không có cờ source được coi là "human" (đã sửa tay) — tương thích
     ngược, không mất ưu tiên.
+
+    Phình kích thước: đây là DỮ LIỆU NGƯỜI DÙNG nên KHÔNG có TTL và KHÔNG tự
+    xóa. Để tránh file phình âm thầm tới mức bất thường, save_timeline gọi
+    _maybe_warn_size() — chỉ LOG CẢNH BÁO khi vượt SIZE_WARN_THRESHOLD, tuyệt
+    đối không xóa entry nào. Dùng count_timelines() để kiểm tra số lượng.
     """
 
     DEFAULT_SOURCE = "human"
+
+    # Ngưỡng cảnh báo (không xóa). Vượt mức này → log nhắc người dùng dọn thủ
+    # công. Chọn lớn (2000) vì mỗi bài là 1 entry — người dùng thực khó chạm tới.
+    SIZE_WARN_THRESHOLD = 2000
+
+    @staticmethod
+    def count_timelines():
+        """Trả về số timeline đang lưu (số bài). Không tải nặng — chỉ đếm key."""
+        return len(ManualToneTimeline._load_all())
+
+    @staticmethod
+    def _maybe_warn_size(all_data):
+        """Log cảnh báo nếu số timeline vượt ngưỡng. KHÔNG xóa gì cả.
+
+        Best-effort: mọi lỗi đều nuốt để không bao giờ chặn việc lưu dữ liệu
+        người dùng.
+        """
+        try:
+            count = len(all_data)
+            if count > ManualToneTimeline.SIZE_WARN_THRESHOLD:
+                print(
+                    "[CẢNH BÁO] manual_timelines có {} bài (> {}). Dữ liệu KHÔNG "
+                    "bị tự xóa; cân nhắc dọn thủ công các bài không dùng để file "
+                    "gọn hơn.".format(count, ManualToneTimeline.SIZE_WARN_THRESHOLD)
+                )
+        except Exception:
+            pass
 
     @staticmethod
     def _load_all():
@@ -216,7 +341,7 @@ class ManualToneTimeline:
         if not key:
             return False
 
-        with _timeline_lock:
+        with _interprocess_lock(MANUAL_TIMELINES_FILE), _timeline_lock:
             all_data = ManualToneTimeline._load_all()
             all_data[key] = {
                 "title": title,
@@ -225,6 +350,7 @@ class ManualToneTimeline:
                 "source": source,
                 "updated_at": time.time()
             }
+            ManualToneTimeline._maybe_warn_size(all_data)
             return ManualToneTimeline._save_all(all_data)
 
     @staticmethod
@@ -234,7 +360,7 @@ class ManualToneTimeline:
         if not key:
             return False
 
-        with _timeline_lock:
+        with _interprocess_lock(MANUAL_TIMELINES_FILE), _timeline_lock:
             all_data = ManualToneTimeline._load_all()
             # Tương thích ngược: xóa cả key cũ (video_id thuần) nếu có
             removed = False

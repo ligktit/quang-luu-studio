@@ -108,16 +108,49 @@ def _install_watchdog(timeout_sec, on_complete, on_error, label, on_timeout_hook
     return _safe_complete, _safe_error, watchdog_cancel
 
 
+def _cancelled(cancel, watchdog_cancel=None):
+    """True nếu phiên bị hủy (session cancel) HOẶC watchdog đã timeout.
+
+    Trước đây watchdog_cancel gần như là dead code: khi timeout, on_timeout_hook
+    gọi _tone_session.stop() — việc này set SESSION cancel nên worker vẫn dừng ở
+    điểm poll kế. Nhưng nếu UI/luồng khác mở phiên MỚI ngay sau timeout (state về
+    SCANNING với cancel event khác), session cancel của phiên cũ không còn được
+    set, worker cũ có thể chạy tiếp tới các bước side-effect (gửi MIDI / ghi cache)
+    SAU KHI UI đã báo timeout. watchdog_cancel là cờ RIÊNG của phiên này nên một
+    khi đã timeout sẽ mãi True → kết hợp ở đây để worker dừng dứt khoát, không phụ
+    thuộc việc session cancel có bị "tái sử dụng" hay không.
+    """
+    if cancel is not None and cancel.is_set():
+        return True
+    if watchdog_cancel is not None and watchdog_cancel.is_set():
+        return True
+    return False
+
+
 class _ToneMixin:
     # ── DRY Helpers ──────────────────────────────────────────────────────────────
 
+    def _tone_resolve_cache_lock_obj(self):
+        """Trả về lock bảo vệ _tone_resolve_cache.
+
+        Dùng getattr-default để an toàn với các instance được tạo trước khi
+        __init__ thêm lock (vd. test cũ build engine kiểu khác) — không có lock
+        thì rơi về một RLock dùng-một-lần (vẫn đúng, chỉ không chia sẻ).
+        """
+        lock = getattr(self, "_tone_resolve_cache_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._tone_resolve_cache_lock = lock
+        return lock
+
     def _resolve_tone(self, url):
-        # In-session memoization: check RAM cache first
-        if url in self._tone_resolve_cache:
-            self._tone_resolve_cache.move_to_end(url)
-            source, data = self._tone_resolve_cache[url]
-            print(f"[RESOLVE] Cache phiên: {source}")
-            return (source, data)
+        # In-session memoization: check RAM cache first (dưới khóa).
+        with self._tone_resolve_cache_lock_obj():
+            if url in self._tone_resolve_cache:
+                self._tone_resolve_cache.move_to_end(url)
+                source, data = self._tone_resolve_cache[url]
+                print(f"[RESOLVE] Cache phiên: {source}")
+                return (source, data)
 
         saved_manual = ManualToneTimeline.load_timeline(url)
         if saved_manual and saved_manual.get('timeline'):
@@ -135,14 +168,16 @@ class _ToneMixin:
 
     def _tone_resolve_cache_put(self, url, entry):
         """Insert into in-session cache, evicting oldest if over max size."""
-        self._tone_resolve_cache[url] = entry
-        self._tone_resolve_cache.move_to_end(url)
-        while len(self._tone_resolve_cache) > self._TONE_RESOLVE_CACHE_MAX:
-            self._tone_resolve_cache.popitem(last=False)
+        with self._tone_resolve_cache_lock_obj():
+            self._tone_resolve_cache[url] = entry
+            self._tone_resolve_cache.move_to_end(url)
+            while len(self._tone_resolve_cache) > self._TONE_RESOLVE_CACHE_MAX:
+                self._tone_resolve_cache.popitem(last=False)
 
     def _tone_resolve_cache_invalidate(self, url):
         """Remove a URL from the in-session cache (called after save)."""
-        self._tone_resolve_cache.pop(url, None)
+        with self._tone_resolve_cache_lock_obj():
+            self._tone_resolve_cache.pop(url, None)
 
     def _build_cache_result(self, cached):
         """Build a flat result dict from already-loaded cache data + send MIDI.
@@ -306,14 +341,19 @@ class _ToneMixin:
             on_timeout_hook=lambda: self._tone_session.stop(),
         )
 
+        # Snapshot field dùng chung MỘT LẦN: thread khác có thể đổi
+        # current_youtube_url giữa chừng → nếu re-read, có thể dò URL này nhưng
+        # cache vào URL kia. Dùng biến local nhất quán xuyên suốt worker.
+        youtube_url = self.current_youtube_url
+
         # Đi qua session để chống bấm chồng: start_scanning() hủy phiên cũ
         # (set cancel của nó) và cấp token mới cho phiên này.
-        cancel = self._tone_session.start_scanning(self.current_youtube_url or "")
+        cancel = self._tone_session.start_scanning(youtube_url or "")
 
         def _detect():
             try:
-                if self.current_youtube_url:
-                    source, resolved_data = self._resolve_tone(self.current_youtube_url)
+                if youtube_url:
+                    source, resolved_data = self._resolve_tone(youtube_url)
                     if source == 'manual':
                         timeline = resolved_data['timeline']
                         first    = timeline[0]
@@ -338,20 +378,20 @@ class _ToneMixin:
                                 on_complete(cached_result)
                             return
 
-                if cancel.is_set():
+                if _cancelled(cancel, watchdog_cancel):
                     return
 
                 result = None
-                if self.current_youtube_url:
+                if youtube_url:
                     print("[DÒ TONE] Dùng YouTube audio...")
                     try:
                         result = ToneDetector.detect_key_from_youtube(
-                            self.current_youtube_url, duration_limit=30
+                            youtube_url, duration_limit=30
                         )
                     except Exception as e:
                         print(f"[DÒ TONE] YouTube download thất bại: {e}")
 
-                if cancel.is_set():
+                if _cancelled(cancel, watchdog_cancel):
                     return
 
                 if not result:
@@ -359,13 +399,15 @@ class _ToneMixin:
                         duration=duration, on_progress=on_progress
                     )
 
-                if cancel.is_set():
+                # Kiểm tra timeout/cancel TRƯỚC mọi side-effect (gửi MIDI / ghi
+                # cache): nếu UI đã báo timeout thì không gửi MIDI/ghi cache muộn.
+                if _cancelled(cancel, watchdog_cancel):
                     return
 
                 if result:
                     self._send_tone_midi(result)
-                    if self.current_youtube_url:
-                        self._save_tone_to_cache(self.current_youtube_url, result)
+                    if youtube_url:
+                        self._save_tone_to_cache(youtube_url, result)
                     if on_complete:
                         on_complete(result)
                 else:
@@ -430,7 +472,7 @@ class _ToneMixin:
                             on_complete(cached_result)
                         return
 
-                if cancel.is_set():
+                if _cancelled(cancel, watchdog_cancel):
                     return
 
                 if on_progress:
@@ -438,7 +480,8 @@ class _ToneMixin:
 
                 result = ToneDetector.detect_key_from_youtube(youtube_url, duration_limit=30)
 
-                if cancel.is_set():
+                # Kiểm tra timeout/cancel TRƯỚC side-effect (gửi MIDI / ghi cache).
+                if _cancelled(cancel, watchdog_cancel):
                     return
 
                 if result:
@@ -530,7 +573,7 @@ class _ToneMixin:
                                 on_complete(cached_result)
                             return
 
-                if cancel.is_set():
+                if _cancelled(cancel, watchdog_cancel):
                     return
 
                 # 4. Tải audio từ YouTube (45s)
@@ -543,7 +586,7 @@ class _ToneMixin:
                 except Exception:
                     audio_path, video_title = None, ''
 
-                if cancel.is_set():
+                if _cancelled(cancel, watchdog_cancel):
                     return
 
                 result = None
@@ -556,11 +599,11 @@ class _ToneMixin:
                     try:
                         import librosa
 
-                        if cancel.is_set():
+                        if _cancelled(cancel, watchdog_cancel):
                             return
                         audio_data, sr = librosa.load(audio_path, sr=16000, mono=True, duration=45)
 
-                        if cancel.is_set():
+                        if _cancelled(cancel, watchdog_cancel):
                             del audio_data
                             return
                         result = ToneDetector.detect_key_from_audio(audio_data, sr, skip_hum_detection=True)
@@ -591,7 +634,8 @@ class _ToneMixin:
                         fail_reason = ("Không tải được audio từ YouTube (video bị chặn / cần đăng "
                                        "nhập / lỗi mạng) và phương án nghe loa cũng thất bại: " + lb_reason)
 
-                if cancel.is_set():
+                # Kiểm tra timeout/cancel TRƯỚC side-effect (gửi MIDI / ghi cache / replay).
+                if _cancelled(cancel, watchdog_cancel):
                     return
 
                 if result:
@@ -704,7 +748,7 @@ class _ToneMixin:
                 except Exception as e:
                     print(f"[AUTO TIMELINE] Không lấy được title: {e}")
 
-                if cancel.is_set():
+                if _cancelled(cancel, watchdog_cancel):
                     return
 
                 if on_progress:
@@ -713,7 +757,7 @@ class _ToneMixin:
                 scoring_engine = ScoringEngine()
                 audio_path     = scoring_engine.download_youtube_audio(url)
 
-                if cancel.is_set():
+                if _cancelled(cancel, watchdog_cancel):
                     return
 
                 total_seconds    = 0
@@ -724,7 +768,7 @@ class _ToneMixin:
                     if on_progress:
                         on_progress("Đang load file âm thanh...")
 
-                    if cancel.is_set():
+                    if _cancelled(cancel, watchdog_cancel):
                         return
 
                     audio_data, sr = librosa.load(audio_path, sr=22050, mono=True)
@@ -732,7 +776,7 @@ class _ToneMixin:
                     num_segments   = math.ceil(total_seconds / SEGMENT_DURATION)
                     print(f"[AUTO TIMELINE] Audio: {total_seconds:.1f}giây, {num_segments} đoạn")
 
-                    if cancel.is_set():
+                    if _cancelled(cancel, watchdog_cancel):
                         del audio_data
                         audio_data = None
                         return
@@ -766,7 +810,8 @@ class _ToneMixin:
                         fail_reason = ("Không tải được audio từ YouTube (video bị chặn / cần đăng "
                                        "nhập / lỗi mạng) và phương án nghe loa cũng thất bại: " + lb_reason)
 
-                if cancel.is_set():
+                # Kiểm tra timeout/cancel TRƯỚC side-effect (ghi cache / gửi MIDI / replay).
+                if _cancelled(cancel, watchdog_cancel):
                     return
 
                 if not timeline_entries:

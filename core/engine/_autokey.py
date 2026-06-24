@@ -339,7 +339,17 @@ class _AutokeyMixin:
             print(f"[TONE CONTINUOUS] Loopback: {loopback_dev['name']}, sr={device_sr}")
 
             _seg_count = 0
-            while not cancel.is_set() and self.youtube_monitoring_active:
+            # ĐIỀU KIỆN DỪNG = CỜ RIÊNG của phiên dò (cancel của _tone_session), KHÔNG
+            # phụ thuộc youtube_monitoring_active. youtube_monitoring_active là một TIMER
+            # theo độ-dài-video (monitor_video trong _youtube.py): nó tắt khi timer hết,
+            # độc lập hoàn toàn với việc nhạc CÓ CÒN ĐANG PHÁT hay không. Trước đây ghép
+            # nó vào điều kiện while khiến continuous DỪNG ĐỘT NGỘT khi timer hết dù nhạc
+            # vẫn phát (ước lượng duration sai / video bị tua / continuous bắt đầu trễ).
+            #
+            # cancel mới là cờ dừng đúng đắn & đầy đủ: stop_tone_detection() → session.stop()
+            # set cancel; đổi URL/bài → start_scanning() thay Event cũ (đã set) nên vòng cũ
+            # tự thấy cancel.is_set() và thoát. Không có rủi ro leak thread.
+            while not cancel.is_set():
                 try:
                     audio_chunks  = []
                     frames_needed = segment_duration * device_sr

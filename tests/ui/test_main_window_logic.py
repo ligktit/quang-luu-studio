@@ -186,6 +186,63 @@ def test_manual_tone_override_locks_replay(qapp, mock_engine, qtbot):
     mock_engine.stop_tone_detection.assert_called()
 
 
+_STD_KEY_MAP = {
+    "C": 0, "C#": 1, "D": 2, "D#": 3, "E": 4, "F": 5,
+    "F#": 6, "G": 7, "G#": 8, "A": 9, "A#": 10, "B": 11,
+}
+
+
+def test_reverse_lookup_key_standard_map():
+    # Map chuẩn tuyến tính → khớp chính xác từng nốt
+    for k, v in _STD_KEY_MAP.items():
+        assert MainDashboard._reverse_lookup_key(v, _STD_KEY_MAP) == k
+
+
+def test_reverse_lookup_key_nearest_when_offset():
+    # Value lệch nhẹ → chọn nốt GẦN nhất
+    assert MainDashboard._reverse_lookup_key(7, _STD_KEY_MAP) == "G"
+    # 6.x làm tròn về phía gần hơn (value nguyên 6 -> F#)
+    assert MainDashboard._reverse_lookup_key(6, _STD_KEY_MAP) == "F#"
+
+
+def test_reverse_lookup_key_tie_prefers_exact():
+    # Map bất thường: C và D cùng cách value=1 một khoảng, nhưng C# khớp chính xác.
+    weird = dict(_STD_KEY_MAP)
+    weird["C"] = 0   # diff 1
+    weird["C#"] = 1  # diff 0 (exact)
+    weird["D"] = 2   # diff 1
+    assert MainDashboard._reverse_lookup_key(1, weird) == "C#"
+
+
+def test_reverse_lookup_key_inverted_map():
+    # Map ĐẢO chiều (value cao = nốt thấp) vẫn lấy đúng nốt gần nhất.
+    inverted = {k: (11 - v) for k, v in _STD_KEY_MAP.items()}
+    assert MainDashboard._reverse_lookup_key(11, inverted) == "C"
+    assert MainDashboard._reverse_lookup_key(0, inverted) == "B"
+
+
+def test_reverse_lookup_scale_nearest():
+    smap = {"Major": 13, "Minor": 18}
+    assert MainDashboard._reverse_lookup_scale(13, smap) == "Major"
+    assert MainDashboard._reverse_lookup_scale(18, smap) == "Minor"
+    assert MainDashboard._reverse_lookup_scale(17, smap) == "Minor"
+    assert MainDashboard._reverse_lookup_scale(14, smap) == "Major"
+
+
+def test_reverse_lookup_scale_guard_equal():
+    # Major == Minor (map hỏng) → guard trả Major, không chia nhầm.
+    assert MainDashboard._reverse_lookup_scale(20, {"Major": 20, "Minor": 20}) == "Major"
+
+
+def test_is_speaker_loopback_error():
+    assert MainDashboard._is_speaker_loopback_error(
+        "Loa 'X' không phát ra âm thanh (im lặng).")
+    assert MainDashboard._is_speaker_loopback_error(
+        "...và phương án nghe loa cũng thất bại: ...")
+    assert not MainDashboard._is_speaker_loopback_error(
+        "Không tải được audio từ YouTube (video bị chặn).")
+
+
 def test_quick_score_button(qapp, mock_engine, qtbot):
     # UI-03
     with patch("frontend_qt.backend.SongManager.load_songs", return_value=[]), \

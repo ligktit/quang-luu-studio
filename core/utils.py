@@ -74,16 +74,24 @@ def find_ffmpeg():
 
 def extract_video_id(url):
     """Trích xuất YouTube Video ID từ URL (11 ký tự).
-    
-    Hỗ trợ: youtube.com/watch?v=, youtu.be/, youtube.com/embed/, youtube.com/shorts/
+
+    Hỗ trợ: youtube.com/watch?v=, youtu.be/, youtube.com/embed/,
+    youtube.com/shorts/, youtube.com/live/
+
+    Với dạng watch?…v=…, chỉ bắt ĐÚNG tham số `v` (ranh giới [?&]v=) để không
+    khớp nhầm các tham số nhiễu kết thúc bằng "v" như `ved=…`.
     """
     if not url:
         return None
     patterns = [
-        r'(?:youtube\.com/watch\?.*v=)([a-zA-Z0-9_-]{11})',
+        # watch?v=… : YÊU CẦU ranh giới tham số ([?&]v=) để KHÔNG nuốt nhầm
+        # các tham số khác kết thúc bằng "v" (vd ved=…&v=…). Trước đây dùng
+        # ".*v=" có thể bắt 11 ký tự ngay sau "ved=" thay vì tham số v thật.
+        r'youtube\.com/watch\?(?:[^#]*&)?v=([a-zA-Z0-9_-]{11})',
         r'(?:youtu\.be/)([a-zA-Z0-9_-]{11})',
         r'(?:youtube\.com/embed/)([a-zA-Z0-9_-]{11})',
         r'(?:youtube\.com/shorts/)([a-zA-Z0-9_-]{11})',
+        r'(?:youtube\.com/live/)([a-zA-Z0-9_-]{11})',
     ]
     for pat in patterns:
         m = re.search(pat, url)

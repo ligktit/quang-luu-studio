@@ -644,3 +644,254 @@ class TestAutoDetectWritesCacheNotManual:
         cache_payload = save_cache.call_args[0][1]
         assert cache_payload["primary_key"] == "G"
         assert cache_payload["title"] == "Bài Test"
+
+
+# ──────────────────────────────────────────────────────────────
+# E-33 — detect_tone_continuous dừng theo CỜ RIÊNG (cancel của session),
+#         KHÔNG bị timer video (youtube_monitoring_active) tắt đột ngột
+# ──────────────────────────────────────────────────────────────
+
+def _make_fake_pyaudio(non_silent=True):
+    """Dựng module pyaudiowpatch giả với 1 loopback device + stream phát data."""
+    import types
+    import numpy as np
+
+    chunk = (np.ones(1024, dtype=np.float32) * (0.1 if non_silent else 0.0)).tobytes()
+
+    mock_pa = MagicMock()
+    mock_pa.get_host_api_count.return_value = 1
+    mock_pa.get_host_api_info_by_index.return_value = {"name": "wasapi", "index": 0}
+    mock_pa.get_device_count.return_value = 1
+    mock_pa.get_device_info_by_index.return_value = {
+        "isLoopbackDevice": True, "hostApi": 0, "name": "Speakers",
+        "defaultSampleRate": 44100, "index": 0,
+    }
+    mock_stream = MagicMock()
+    mock_stream.read.return_value = chunk
+    mock_pa.open.return_value = mock_stream
+    mock_pa.paFloat32 = 1
+
+    fake = types.ModuleType("pyaudiowpatch")
+    fake.PyAudio = lambda: mock_pa
+    fake.paFloat32 = 1
+    return fake
+
+
+class TestContinuousFlagDecoupling:
+
+    def test_keeps_running_when_video_timer_off(self, engine, mocker):
+        """E-33: continuous KHÔNG dừng khi youtube_monitoring_active=False
+        (timer video hết) trong lúc nhạc còn phát. Vòng lặp chỉ dừng khi
+        cancel của _tone_session được set."""
+        from core.tone_detector import ToneDetector
+
+        # Timer video đã TẮT ngay từ đầu — trước đây điều này làm while thoát luôn.
+        engine.youtube_monitoring_active = False
+
+        result = {"key": "C", "key_index": 0, "scale": "Major",
+                  "confidence": 0.9, "key_display": "C"}
+
+        seg_calls = {"n": 0}
+        # Sau vài segment, set cancel để vòng lặp thoát qua cờ RIÊNG của nó.
+        def fake_detect(*a, **kw):
+            seg_calls["n"] += 1
+            if seg_calls["n"] >= 3:
+                engine._tone_session.stop()   # set cancel → đường dừng hợp lệ
+            return dict(result)
+
+        mocker.patch.object(ToneDetector, "_find_loopback_device",
+                            return_value={"name": "Speakers",
+                                          "defaultSampleRate": 44100, "index": 0})
+        mocker.patch.object(ToneDetector, "detect_key_from_audio",
+                            side_effect=fake_detect)
+        mocker.patch("core.engine._autokey.MemoryGuard.force_cleanup")
+        engine._send_tone_midi = MagicMock()
+        mocker.patch("ctypes.windll.ole32.CoInitializeEx", return_value=0)
+        mocker.patch("ctypes.windll.ole32.CoUninitialize")
+        mocker.patch("core.engine._autokey.ToneCacheManager.save_tone")
+
+        with patch.dict("sys.modules", {"pyaudiowpatch": _make_fake_pyaudio()}):
+            done = threading.Event()
+
+            def run():
+                engine.detect_tone_continuous(url=None, segment_duration=1)
+                done.set()
+
+            threading.Thread(target=run, daemon=True).start()
+            assert done.wait(timeout=5), "Vòng continuous không dừng — leak thread"
+
+        # Đã chạy QUA mốc timer-off: detect_key_from_audio được gọi >=3 lần,
+        # chứng tỏ youtube_monitoring_active=False KHÔNG còn làm dừng vòng lặp.
+        assert seg_calls["n"] >= 3
+
+    def test_stops_when_session_cancelled(self, engine, mocker):
+        """E-33b: cancel của session (stop_tone_detection) là đường dừng rõ
+        ràng — set trước khi chạy thì vòng lặp thoát gần như tức thì."""
+        from core.tone_detector import ToneDetector
+
+        engine.youtube_monitoring_active = True
+        mocker.patch.object(ToneDetector, "_find_loopback_device",
+                            return_value={"name": "Speakers",
+                                          "defaultSampleRate": 44100, "index": 0})
+        detect = mocker.patch.object(ToneDetector, "detect_key_from_audio",
+                                     return_value={"key": "C", "key_index": 0,
+                                                   "scale": "Major", "confidence": 0.9,
+                                                   "key_display": "C"})
+        mocker.patch("core.engine._autokey.MemoryGuard.force_cleanup")
+        mocker.patch("ctypes.windll.ole32.CoInitializeEx", return_value=0)
+        mocker.patch("ctypes.windll.ole32.CoUninitialize")
+        mocker.patch("core.engine._autokey.ToneCacheManager.save_tone")
+
+        # detect_tone_continuous tự gọi start_scanning ở đầu (tạo cancel mới).
+        # Cho start_scanning trả về một Event ĐÃ set → mô phỏng phiên đã bị huỷ
+        # (stop_tone_detection) ngay khi vòng while bắt đầu kiểm tra.
+        cancelled = threading.Event()
+        cancelled.set()
+        engine._tone_session = MagicMock()
+        engine._tone_session.start_scanning.return_value = cancelled
+
+        with patch.dict("sys.modules", {"pyaudiowpatch": _make_fake_pyaudio()}):
+            done = threading.Event()
+
+            def run():
+                engine.detect_tone_continuous(url=None, segment_duration=1)
+                done.set()
+
+            threading.Thread(target=run, daemon=True).start()
+            assert done.wait(timeout=5), "cancel không dừng được vòng lặp"
+
+        # cancel đã set trước vòng while → không phân tích segment nào.
+        detect.assert_not_called()
+
+
+# ──────────────────────────────────────────────────────────────
+# E-40..E-46 — Điểm mù threading mức trung-thấp:
+#   _cancelled (watchdog_cancel + session cancel nhất quán),
+#   snapshot URL dùng chung, khóa cho RAM resolve cache.
+# ──────────────────────────────────────────────────────────────
+
+class TestCancelledHelper:
+
+    def test_cancelled_true_on_session_cancel(self):
+        """E-40: _cancelled() True khi SESSION cancel được set."""
+        from core.engine._tone import _cancelled
+        sess = threading.Event(); sess.set()
+        assert _cancelled(sess, threading.Event()) is True
+
+    def test_cancelled_true_on_watchdog_cancel(self):
+        """E-41: _cancelled() True khi WATCHDOG cancel set (dù session chưa)."""
+        from core.engine._tone import _cancelled
+        wd = threading.Event(); wd.set()
+        assert _cancelled(threading.Event(), wd) is True
+
+    def test_cancelled_false_and_none_safe(self):
+        """E-42: False khi cả hai chưa set; chịu None an toàn."""
+        from core.engine._tone import _cancelled
+        assert _cancelled(threading.Event(), threading.Event()) is False
+        assert _cancelled(None, None) is False
+
+
+class TestDetectToneSnapshotsUrl:
+
+    def test_uses_snapshot_url_not_reread(self, engine, mocker):
+        """E-43: detect_tone snapshot current_youtube_url MỘT LẦN — nếu thread khác
+        đổi field giữa chừng, worker vẫn dò + ghi cache theo URL ban đầu (nhất quán)."""
+        fake = {"key_display": "C", "key_index": 0, "scale": "Major", "confidence": 0.9}
+        mocker.patch("core.engine._tone.ToneDetector.detect_key_from_youtube",
+                     return_value=dict(fake))
+        mocker.patch("core.engine._tone.ToneDetector.detect_key_from_system_audio",
+                     return_value=None)
+        mocker.patch("core.engine._tone._ToneMixin._send_tone_midi")
+        mocker.patch("core.engine._tone._ToneMixin._resolve_tone", return_value=(None, None))
+        mocker.patch("core.engine._tone.MemoryGuard.force_cleanup")
+        save = mocker.patch("core.engine._tone._ToneMixin._save_tone_to_cache")
+
+        url0 = "https://youtu.be/AAAAAAAAAAA"
+        engine.current_youtube_url = url0
+
+        done = threading.Event()
+        save.side_effect = lambda *a, **k: done.set()
+
+        # Đổi field NGAY sau khi gọi (mô phỏng thread khác) — không được ảnh hưởng.
+        engine.detect_tone(duration=1, on_complete=MagicMock())
+        engine.current_youtube_url = "https://youtu.be/BBBBBBBBBBB"
+
+        assert done.wait(timeout=5)
+        # Cache phải ghi vào URL ban đầu (snapshot), không phải URL mới.
+        assert save.call_args[0][0] == url0
+
+
+class TestSideEffectSkippedWhenCancelled:
+
+    def test_no_midi_or_cache_after_cancel(self, engine, mocker):
+        """E-44: nếu phiên bị stop() ngay trước bước side-effect, worker KHÔNG gửi
+        MIDI / KHÔNG ghi cache muộn (mô phỏng watchdog timeout → stop())."""
+        send_midi = mocker.patch("core.engine._tone._ToneMixin._send_tone_midi")
+        save_cache = mocker.patch("core.engine._tone._ToneMixin._save_tone_to_cache")
+        mocker.patch("core.engine._tone._ToneMixin._resolve_tone", return_value=(None, None))
+        mocker.patch("core.engine._tone.MemoryGuard.force_cleanup")
+        mocker.patch("core.engine._tone.ToneDetector.detect_key_from_youtube",
+                     return_value=None)
+
+        done = threading.Event()
+
+        def _detect_then_cancel(*a, **k):
+            engine._tone_session.stop()  # phiên bị huỷ ngay trước side-effect
+            done.set()
+            return {"key_display": "C", "key_index": 0, "scale": "Major", "confidence": 0.9}
+
+        mocker.patch("core.engine._tone.ToneDetector.detect_key_from_system_audio",
+                     side_effect=_detect_then_cancel)
+
+        engine.current_youtube_url = None
+        on_complete = MagicMock()
+        engine.detect_tone(duration=1, on_complete=on_complete)
+        assert done.wait(timeout=5)
+        # Cho worker chạy nốt qua điểm kiểm cancel cuối.
+        import time as _t
+        _t.sleep(0.2)
+        send_midi.assert_not_called()
+        save_cache.assert_not_called()
+        on_complete.assert_not_called()
+
+
+class TestResolveCacheThreadSafety:
+
+    def test_lock_exists_and_basic_ops(self, engine):
+        """E-45: có lock; put/get(qua _resolve_tone RAM hit)/invalidate hoạt động."""
+        assert hasattr(engine, "_tone_resolve_cache_lock")
+        engine._tone_resolve_cache_put("u1", ("cache", {"a": 1}))
+        source, data = engine._resolve_tone("u1")
+        assert source == "cache" and data == {"a": 1}
+        engine._tone_resolve_cache_invalidate("u1")
+        assert "u1" not in engine._tone_resolve_cache
+
+    def test_lru_eviction_keeps_max_size(self, engine):
+        """E-46: LRU evict đúng khi vượt _TONE_RESOLVE_CACHE_MAX."""
+        engine._TONE_RESOLVE_CACHE_MAX = 3
+        for i in range(5):
+            engine._tone_resolve_cache_put(f"u{i}", ("cache", {"i": i}))
+        assert len(engine._tone_resolve_cache) == 3
+        assert "u0" not in engine._tone_resolve_cache
+        assert "u4" in engine._tone_resolve_cache
+
+    def test_concurrent_put_invalidate_no_corruption(self, engine):
+        """E-47: nhiều thread put/invalidate song song không hỏng OrderedDict / vượt max."""
+        engine._TONE_RESOLVE_CACHE_MAX = 8
+        errors = []
+
+        def _worker(base):
+            try:
+                for i in range(300):
+                    engine._tone_resolve_cache_put(f"{base}-{i}", ("cache", {"v": i}))
+                    engine._tone_resolve_cache_invalidate(f"{base}-{i-1}")
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=_worker, args=(b,)) for b in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert not errors
+        assert len(engine._tone_resolve_cache) <= 8

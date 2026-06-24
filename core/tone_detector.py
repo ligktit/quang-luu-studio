@@ -70,12 +70,19 @@ class ToneDetector:
     
     # Bảng ánh xạ Key → MIDI CC value (từ knob% thực tế trên plugin Auto-Tune)
     # Plugin nhận 0-127 → hiển thị 0-100%. Công thức: round(knob% × 127/100)
+    #
+    # ⚠ NGUỒN THẬT: core.config._DEFAULT_APP_CONFIG['key_midi_map']. Hai hằng
+    # KEY_MIDI_MAP/SCALE_MIDI_MAP dưới đây chỉ là FALLBACK khi AppConfig import
+    # lỗi (xem key_index_to_midi/scale_to_midi). Nếu ai đổi config mà quên cập
+    # nhật 2 hằng này → lệch âm thầm. test_tone_detector.TestMidiMapNoDrift
+    # khẳng định 2 bảng phải BẰNG config default để bắt mọi drift ngay.
     KEY_MIDI_MAP = {
         "C": 0,   "C#": 11,  "Db": 11,  "D": 23,  "D#": 34,  "Eb": 34,
         "E": 46,  "F": 57,   "F#": 69,  "G": 80,
         "G#": 92, "Ab": 92,  "A": 103,  "A#": 115, "Bb": 115, "B": 127,
     }
     # Scale → MIDI CC value (từ knob% thực tế trên plugin)
+    # NGUỒN THẬT: core.config._DEFAULT_APP_CONFIG['scale_midi_map'] (fallback).
     SCALE_MIDI_MAP = {
         "Major": 13,
         "Minor": 18,
@@ -199,6 +206,16 @@ class ToneDetector:
             librosa.effects.hpss trước khi tính chroma, loại bớt percussion/transient
             làm nhiễu chroma. Các luồng realtime/nhanh (autokey 5s/lần) có thể truyền
             use_hpss=False để bỏ qua, tiết kiệm CPU.
+
+        skip_hum_detection: True bỏ qua bước notch hum 50/60Hz (Stage 5), tiết
+            kiệm ~100–200ms. ĐÁNH ĐỔI: chỉ an toàn khi nguồn audio đã sạch hum —
+            đúng với nhạc YouTube đã master/encode chuẩn (detect_key_from_youtube
+            truyền True). KHÔNG đúng tuyệt đối với video quay điện thoại / livestream
+            / cover thu tại nhà đăng lên YouTube: các nguồn này có thể dính hum
+            mains 50/60Hz lọt vào dải bass và làm lệch tonic. Hiện vẫn để mặc định
+            skip cho YouTube (đa số là nhạc sạch, ưu tiên tốc độ); nếu cần độ chính
+            xác tối đa cho nguồn nghi ngờ có hum, gọi với skip_hum_detection=False.
+            Hum thường nằm ngoài dải tonal nên rủi ro lệch là thấp-trung, không cao.
         """
         try:
             import librosa
@@ -229,7 +246,11 @@ class ToneDetector:
             audio_data = audio_data - np.mean(audio_data)
             
             # Stage 5: Adaptive hum removal (PYIN detect → notch filter)
-            # Skipped for YouTube audio (encoder already cleaned) to save ~100–200 ms
+            # Skipped khi skip_hum_detection=True (YouTube) để tiết kiệm ~100–200ms.
+            # ĐÁNH ĐỔI: giả định "nguồn đã sạch hum" KHÔNG đúng với video quay
+            # điện thoại / livestream / cover thu tại nhà có hum mains 50/60Hz
+            # (xem docstring detect_key_from_audio). Mặc định vẫn skip cho YouTube;
+            # rủi ro lệch tonic do hum là thấp-trung (hum nằm dưới dải tonal).
             if not skip_hum_detection:
                 try:
                     f0_detect, voiced, _ = librosa.pyin(
@@ -280,6 +301,14 @@ class ToneDetector:
             rms = rms[:min_frames]
             rms_sum = np.sum(rms)
             if rms_sum > 0:
+                # ĐÁNH ĐỔI energy-weight: trọng số = rms tuyến tính nên các frame
+                # cực to (chorus/drop) lấn át trung bình chroma. Cách dịu hơn là
+                # sqrt(rms) hoặc winsorize trọng số ở percentile cao. KHÔNG đổi ở
+                # đây: thay đổi này ảnh hưởng MỌI luồng dò và chưa có bằng chứng
+                # cải thiện key đúng — pop/ballad thường đồng nhất tone qua chorus,
+                # nên việc chorus lấn át hiếm khi đổi tonic. Giữ tuyến tính để bảo
+                # toàn kết quả hiện có; nếu sau này có dataset chứng minh lợi >
+                # hại thì winsorize tại đây + đồng bộ chỗ timeline bên dưới.
                 chroma_avg = np.average(chroma_cqt[:, :min_frames], axis=1, weights=rms / rms_sum)
             else:
                 chroma_avg = np.mean(chroma_cqt, axis=1)
@@ -318,6 +347,22 @@ class ToneDetector:
     @staticmethod
     def _detect_key_from_chroma_impl(chroma_for_analysis, cqt_normalized):
         try:
+            import numpy as np
+
+            # Guard NaN/inf đầu vào: caller có thể gọi impl trực tiếp với chroma
+            # chưa làm sạch. _safe_corrcoef đã chặn NaN/inf phía correlation,
+            # nhưng nhánh tonal_strength (disambiguation) đọc thẳng cqt_normalized
+            # → 1 phần tử inf/NaN sẽ lan vào tonal_norm/combined và phá so sánh
+            # (RuntimeWarning "invalid value in subtract"). Làm sạch 1 lần tại đây.
+            chroma_for_analysis = np.nan_to_num(
+                np.asarray(chroma_for_analysis, dtype=float),
+                nan=0.0, posinf=0.0, neginf=0.0
+            )
+            cqt_normalized = np.nan_to_num(
+                np.asarray(cqt_normalized, dtype=float),
+                nan=0.0, posinf=0.0, neginf=0.0
+            )
+
             # === BƯỚC 3: Weighted Multi-profile correlation ===
             W = ToneDetector.PROFILE_WEIGHTS
             
@@ -407,7 +452,13 @@ class ToneDetector:
                     else:
                         third = cqt_normalized[(r["key_index"] + 4) % 12]
                     raw_tonal[id(r)] = (tonic + fifth * 0.7 + third * 0.5, tonic, fifth, third)
-                max_tonal = max(v[0] for v in raw_tonal.values()) or 1.0
+                # Guard NaN/inf + chia-0: nếu cqt_normalized bẩn (caller gọi impl
+                # trực tiếp với chroma chưa làm sạch) thì max(...) có thể là NaN —
+                # và "NaN or 1.0" trả NaN (NaN truthy) → tonal_norm NaN, hỏng so
+                # sánh combined. Ép về 1.0 khi không finite hoặc <= 0.
+                max_tonal = max(v[0] for v in raw_tonal.values())
+                if not np.isfinite(max_tonal) or max_tonal <= 0:
+                    max_tonal = 1.0
 
                 best_candidate = None
                 best_score = -1
@@ -759,6 +810,11 @@ class ToneDetector:
         """
         Tải audio từ YouTube và phát hiện tone
         Chỉ phân tích tối đa duration_limit giây đầu tiên
+
+        Lưu ý: truyền skip_hum_detection=True (bỏ notch hum để nhanh hơn) vì đa
+        số nhạc YouTube đã master sạch hum. ĐÁNH ĐỔI cho nguồn quay điện thoại /
+        livestream / cover thu tại nhà có thể dính hum 50/60Hz — xem docstring
+        detect_key_from_audio. Rủi ro lệch tonic do hum là thấp-trung.
         """
         try:
             import librosa
@@ -900,7 +956,9 @@ class ToneDetector:
             # Extract slice from precomputed CQT
             chroma_slice = full_chroma_cqt[:, start_frame:end_frame]
             
-            # Energy weighted average
+            # Energy weighted average (xem ĐÁNH ĐỔI energy-weight ở
+            # detect_key_from_audio: giữ rms tuyến tính, không winsorize, để
+            # đồng nhất hành vi giữa single-shot và timeline).
             rms_sum = np.sum(rms_slice)
             if rms_sum > 0:
                 chroma_avg = np.average(chroma_slice, axis=1, weights=rms_slice / rms_sum)

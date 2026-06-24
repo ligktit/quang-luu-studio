@@ -1,8 +1,10 @@
 import pytest
 import json
+import os
 import time
 from unittest.mock import patch
-from core.tone_cache import ToneCacheManager, ManualToneTimeline
+import core.tone_cache as tone_cache
+from core.tone_cache import ToneCacheManager, ManualToneTimeline, _interprocess_lock
 
 @pytest.fixture(autouse=True)
 def mock_cache_files(tmp_path):
@@ -115,3 +117,80 @@ def test_list_all_timelines():
     assert len(all_tl) == 2
     titles = [t["title"] for t in all_tl]
     assert "T1" in titles and "T2" in titles
+
+
+# --- 8.3 File-lock liên tiến trình ---
+
+def test_interprocess_lock_acquire_and_release(tmp_path):
+    # TC-17: lấy được lock → tạo lockfile, nhả xong xóa lockfile
+    data = tmp_path / "data.json"
+    lock = str(data) + ".lock"
+    with _interprocess_lock(str(data)) as acquired:
+        assert acquired is True
+        assert os.path.exists(lock)
+    assert not os.path.exists(lock)
+
+
+def test_interprocess_lock_contended_timeout(tmp_path, monkeypatch):
+    # TC-18: lock đã bị giữ (lockfile mới) → sau timeout vẫn yield (KHÔNG treo,
+    # KHÔNG raise) nhưng acquired=False. Rút ngắn timeout cho test nhanh.
+    data = tmp_path / "data.json"
+    lock = str(data) + ".lock"
+    # Tạo sẵn lockfile "đang giữ" và mới tinh (không stale)
+    with open(lock, "w") as f:
+        f.write("99999")
+    monkeypatch.setattr(tone_cache, "_LOCK_TIMEOUT", 0.2)
+    monkeypatch.setattr(tone_cache, "_LOCK_STALE_AGE", 9999)
+    with _interprocess_lock(str(data)) as acquired:
+        assert acquired is False
+    # Lockfile của process khác KHÔNG bị ta xóa (ta không sở hữu nó)
+    assert os.path.exists(lock)
+
+
+def test_interprocess_lock_steals_stale(tmp_path, monkeypatch):
+    # TC-19: lockfile mồ côi (cũ hơn ngưỡng stale) → bị cướp và lấy được lock
+    data = tmp_path / "data.json"
+    lock = str(data) + ".lock"
+    with open(lock, "w") as f:
+        f.write("12345")
+    # Đặt mtime về quá khứ xa để coi là stale
+    old = time.time() - 100000
+    os.utime(lock, (old, old))
+    monkeypatch.setattr(tone_cache, "_LOCK_STALE_AGE", 30)
+    with _interprocess_lock(str(data)) as acquired:
+        assert acquired is True
+        assert os.path.exists(lock)
+    assert not os.path.exists(lock)
+
+
+def test_save_tone_concurrent_processes_no_lost_update(mock_cache_files):
+    # TC-20: Mô phỏng read-modify-write xen kẽ giữa 2 "tiến trình".
+    # Với file-lock thật ta không dễ chạy đa tiến trình trong unit test, nên ở
+    # đây kiểm CHỨC NĂNG: save_tone vẫn bọc trong _interprocess_lock và không
+    # đánh mất entry khi ghi tuần tự nhiều key (chu trình RMW toàn vẹn).
+    for i in range(5):
+        url = f"https://www.youtube.com/watch?v=vid{i:08d}"
+        ToneCacheManager.save_tone(url, {"tone": f"T{i}"})
+    tone_file, _ = mock_cache_files
+    data = json.loads(tone_file.read_text(encoding="utf-8"))
+    assert len(data) == 5
+
+
+# --- 8.4 Housekeeping (cảnh báo, KHÔNG xóa) ---
+
+def test_count_timelines():
+    # TC-21
+    assert ManualToneTimeline.count_timelines() == 0
+    ManualToneTimeline.save_timeline("https://www.youtube.com/watch?v=11111111111", "T1", [])
+    assert ManualToneTimeline.count_timelines() == 1
+
+
+def test_maybe_warn_size_does_not_delete(capsys):
+    # TC-22: vượt ngưỡng → log cảnh báo nhưng KHÔNG xóa entry nào
+    big = {f"k{i}": {"title": str(i)} for i in range(3)}
+    with patch.object(ManualToneTimeline, "SIZE_WARN_THRESHOLD", 2):
+        ManualToneTimeline._maybe_warn_size(big)
+    out = capsys.readouterr().out
+    assert "CẢNH BÁO" in out
+    # Dữ liệu đầu vào không bị thay đổi
+    assert len(big) == 3

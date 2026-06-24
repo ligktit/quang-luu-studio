@@ -81,6 +81,8 @@ class EditSongDialog(QDialog):
         body.setContentsMargins(16, 12, 16, 10)
         body.setSpacing(8)
         body.addWidget(self._build_preview())
+        body.addWidget(self._build_quick_tone())
+        body.addWidget(self._build_advanced_header())
         body.addWidget(self._build_col_headers())
 
         scroll = QScrollArea()
@@ -146,6 +148,104 @@ class EditSongDialog(QDialog):
         chain = "  →  ".join(f"{lbl} {key}" for _, lbl, key in items)
         self._preview_label.setText(chain or "—")
 
+    def _build_quick_tone(self):
+        """Lối tắt thân thiện: đặt 1 tone cho CẢ bài mà không cần hiểu timeline.
+
+        Người dùng phổ thông chỉ muốn đổi 1 tone cho cả bài → chọn nhanh
+        Nốt + Thể (Trưởng/Thứ) rồi bấm "Đặt 1 tone cho cả bài". Lưu thành
+        timeline 1 mốc tại 0:00, source="human"."""
+        frame = QFrame()
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: rgba(56,189,248,0.08);
+                border-radius: 8px; border: 1px solid {C['border']};
+            }}
+        """)
+        lay = QHBoxLayout(frame)
+        lay.setContentsMargins(14, 8, 14, 8)
+        lay.setSpacing(8)
+
+        tag = QLabel("Sửa nhanh")
+        tag.setToolTip("Chỉ muốn đổi 1 tone cho cả bài? Chọn ở đây — không cần nhập mốc thời gian.")
+        tag.setStyleSheet(
+            f"font-size: 11px; font-weight: bold; color: {C['teal']};"
+            f" font-family: {FONT}; background: transparent; border: none;"
+        )
+        lay.addWidget(tag)
+
+        # Combo nốt gốc (12 nốt) + combo thể (Trưởng / Thứ)
+        self._quick_key_combo = QComboBox()
+        self._quick_key_combo.addItems(_CHROMATIC)
+        self._quick_key_combo.setStyleSheet(combo_qss(color=C["green"], font_size=14))
+        self._quick_key_combo.setAccessibleName("Nốt gốc cho cả bài")
+        self._quick_key_combo.setAccessibleDescription("Chọn nốt gốc (C, D, E…) áp cho toàn bộ bài hát")
+        lay.addWidget(self._quick_key_combo)
+
+        self._quick_scale_combo = QComboBox()
+        self._quick_scale_combo.addItems(["Major", "Minor"])
+        self._quick_scale_combo.setStyleSheet(combo_qss(color=C["green"], font_size=14))
+        self._quick_scale_combo.setToolTip("Major = Trưởng (tươi sáng) · Minor = Thứ (trầm buồn)")
+        self._quick_scale_combo.setAccessibleName("Thể cho cả bài")
+        self._quick_scale_combo.setAccessibleDescription(
+            "Chọn thể: Major là Trưởng, Minor là Thứ — áp cho toàn bộ bài hát")
+        lay.addWidget(self._quick_scale_combo)
+
+        # Điền sẵn theo mốc đầu tiên đang có
+        first = self._initial_entries[0] if self._initial_entries else {}
+        disp = first.get("key_display", "C")
+        is_minor = disp.endswith("m")
+        root = disp[:-1] if is_minor else disp
+        if root in _CHROMATIC:
+            self._quick_key_combo.setCurrentText(root)
+        self._quick_scale_combo.setCurrentText("Minor" if is_minor else "Major")
+
+        apply_btn = PainterButton("Đặt 1 tone cho cả bài", color=C["teal"],
+                                  height=32, radius=14, font_size=12)
+        apply_btn.setToolTip("Lưu ngay 1 tone duy nhất cho cả bài (xoá các mốc khác)")
+        apply_btn.clicked.connect(self._on_apply_single_tone)
+        lay.addWidget(apply_btn, 1)
+        return frame
+
+    def _build_advanced_header(self):
+        """Nhãn phân tách phần timeline nâng cao (nhiều mốc đổi tone)."""
+        lbl = QLabel("Hoặc sửa nâng cao theo nhiều mốc thời gian:")
+        lbl.setStyleSheet(
+            f"font-size: 11px; color: {C['text_muted']};"
+            f" font-family: {FONT}; background: transparent; border: none;"
+        )
+        return lbl
+
+    def _on_apply_single_tone(self):
+        """Áp 1 tone (nốt + thể) cho cả bài tại mốc 0:00 và lưu ngay (source human)."""
+        root = self._quick_key_combo.currentText()
+        is_minor = (self._quick_scale_combo.currentText() == "Minor")
+        key_display = (root + "m") if is_minor else root
+        try:
+            key_index = _CHROMATIC.index(root)
+        except ValueError:
+            key_index = 0
+
+        if not self._song_url:
+            self._dashboard._show_message("⚠️ Bài hát không có URL!", is_error=True)
+            return
+
+        entries = [{
+            "time":        0.0,
+            "key_display": key_display,
+            "key_index":   key_index,
+            "scale":       "Minor" if is_minor else "Major",
+        }]
+        if backend.ManualToneTimeline.save_timeline(
+                self._song_url, self._song_title, entries, source="human"):
+            if self._song_id:
+                backend.SongManager.update_song(self._song_id, tone=key_display)
+            self._dashboard._show_message(f"✅ Đã đặt 1 tone {key_display} cho cả bài!")
+            self.close()
+            from ui.dialogs.songs_list import SongsListDialog
+            SongsListDialog(self._dashboard).exec()
+        else:
+            self._dashboard._show_message("❌ Lỗi khi lưu timeline!", is_error=True)
+
     def _build_col_headers(self):
         frame = QFrame()
         frame.setStyleSheet(f"""
@@ -161,7 +261,7 @@ class EditSongDialog(QDialog):
         for text, width, color in [
             ("#",  28, C["text_muted"]),
             ("Thời gian (MM:SS)", 110, C["teal"]),
-            ("Key / Scale", 0, C["teal"]),
+            ("Tone (Nốt / Thể)", 0, C["teal"]),
             ("Xóa", 40, C["text_muted"]),
         ]:
             lbl = QLabel(text)
@@ -169,7 +269,8 @@ class EditSongDialog(QDialog):
                 f"font-size: 11px; font-weight: bold; color: {color};"
                 f" font-family: {FONT}; background: transparent; border: none;"
             )
-            if text == "Key / Scale":
+            if text.startswith("Tone"):
+                lbl.setToolTip("Nốt gốc và thể (Trưởng = Major / Thứ = Minor) áp dụng từ mốc thời gian này.")
                 lay.addWidget(lbl, 1)
             else:
                 if width:
@@ -246,6 +347,10 @@ class EditSongDialog(QDialog):
         if key_display in _ALL_KEYS:
             key_combo.setCurrentText(key_display)
         key_combo.setStyleSheet(self._key_combo_qss)
+        key_combo.setToolTip("Nốt gốc + thể. Có chữ 'm' = thể Thứ (Minor), không có = thể Trưởng (Major).")
+        key_combo.setAccessibleName("Chọn tone cho mốc này")
+        key_combo.setAccessibleDescription(
+            "Chọn nốt gốc và thể cho mốc thời gian này. Hậu tố m là thể Thứ (Minor), không có m là Trưởng (Major).")
         key_combo.currentTextChanged.connect(self._update_preview)
         lay.addWidget(key_combo, 1)
 

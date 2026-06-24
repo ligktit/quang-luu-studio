@@ -376,6 +376,42 @@ class MainDashboard(QMainWindow):
     _CHROMATIC_KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
     RELATIVE_MINOR_OFFSET = 9  # Major + 9 semitone = relative Minor (đồng bộ ToneDetector)
 
+    @staticmethod
+    def _reverse_lookup_key(value, key_midi_map, keys=None):
+        """MIDI value → tên nốt, bền với map calibrate phi tuyến / đảo chiều.
+
+        Chọn nốt có MIDI value GẦN nhất với ``value``. Khi nhiều nốt cách đều
+        nhau (tie), ưu tiên nốt KHỚP CHÍNH XÁC nếu có; nếu vẫn hoà thì giữ nốt
+        đầu tiên gặp theo thứ tự chromatic (ổn định, không phụ thuộc giá trị
+        tuyệt đối của MIDI value như cách "ưu tiên key thấp" cũ).
+        """
+        if keys is None:
+            keys = MainDashboard._CHROMATIC_KEYS
+        best_key = keys[0]
+        best_diff = None
+        best_exact = False
+        for k in keys:
+            midi_val = key_midi_map.get(k, 0)
+            diff = abs(midi_val - value)
+            exact = (midi_val == value)
+            if best_diff is None or diff < best_diff:
+                best_diff, best_key, best_exact = diff, k, exact
+            elif diff == best_diff and exact and not best_exact:
+                # Tie về khoảng cách → ưu tiên nốt khớp chính xác value
+                best_key, best_exact = k, True
+        return best_key
+
+    @staticmethod
+    def _reverse_lookup_scale(value, scale_midi_map):
+        """MIDI value → 'Major'/'Minor' theo value gần nhất, có guard chống chia
+        nhầm khi map bất thường (Major == Minor → mặc định 'Major')."""
+        major_val = scale_midi_map.get("Major", 13)
+        minor_val = scale_midi_map.get("Minor", 18)
+        if major_val == minor_val:
+            # Map hỏng / hai thể trùng value → không thể phân biệt, giữ Major
+            return "Major"
+        return "Minor" if abs(value - minor_val) < abs(value - major_val) else "Major"
+
     def _lock_replay_for_manual_override(self):
         """Khi user chỉnh tone/scale tay → dừng replay timeline để mốc kế tiếp
         không gửi MIDI đè lên lựa chọn của user. Replay sẽ bật lại khi user
@@ -478,26 +514,16 @@ class MainDashboard(QMainWindow):
         # Dùng QSignalBlocker (RAII) thay vì flag toàn cục — đúng idiom Qt.
         try:
             if cc == int(MIDI_CC.get("key_root", 33)):
-                # Reverse-lookup: tìm key có MIDI value gần nhất trong KEY_MIDI_MAP
-                keys = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
-                best_key = "C"
-                best_diff = 999
-                for k in keys:
-                    midi_val = backend.AppConfig.get_key_midi_map().get(k, 0)
-                    diff = abs(midi_val - value)
-                    if diff < best_diff:
-                        best_diff = diff
-                        best_key = k
+                # Reverse-lookup bền: nốt có MIDI value gần nhất, tie-break ưu
+                # tiên khớp chính xác (xem _reverse_lookup_key).
+                best_key = self._reverse_lookup_key(value, backend.AppConfig.get_key_midi_map())
                 if self.tone_combo.currentText() != best_key:
                     with QSignalBlocker(self.tone_combo):
                         self.tone_combo.setCurrentText(best_key)
                 self.current_tone = best_key
             elif cc == int(MIDI_CC.get("scale_type", MIDI_CC.get("key_scale", 35))):
-                # Reverse-lookup: tìm scale có MIDI value gần nhất
-                _smap = backend.AppConfig.get_scale_midi_map()
-                major_val = _smap.get("Major", 13)
-                minor_val = _smap.get("Minor", 18)
-                scale_str = "Minor" if abs(value - minor_val) < abs(value - major_val) else "Major"
+                # Reverse-lookup thể theo value gần nhất, có guard major==minor.
+                scale_str = self._reverse_lookup_scale(value, backend.AppConfig.get_scale_midi_map())
                 self.current_scale = scale_str
                 self.scale_is_major = (scale_str == "Major")
                 if hasattr(self, 'scale_combo') and self.scale_combo.currentText() != scale_str:
@@ -741,6 +767,56 @@ class MainDashboard(QMainWindow):
                 skip_resolve=True
             )
 
+    # ── Hướng dẫn khi nghe loa (loopback) thất bại ──────────────────────────
+    # Các cụm từ này xuất hiện trong message lỗi do core trả về (core/tone_detector.py,
+    # core/engine/_tone.py) khi phương án dự phòng "nghe từ loa" không có âm thanh —
+    # thường vì loa/tai nghe đang nghe KHÁC thiết bị mặc định của Windows.
+    _SPEAKER_ERR_HINTS = (
+        "không phát ra âm thanh",
+        "nghe loa cũng thất bại",
+        "nghe từ loa",
+        "nghe được âm thanh từ loa",
+        "lỗi khi nghe âm thanh từ loa",
+        "loa mặc định",
+    )
+
+    @classmethod
+    def _is_speaker_loopback_error(cls, msg):
+        """True nếu message lỗi nói về việc nghe loa/loopback thất bại."""
+        low = (msg or "").lower()
+        return any(h in low for h in cls._SPEAKER_ERR_HINTS)
+
+    def _open_sound_settings(self):
+        """Mở trang Cài đặt âm thanh của Windows (ms-settings:sound)."""
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        if not QDesktopServices.openUrl(QUrl("ms-settings:sound")):
+            # Dự phòng nếu ms-settings bị chặn: mở Control Panel âm thanh cổ điển
+            try:
+                os.startfile("mmsys.cpl")
+            except Exception:
+                self._show_message(
+                    "Không mở được Cài đặt âm thanh. Hãy chuột phải biểu tượng loa "
+                    "ở khay hệ thống → 'Open Sound settings'.", is_error=True)
+
+    def _show_speaker_help(self, msg):
+        """Thông báo lỗi nghe loa kèm hướng dẫn từng bước + nút mở Cài đặt âm thanh.
+
+        Người dùng phổ thông thường cắm tai nghe nhưng Windows vẫn để loa cũ làm
+        mặc định → app nghe nhầm thiết bị im lặng. Hướng dẫn họ đặt đúng thiết bị
+        đang nghe làm Output mặc định."""
+        guide = (
+            f"❌ {msg}\n\n"
+            "👉 Cách sửa: app chỉ nghe được THIẾT BỊ ÂM THANH MẶC ĐỊNH của Windows.\n"
+            "1. Chuột phải biểu tượng loa 🔈 ở khay hệ thống (góc dưới phải).\n"
+            "2. Chọn 'Open Sound settings' (Mở cài đặt âm thanh).\n"
+            "3. Ở mục Output / Đầu ra, chọn ĐÚNG thiết bị bạn đang nghe (tai nghe "
+            "hoặc loa) làm mặc định.\n"
+            "4. Phát lại bài hát rồi bấm 'Dò Lại'."
+        )
+        # Dùng panel lỗi (ở lâu, không cắt cụt) nhưng gắn thêm nút mở Cài đặt.
+        self._show_message(guide, is_error=True, action_text="Mở Cài đặt âm thanh",
+                           action_cb=self._open_sound_settings)
 
     def _handle_tone_result(self, result):
         """Slot xử lý kết quả dò tone trên main thread (thread-safe via Signal)"""
@@ -773,7 +849,13 @@ class MainDashboard(QMainWindow):
             self._set_rescan_button_state("idle")
             self.autokey_dot.setStyleSheet(f"color: {C['card_hover']}; font-size: 16px;")
             self._marquee_text = "♪ Quang Lưu Studio — Karaoke Pro ♪"
-            self._show_message(f"❌ {msg}", is_error=True)
+            # Lỗi liên quan tới việc NGHE LOA (loopback) thường do tai nghe / loa
+            # đang nghe KHÁC với thiết bị mặc định Windows → kèm hướng dẫn cụ thể
+            # + nút mở "Cài đặt âm thanh" thay vì chỉ báo lỗi cụt.
+            if self._is_speaker_loopback_error(msg):
+                self._show_speaker_help(msg)
+            else:
+                self._show_message(f"❌ {msg}", is_error=True)
             return
         
         # === Trường hợp THÀNH CÔNG ===
@@ -1012,12 +1094,15 @@ class MainDashboard(QMainWindow):
         from ui.dialogs.scoring_report import ScoringReportDialog
         ScoringReportDialog(self, result).exec()
 
-    def _show_message(self, text, is_error=False):
+    def _show_message(self, text, is_error=False, action_text=None, action_cb=None):
         """Show temporary message box in center of dashboard.
 
         Thông báo lỗi: ở lâu hơn (8s), không cắt cụt câu dài (word-wrap, rộng
         tối đa theo cửa sổ) và có nút ✕ để user tự đóng ngay khi đã đọc xong.
-        Thông báo info ngắn: giữ nguyên hành vi cũ (tự biến mất sau 2s)."""
+        Thông báo info ngắn: giữ nguyên hành vi cũ (tự biến mất sau 2s).
+
+        action_text/action_cb: nếu có, hiện thêm một nút hành động (vd "Mở Cài
+        đặt âm thanh") dưới nội dung lỗi — chỉ áp dụng cho panel lỗi."""
         color = C["accent"] if is_error else C["green"]
         font_size = 14 if is_error else 11
 
@@ -1042,9 +1127,14 @@ class MainDashboard(QMainWindow):
         )
         panel.setAccessibleName("Thông báo lỗi")
         panel.setAccessibleDescription(text)
-        lay = QHBoxLayout(panel)
+        outer_v = QVBoxLayout(panel)
+        outer_v.setContentsMargins(0, 0, 0, 0)
+        outer_v.setSpacing(6)
+        top_row = QWidget(panel)
+        lay = QHBoxLayout(top_row)
         lay.setContentsMargins(16, 12, 10, 12)
         lay.setSpacing(8)
+        outer_v.addWidget(top_row)
 
         lbl = QLabel(text, panel)
         lbl.setWordWrap(True)
@@ -1066,6 +1156,38 @@ class MainDashboard(QMainWindow):
         )
         lay.addWidget(close_btn, 0, Qt.AlignTop)
 
+        def _close():
+            try:
+                panel.deleteLater()
+            except RuntimeError:
+                pass
+
+        # Nút hành động phụ (vd "Mở Cài đặt âm thanh") — đặt dưới nội dung lỗi.
+        if action_text and action_cb is not None:
+            act_row = QWidget(panel)
+            act_lay = QHBoxLayout(act_row)
+            act_lay.setContentsMargins(16, 0, 10, 12)
+            act_lay.addStretch()
+            act_btn = QPushButton(action_text, act_row)
+            act_btn.setCursor(Qt.PointingHandCursor)
+            act_btn.setAccessibleName(action_text)
+            act_btn.setAccessibleDescription(
+                "Mở trang Cài đặt âm thanh của Windows để chọn đúng thiết bị đang nghe làm mặc định")
+            act_btn.setStyleSheet(
+                f"QPushButton {{ background: {color}; color: {C['bg']}; border: none;"
+                f" border-radius: 8px; padding: 6px 14px; font-size: 13px;"
+                f" font-weight: 700; font-family: {FONT}; }}"
+                f"QPushButton:hover {{ background: {_lighten(color, 0.15)}; }}"
+            )
+            def _do_action():
+                try:
+                    action_cb()
+                finally:
+                    _close()
+            act_btn.clicked.connect(_do_action)
+            act_lay.addWidget(act_btn)
+            outer_v.addWidget(act_row)
+
         # Rộng tối đa ~80% cửa sổ để câu dài xuống dòng thay vì bị cắt
         max_w = max(320, int(self.width() * 0.8))
         panel.setMaximumWidth(max_w)
@@ -1075,13 +1197,9 @@ class MainDashboard(QMainWindow):
         panel.show()
         panel.raise_()
 
-        def _close():
-            try:
-                panel.deleteLater()
-            except RuntimeError:
-                pass
         close_btn.clicked.connect(_close)
-        QTimer.singleShot(8000, _close)
+        # Có nút hành động → để lâu hơn (12s) cho user kịp đọc & bấm
+        QTimer.singleShot(12000 if action_text else 8000, _close)
 
     _SAVE_KEYS = [
         "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",

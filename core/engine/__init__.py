@@ -88,8 +88,12 @@ class SystemEngine(
         self._pwa_title_cache      = {}
         self._no_browser_count     = 0
 
-        # In-session tone resolve cache (avoids repeated JSON disk reads)
+        # In-session tone resolve cache (avoids repeated JSON disk reads).
+        # _tone_resolve_cache_lock bảo vệ MỌI thao tác đọc/ghi/move/pop trên
+        # OrderedDict này: 2 thread dò tone song song có thể cùng đọc-ghi cache
+        # nên cần khóa để không đọc bản dở dang / hỏng cấu trúc LRU.
         self._tone_resolve_cache: OrderedDict[str, tuple] = OrderedDict()
+        self._tone_resolve_cache_lock = threading.Lock()
         self._TONE_RESOLVE_CACHE_MAX = 8
 
         # Memory management

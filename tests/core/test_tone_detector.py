@@ -220,6 +220,86 @@ class TestConfidenceFlags:
                 "confidence_level", "uncertain"}.issubset(result.keys())
 
 
+class TestMidiMapNoDrift:
+    """Chống DRIFT giữa hằng fallback trong ToneDetector và nguồn thật ở config.
+
+    KEY_MIDI_MAP / SCALE_MIDI_MAP của class chỉ là FALLBACK khi AppConfig import
+    lỗi. Nếu ai đổi _DEFAULT_APP_CONFIG['key_midi_map'] / ['scale_midi_map'] mà
+    quên cập nhật 2 hằng này → fallback trả MIDI CC SAI âm thầm (chỉ lộ khi
+    config lỗi). Các test dưới khẳng định 2 bảng phải BẰNG config default để
+    bắt drift ngay lúc CI, không đợi ra production.
+    """
+
+    def test_key_midi_map_matches_config_default(self):
+        """ToneDetector.KEY_MIDI_MAP == config _DEFAULT_APP_CONFIG['key_midi_map']."""
+        from core.config import _DEFAULT_APP_CONFIG
+        assert ToneDetector.KEY_MIDI_MAP == _DEFAULT_APP_CONFIG["key_midi_map"]
+
+    def test_scale_midi_map_matches_config_default(self):
+        """ToneDetector.SCALE_MIDI_MAP == config _DEFAULT_APP_CONFIG['scale_midi_map']."""
+        from core.config import _DEFAULT_APP_CONFIG
+        assert ToneDetector.SCALE_MIDI_MAP == _DEFAULT_APP_CONFIG["scale_midi_map"]
+
+    def test_fallback_path_uses_synced_const(self):
+        """Khi AppConfig import lỗi, key_index_to_midi rơi về KEY_MIDI_MAP và
+        vẫn khớp config (vì 2 bảng đồng bộ). Mô phỏng lỗi bằng cách patch
+        AppConfig.get_key_midi_map raise."""
+        from core.config import _DEFAULT_APP_CONFIG
+        with patch("core.config.AppConfig.get_key_midi_map",
+                   side_effect=RuntimeError("config hỏng")):
+            # G (idx 7): config = 80, fallback const cũng phải = 80
+            assert ToneDetector.key_index_to_midi(7) == _DEFAULT_APP_CONFIG["key_midi_map"]["G"]
+
+    def test_scale_fallback_path_uses_synced_const(self):
+        """Tương tự cho scale_to_midi khi AppConfig lỗi."""
+        from core.config import _DEFAULT_APP_CONFIG
+        with patch("core.config.AppConfig.get_scale_midi_map",
+                   side_effect=RuntimeError("config hỏng")):
+            assert ToneDetector.scale_to_midi("Minor") == _DEFAULT_APP_CONFIG["scale_midi_map"]["Minor"]
+
+
+class TestChromaImplNanGuard:
+    """Fix #4 — guard NaN/inf cho max_tonal trong _detect_key_from_chroma_impl.
+
+    Caller có thể gọi impl trực tiếp với cqt_normalized chưa làm sạch (NaN/inf).
+    Trước guard: max_tonal = max(... NaN ...) = NaN, và "NaN or 1.0" trả NaN
+    (NaN truthy) → tonal_norm NaN → so sánh combined hỏng. Sau guard: vẫn trả
+    result hợp lệ, không NaN, không RuntimeWarning.
+    """
+
+    def test_nan_in_chroma_does_not_break(self):
+        """cqt_normalized chứa NaN → vẫn trả dict hợp lệ (không crash, không NaN field)."""
+        import warnings
+        # chroma_for_analysis sạch (để correlation chạy được + tạo family),
+        # nhưng cqt_normalized (dùng cho tonal_strength) dính NaN.
+        chroma = np.zeros(12)
+        chroma[0] = 0.5
+        chroma[9] = 0.5  # đẩy C/Am vào family để nhánh disambiguation chạy
+        chroma = chroma / chroma.sum()
+        bad_cqt = chroma.copy()
+        bad_cqt[0] = np.nan  # nhiễm NaN vào tonic C
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # RuntimeWarning mới → fail
+            with patch("core.memory.MemoryGuard.force_cleanup", MagicMock()):
+                result = ToneDetector._detect_key_from_chroma_impl(chroma, bad_cqt)
+        assert result is not None
+        assert "key" in result and "confidence" in result
+
+    def test_inf_in_chroma_does_not_break(self):
+        """cqt_normalized chứa +inf → max_tonal được ép 1.0, kết quả vẫn hợp lệ."""
+        chroma = np.zeros(12)
+        chroma[0] = 0.5
+        chroma[9] = 0.5
+        chroma = chroma / chroma.sum()
+        bad_cqt = chroma.copy()
+        bad_cqt[7] = np.inf  # fifth của C → inf
+        with patch("core.memory.MemoryGuard.force_cleanup", MagicMock()):
+            result = ToneDetector._detect_key_from_chroma_impl(chroma, bad_cqt)
+        assert result is not None
+        assert result["scale"] in ("Major", "Minor")
+        assert 0 <= result["key_index"] <= 11
+
+
 # ──────────────────────────────────────────────────────────────
 # Detection tests with mocked heavy deps
 # ──────────────────────────────────────────────────────────────

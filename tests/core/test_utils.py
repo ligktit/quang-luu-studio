@@ -40,6 +40,37 @@ def test_extract_video_id_empty():
     assert extract_video_id("") is None
 
 
+def test_extract_video_id_list_before_v():
+    # U-12: tham số khác (list) đứng TRƯỚC v= vẫn bắt đúng id thật
+    url = "https://www.youtube.com/watch?list=PLabc123&v=dQw4w9WgXcQ"
+    assert extract_video_id(url) == "dQw4w9WgXcQ"
+
+
+def test_extract_video_id_noise_param_ved():
+    # U-13: tham số nhiễu kết thúc bằng "v" (ved=) KHÔNG được bắt nhầm.
+    # ved=11ký_tự_rác rồi mới tới v= thật → phải lấy đúng tham số v.
+    url = "https://www.youtube.com/watch?ved=AAAAAAAAAAA&v=dQw4w9WgXcQ"
+    assert extract_video_id(url) == "dQw4w9WgXcQ"
+
+
+def test_extract_video_id_v_first_then_noise_with_eq_v():
+    # U-14: v= thật đứng ĐẦU, một tham số sau lại CHỨA chuỗi "v=" + 11 ký tự rác.
+    # Regex cũ ".*v=" (greedy) sẽ bắt NHẦM id rác cuối cùng → đây là bug cần chặn.
+    # Ranh giới [?&]v= chỉ khớp tham số v thật (đứng ngay sau ? hoặc &).
+    url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ&pp=xxv=FAKEFAKEFAK"
+    assert extract_video_id(url) == "dQw4w9WgXcQ"
+
+
+def test_extract_video_id_live():
+    # U-15: URL dạng /live/ (livestream) — nguồn hợp lệ cần hỗ trợ
+    assert extract_video_id("https://www.youtube.com/live/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+
+
+def test_extract_video_id_live_with_params():
+    # U-16: /live/ kèm query
+    assert extract_video_id("https://www.youtube.com/live/dQw4w9WgXcQ?si=abc") == "dQw4w9WgXcQ"
+
+
 # --- 4.2 find_ffmpeg() ---
 
 @patch("shutil.which")
