@@ -16,8 +16,36 @@ _cache_lock = threading.Lock()
 _timeline_lock = threading.Lock()
 
 
+def _backup_corrupt_file(path, err):
+    """Sao lưu file JSON hỏng sang <path>.corrupt-<timestamp> trước khi caller
+    trả {} — tránh để atomic_write kế tiếp GHI ĐÈ lên dữ liệu còn cứu được.
+
+    Best-effort: nếu ngay cả việc sao lưu cũng thất bại thì chỉ log, không raise
+    (để luồng đọc vẫn trả {} và app không sập).
+    """
+    backup_path = "{}.corrupt-{}".format(path, int(time.time()))
+    try:
+        os.replace(path, backup_path)
+        print(
+            "[CẢNH BÁO] File JSON hỏng: {} ({}). Đã sao lưu sang {} — "
+            "dữ liệu KHÔNG bị ghi đè, có thể khôi phục thủ công.".format(
+                path, err, backup_path
+            )
+        )
+    except OSError as move_err:
+        print(
+            "[CẢNH BÁO] File JSON hỏng: {} ({}). Sao lưu thất bại ({}) — "
+            "trả về rỗng.".format(path, err, move_err)
+        )
+
+
 class ToneCacheManager:
-    """Quản lý cache kết quả dò tone YouTube — tránh dò lại bài đã biết"""
+    """Quản lý cache kết quả dò tone (auto) — tránh dò lại bài đã biết.
+
+    Khóa lưu trữ dùng song_match_key (extract_video_id or url.strip()) để MỌI
+    nguồn (YouTube, file local, link /live/, loopback...) đều cache được, không
+    chỉ riêng YouTube URL chuẩn. Vẫn đọc được entry cũ key theo video_id thuần.
+    """
 
     CACHE_FILE = TONE_CACHE_FILE
     CACHE_TTL_DAYS = 30  # Hết hạn sau 30 ngày
@@ -28,7 +56,15 @@ class ToneCacheManager:
             try:
                 with open(ToneCacheManager.CACHE_FILE, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except Exception:
+            except (json.JSONDecodeError, ValueError, UnicodeDecodeError) as e:
+                # File hỏng: sao lưu trước rồi mới trả {} — KHÔNG để save kế
+                # tiếp load {} rồi atomic_write đè mất dữ liệu trong im lặng.
+                _backup_corrupt_file(ToneCacheManager.CACHE_FILE, e)
+                return {}
+            except OSError as e:
+                # Lỗi đọc khác (quyền, khoá file...): log, trả {} nhưng KHÔNG
+                # sao lưu/di chuyển vì file có thể vẫn nguyên vẹn.
+                print(f"[CẢNH BÁO] Không đọc được tone cache {ToneCacheManager.CACHE_FILE}: {e}")
                 return {}
         return {}
 
@@ -48,42 +84,53 @@ class ToneCacheManager:
             atomic_write_json(ToneCacheManager.CACHE_FILE, cache, indent=2)
         except Exception as e:
             print(f"Lỗi lưu tone cache: {e}")
-    
+
     @staticmethod
     def get_cached_tone(youtube_url):
-        """Lấy tone đã cache cho YouTube URL (theo video ID)"""
-        video_id = extract_video_id(youtube_url)
-        if not video_id:
+        """Lấy tone đã cache cho URL (theo song_match_key, fallback video_id thuần)."""
+        key = song_match_key(youtube_url)
+        if not key:
             return None
-        
+
         cache = ToneCacheManager._load_cache()
-        entry = cache.get(video_id)
-        
+        # Tương thích ngược: entry cũ có thể được key theo video_id thuần.
+        entry = cache.get(key)
+        if not entry:
+            legacy_key = extract_video_id(youtube_url)
+            if legacy_key and legacy_key != key:
+                entry = cache.get(legacy_key)
+
         if not entry:
             return None
-        
+
         # Kiểm tra TTL
         cached_time = entry.get("cached_at", 0)
         if time.time() - cached_time > ToneCacheManager.CACHE_TTL_DAYS * 86400:
             return None  # Hết hạn
-        
+
         return entry
-    
+
     @staticmethod
     def save_tone(youtube_url, tone_data):
-        """Lưu kết quả dò tone vào cache"""
-        video_id = extract_video_id(youtube_url)
-        if not video_id:
+        """Lưu kết quả dò tone (auto) vào cache.
+
+        Không mutate tone_data của caller (copy trước khi thêm cached_at).
+        Chỉ bỏ qua khi key thực sự rỗng (URL/None rỗng).
+        """
+        key = song_match_key(youtube_url)
+        if not key:
             return
 
         with _cache_lock:
             cache = ToneCacheManager._load_cache()
             # Prune entry hết hạn khi save — file không phình to vô hạn
             cache = ToneCacheManager._prune_expired(cache)
-            tone_data["cached_at"] = time.time()
-            cache[video_id] = tone_data
+            # Copy để không mutate dict của caller
+            entry = dict(tone_data) if isinstance(tone_data, dict) else {"value": tone_data}
+            entry["cached_at"] = time.time()
+            cache[key] = entry
             ToneCacheManager._save_cache(cache)
-        print(f"[CACHE] Đã lưu tone cho video {video_id}")
+        print(f"[CACHE] Đã lưu tone cho {key}")
 
     @staticmethod
     def clear_cache():
@@ -93,18 +140,34 @@ class ToneCacheManager:
 
 
 class ManualToneTimeline:
-    """Quản lý timeline tone thủ công (user nhập) cho từng bài YouTube"""
-    
+    """Quản lý timeline tone THỦ CÔNG (user nhập) cho từng bài.
+
+    Đây là dữ liệu người dùng → KHÔNG có TTL/prune, không tự xóa. Kết quả dò
+    AUTO không còn ghi qua đây nữa (chỉ ghi vào ToneCacheManager).
+
+    Mỗi entry có cờ "source": "human" (mặc định) để phân biệt với "auto" về sau.
+    Entry CŨ không có cờ source được coi là "human" (đã sửa tay) — tương thích
+    ngược, không mất ưu tiên.
+    """
+
+    DEFAULT_SOURCE = "human"
+
     @staticmethod
     def _load_all():
         if os.path.exists(MANUAL_TIMELINES_FILE):
             try:
                 with open(MANUAL_TIMELINES_FILE, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except Exception:
+            except (json.JSONDecodeError, ValueError, UnicodeDecodeError) as e:
+                # File hỏng: sao lưu trước rồi mới trả {} — dữ liệu người dùng
+                # quý hơn cache, tuyệt đối KHÔNG để bị atomic_write đè mất.
+                _backup_corrupt_file(MANUAL_TIMELINES_FILE, e)
+                return {}
+            except OSError as e:
+                print(f"[CẢNH BÁO] Không đọc được manual timelines {MANUAL_TIMELINES_FILE}: {e}")
                 return {}
         return {}
-    
+
     @staticmethod
     def _save_all(data):
         try:
@@ -113,7 +176,7 @@ class ManualToneTimeline:
         except Exception as e:
             print(f"Lỗi lưu manual timelines: {e}")
             return False
-    
+
     @staticmethod
     def load_timeline(youtube_url):
         """Load timeline cho 1 bài (theo video_id, fallback URL nguyên văn)."""
@@ -124,16 +187,30 @@ class ManualToneTimeline:
         all_data = ManualToneTimeline._load_all()
         # Tương thích ngược: dữ liệu cũ key theo video_id thuần
         return all_data.get(key) or all_data.get(extract_video_id(youtube_url))
-    
+
     @staticmethod
-    def save_timeline(youtube_url, title, timeline_entries):
+    def get_timeline_source(youtube_url):
+        """Đọc cờ source ('human'/'auto') của timeline 1 bài.
+
+        Entry KHÔNG có cờ source được coi là 'human' (tương thích data cũ).
+        Trả None nếu không có timeline cho bài đó.
         """
-        Lưu timeline cho 1 bài YouTube.
-        
+        entry = ManualToneTimeline.load_timeline(youtube_url)
+        if not entry:
+            return None
+        return entry.get("source", ManualToneTimeline.DEFAULT_SOURCE)
+
+    @staticmethod
+    def save_timeline(youtube_url, title, timeline_entries, source="human"):
+        """
+        Lưu timeline cho 1 bài.
+
         Args:
-            youtube_url: YouTube URL
+            youtube_url: URL (YouTube hoặc nguồn khác)
             title: Tên bài hát
             timeline_entries: list of {time, key_display, key_index, scale}
+            source: "human" (mặc định, user sửa tay) hoặc "auto". Lưu vào entry
+                    để phân biệt nguồn về sau.
         """
         key = song_match_key(youtube_url)
         if not key:
@@ -145,10 +222,11 @@ class ManualToneTimeline:
                 "title": title,
                 "url": youtube_url,
                 "timeline": timeline_entries,
+                "source": source,
                 "updated_at": time.time()
             }
             return ManualToneTimeline._save_all(all_data)
-    
+
     @staticmethod
     def delete_timeline(youtube_url):
         """Xóa timeline của 1 bài (theo video_id, fallback URL nguyên văn)."""
@@ -167,35 +245,38 @@ class ManualToneTimeline:
             if removed:
                 return ManualToneTimeline._save_all(all_data)
             return False
-    
+
     @staticmethod
     def list_all_timelines():
         """Liệt kê tất cả timeline đã lưu"""
         all_data = ManualToneTimeline._load_all()
         result = []
         for video_id, data in all_data.items():
+            if not isinstance(data, dict):
+                continue
             result.append({
                 "video_id": video_id,
                 "title": data.get("title", ""),
                 "url": data.get("url", ""),
                 "entries_count": len(data.get("timeline", [])),
+                "source": data.get("source", ManualToneTimeline.DEFAULT_SOURCE),
                 "updated_at": data.get("updated_at", 0)
             })
         return result
-    
+
     @staticmethod
     def get_entry_at_position(timeline, position_seconds):
         """Lấy entry áp dụng cho thời gian hiện tại (thời gian <= position lớn nhất)"""
         if not timeline:
             return None, -1
-            
+
         target_idx = -1
         for i, entry in enumerate(timeline):
             if entry['time'] <= position_seconds:
                 target_idx = i
             else:
                 break
-                
+
         if target_idx >= 0:
             return timeline[target_idx], target_idx
         return None, -1

@@ -92,15 +92,41 @@ _DEFAULT_APP_CONFIG = {
     "youtube_cookie_browser": "auto",
     "youtube_cookie_profile": "",
     "youtube_cookie_file": "",
+    # ── MIDI CC mapping ──────────────────────────────────────
+    # QUAN TRỌNG: mỗi chức năng có nút vật lý riêng phải có CC DUY NHẤT.
+    # Caller tra theo TÊN key (vd MIDI_CC.get("fix_meo")), KHÔNG theo số —
+    # nên chỉ cần đổi số, không đổi tên. Dải CC trống còn lại: 43-49.
     "midi_cc": {
         "tone_music": 10, "tone_voice": 11,
         "mix_music": 20, "mix_mic": 21, "mix_reverb": 22, "mix_backing": 23,
+        # CC 30: live-tuner tab "Mode" (calibration.py:487 đọc MIDI_CC["mode"]).
+        # CC 31: AutoKey toggle — control riêng trong template Studio One
+        #        (surface.xml). Không có caller Python gửi/đọc qua key này.
         "mode": 30, "autokey": 31, "score_trigger": 32,
+        # key_scale (34): fallback MỒ CÔI / deprecated. Code thật dùng
+        # scale_type (35) — xem getter get_scale_midi_map + _tone._send_tone_midi.
+        # Giữ lại để app_config.json/template cũ không vỡ, đừng tham chiếu mới.
         "key_root": 33, "key_scale": 34, "scale_type": 35,
-        "tune_on_off": 36, "tone_auto": 31, "fix_meo": 36,
-        "mode_danca": 30, "mode_lofi": 37, "mode_remix": 38, "mode_datheloai": 39,
+        # tune_on_off (36): control "Auto-Tune bypass" cho template Studio One,
+        #        không có caller Python (chỉ surface.xml + script test).
+        # tone_auto (40): nút Auto-Tune thật — frontend_qt.py:474/797. TÁCH khỏi 31.
+        # fix_meo  (41): nút chống méo giọng thật — frontend_qt.py:479/809,
+        #        tools.py:187. TÁCH khỏi 36.
+        "tune_on_off": 36, "tone_auto": 40, "fix_meo": 41,
+        # mode_danca (42): TÁCH khỏi 30 để không đè live-tuner "mode".
+        #        LƯU Ý: nút Dân Ca thật đi qua mode_config["Dân Ca"]["cc"] (=30),
+        #        không qua key này; nếu muốn nút Dân Ca dùng CC 42 phải sửa cả
+        #        mode_config bên dưới (ngoài phạm vi thay đổi hiện tại).
+        "mode_danca": 42, "mode_lofi": 37, "mode_remix": 38, "mode_datheloai": 39,
         "mute_music": 50, "mute_mic": 51, "mute_reverb": 52, "mute_backing": 53,
     },
+    # ⚠ NGUỒN TRÙNG: scale_values {major,minor} và scale_midi_map {Major,Minor}
+    # (bên dưới) chứa CÙNG giá trị 13/18 nhưng khác cách viết hoa key.
+    #   • Đường gửi MIDI THẬT (dò tone) dùng scale_midi_map qua
+    #     get_scale_midi_map() → _tone._send_tone_midi (core/engine/_tone.py:257).
+    #   • scale_values (get_scale_values) chỉ phục vụ toggle Major/Minor thủ công
+    #     ở frontend_qt.py:827/831 (SCALE_VALUES) và calibration ghi cả hai.
+    # => Phải GIỮ ĐỒNG BỘ 2 nơi này thủ công khi đổi giá trị.
     "scale_values": {
         "major": 13,
         "minor": 18
@@ -110,6 +136,8 @@ _DEFAULT_APP_CONFIG = {
         "E": 46, "F": 57, "F#": 69, "G": 80,
         "G#": 92, "Ab": 92, "A": 103, "A#": 115, "Bb": 115, "B": 127,
     },
+    # ⚠ Nguồn THẬT cho gửi MIDI scale (xem cảnh báo ở scale_values phía trên).
+    # Giữ đồng bộ giá trị với scale_values.
     "scale_midi_map": {
         "Major": 13,
         "Minor": 18

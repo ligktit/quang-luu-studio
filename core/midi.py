@@ -26,6 +26,11 @@ class MidiHandler:
         self.on_cc_received = None  # Callback(cc, value)
         self._connect_out_warned = False  # Chỉ cảnh báo 1 lần
         self._connect_in_warned = False
+        # Lock bảo vệ mọi thao tác gửi tới outport — đảm bảo thread-safe.
+        # Có 8+ nơi từ nhiều thread (detect, replay cached/manual, autokey,
+        # continuous...) gọi send đồng thời. Lock này serialize toàn bộ việc
+        # ghi vào outport, tránh xen kẽ byte stream MIDI / lẫn key+scale.
+        self._send_lock = threading.Lock()
     
     def connect(self):
         """Kết nối tới MIDI output port (loopMIDI)"""
@@ -56,8 +61,12 @@ class MidiHandler:
                 self._connect_out_warned = True
             return False
     
-    def send_cc(self, cc, value, channel=0):
-        """Gửi MIDI Control Change message"""
+    def _send_cc_unlocked(self, cc, value, channel=0):
+        """Gửi 1 CC message — GIẢ ĐỊNH đã giữ self._send_lock.
+
+        Chỉ dùng nội bộ bởi send_cc/send_cc_pair/send_cc_many để tránh
+        khóa lồng nhau (không đệ quy lock).
+        """
         if self.outport:
             try:
                 import mido
@@ -67,6 +76,45 @@ class MidiHandler:
             except Exception:
                 return False
         return False
+
+    def send_cc(self, cc, value, channel=0):
+        """Gửi MIDI Control Change message (thread-safe).
+
+        Serialize qua _send_lock để nhiều thread gửi đồng thời không làm
+        hỏng byte stream MIDI.
+        """
+        with self._send_lock:
+            return self._send_cc_unlocked(cc, value, channel=channel)
+
+    def send_cc_pair(self, cc1, val1, cc2, val2, channel=0):
+        """Gửi NGUYÊN TỬ một cặp CC trong cùng một lần giữ lock.
+
+        Dùng cho _send_tone_midi (key_root + scale_type): đảm bảo không
+        thread nào chen vào giữa 2 CC → Studio One không nhận key của bài
+        này lẫn scale của bài kia.
+
+        Trả về True nếu CẢ HAI CC gửi thành công, False nếu bất kỳ cái nào
+        thất bại (hoặc outport chưa kết nối).
+        """
+        with self._send_lock:
+            ok1 = self._send_cc_unlocked(cc1, val1, channel=channel)
+            ok2 = self._send_cc_unlocked(cc2, val2, channel=channel)
+            return ok1 and ok2
+
+    def send_cc_many(self, cc_values, channel=0):
+        """Gửi NGUYÊN TỬ nhiều CC trong cùng một lần giữ lock.
+
+        cc_values: iterable các tuple (cc, value).
+        Trả về True nếu TẤT CẢ gửi thành công, False nếu có cái nào thất bại
+        (hoặc outport chưa kết nối). Các CC vẫn được gửi theo thứ tự, không
+        dừng giữa chừng để giữ trạng thái nhất quán nhất có thể.
+        """
+        with self._send_lock:
+            all_ok = True
+            for cc, value in cc_values:
+                if not self._send_cc_unlocked(cc, value, channel=channel):
+                    all_ok = False
+            return all_ok
     
     def start_listening(self):
         """Bắt đầu lắng nghe MIDI input (background thread)"""

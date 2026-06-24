@@ -83,6 +83,27 @@ class _MidiMixin:
                 success = self.midi_handler.send_cc(cc, value)
         return success
 
+    def send_midi_pair(self, cc1, val1, cc2, val2, auto_reconnect=True):
+        """Gửi NGUYÊN TỬ một cặp CC (vd: key_root + scale_type).
+
+        Wrapper của MidiHandler.send_cc_pair: cả 2 CC được gửi trong cùng
+        một lần giữ lock nên không thread nào chen vào giữa. Giữ nguyên cơ
+        chế auto_reconnect như send_midi.
+
+        Trả về True nếu cả 2 CC gửi thành công.
+        """
+        success = self.midi_handler.send_cc_pair(cc1, val1, cc2, val2)
+        if not success and auto_reconnect:
+            now = time.time()
+            last_warn = getattr(self, '_last_midi_fail_warn', 0)
+            if now - last_warn > 10:
+                print(f"Gửi MIDI pair thất bại (cc={cc1},{cc2}), đang thử kết nối lại...")
+                self._last_midi_fail_warn = now
+
+            if self.connect_midi():
+                success = self.midi_handler.send_cc_pair(cc1, val1, cc2, val2)
+        return success
+
     def trigger_midi_learn(self, cc_list=None):
         if cc_list is None:
             cc_list = [10, 11, 20, 21, 22, 23, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 50, 51, 52, 53]
