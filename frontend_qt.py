@@ -168,7 +168,7 @@ class MainDashboard(QMainWindow):
         root.setSpacing(0)
 
         # Marquee text (used by SmoothMarqueeLabel component)
-        self._marquee_text = "Bản quyền Quang Lưu Studio"
+        self._marquee_text = self._brand_marquee_text("Bản quyền Quang Lưu Studio")
 
         # Build UI — V5.0: Performance Stage (waveform hero + tabbed dock)
         root.addWidget(self._build_header())
@@ -701,6 +701,17 @@ class MainDashboard(QMainWindow):
         msg = (text or "").strip() or "Đang dò tone..."
         return f"{frame}  {msg}  {frame}"
 
+    def _brand_marquee_text(self, default: str) -> str:
+        """Text thương hiệu/nhàn rỗi cho marquee. Khách VIP (Premium) được chào
+        đón riêng; còn lại giữ text mặc định."""
+        try:
+            from core import entitlements
+            if entitlements.is_premium():
+                return "👑  Chào mừng Quý khách VIP đến với Quang Lưu Studio  👑"
+        except Exception:
+            pass
+        return default
+
     def _set_marquee_text(self, text):
         """Slot main-thread cho _marquee_signal — cập nhật marquee an toàn."""
         self._marquee_text = text
@@ -755,7 +766,7 @@ class MainDashboard(QMainWindow):
         self._do_tone_running = False
         self._set_rescan_button_state("idle")
         self.autokey_dot.setStyleSheet(f"color: {C['card_hover']}; font-size: 16px;")
-        self._marquee_text = "♪ Quang Lưu Studio — Karaoke Pro ♪"
+        self._marquee_text = self._brand_marquee_text("♪ Quang Lưu Studio — Karaoke Pro ♪")
         self._show_message("Đã huỷ dò tone")
 
     def _on_force_rescan(self):
@@ -877,7 +888,7 @@ class MainDashboard(QMainWindow):
             self._do_tone_done = False
             self._set_rescan_button_state("idle")
             self.autokey_dot.setStyleSheet(f"color: {C['card_hover']}; font-size: 16px;")
-            self._marquee_text = "♪ Quang Lưu Studio — Karaoke Pro ♪"
+            self._marquee_text = self._brand_marquee_text("♪ Quang Lưu Studio — Karaoke Pro ♪")
             # Lỗi liên quan tới việc NGHE LOA (loopback) thường do tai nghe / loa
             # đang nghe KHÁC với thiết bị mặc định Windows → kèm hướng dẫn cụ thể
             # + nút mở "Cài đặt âm thanh" thay vì chỉ báo lỗi cụt.

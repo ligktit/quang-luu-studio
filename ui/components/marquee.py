@@ -13,11 +13,14 @@ Features:
 """
 from __future__ import annotations
 
+import math
 import time
 import unicodedata
 
 from PySide6.QtCore import QEvent, QRectF, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QLinearGradient, QPainter, QPen
+from PySide6.QtGui import (
+    QColor, QFont, QFontMetricsF, QLinearGradient, QPainter, QPen, QRadialGradient,
+)
 from PySide6.QtWidgets import QSizePolicy, QWidget
 from ui.design_tokens import C
 
@@ -45,6 +48,10 @@ class SmoothMarqueeLabel(QWidget):
         self._last_tick = None
         self._text_width = 0.0
         self._status = {"glyph": "\u266A", "label": "Now", "accent": QColor(self._accent)}
+
+        # Vi\u1EC1n LED ch\u1EA1y (VIP). T\u1EAFt m\u1EB7c \u0111\u1ECBnh \u2014 b\u1EADt qua set_led_border(True).
+        self._led_border = False
+        self._led_phase = 0.0
 
         self.setAttribute(Qt.WA_Hover, True)
         self.setMouseTracking(True)
@@ -79,6 +86,13 @@ class SmoothMarqueeLabel(QWidget):
     def set_color(self, color: str):
         self._accent = QColor(color)
         self._status = self._infer_status(self.text)
+        self.update()
+
+    def set_led_border(self, on: bool):
+        """Bật/tắt viền LED chạy (dành cho khách VIP/Premium)."""
+        self._led_border = bool(on)
+        # Chừa lề để bóng LED không đè chữ; cao tối thiểu lớn hơn chút.
+        self.setMinimumHeight(self.DEFAULT_HEIGHT + (6 if self._led_border else 0))
         self.update()
 
     def enterEvent(self, event):
@@ -155,6 +169,11 @@ class SmoothMarqueeLabel(QWidget):
         if self.width() <= 0:
             return
 
+        # Viền LED chạy liên tục, kể cả khi hover (text dừng nhưng đèn vẫn nhấp nháy).
+        if self._led_border:
+            self._led_phase += 0.05
+            self.update()
+
         if not self._ready:
             self._reset_offset()
             self.update()
@@ -210,6 +229,88 @@ class SmoothMarqueeLabel(QWidget):
         painter.setFont(self._status_font())
         painter.drawText(icon_rect, Qt.AlignCenter, self._status["glyph"])
 
+    # ── Viền LED chạy (VIP) ──────────────────────────────────────────────────
+    def _round_rect_point(self, rect: QRectF, r: float, d: float, perim: float):
+        """Toạ độ tại quãng đường d (đi dọc chu vi pill/rounded-rect)."""
+        x0, y0, w, h = rect.left(), rect.top(), rect.width(), rect.height()
+        sx = max(0.0, w - 2 * r)          # đoạn thẳng ngang
+        sy = max(0.0, h - 2 * r)          # đoạn thẳng dọc
+        arc = (math.pi / 2.0) * r          # 1/4 cung
+        cx_l, cx_r = x0 + r, x0 + w - r
+        cy_t, cy_b = y0 + r, y0 + h - r
+        segs = [sx, arc, sy, arc, sx, arc, sy, arc]
+        d = d % perim
+        for i, seg in enumerate(segs):
+            if d <= seg or i == len(segs) - 1:
+                if i == 0:      # top L→R
+                    return cx_l + d, y0
+                if i == 1:      # corner TR
+                    th = -math.pi / 2 + (d / max(arc, 1e-6)) * (math.pi / 2)
+                    return cx_r + r * math.cos(th), cy_t + r * math.sin(th)
+                if i == 2:      # right T→B
+                    return x0 + w, cy_t + d
+                if i == 3:      # corner BR
+                    th = 0 + (d / max(arc, 1e-6)) * (math.pi / 2)
+                    return cx_r + r * math.cos(th), cy_b + r * math.sin(th)
+                if i == 4:      # bottom R→L
+                    return cx_r - d, y0 + h
+                if i == 5:      # corner BL
+                    th = math.pi / 2 + (d / max(arc, 1e-6)) * (math.pi / 2)
+                    return cx_l + r * math.cos(th), cy_b + r * math.sin(th)
+                if i == 6:      # left B→T
+                    return x0, cy_b - d
+                # corner TL
+                th = math.pi + (d / max(arc, 1e-6)) * (math.pi / 2)
+                return cx_l + r * math.cos(th), cy_t + r * math.sin(th)
+            d -= seg
+        return x0, y0
+
+    def _draw_led_border(self, painter: QPainter):
+        inset = 3.0
+        rect = QRectF(inset, inset, self.width() - inset * 2, self.height() - inset * 2)
+        if rect.width() <= 4 or rect.height() <= 4:
+            return
+        r = rect.height() / 2.0                       # dạng pill (bảng hiệu)
+        perim = 2 * max(0.0, rect.width() - 2 * r) + 2 * math.pi * r
+
+        # Viền nền vàng mờ (ambiance) — 2 lớp tạo quầng sáng.
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(255, 196, 64, 28), 4.0))
+        painter.drawRoundedRect(rect, r, r)
+        painter.setPen(QPen(QColor(255, 224, 150, 70), 1.4))
+        painter.drawRoundedRect(rect, r, r)
+
+        # Bóng LED chạy quanh chu vi.
+        spacing = 13.0
+        count = max(12, int(perim / spacing))
+        loops = 3.0                                   # số cụm sáng chạy quanh
+        painter.setPen(Qt.NoPen)
+        for i in range(count):
+            t = i / count
+            x, y = self._round_rect_point(rect, r, t * perim, perim)
+            # Sóng sáng chạy: pha dịch theo _led_phase.
+            b = 0.5 + 0.5 * math.sin(t * loops * math.tau - self._led_phase * math.tau)
+            b = b * b                                 # nén để các bóng tắt rõ hơn
+            if b < 0.04:
+                continue
+            # Màu vàng gold → trắng nóng khi sáng nhất.
+            cr = int(255)
+            cg = int(190 + 60 * b)
+            cb = int(70 + 150 * b)
+            core = QColor(cr, min(255, cg), min(255, cb))
+            # Quầng glow
+            gr = 2.5 + 5.0 * b
+            glow = QRadialGradient(x, y, gr)
+            ga = int(200 * b)
+            glow.setColorAt(0.0, QColor(cr, min(255, cg), min(255, cb), ga))
+            glow.setColorAt(1.0, QColor(cr, min(255, cg), 80, 0))
+            painter.setBrush(glow)
+            painter.drawEllipse(QRectF(x - gr, y - gr, gr * 2, gr * 2))
+            # Lõi bóng
+            cs = 1.1 + 1.3 * b
+            painter.setBrush(core)
+            painter.drawEllipse(QRectF(x - cs, y - cs, cs * 2, cs * 2))
+
     def paintEvent(self, _):
         if self.width() <= 0 or self.height() <= 0:
             return
@@ -260,4 +361,9 @@ class SmoothMarqueeLabel(QWidget):
         painter.drawRect(QRectF(lane.right() - self.EDGE_FADE, 0, self.EDGE_FADE, lane.height()))
 
         painter.restore()
+
+        # Viền LED VIP — vẽ trên cùng, ngoài vùng clip của lane.
+        if self._led_border:
+            self._draw_led_border(painter)
+
         painter.end()

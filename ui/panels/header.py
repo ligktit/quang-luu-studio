@@ -50,6 +50,14 @@ def build_header(dashboard) -> PaintedHeaderBar:
     dashboard._marquee_widget.setFixedHeight(30)
     dashboard._marquee_widget.setAccessibleName("Bảng thông báo")
     dashboard._marquee_widget.setAccessibleDescription("Hiển thị tên bài hát và thông tin tone đang phát")
+    # VIP/Premium: viền LED chạy quanh marquee.
+    try:
+        from core import entitlements
+        if entitlements.is_premium():
+            dashboard._marquee_widget.setFixedHeight(40)
+            dashboard._marquee_widget.set_led_border(True)
+    except Exception as e:
+        print(f"[PREMIUM-LED] init lỗi: {e}")
     layout.addWidget(dashboard._marquee_widget, 1)
     dashboard.marquee_label = dashboard._marquee_widget
 
