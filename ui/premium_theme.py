@@ -19,11 +19,19 @@ from __future__ import annotations
 _applied = False
 
 # ── Bảng màu Gold & Diamond ───────────────────────────────────────────────────
+# Nền cửa sổ: gradient chéo VÀNG GOLD (góc trên-trái) → đen ấm (giữa) → KIM CƯƠNG
+# xanh băng (góc dưới-phải). Đủ tối ở giữa để nội dung vẫn tương phản tốt.
+_WINDOW_BG_GRADIENT = (
+    "qlineargradient(x1:0, y1:0, x2:1, y2:1, "
+    "stop:0 #3A2C12, stop:0.30 #1B1408, stop:0.55 #15110B, "
+    "stop:0.80 #122029, stop:1 #1A3038)"
+)
+
 _C_GOLD = {
-    # Nền đen ấm sang trọng
-    "bg":           "#0E0B06",
-    "card":         "#1C170D",
-    "card_hover":   "#2A2316",
+    # Nền nâu-vàng tối ấm (sáng hơn để thấy rõ tông vàng)
+    "bg":           "#171008",
+    "card":         "#241B0D",
+    "card_hover":   "#352A18",
 
     # Accent chính = VÀNG GOLD; phụ = KIM CƯƠNG (xanh băng)
     "primary":      "#E9C45A",   # gold
@@ -100,9 +108,11 @@ def apply_gold_diamond() -> None:
     global _applied
     if _applied:
         return
-    from ui.design_tokens import C, PAINTER
-    C.update(_C_GOLD)
-    PAINTER.update(_PAINTER_GOLD)
+    import ui.design_tokens as dt
+    dt.C.update(_C_GOLD)
+    dt.PAINTER.update(_PAINTER_GOLD)
+    # Nền cửa sổ chính → gradient vàng/kim cương (load_qss đọc WINDOW_BG).
+    dt.WINDOW_BG = _WINDOW_BG_GRADIENT
     # Đồng bộ dải visualizer Premium sang gold/diamond cho ăn nhập.
     try:
         from ui.components import premium_visualizer as _pv

@@ -114,6 +114,18 @@ FONT = '"Be Vietnam Pro", "Segoe UI", sans-serif'
 FONT_MONO = "Consolas"
 
 
+# Nền cửa sổ chính. Mặc định None → dùng màu phẳng C["bg"]. Theme Premium
+# (ui.premium_theme) gán chuỗi qlineargradient để nền hiện gradient vàng/kim cương.
+WINDOW_BG = None
+
+
+def _hex_rgb(hex_color: str) -> str:
+    """'#RRGGBB' → 'r, g, b' (cho rgba() trong QSS)."""
+    from PySide6.QtGui import QColor as _QC
+    c = _QC(hex_color)
+    return f"{c.red()}, {c.green()}, {c.blue()}"
+
+
 # ── QSS loader ────────────────────────────────────────────────
 def load_qss() -> str:
     """
@@ -134,6 +146,11 @@ def load_qss() -> str:
             "text_muted": C["text_muted"],
             "border":     C["border"],
             "font":       FONT,
+            # Nền cửa sổ (gradient nếu theme Premium đặt WINDOW_BG)
+            "window_bg":  WINDOW_BG or C["bg"],
+            # rgb thô để card/panel ngả màu theo theme (không hardcode navy)
+            "card_rgb":   _hex_rgb(C["card"]),
+            "bg_rgb":     _hex_rgb(C["bg"]),
         }
     # Inline fallback
     return _inline_qss()

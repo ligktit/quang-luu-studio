@@ -8,7 +8,7 @@
 /* ── Base ── */
 QMainWindow,
 QWidget#central {
-    background-color: %(bg)s;
+    background: %(window_bg)s;
 }
 
 /* ── Typography ── */
@@ -38,21 +38,21 @@ QLabel#sectionTitle {
 
 /* ── Card (Level 1 panel) ── */
 QFrame#card {
-    background-color: rgba(30, 41, 59, 220);
+    background-color: rgba(%(card_rgb)s, 220);
     border-radius: 12px;
     border: 1px solid rgba(51, 65, 85, 0.5);
 }
 
 /* ── Panel (Level 2 section) ── */
 QFrame#panel {
-    background-color: rgba(15, 23, 42, 0.55);
+    background-color: rgba(%(bg_rgb)s, 0.55);
     border-radius: 8px;
     border: 1px solid rgba(51, 65, 85, 0.4);
 }
 
 /* ── Header ── */
 QFrame#header {
-    background-color: %(bg)s;
+    background: %(window_bg)s;
     border-bottom: 1px solid rgba(51, 65, 85, 0.3);
 }
 
