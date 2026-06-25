@@ -95,6 +95,13 @@ Source: "studio_one\deviceinfo.xml"; DestDir: "{app}\studio_one"; Flags: ignorev
 ; SFX (sound effects)
 Source: "sfx\*"; DestDir: "{app}\sfx"; Flags: ignoreversion recursesubdirs
 
+; Model giọng nói tiếng Việt (offline) — đặt CẠNH exe, không nhúng vào exe để
+; tránh phình + giải nén lại mỗi lần chạy. Tải trước bằng tools/download_voice_models.py.
+; skipifsourcedoesntexist: build không có model vẫn chạy được (tính năng fail-soft).
+Source: "models\*"; DestDir: "{app}\models"; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist
+; Piper TTS binary (Windows)
+Source: "tools\piper\*"; DestDir: "{app}\tools\piper"; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist
+
 [Dirs]
 ; Tạo thư mục cho dữ liệu user (writable)
 Name: "{userappdata}\{#MyAppDataFolder}"; Permissions: users-full

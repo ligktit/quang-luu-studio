@@ -1899,6 +1899,12 @@ class MainDashboard(QMainWindow):
                 rate=int(cfg.get("tts_rate", 180)),
                 voice_id=cfg.get("tts_voice", "") or "",
                 enabled=bool(cfg.get("tts_enabled", False)),
+                engine=cfg.get("tts_engine", "sapi") or "sapi",
+            )
+            # Áp engine kể cả khi singleton đã tồn tại (đổi trong Cài đặt).
+            self._a11y_speaker.set_engine(
+                cfg.get("tts_engine", "sapi") or "sapi",
+                cfg.get("tts_piper_voice", "") or "",
             )
             self._a11y_speaker.set_enabled(bool(cfg.get("tts_enabled", False)))
             if self._a11y_speaker.enabled:
@@ -2001,9 +2007,14 @@ class MainDashboard(QMainWindow):
             from core.accessibility.voice_input import VoiceInput
             # Intent route qua signal (QueuedConnection) — handler có thể mở
             # dialog, không được chạy trực tiếp trong callback/key handler.
+            try:
+                _vcfg = backend.AppConfig.get_accessibility() or {}
+            except Exception:
+                _vcfg = {}
             self._a11y_voice = VoiceInput(
                 on_intent=lambda it: self._voice_intent_signal.emit(it),
                 on_error=lambda msg: self._a11y_speak(msg, priority="high"),
+                variant=_vcfg.get("voice_model", "small") or "small",
             )
             if not self._a11y_voice.available:
                 self._a11y_speak("Chưa có model giọng nói. Hãy tải Vosk vi vào thư mục models.")

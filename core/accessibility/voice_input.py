@@ -168,10 +168,19 @@ class VoiceInput:
     on_error:  Callable[[str], None]
     """
 
+    # Các biến thể model Vosk VI (thư mục trong models/). "small" mặc định —
+    # nhẹ, đủ cho lệnh ngắn; "large" chính xác hơn (WER thấp hơn) nhưng nặng.
+    MODEL_DIRS = {
+        "small": "vosk-vi",
+        "large": "vosk-vi-large",
+    }
+
     def __init__(self, model_path: str = "", sample_rate: int = 16000,
                  on_intent: Optional[Callable[[Intent], None]] = None,
-                 on_error: Optional[Callable[[str], None]] = None):
-        self._model_path = model_path or self._default_model_path()
+                 on_error: Optional[Callable[[str], None]] = None,
+                 variant: str = "small"):
+        self._variant = (variant or "small").lower()
+        self._model_path = model_path or self._resolve_model_path(self._variant)
         self._rate = int(sample_rate)
         self._on_intent = on_intent
         self._on_error = on_error
@@ -188,14 +197,57 @@ class VoiceInput:
     def available(self) -> bool:
         return _VOSK_OK and _SD_OK and os.path.isdir(self._model_path)
 
-    def _default_model_path(self) -> str:
-        # Cho phép placement linh hoạt: project_root/models/vosk-vi/ hoặc next-to-exe.
+    @staticmethod
+    def _candidate_bases() -> list[str]:
+        """Các thư mục gốc có thể chứa models/. Onefile: model đặt CẠNH exe (do
+        installer ship, tránh phình exe) nên ưu tiên dir(exe), rồi _MEIPASS;
+        dev: project root."""
         import sys
+        bases = []
         if getattr(sys, "frozen", False):
-            base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
-        else:
-            base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        return os.path.join(base, "models", "vosk-vi")
+            bases.append(os.path.dirname(sys.executable))
+            mei = getattr(sys, "_MEIPASS", None)
+            if mei:
+                bases.append(mei)
+        bases.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        return bases
+
+    @classmethod
+    def _variant_path(cls, variant: str) -> str:
+        """Path model theo variant — trả thư mục TỒN TẠI đầu tiên trong các base,
+        nếu không có thì base đầu (để báo lỗi rõ)."""
+        sub = cls.MODEL_DIRS.get((variant or "small").lower(), cls.MODEL_DIRS["small"])
+        bases = cls._candidate_bases()
+        for b in bases:
+            p = os.path.join(b, "models", sub)
+            if os.path.isdir(p):
+                return p
+        return os.path.join(bases[0], "models", sub)
+
+    @classmethod
+    def _resolve_model_path(cls, variant: str) -> str:
+        """Trả path model theo variant; nếu variant chọn không có thì fallback
+        sang variant còn lại đang tồn tại (small ↔ large)."""
+        want = cls._variant_path(variant)
+        if os.path.isdir(want):
+            return want
+        for other in cls.MODEL_DIRS:
+            p = cls._variant_path(other)
+            if os.path.isdir(p):
+                return p
+        return want  # giữ path mong muốn để báo lỗi rõ ràng
+
+    @classmethod
+    def available_variants(cls):
+        """Trả list (id, label, available) cho settings dialog."""
+        labels = {"small": "Vosk nhỏ (nhanh)", "large": "Vosk lớn (chính xác hơn)"}
+        return [
+            (vid, labels.get(vid, vid), os.path.isdir(cls._variant_path(vid)))
+            for vid in cls.MODEL_DIRS
+        ]
+
+    def _default_model_path(self) -> str:
+        return self._resolve_model_path(getattr(self, "_variant", "small"))
 
     def _ensure_model(self) -> bool:
         """Load model Vosk (BLOCKING, có thể mất vài giây). Thread-safe."""

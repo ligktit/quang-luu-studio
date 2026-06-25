@@ -890,6 +890,20 @@ class SettingsDialog(QDialog):
         self._a11y_cb_announce_state.setStyleSheet(self._checkbox_qss)
         self._a11y_cb_announce_state.setChecked(bool(cfg.get("announce_state", True)))
 
+        # Engine combo (SAPI vs Piper neural)
+        self._a11y_combo_engine = QComboBox()
+        self._a11y_combo_engine.setStyleSheet(self._combo_qss)
+        try:
+            from core.accessibility.speaker import get_speaker
+            for eid, label, avail in get_speaker().list_engines():
+                self._a11y_combo_engine.addItem(label if avail else f"{label} (chưa cài)", eid)
+            cur_eng = cfg.get("tts_engine", "sapi") or "sapi"
+            idx = self._a11y_combo_engine.findData(cur_eng)
+            if idx >= 0:
+                self._a11y_combo_engine.setCurrentIndex(idx)
+        except Exception as e:
+            print(f"[SETTINGS] list_engines lỗi: {e}")
+
         # Voice combo
         self._a11y_combo_voice = QComboBox()
         self._a11y_combo_voice.setStyleSheet(self._combo_qss)
@@ -930,7 +944,11 @@ class SettingsDialog(QDialog):
             vl.addWidget(self._a11y_cb_tts)
             vl.addWidget(self._a11y_cb_announce_focus)
             vl.addWidget(self._a11y_cb_announce_state)
-            voice_lbl = QLabel("Giọng:")
+            engine_lbl = QLabel("Bộ đọc:")
+            engine_lbl.setStyleSheet(self._field_label_qss())
+            vl.addWidget(engine_lbl)
+            vl.addWidget(self._a11y_combo_engine)
+            voice_lbl = QLabel("Giọng (SAPI):")
             voice_lbl.setStyleSheet(self._field_label_qss())
             vl.addWidget(voice_lbl)
             vl.addWidget(self._a11y_combo_voice)
@@ -951,10 +969,29 @@ class SettingsDialog(QDialog):
         self._a11y_cb_voice.setStyleSheet(self._checkbox_qss)
         self._a11y_cb_voice.setChecked(bool(cfg.get("voice_command_enabled", False)))
 
+        # Model Vosk variant (nhỏ/lớn)
+        self._a11y_combo_model = QComboBox()
+        self._a11y_combo_model.setStyleSheet(self._combo_qss)
+        try:
+            from core.accessibility.voice_input import VoiceInput
+            for vid, label, avail in VoiceInput.available_variants():
+                self._a11y_combo_model.addItem(label if avail else f"{label} (chưa tải)", vid)
+            cur_model = cfg.get("voice_model", "small") or "small"
+            idx = self._a11y_combo_model.findData(cur_model)
+            if idx >= 0:
+                self._a11y_combo_model.setCurrentIndex(idx)
+        except Exception as e:
+            print(f"[SETTINGS] available_variants lỗi: {e}")
+
         def _build_voice_card(vl):
             vl.addWidget(self._a11y_cb_voice)
+            model_lbl = QLabel("Model nhận lệnh:")
+            model_lbl.setStyleSheet(self._field_label_qss())
+            vl.addWidget(model_lbl)
+            vl.addWidget(self._a11y_combo_model)
             hint = QLabel(
-                "Yêu cầu: tải Vosk model tiếng Việt vào thư mục models/vosk-vi/.\n"
+                "Yêu cầu: model Vosk tiếng Việt trong models/vosk-vi/ (nhỏ) hoặc\n"
+                "models/vosk-vi-large/ (lớn). Tải qua tools/download_voice_models.py.\n"
                 "Lệnh hỗ trợ: dò tone, ghi âm, lưu bài, chấm điểm, mở danh sách,\n"
                 "tăng/giảm nhạc/mic/vang, chế độ Bolero/Lofi/Remix, đọc trạng thái."
             )
@@ -1006,6 +1043,7 @@ class SettingsDialog(QDialog):
             from core.accessibility.speaker import get_speaker
             spk = get_speaker()
             spk.set_rate(int(self._a11y_slider_rate.value()))
+            spk.set_engine(self._a11y_combo_engine.currentData() or "sapi")
             voice = self._a11y_combo_voice.currentData() or ""
             if voice:
                 spk.set_voice(voice)
@@ -1020,9 +1058,11 @@ class SettingsDialog(QDialog):
         try:
             backend.AppConfig.set_accessibility(
                 tts_enabled=self._a11y_cb_tts.isChecked(),
+                tts_engine=self._a11y_combo_engine.currentData() or "sapi",
                 tts_voice=self._a11y_combo_voice.currentData() or "",
                 tts_rate=int(self._a11y_slider_rate.value()),
                 voice_command_enabled=self._a11y_cb_voice.isChecked(),
+                voice_model=self._a11y_combo_model.currentData() or "small",
                 high_contrast=self._a11y_cb_high_contrast.isChecked(),
                 focus_ring_thick=self._a11y_cb_focus_ring.isChecked(),
                 font_scale=round(float(self._a11y_slider_font.value()) / 100.0, 2),
@@ -1049,6 +1089,7 @@ class SettingsDialog(QDialog):
             spk = getattr(d, "_a11y_speaker", None)
             if spk is not None:
                 spk.set_rate(int(self._a11y_slider_rate.value()))
+                spk.set_engine(self._a11y_combo_engine.currentData() or "sapi")
                 vid = self._a11y_combo_voice.currentData() or ""
                 if vid:
                     spk.set_voice(vid)
@@ -1067,8 +1108,14 @@ class SettingsDialog(QDialog):
         except Exception as e:
             print(f"[SETTINGS] apply announcer lỗi: {e}")
 
-        # Voice command — lazy init khi user enable
+        # Voice command — lazy init khi user enable; reset nếu đổi model variant.
         try:
+            want_variant = self._a11y_combo_model.currentData() or "small"
+            cur_voice = getattr(d, "_a11y_voice", None)
+            cur_variant = getattr(cur_voice, "_variant", None) if cur_voice else None
+            if cur_voice is not None and cur_variant != want_variant:
+                # Đổi model → bỏ instance cũ để init lại với variant mới.
+                d._a11y_voice = None
             if self._a11y_cb_voice.isChecked() and getattr(d, "_a11y_voice", None) is None:
                 d._a11y_init_voice()
         except Exception as e:

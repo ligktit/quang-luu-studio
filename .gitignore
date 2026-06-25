@@ -86,3 +86,8 @@ logs/
 
 # Git worktrees
 .claude/worktrees/
+
+# Voice models lớn (tải qua tools/download_voice_models.py — không commit binary nặng)
+models/vosk-vi-large/
+models/piper-vi/
+tools/piper/

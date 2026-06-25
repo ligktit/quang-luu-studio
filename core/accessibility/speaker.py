@@ -47,10 +47,16 @@ class Speaker:
     Mọi method đều thread-safe.
     """
 
-    def __init__(self, rate: int = 180, voice_id: str = "", enabled: bool = True):
+    def __init__(self, rate: int = 180, voice_id: str = "", enabled: bool = True,
+                 engine: str = "sapi"):
         self._rate = int(rate)
         self._voice_id = voice_id or ""
-        self._enabled = bool(enabled) and _PYTTSX3_AVAILABLE
+        # engine: "sapi" (pyttsx3) | "piper" (neural VI). Fallback SAPI nếu Piper
+        # không khả dụng. _enabled vẫn cần pyttsx3 HOẶC piper.
+        self._engine_name = (engine or "sapi").lower()
+        self._piper = None          # PiperTTS, khởi tạo lazy trong worker
+        self._piper_voice_id = ""   # voice .onnx cụ thể (rỗng = tự chọn)
+        self._enabled = bool(enabled) and self._any_backend_available()
         self._engine = None
         self._queue: "queue.Queue" = queue.Queue()
         self._thread: Optional[threading.Thread] = None
@@ -58,19 +64,56 @@ class Speaker:
         self._lock = threading.Lock()
         self._last_text = ""
 
+    @staticmethod
+    def _piper_available(voice_id: str = "") -> bool:
+        try:
+            from core.accessibility.tts_piper import PiperTTS
+            return PiperTTS(voice_id=voice_id).available
+        except Exception:
+            return False
+
+    def _any_backend_available(self) -> bool:
+        """Có ít nhất 1 backend đọc được (Piper hoặc SAPI)."""
+        if self._engine_name == "piper" and self._piper_available(self._piper_voice_id):
+            return True
+        return _PYTTSX3_AVAILABLE
+
+    def _use_piper(self) -> bool:
+        return self._engine_name == "piper" and self._piper is not None and self._piper.available
+
     # ── Public API ───────────────────────────────────────────
 
     @property
     def available(self) -> bool:
-        """True nếu pyttsx3 có sẵn (engine có thể nói)."""
-        return _PYTTSX3_AVAILABLE
+        """True nếu có ít nhất 1 backend đọc được (Piper hoặc SAPI)."""
+        return self._any_backend_available()
 
     @property
     def enabled(self) -> bool:
         return self._enabled
 
     def set_enabled(self, value: bool):
-        self._enabled = bool(value) and _PYTTSX3_AVAILABLE
+        self._enabled = bool(value) and self._any_backend_available()
+
+    def set_engine(self, engine: str, voice_id: str = ""):
+        """Đổi backend đọc: "sapi" | "piper". Áp dụng từ câu kế tiếp.
+
+        Nếu chọn "piper" mà không khả dụng → giữ "sapi" (fallback)."""
+        name = (engine or "sapi").lower()
+        self._piper_voice_id = voice_id or self._piper_voice_id
+        if name == "piper" and not self._piper_available(self._piper_voice_id):
+            log.info("Piper không khả dụng — giữ SAPI")
+            name = "sapi"
+        self._engine_name = name
+        # Buộc worker khởi tạo lại backend phù hợp ở lần nói kế.
+        self._piper = None
+
+    def list_engines(self):
+        """Trả list (id, label, available) cho settings dialog."""
+        return [
+            ("sapi",  "Giọng hệ thống (SAPI5)", _PYTTSX3_AVAILABLE),
+            ("piper", "Giọng tiếng Việt (Piper neural)", self._piper_available()),
+        ]
 
     def start(self):
         """Khởi tạo engine + worker thread. Idempotent."""
@@ -120,6 +163,12 @@ class Speaker:
                 eng.stop()
             except Exception as e:
                 log.debug("TTS interrupt error: %s", e)
+        # Ngắt Piper đang synth/phát.
+        if self._piper is not None:
+            try:
+                self._piper.stop()
+            except Exception as e:
+                log.debug("Piper interrupt error: %s", e)
         self._last_text = ""
 
     def stop(self):
@@ -208,10 +257,29 @@ class Speaker:
             pass
         return ""
 
-    def _run(self):
-        self._init_engine()
-        if self._engine is None:
+    def _init_piper(self):
+        """Khởi tạo PiperTTS nếu engine='piper'. Fallback SAPI nếu không khả dụng."""
+        if self._engine_name != "piper":
             return
+        try:
+            from core.accessibility.tts_piper import PiperTTS
+            p = PiperTTS(voice_id=self._piper_voice_id)
+            if p.available:
+                self._piper = p
+                log.info("TTS dùng Piper: %s", p.describe())
+                return
+        except Exception as e:
+            log.warning("Khởi tạo Piper lỗi: %s", e)
+        # Fallback
+        self._piper = None
+        self._engine_name = "sapi"
+
+    def _run(self):
+        self._init_piper()
+        if not self._use_piper():
+            self._init_engine()
+            if self._engine is None:
+                return
         while not self._stop_flag.is_set():
             try:
                 item = self._queue.get(timeout=0.2)
@@ -227,9 +295,18 @@ class Speaker:
                 except queue.Empty:
                     pass
                 continue
+            # Engine có thể đổi giữa chừng (set_engine) — kiểm tra mỗi câu.
+            if self._engine_name == "piper" and self._piper is None:
+                self._init_piper()
             try:
-                self._engine.say(item)
-                self._engine.runAndWait()
+                if self._use_piper():
+                    self._piper.speak_blocking(item)
+                else:
+                    if self._engine is None:
+                        self._init_engine()
+                    if self._engine is not None:
+                        self._engine.say(item)
+                        self._engine.runAndWait()
             except RuntimeError:
                 # pyttsx3 đôi khi raise nếu engine đang busy — ignore.
                 pass
@@ -242,12 +319,13 @@ _singleton: Optional[Speaker] = None
 _singleton_lock = threading.Lock()
 
 
-def get_speaker(rate: int = 180, voice_id: str = "", enabled: bool = False) -> Speaker:
+def get_speaker(rate: int = 180, voice_id: str = "", enabled: bool = False,
+                engine: str = "sapi") -> Speaker:
     """Trả về Speaker dùng chung. Lần đầu gọi sẽ khởi tạo + start nếu enabled."""
     global _singleton
     with _singleton_lock:
         if _singleton is None:
-            _singleton = Speaker(rate=rate, voice_id=voice_id, enabled=enabled)
+            _singleton = Speaker(rate=rate, voice_id=voice_id, enabled=enabled, engine=engine)
             if enabled:
                 _singleton.start()
         return _singleton
