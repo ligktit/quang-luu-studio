@@ -69,6 +69,15 @@ threading.excepthook = _thread_excepthook
 from core.version import __version__
 log.info("Quang Lưu Studio v%s starting", __version__)
 
+# Theme VIP: ghi đè palette sang Gold & Kim cương TRƯỚC khi import frontend_qt
+# (APP_QSS = load_qss() đóng băng lúc import) để toàn app mang tông vàng.
+try:
+    from ui.premium_theme import apply_if_premium
+    if apply_if_premium():
+        log.info("Áp theme Premium: Gold & Diamond")
+except Exception as e:
+    log.debug("premium theme skipped: %s", e)
+
 import backend
 import frontend_qt
 
