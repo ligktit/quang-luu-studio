@@ -2428,6 +2428,11 @@ class MainDashboard(QMainWindow):
                 self._premium_viz.stop()
             except Exception:
                 pass
+        if getattr(self, "_premium_tag", None) is not None:
+            try:
+                self._premium_tag.stop()
+            except Exception:
+                pass
         if self.is_recording:
             try:
                 self.engine.recorder.stop_recording(save_path=None)

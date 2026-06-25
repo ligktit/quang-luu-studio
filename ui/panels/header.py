@@ -14,6 +14,20 @@ def build_header(dashboard) -> PaintedHeaderBar:
     header.setAccessibleName("Thanh tiêu đề Quang Lưu Studio")
     layout = header.layout()
 
+    # Tag PREMIUM (texture kim cương) — chỉ hiện cho gói Premium.
+    dashboard._premium_tag = None
+    try:
+        from core import entitlements
+        if entitlements.is_premium():
+            from ui.components.premium_tag import PremiumTag
+            dashboard._premium_tag = PremiumTag("PREMIUM")
+            dashboard._premium_tag.setToolTip("Tài khoản Premium")
+            dashboard._premium_tag.setAccessibleName("Huy hiệu Premium")
+            layout.addWidget(dashboard._premium_tag)
+            layout.addSpacing(SP.SM)
+    except Exception as e:
+        print(f"[PREMIUM-TAG] init lỗi: {e}")
+
     dashboard._midi_dot = PaintedMidiDot()
     dashboard._midi_dot.setToolTip("Trạng thái kết nối MIDI (Studio One/Loopback)")
     dashboard._midi_dot.setAccessibleName("Đèn báo MIDI")
