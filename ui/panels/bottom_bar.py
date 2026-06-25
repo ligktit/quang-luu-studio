@@ -15,8 +15,9 @@ def build_bottom_bar(dashboard) -> QWidget:
     wrapper_layout.setContentsMargins(SP.LG, SP.XS, SP.LG, SP.SM)
 
     bar = QFrame()
-    bar.setStyleSheet("""
-        background-color: rgba(30, 41, 59, 230);
+    _bc = QColor(C["card"])
+    bar.setStyleSheet(f"""
+        background-color: rgba({_bc.red()}, {_bc.green()}, {_bc.blue()}, 230);
         border-radius: 22px;
         border: 1px solid rgba(51, 65, 85, 0.4);
     """)

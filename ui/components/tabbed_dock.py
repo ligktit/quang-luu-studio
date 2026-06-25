@@ -58,8 +58,9 @@ class TabBar(QWidget):
         tab_w = w / n
 
         # ── Background ───────────────────────────────────────
+        _bar_bg = QColor(C["bg"]); _bar_bg.setAlpha(220)
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(15, 20, 38, 220))
+        p.setBrush(_bar_bg)
         p.drawRoundedRect(QRectF(0, 0, w, h), 8, 8)
 
         font = QFont()
@@ -76,9 +77,11 @@ class TabBar(QWidget):
 
             # ── Hover/active background ──────────────────────
             if is_active:
+                _ac0 = QColor(C["primary"]); _ac0.setAlpha(15)
+                _ac1 = QColor(C["primary"]); _ac1.setAlpha(5)
                 active_bg = QLinearGradient(x, 0, x, h)
-                active_bg.setColorAt(0, QColor(56, 189, 248, 15))
-                active_bg.setColorAt(1, QColor(56, 189, 248, 5))
+                active_bg.setColorAt(0, _ac0)
+                active_bg.setColorAt(1, _ac1)
                 p.setPen(Qt.NoPen)
                 p.setBrush(active_bg)
                 p.drawRoundedRect(tab_rect, 6, 6)
@@ -97,8 +100,9 @@ class TabBar(QWidget):
                 # Glow
                 glow_rect = QRectF(ind_x - 10, h - self.INDICATOR_H - 3,
                                     ind_w + 20, self.INDICATOR_H + 6)
+                _glow = QColor(C["primary"]); _glow.setAlpha(25)
                 p.setPen(Qt.NoPen)
-                p.setBrush(QColor(56, 189, 248, 25))
+                p.setBrush(_glow)
                 p.drawRoundedRect(glow_rect, 4, 4)
 
                 # Indicator line
@@ -139,11 +143,13 @@ class TabbedDock(QWidget):
         self.tab_bar = TabBar(tabs)
         vl.addWidget(self.tab_bar)
 
-        # Content wrapper — glass panel background
+        # Content wrapper — glass panel background (ngả màu theo theme).
+        _cw = QColor(C["card"])
+        _cw_rgba = f"rgba({_cw.red()}, {_cw.green()}, {_cw.blue()}, 180)"
         self._content_wrapper = QFrame()
         self._content_wrapper.setStyleSheet(f"""
             QFrame {{
-                background-color: rgba(20, 25, 45, 180);
+                background-color: {_cw_rgba};
                 border: 1px solid rgba(51, 65, 85, 0.3);
                 border-top: none;
                 border-bottom-left-radius: 10px;

@@ -220,17 +220,22 @@ class WaveformHeroPanel(QWidget):
         """Dark background with subtle radial glow."""
         p.setPen(Qt.NoPen)
         # Base
+        _wb_top = QColor(C["card"]); _wb_top.setAlpha(235)
+        _wb_mid = QColor(C["bg"]);   _wb_mid.setAlpha(250)
+        _wb_bot = QColor(C["bg"]);   _wb_bot.setAlpha(255)
         bg_grad = QLinearGradient(0, 0, 0, h)
-        bg_grad.setColorAt(0.0, QColor(10, 14, 30, 240))
-        bg_grad.setColorAt(0.5, QColor(12, 18, 38, 250))
-        bg_grad.setColorAt(1.0, QColor(8, 12, 25, 255))
+        bg_grad.setColorAt(0.0, _wb_top)
+        bg_grad.setColorAt(0.5, _wb_mid)
+        bg_grad.setColorAt(1.0, _wb_bot)
         p.setBrush(bg_grad)
         p.drawRoundedRect(QRectF(0, 0, w, h), 12, 12)
 
-        # Center radial glow
+        # Center radial glow — gold (primary) + kim cương (creative).
+        _g0 = QColor(C["primary"]);  _g0.setAlpha(12)
+        _g1 = QColor(C["creative"]); _g1.setAlpha(6)
         glow = QRadialGradient(w / 2, h * 0.4, w * 0.5)
-        glow.setColorAt(0, QColor(56, 189, 248, 12))
-        glow.setColorAt(0.6, QColor(168, 85, 247, 6))
+        glow.setColorAt(0, _g0)
+        glow.setColorAt(0.6, _g1)
         glow.setColorAt(1, QColor(0, 0, 0, 0))
         p.setBrush(glow)
         p.drawRoundedRect(QRectF(0, 0, w, h), 12, 12)
@@ -523,12 +528,14 @@ class WaveformHeroPanel(QWidget):
         bar_cy = bar_y + bar_h / 2
 
         # Background
+        _pb = QColor(C["bg"]); _pb.setAlpha(200)
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(10, 15, 30, 200))
+        p.setBrush(_pb)
         p.drawRoundedRect(bar_rect, bar_h / 2, bar_h / 2)
 
         # Border
-        p.setPen(QPen(QColor(56, 189, 248, 30), 1))
+        _pbd = QColor(C["primary"]); _pbd.setAlpha(30)
+        p.setPen(QPen(_pbd, 1))
         p.setBrush(Qt.NoBrush)
         p.drawRoundedRect(bar_rect, bar_h / 2, bar_h / 2)
 

@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout
 from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QLinearGradient, QPainter, QPainterPath, QPen, QColor, QRadialGradient
 
-from ui.design_tokens import C, SP
+from ui.design_tokens import C, SP, PAINTER
 
 
 class PaintedHeaderBar(QFrame):
@@ -34,8 +34,8 @@ class PaintedHeaderBar(QFrame):
         w, h = self.width(), self.height()
 
         bg_grad = QLinearGradient(0, 0, 0, h)
-        bg_grad.setColorAt(0.0, QColor(14, 19, 34))
-        bg_grad.setColorAt(1.0, QColor(10, 14, 26))
+        bg_grad.setColorAt(0.0, QColor(PAINTER["header_top"]))
+        bg_grad.setColorAt(1.0, QColor(PAINTER["header_bot"]))
         painter.setPen(Qt.NoPen)
         painter.setBrush(bg_grad)
         painter.drawRect(0, 0, w, h)
@@ -44,14 +44,18 @@ class PaintedHeaderBar(QFrame):
         tray_path = QPainterPath()
         tray_path.addRoundedRect(tray, 16, 16)
 
+        # Khay đọc token C → ngả vàng theo theme.
+        _tray_top = QColor(C["card"]); _tray_top.setAlpha(236)
+        _tray_bot = QColor(C["bg"]);   _tray_bot.setAlpha(242)
         tray_grad = QLinearGradient(0, tray.top(), 0, tray.bottom())
-        tray_grad.setColorAt(0.0, QColor(18, 26, 44, 236))
-        tray_grad.setColorAt(1.0, QColor(12, 18, 32, 242))
+        tray_grad.setColorAt(0.0, _tray_top)
+        tray_grad.setColorAt(1.0, _tray_bot)
         painter.setPen(Qt.NoPen)
         painter.setBrush(tray_grad)
         painter.drawPath(tray_path)
 
-        painter.setPen(QPen(QColor(148, 163, 184, 42), 1))
+        _edge = QColor(C["primary"]); _edge.setAlpha(45)
+        painter.setPen(QPen(_edge, 1))
         painter.setBrush(Qt.NoBrush)
         painter.drawPath(tray_path)
 

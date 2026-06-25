@@ -61,10 +61,14 @@ class GlassPanel(QFrame):
         rect = QRectF(0.5, 0.5, w - 1, h - 1)
 
         # ── Background gradient ──────────────────────────────
+        # Đọc từ token C (theme mutate in-place) → ngả vàng khi Premium.
+        _top = QColor(C["card"]); _top.setAlpha(180)
+        _mid = QColor(C["card"]); _mid.setAlpha(200)
+        _bot = QColor(C["bg"]);   _bot.setAlpha(210)
         bg_grad = QLinearGradient(0, 0, 0, h)
-        bg_grad.setColorAt(0.0, QColor(25, 30, 52, 180))
-        bg_grad.setColorAt(0.5, QColor(20, 25, 45, 200))
-        bg_grad.setColorAt(1.0, QColor(15, 20, 38, 210))
+        bg_grad.setColorAt(0.0, _top)
+        bg_grad.setColorAt(0.5, _mid)
+        bg_grad.setColorAt(1.0, _bot)
 
         # Rounded rect path
         path = QPainterPath()
@@ -75,10 +79,14 @@ class GlassPanel(QFrame):
         p.drawPath(path)
 
         # ── Border ───────────────────────────────────────────
+        # Viền tô màu accent (vàng gold khi Premium, xanh khi Standard).
+        _b0 = QColor(C["primary"]); _b0.setAlpha(70)
+        _b1 = QColor(C["primary"]); _b1.setAlpha(42)
+        _b2 = QColor(C["border"]);  _b2.setAlpha(55)
         border_grad = QLinearGradient(0, 0, w, h)
-        border_grad.setColorAt(0.0, QColor(100, 110, 160, 60))
-        border_grad.setColorAt(0.5, QColor(70, 80, 130, 40))
-        border_grad.setColorAt(1.0, QColor(50, 60, 100, 30))
+        border_grad.setColorAt(0.0, _b0)
+        border_grad.setColorAt(0.5, _b1)
+        border_grad.setColorAt(1.0, _b2)
 
         # Border with gradient brush
         from PySide6.QtGui import QBrush as _QBrush
