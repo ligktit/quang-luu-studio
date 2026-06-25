@@ -325,6 +325,17 @@ class MainDashboard(QMainWindow):
         wl.setContentsMargins(SP.SM, 2, SP.SM, 2)
         wl.setSpacing(4)
 
+        # ── Visualizer Premium (chỉ hiện cho gói Premium) ──
+        self._premium_viz = None
+        try:
+            from core import entitlements
+            if entitlements.is_premium():
+                from ui.components.premium_visualizer import PremiumVisualizer
+                self._premium_viz = PremiumVisualizer()
+                wl.addWidget(self._premium_viz)
+        except Exception as e:
+            print(f"[PREMIUM-VIZ] init lỗi: {e}")
+
         # ── Hàng 1: Mixer + Mode + Tools ──
         top_dock = QHBoxLayout()
         top_dock.setSpacing(6)
@@ -2392,6 +2403,11 @@ class MainDashboard(QMainWindow):
         if self._waveform is not None:
             try:
                 self._waveform.stop()
+            except Exception:
+                pass
+        if getattr(self, "_premium_viz", None) is not None:
+            try:
+                self._premium_viz.stop()
             except Exception:
                 pass
         if self.is_recording:
