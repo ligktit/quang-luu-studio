@@ -68,9 +68,20 @@ def build_bottom_bar(dashboard) -> QWidget:
         "", color=C["light_purple"], height=34, radius=8,
         font_size=10, svg_content=SVG_STAR, svg_size=18, fixed_width=38,
     )
-    btn_score.setToolTip("Chấm điểm")
-    btn_score.setAccessibleName("Chấm điểm")
-    btn_score.setAccessibleDescription("Bắt đầu hoặc huỷ chấm điểm bài hát. Phím tắt Ctrl+P")
+    # Premium-only: hiển thị rõ tính năng bị khóa cho gói Standard/trial.
+    try:
+        from core import entitlements
+        _score_premium = entitlements.has_feature("scoring")
+    except Exception:
+        _score_premium = True
+    if _score_premium:
+        btn_score.setToolTip("Chấm điểm")
+        btn_score.setAccessibleName("Chấm điểm")
+        btn_score.setAccessibleDescription("Bắt đầu hoặc huỷ chấm điểm bài hát. Phím tắt Ctrl+P")
+    else:
+        btn_score.setToolTip("👑 Chấm điểm — Tính năng Premium")
+        btn_score.setAccessibleName("Chấm điểm (Premium)")
+        btn_score.setAccessibleDescription("Tính năng Premium. Nhấn để xem cách nâng cấp.")
     btn_score.clicked.connect(dashboard._on_score)
     bar_layout.addWidget(btn_score)
     dashboard._func_buttons["Chấm điểm"] = btn_score

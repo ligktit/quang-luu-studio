@@ -110,6 +110,26 @@ class CrashReport(Base):
     last_seen:       Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class SyncBlob(Base):
+    """Blob đồng bộ dữ liệu người dùng (Cloud Sync — tính năng Premium).
+
+    Mỗi (license_code, kind) là một bản ghi duy nhất chứa JSON string. Server
+    không hiểu nội dung, chỉ lưu/last-write-wins theo updated_at và tăng version
+    mỗi lần PUT. kind ∈ {songs, timelines, tones, scores}.
+    """
+    __tablename__ = "sync_blobs"
+    __table_args__ = (UniqueConstraint("license_code", "kind", name="uq_sync_code_kind"),)
+
+    id:           Mapped[int] = mapped_column(Integer, primary_key=True)
+    license_code: Mapped[str] = mapped_column(String(40), index=True)
+    kind:         Mapped[str] = mapped_column(String(20), index=True)
+    data:         Mapped[str] = mapped_column(Text, default="")
+    version:      Mapped[int] = mapped_column(Integer, default=1)
+    updated_at:   Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class AdminUser(Base):
     __tablename__ = "admin_users"
 

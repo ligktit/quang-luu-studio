@@ -1049,8 +1049,12 @@ class MainDashboard(QMainWindow):
         self._lock_replay_for_manual_override()
 
     def _on_score(self):
+        # Premium-only: chặn trước khi bắt đầu (cho phép tắt nếu đang chạy).
+        if not self.engine.quick_score_active and not self._require_premium("scoring", "Chấm Điểm"):
+            return
+
         btn = self._func_buttons.get("Chấm điểm")
-        
+
         if self.engine.quick_score_active:
             # Tắt chấm điểm bằng tay nếu đang chạy
             self.engine.stop_quick_score(cancel=True)
@@ -1067,8 +1071,20 @@ class MainDashboard(QMainWindow):
                 if "error" in result:
                     self._message_signal.emit(f"Lỗi chấm điểm: {result['error']}", True)
                 else:
+                    # Phase 3 — lưu lịch sử chấm điểm (Premium "progress").
+                    # Score đã gate premium ở đầu _on_score nên chỉ chạy cho Premium.
+                    # Fail-soft: ScoreHistory.add nuốt mọi lỗi, không làm vỡ luồng.
+                    try:
+                        from core.score_history import ScoreHistory
+                        ScoreHistory.add(
+                            result,
+                            song_title=getattr(self, "current_title", "") or "",
+                            url=getattr(self.engine, "current_youtube_url", "") or "",
+                        )
+                    except Exception as e:
+                        print(f"[PROGRESS] save history error: {e}")
                     self._score_report_signal.emit(result)
-                    
+
             lb_idx = self.settings.get("record_loopback_device", -1)
             mic_idx = self.settings.get("record_mic_device", -1)
             
@@ -1093,6 +1109,142 @@ class MainDashboard(QMainWindow):
     def _show_scoring_report(self, result: dict):
         from ui.dialogs.scoring_report import ScoringReportDialog
         ScoringReportDialog(self, result).exec()
+
+    # ── Phase 3: Bảng tiến bộ luyện hát (Premium) ──
+    def _show_progress_dialog(self):
+        if not self._require_premium("progress", "Bảng tiến bộ luyện hát"):
+            return
+        from ui.dialogs.progress_dialog import ProgressDialog
+        ProgressDialog(self).exec()
+
+    # ── Phase 2: Smart Recall (Premium) ──
+    def _apply_song_preset(self, song):
+        """Khôi phục tone/scale/mixer/mode đã lưu của bài (Smart Recall).
+
+        Dùng has_feature im lặng (KHÔNG upsell) ở luồng mở bài: Standard mở bài
+        bình thường, chỉ bỏ qua việc auto-apply. Fail-soft toàn bộ."""
+        if not song:
+            return
+        try:
+            from core import entitlements
+            if not entitlements.has_feature("smart_recall"):
+                return
+            preset = backend.SongManager.get_preset(song.get("id"))
+        except Exception:
+            return
+        if not preset:
+            return  # Bài chưa có preset → tương thích ngược
+
+        from PySide6.QtCore import QSignalBlocker
+        try:
+            tone = preset.get("tone")
+            if tone:
+                with QSignalBlocker(self.tone_combo):
+                    self.tone_combo.setCurrentText(tone)
+                self._on_tone_selected(tone)
+
+            scale = preset.get("scale")
+            if scale and hasattr(self, "scale_combo"):
+                with QSignalBlocker(self.scale_combo):
+                    self.scale_combo.setCurrentText(scale)
+                self._on_scale_selected(scale)
+
+            mixer = preset.get("mixer") or {}
+            key_map = {"music": "mix_music", "mic": "mix_mic",
+                       "reverb": "mix_reverb", "backing": "mix_backing"}
+            sliders = getattr(self, "_mixer_sliders", {})
+            for pkey, cc_key in key_map.items():
+                if pkey not in mixer:
+                    continue
+                slider = sliders.get(cc_key)
+                if slider is not None:
+                    slider.setValue(int(mixer[pkey]))
+
+            mode = preset.get("mode")
+            if mode:
+                self._on_mode_selected(mode, toggle=False)
+
+            self._show_message(f"🎚️ Đã khôi phục preset: {song.get('title','')}")
+        except Exception as e:
+            print(f"[SMART_RECALL] apply preset error: {e}")
+
+    def _capture_current_preset(self) -> dict:
+        """Chụp trạng thái UI hiện tại thành preset dict (tone/scale/mixer/mode)."""
+        preset = {
+            "tone":  self.tone_combo.currentText() if hasattr(self, "tone_combo") else None,
+            "scale": self.scale_combo.currentText() if hasattr(self, "scale_combo") else None,
+            "mode":  getattr(self, "current_mode", None),
+            "mixer": {},
+        }
+        key_map = {"mix_music": "music", "mix_mic": "mic",
+                   "mix_reverb": "reverb", "mix_backing": "backing"}
+        sliders = getattr(self, "_mixer_sliders", {})
+        for cc_key, pkey in key_map.items():
+            slider = sliders.get(cc_key)
+            if slider is not None:
+                preset["mixer"][pkey] = slider.value()
+        return preset
+
+    # ── Phase 5: Live Setlist / Auto-Pilot (Premium) ──
+    def _show_setlist(self):
+        if not self._require_premium("setlist", "Live Setlist / Auto-Pilot"):
+            return
+        from ui.dialogs.setlist_dialog import SetlistDialog
+        SetlistDialog(
+            self,
+            on_play=self._setlist_play_song,
+            make_controller=self.engine.make_setlist,
+        ).exec()
+
+    def _setlist_play_song(self, song):
+        """Mở URL bài + áp preset khi Auto-Pilot chuyển bài."""
+        if not song:
+            return
+        url   = song.get("url")
+        tone  = song.get("tone", "C")
+        if not url:
+            return
+        try:
+            tl_data   = backend.ManualToneTimeline.load_timeline(url)
+            manual_tl = tl_data["timeline"] if tl_data and tl_data.get("timeline") else None
+            self.engine.open_youtube_url(
+                url,
+                on_video_end_callback=lambda res: None,
+                on_tone_detected=lambda result: self._tone_result_signal.emit(result),
+                manual_timeline=manual_tl,
+            )
+            from PySide6.QtCore import QSignalBlocker
+            with QSignalBlocker(self.tone_combo):
+                self.tone_combo.setCurrentText(tone)
+            self._apply_song_preset(song)
+        except Exception as e:
+            print(f"[SETLIST] play song error: {e}")
+
+    # ── Entitlement gate (Premium) ──
+    def _require_premium(self, feature: str, label: str) -> bool:
+        """Trả True nếu được phép dùng `feature`. Nếu không → mở dialog upsell
+        và (tuỳ chọn) mở lại ActivationDialog để nhập mã Premium. Trả False."""
+        from core import entitlements
+        if entitlements.has_feature(feature):
+            return True
+        try:
+            from ui.dialogs.premium_dialog import PremiumUpsellDialog
+            dlg = PremiumUpsellDialog(feature, label, self)
+            if dlg.exec() == QDialog.Accepted:
+                self._open_activation_upgrade()
+                # Sau khi nhập mã thành công, kiểm tra lại quyền ngay.
+                return entitlements.has_feature(feature)
+        except Exception as e:
+            print(f"[PREMIUM] upsell dialog error: {e}")
+        return False
+
+    def _open_activation_upgrade(self):
+        """Mở ActivationDialog để người dùng nhập mã Premium giữa phiên."""
+        try:
+            dlg = ActivationDialog()
+            dlg.mainloop()
+        except Exception as e:
+            print(f"[PREMIUM] activation dialog error: {e}")
 
     def _show_message(self, text, is_error=False, action_text=None, action_cb=None):
         """Show temporary message box in center of dashboard.
@@ -2124,6 +2276,7 @@ class MainDashboard(QMainWindow):
             "record_toggle":    self._on_record,
             "save":             self._on_save,
             "open_songs":       self._show_songs_list,
+            "open_setlist":     self._show_setlist,
             "score":            self._on_score,
             "speak_status":     self._a11y_speak_status,
             # interrupt() chỉ ngắt câu đang đọc + xoá queue — KHÔNG kill worker

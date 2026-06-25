@@ -159,6 +159,23 @@ def assign_license(
     return _redirect("/admin/licenses")
 
 
+@router.post("/licenses/{lic_id}/set-plan")
+def set_license_plan(
+    lic_id: int,
+    plan: str = Form("standard"),
+    admin: str = Depends(current_admin),
+    db: Session = Depends(get_db),
+):
+    plan = plan.strip().lower()
+    if plan not in ("standard", "premium"):
+        plan = "standard"
+    lic = db.get(License, lic_id)
+    if lic:
+        lic.plan = plan
+        db.commit()
+    return _redirect("/admin/licenses")
+
+
 @router.post("/licenses/{lic_id}/revoke")
 def revoke_license(lic_id: int, admin: str = Depends(current_admin), db: Session = Depends(get_db)):
     lic = db.get(License, lic_id)

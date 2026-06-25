@@ -114,11 +114,12 @@ def activate(
     device.last_check_in = now
     db.commit()
 
-    token = issue_license_token(lic.code, fingerprint, _aware(lic.expires_at))
+    token = issue_license_token(lic.code, fingerprint, _aware(lic.expires_at), lic.plan)
     return {
         "valid": True,
         "status": "active",
         "token": token,
+        "plan": lic.plan,
         "days_remaining": _days_remaining(lic.expires_at),
         "expires_at": _aware(lic.expires_at),
         "message": "Kích hoạt thành công.",
@@ -154,11 +155,12 @@ def verify(db: Session, code: str, fingerprint: str, app_version: str | None = N
         device.app_version = app_version
     db.commit()
 
-    token = issue_license_token(lic.code, fingerprint, _aware(lic.expires_at))
+    token = issue_license_token(lic.code, fingerprint, _aware(lic.expires_at), lic.plan)
     return {
         "valid": True,
         "status": "active",
         "token": token,
+        "plan": lic.plan,
         "days_remaining": _days_remaining(lic.expires_at),
         "expires_at": _aware(lic.expires_at),
         "message": "OK",

@@ -34,10 +34,13 @@ def verify_password(raw: str, hashed: str) -> bool:
 _ALGO = "HS256"
 
 
-def issue_license_token(code: str, fingerprint: str, expires_at: datetime | None) -> str:
+def issue_license_token(
+    code: str, fingerprint: str, expires_at: datetime | None, plan: str = "standard"
+) -> str:
     """
     Sinh license token cho client cache. exp = min(grace_days, license expiry).
     Client chạy offline tới khi token hết hạn thì phải verify lại online.
+    Claim `plan` cho phép client biết tier (standard|premium) cả khi offline.
     """
     now = datetime.now(timezone.utc)
     grace_exp = now + timedelta(days=settings.grace_days)
@@ -47,6 +50,7 @@ def issue_license_token(code: str, fingerprint: str, expires_at: datetime | None
     payload = {
         "code": code,
         "fp":   fingerprint,
+        "plan": plan or "standard",
         "iat":  int(now.timestamp()),
         "exp":  int(exp.timestamp()),
         "lexp": int(expires_at.timestamp()) if expires_at else 0,  # hạn license thật

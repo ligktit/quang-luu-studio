@@ -68,9 +68,12 @@ def _decode_jwt_claims(token: str) -> dict:
 def _store_from_response(code: str, fingerprint: str, body: dict) -> None:
     token = body.get("token") or ""
     claims = _decode_jwt_claims(token)
+    # plan: ưu tiên field response → claim JWT → mặc định standard (chống lệch)
+    plan = body.get("plan") or claims.get("plan") or "standard"
     _save({
         "license_code": code,
         "license_token": token,
+        "license_plan": str(plan).lower(),
         "device_fingerprint": fingerprint,
         "grace_until_ts": int(claims.get("exp", 0)),
         "license_expires_ts": int(claims.get("lexp", 0)),
@@ -155,6 +158,15 @@ def verify_online() -> dict:
 # ── Trạng thái cho ActivationManager (offline-aware) ──
 def has_online_license() -> bool:
     return bool(_load().get("license_token"))
+
+
+def current_plan() -> str:
+    """Tier đã cache (standard|premium). Đọc license_plan, fallback claim JWT."""
+    cache = _load()
+    plan = cache.get("license_plan")
+    if not plan:
+        plan = _decode_jwt_claims(cache.get("license_token", "")).get("plan")
+    return str(plan or "standard").lower()
 
 
 def is_grace_valid() -> bool:

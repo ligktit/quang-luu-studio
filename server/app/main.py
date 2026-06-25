@@ -8,7 +8,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.config import settings
 from app.deps import AdminRequired
-from app.routers import activation, admin, crashes, updates
+from app.routers import activation, admin, crashes, sync, updates
 from app.security import limiter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
@@ -26,6 +26,7 @@ async def _admin_required_handler(request: Request, exc: AdminRequired):
 
 
 app.include_router(activation.router)
+app.include_router(sync.router)
 app.include_router(updates.router)
 app.include_router(crashes.router)
 app.include_router(admin.router)

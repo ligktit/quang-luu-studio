@@ -161,6 +161,15 @@ def _background_maintenance():
                 log.warning("License đã bị thu hồi từ server")
     except Exception as e:
         log.debug("license re-verify skipped: %s", e)
+    # Cloud Sync nền (Premium). Fail-soft: lỗi mạng/không cấu hình → bỏ qua.
+    try:
+        from core import entitlements
+        if entitlements.is_premium():
+            from core.licensing import sync as _sync
+            res = _sync.sync_all()
+            log.info("Cloud sync nền: %s", res.get("results", res))
+    except Exception as e:
+        log.debug("cloud sync skipped: %s", e)
 
 
 def main():

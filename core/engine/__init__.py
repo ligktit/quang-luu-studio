@@ -23,6 +23,7 @@ from core.engine._lifecycle import _LifecycleMixin
 from core.engine._youtube  import _YouTubeMixin, _WNDENUMPROC_TYPE
 from core.engine._tone     import _ToneMixin
 from core.engine._autokey  import _AutokeyMixin
+from core.engine._setlist  import SetlistController
 
 
 class SystemEngine(
@@ -136,5 +137,26 @@ class SystemEngine(
     def _auto_tone_running(self, val):
         pass  # managed by ToneSession
 
+    # ── Live Setlist / Auto-Pilot (Phase 5) ─────────────────────────────────────
 
-__all__ = ["SystemEngine", "ToneState", "ToneSession"]
+    def make_setlist(self, songs):
+        """Tạo SetlistController với detect_fn nối sẵn vào pipeline dò tone của engine.
+
+        detect_fn dùng auto_detect_youtube_timeline (dò TOÀN BỘ timeline 1 URL,
+        ghi vào ToneCacheManager) — phù hợp prefetch vì cache theo song_match_key
+        nên khi mở bài thật, _resolve_tone sẽ khớp ngay.
+        """
+        controller = SetlistController(songs)
+
+        def _detect_fn(url, on_done=None):
+            self.auto_detect_youtube_timeline(
+                url,
+                on_complete=(lambda res: on_done(res) if on_done else None),
+                on_error=(lambda msg: on_done(None) if on_done else None),
+            )
+
+        controller._engine_detect_fn = _detect_fn  # tiện ích cho integrator
+        return controller
+
+
+__all__ = ["SystemEngine", "ToneState", "ToneSession", "SetlistController"]

@@ -65,6 +65,22 @@ class SongsListDialog(QDialog):
         lay.addWidget(title)
         lay.addStretch()
 
+        # Premium entry points (gate ở dashboard; badge tooltip cho biết Premium).
+        try:
+            from core import entitlements
+            _is_prem = entitlements.is_premium()
+        except Exception:
+            _is_prem = True
+        prog_btn = PainterButton("📈 Tiến bộ", color=C["creative"], height=34, radius=12, font_size=12, fixed_width=104)
+        prog_btn.setToolTip("Bảng tiến bộ luyện hát" + ("" if _is_prem else " — Premium"))
+        prog_btn.clicked.connect(self._dashboard._show_progress_dialog)
+        lay.addWidget(prog_btn)
+
+        setlist_btn = PainterButton("🎤 Setlist", color=C["pink"], height=34, radius=12, font_size=12, fixed_width=100)
+        setlist_btn.setToolTip("Live Setlist / Auto-Pilot" + ("" if _is_prem else " — Premium"))
+        setlist_btn.clicked.connect(self._dashboard._show_setlist)
+        lay.addWidget(setlist_btn)
+
         self._count_lbl = QLabel("")
         self._count_lbl.setStyleSheet(f"font-size: 13px; color: {C['text_muted']}; font-family: {FONT}; background: transparent; border: none;")
         lay.addWidget(self._count_lbl)
@@ -385,6 +401,9 @@ class SongsListDialog(QDialog):
             from PySide6.QtCore import QSignalBlocker
             with QSignalBlocker(self._dashboard.tone_combo):
                 self._dashboard.tone_combo.setCurrentText(tone)
+            # Smart Recall (Premium): khôi phục preset đã lưu (tự gate, im lặng nếu Standard).
+            if hasattr(self._dashboard, "_apply_song_preset"):
+                self._dashboard._apply_song_preset(song)
             if self._dashboard._waveform is not None and title:
                 self._dashboard._waveform.set_song_info(title, tone, "Major", 0)
             if title:
@@ -411,6 +430,10 @@ class SongsListDialog(QDialog):
             act_tone.triggered.connect(lambda: self._edit_tone(song))
             menu.addAction(act_tone)
 
+            act_preset = QAction("🎚️  Lưu preset hiện tại vào bài", menu)
+            act_preset.triggered.connect(lambda: self._save_preset_for(song))
+            menu.addAction(act_preset)
+
             # Submenu playlist
             pl_menu = menu.addMenu("📂  Playlist")
             containing = backend.PlaylistManager.playlists_containing(song.get("id"))
@@ -433,6 +456,19 @@ class SongsListDialog(QDialog):
 
             menu.exec(anchor_btn.mapToGlobal(anchor_btn.rect().bottomLeft()))
         return _open_menu
+
+    def _save_preset_for(self, song):
+        """Smart Recall (Premium): lưu trạng thái UI hiện tại làm preset của bài."""
+        dash = self._dashboard
+        if not dash._require_premium("smart_recall", "Smart Recall"):
+            return
+        preset = dash._capture_current_preset()
+        if backend.SongManager.save_preset(song.get("id"), preset):
+            dash._show_message("✅ Đã lưu preset cho bài hát")
+            self._refresh_data()
+            self._rebuild_list()
+        else:
+            dash._show_message("⚠️ Không lưu được preset", is_error=True)
 
     def _make_toggle_playlist(self, playlist_id, song_id):
         def _toggle(checked=False):

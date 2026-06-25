@@ -9,6 +9,7 @@ import threading
 
 from core.config import SONGS_FILE, PLAYLISTS_FILE
 from core.utils import atomic_write_json, song_match_key as _song_match_key
+from core.presets import normalize_preset
 
 # Lock bảo vệ chu trình read-modify-write trên saved_songs.json
 # (add/delete/update có thể được gọi từ nhiều thread)
@@ -40,12 +41,17 @@ class SongManager:
             return False
 
     @staticmethod
-    def add_song(title, url, tone, favorite=None):
+    def add_song(title, url, tone, favorite=None, preset=None):
         """Thêm bài hát mới vào danh sách.
 
         Chống trùng theo video_id (fallback URL). Nếu bài đã tồn tại → cập nhật
         title/tone, giữ nguyên favorite/playlist (trừ khi favorite được truyền).
+
+        preset (tùy chọn, Smart Recall): dict tone/scale/mixer/mode. Nếu truyền
+        thì được normalize và lưu vào bài; nếu None thì giữ nguyên preset cũ (nếu
+        có) — tương thích ngược với bài chưa từng có preset.
         """
+        norm_preset = normalize_preset(preset) if preset is not None else None
         with _songs_lock:
             songs = SongManager.load_songs()
             match_key = _song_match_key(url)
@@ -58,6 +64,8 @@ class SongManager:
                     song["title"] = title
                     if favorite is not None:
                         song["favorite"] = bool(favorite)
+                    if norm_preset is not None:
+                        song["preset"] = norm_preset
                     SongManager.save_songs(songs)
                     return True
 
@@ -74,6 +82,8 @@ class SongManager:
                 "favorite": bool(favorite) if favorite is not None else False,
                 "date_added": time.strftime("%Y-%m-%d %H:%M:%S")
             }
+            if norm_preset is not None:
+                new_song["preset"] = norm_preset
             songs.append(new_song)
             return SongManager.save_songs(songs)
 
@@ -90,7 +100,13 @@ class SongManager:
 
     @staticmethod
     def update_song(song_id, **kwargs):
-        """Cập nhật thông tin bài hát theo ID. kwargs có thể chứa title, tone, url..."""
+        """Cập nhật thông tin bài hát theo ID. kwargs có thể chứa title, tone, url...
+
+        Nếu kwargs chứa `preset`, giá trị được normalize trước khi lưu (Smart
+        Recall). Các field khác giữ nguyên giá trị truyền vào.
+        """
+        if "preset" in kwargs:
+            kwargs["preset"] = normalize_preset(kwargs["preset"])
         with _songs_lock:
             songs = SongManager.load_songs()
             for song in songs:
@@ -99,6 +115,36 @@ class SongManager:
                         song[key] = value
                     return SongManager.save_songs(songs)
             return False
+
+    @staticmethod
+    def save_preset(song_id, preset_dict):
+        """Lưu preset Smart Recall cho một bài (theo ID).
+
+        preset_dict được normalize về schema chuẩn (xem core.presets). Trả True
+        nếu tìm thấy bài và ghi file thành công, False nếu không tìm thấy ID
+        hoặc ghi lỗi.
+        """
+        norm = normalize_preset(preset_dict)
+        with _songs_lock:
+            songs = SongManager.load_songs()
+            for song in songs:
+                if song.get("id") == song_id:
+                    song["preset"] = norm
+                    return SongManager.save_songs(songs)
+            return False
+
+    @staticmethod
+    def get_preset(song_id):
+        """Lấy preset Smart Recall của một bài (đã normalize), hoặc None nếu bài
+        không tồn tại / chưa có preset.
+
+        Trả về dict preset chuẩn (đủ khóa) khi bài có preset — kể cả preset cũ
+        thiếu field vẫn được normalize đầy đủ. Bài chưa từng lưu preset → None
+        (caller phân biệt được "không có preset" với "preset rỗng")."""
+        song = SongManager.get_song_by_id(song_id)
+        if not song or "preset" not in song:
+            return None
+        return normalize_preset(song.get("preset"))
 
     @staticmethod
     def toggle_favorite(song_id):

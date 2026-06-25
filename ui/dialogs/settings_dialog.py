@@ -367,9 +367,49 @@ class SettingsDialog(QDialog):
         self._cb_close_br.setStyleSheet(self._checkbox_qss)
         self._cb_close_br.setChecked(settings.get("auto_close_browser", False))
         lay.addWidget(self._section_card(self._build_autolaunch))
-        
+
+        # Cloud Sync (Premium)
+        lay.addWidget(self._section_header(SVG_GLOBE, "Đồng bộ đám mây (Premium)"))
+        self._cloud_sync_btn = QPushButton("Đồng bộ ngay")
+        self._cloud_sync_btn.setCursor(Qt.PointingHandCursor)
+        self._cloud_sync_btn.clicked.connect(self._on_cloud_sync)
+        lay.addWidget(self._cloud_sync_btn)
+
         lay.addStretch()
         return tab
+
+    def _on_cloud_sync(self):
+        """Đồng bộ thư viện qua server (Premium). Chạy nền, marshal kết quả về main thread."""
+        try:
+            from core import entitlements
+            if not entitlements.is_premium():
+                from ui.dialogs.premium_dialog import PremiumUpsellDialog
+                PremiumUpsellDialog("cloud_sync", "Đồng bộ đám mây", self).exec()
+                return
+        except Exception:
+            return
+
+        self._cloud_sync_btn.setEnabled(False)
+        self._cloud_sync_btn.setText("Đang đồng bộ...")
+
+        def _done(msg):
+            self._cloud_sync_btn.setEnabled(True)
+            self._cloud_sync_btn.setText("Đồng bộ ngay")
+            self._cloud_sync_btn.setToolTip(msg)
+
+        from PySide6.QtCore import QTimer
+
+        def _work():
+            try:
+                from core.licensing import sync as _sync
+                res = _sync.sync_all()
+                summary = str(res.get("results", res))
+            except Exception as e:
+                summary = f"Lỗi: {e}"
+            QTimer.singleShot(0, lambda: _done(summary))
+
+        import threading
+        threading.Thread(target=_work, daemon=True).start()
 
     def _build_audio_tab(self, settings):
         tab = QWidget()

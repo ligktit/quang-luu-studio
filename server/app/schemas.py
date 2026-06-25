@@ -24,6 +24,7 @@ class LicenseResponse(BaseModel):
     valid:          bool
     status:         str
     token:          str | None = None
+    plan:           str = "standard"
     days_remaining: int | None = None
     expires_at:     datetime | None = None
     message:        str = ""
@@ -55,3 +56,33 @@ class CrashRequest(BaseModel):
 class CrashResponse(BaseModel):
     ok:        bool
     report_id: int | None = None
+
+
+# ── Cloud Sync (Premium) ──
+class SyncPutRequest(BaseModel):
+    token:              str | None = None
+    code:               str | None = None
+    device_fingerprint: str = Field(min_length=8, max_length=128)
+    # data: JSON string của file người dùng (server không parse nội dung).
+    data:               str = Field(max_length=8_000_000)
+    # updated_at: epoch giây client lúc dữ liệu thay đổi (last-write-wins).
+    updated_at:         float | None = None
+
+
+class SyncGetRequest(BaseModel):
+    token:              str | None = None
+    code:               str | None = None
+    device_fingerprint: str = Field(min_length=8, max_length=128)
+
+
+class SyncResponse(BaseModel):
+    ok:         bool
+    kind:       str = ""
+    # exists=False ⇒ chưa có blob nào trên server cho (code, kind).
+    exists:     bool = False
+    data:       str | None = None
+    version:    int = 0
+    updated_at: datetime | None = None
+    # stale=True khi PUT bị bỏ qua vì server có bản mới hơn (last-write-wins).
+    stale:      bool = False
+    message:    str = ""

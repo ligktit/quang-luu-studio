@@ -4,10 +4,10 @@ from app.models import License
 from app.services import codegen
 
 
-def _make_license(max_devices=1, status="unused"):
+def _make_license(max_devices=1, status="unused", plan="standard"):
     code = codegen.generate_code()
     with SessionLocal() as db:
-        db.add(License(code=code, max_devices=max_devices, status=status))
+        db.add(License(code=code, max_devices=max_devices, status=status, plan=plan))
         db.commit()
     return code
 
@@ -72,6 +72,34 @@ def test_verify_with_token(client):
     })
     assert r.status_code == 200
     assert r.json()["valid"] is True
+
+
+def test_activate_default_plan_standard(client):
+    code = _make_license()
+    r = client.post("/api/v1/activate", json={"code": code, "device_fingerprint": "device-aaaaaa"})
+    assert r.status_code == 200
+    assert r.json()["plan"] == "standard"
+
+
+def test_activate_premium_plan_in_response_and_token(client):
+    import jwt
+    from app.config import settings
+
+    code = _make_license(plan="premium")
+    r = client.post("/api/v1/activate", json={"code": code, "device_fingerprint": "device-aaaaaa"})
+    assert r.status_code == 200
+    data = r.json()
+    # plan có trong response
+    assert data["plan"] == "premium"
+    # plan có trong JWT claim (để client biết tier khi offline)
+    claims = jwt.decode(data["token"], settings.license_secret, algorithms=["HS256"])
+    assert claims["plan"] == "premium"
+    # verify cũng giữ plan
+    v = client.post("/api/v1/license/verify", json={
+        "token": data["token"], "device_fingerprint": "device-aaaaaa",
+    })
+    assert v.status_code == 200
+    assert v.json()["plan"] == "premium"
 
 
 def test_verify_token_wrong_device(client):
