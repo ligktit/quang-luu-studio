@@ -897,7 +897,7 @@ class SettingsDialog(QDialog):
             from core.accessibility.speaker import get_speaker
             for eid, label, avail in get_speaker().list_engines():
                 self._a11y_combo_engine.addItem(label if avail else f"{label} (chưa cài)", eid)
-            cur_eng = cfg.get("tts_engine", "sapi") or "sapi"
+            cur_eng = cfg.get("tts_engine", "piper") or "piper"
             idx = self._a11y_combo_engine.findData(cur_eng)
             if idx >= 0:
                 self._a11y_combo_engine.setCurrentIndex(idx)

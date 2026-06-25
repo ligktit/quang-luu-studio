@@ -177,6 +177,11 @@ _DEFAULT_APP_CONFIG = {
         "tts_enabled": False,
         "tts_voice": "",
         "tts_rate": 180,
+        # Giọng đọc mặc định: Piper neural tiếng Việt (tự fallback SAPI nếu chưa
+        # tải model). ASR mặc định Vosk tiếng Việt bản "small".
+        "tts_engine": "piper",
+        "tts_piper_voice": "",
+        "voice_model": "small",
         "voice_command_enabled": False,
         "voice_command_hotkey": "Ctrl+Space",
         "high_contrast": False,

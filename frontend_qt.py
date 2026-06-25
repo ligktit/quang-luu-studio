@@ -1928,11 +1928,11 @@ class MainDashboard(QMainWindow):
                 rate=int(cfg.get("tts_rate", 180)),
                 voice_id=cfg.get("tts_voice", "") or "",
                 enabled=bool(cfg.get("tts_enabled", False)),
-                engine=cfg.get("tts_engine", "sapi") or "sapi",
+                engine=cfg.get("tts_engine", "piper") or "piper",
             )
             # Áp engine kể cả khi singleton đã tồn tại (đổi trong Cài đặt).
             self._a11y_speaker.set_engine(
-                cfg.get("tts_engine", "sapi") or "sapi",
+                cfg.get("tts_engine", "piper") or "piper",
                 cfg.get("tts_piper_voice", "") or "",
             )
             self._a11y_speaker.set_enabled(bool(cfg.get("tts_enabled", False)))
