@@ -10,8 +10,11 @@ Features:
   - Disabled state: desaturated
   - Smooth state transitions
 """
+import math
+import random
+
 from PySide6.QtWidgets import QWidget, QSizePolicy
-from PySide6.QtCore import Qt, Signal, QRectF, QSize
+from PySide6.QtCore import Qt, Signal, QRectF, QSize, QPointF
 from PySide6.QtGui import (
     QPainter, QPen, QColor, QFont, QFontMetrics,
     QLinearGradient, QRadialGradient, QPainterPath
@@ -41,6 +44,12 @@ class PainterButton(QWidget):
         self._svg_content = svg_content
         self._svg_size = svg_size
         self._svg_renderer = None
+
+        # Lấp lánh theo nhạc (Premium) — tắt mặc định, bật qua set_music_reactive().
+        self._music_reactive = False
+        self._pulse_glow = 0.0      # 0..1, nảy lên theo beat rồi rơi
+        self._pulse_phase = 0.0
+        self._sparkle_pts = []      # vị trí hạt lấp lánh (toạ độ tương đối)
         
         if self._svg_content:
             try:
@@ -70,6 +79,51 @@ class PainterButton(QWidget):
         self.update()
     def isEnabled(self): return self._enabled
     def setActive(self, a): self._active = a; self.update()
+
+    # ── Lấp lánh theo nhạc (Premium) ─────────────────────────
+    def set_music_reactive(self, on: bool):
+        """Bật/tắt hiệu ứng glow + lấp lánh nảy theo beat (dùng AudioPulse chung)."""
+        on = bool(on)
+        if on == self._music_reactive:
+            return
+        self._music_reactive = on
+        try:
+            from ui.components.audio_pulse import AudioPulse
+            ap = AudioPulse.instance()
+            if on:
+                # Vị trí hạt lấp lánh cố định quanh nút (toạ độ tương đối 0..1).
+                rnd = random.Random(id(self) & 0xFFFF)
+                self._sparkle_pts = [
+                    (rnd.uniform(0.10, 0.90), rnd.uniform(0.12, 0.88), rnd.uniform(0, math.tau))
+                    for _ in range(3)
+                ]
+                ap.pulse.connect(self._on_pulse)
+                ap.start()
+            else:
+                try:
+                    ap.pulse.disconnect(self._on_pulse)
+                except Exception:
+                    pass
+                ap.stop()
+                self._pulse_glow = 0.0
+                self.update()
+        except Exception as e:
+            print(f"[PainterButton] music reactive lỗi: {e}")
+            self._music_reactive = False
+
+    def _on_pulse(self, level: float, beat: bool):
+        if not self._music_reactive:
+            return
+        prev = self._pulse_glow
+        glow = self._pulse_glow * 0.82
+        glow = max(glow, level * 0.45)      # nền lung linh theo độ to
+        if beat:
+            glow = min(1.0, glow + 0.6)      # nảy mạnh khi có beat
+        self._pulse_glow = glow
+        self._pulse_phase += 0.4
+        # Chỉ repaint khi đáng kể (tiết kiệm) — hoặc khi vừa tắt hẳn.
+        if glow > 0.03 or prev > 0.03:
+            self.update()
 
     def setSvg(self, svg_content: str):
         """Thay thế SVG icon tại runtime và repaint."""
@@ -200,7 +254,42 @@ class PainterButton(QWidget):
             p.setBrush(QColor(255, 255, 255))
             p.drawEllipse(QRectF(w - 9, 6, 4, 4))
 
+        # ── Lấp lánh theo nhạc (Premium) ─────────────────────
+        if self._music_reactive and self._pulse_glow > 0.03 and self._enabled:
+            self._paint_music_glow(p, w, h, r)
+
         p.end()
+
+    def _paint_music_glow(self, p, w, h, r):
+        g = self._pulse_glow
+        base = QColor(self._color)
+        # Viền neon sáng theo beat
+        ring = QColor(self._lighten(base, 0.4))
+        ring.setAlpha(int(220 * g))
+        p.setPen(QPen(ring, 1.5 + 1.5 * g))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(QRectF(1.5, 1.5, w - 3, h - 3), r, r)
+        # Quầng sáng mềm ngoài viền
+        halo = QColor(base)
+        halo.setAlpha(int(70 * g))
+        p.setPen(QPen(halo, 3))
+        p.drawRoundedRect(QRectF(0.5, 0.5, w - 1, h - 1), r + 1, r + 1)
+        # Hạt lấp lánh nhấp nháy
+        p.setPen(Qt.NoPen)
+        for sx, sy, off in self._sparkle_pts:
+            tw = 0.5 + 0.5 * math.sin(self._pulse_phase + off)
+            a = int(230 * g * tw)
+            if a < 12:
+                continue
+            px, py = sx * w, sy * h
+            sz = 1.2 + 2.0 * g * tw
+            glow = QRadialGradient(px, py, sz * 2.6)
+            glow.setColorAt(0.0, QColor(255, 255, 255, a))
+            glow.setColorAt(1.0, QColor(self._color.red(), self._color.green(), self._color.blue(), 0))
+            p.setBrush(glow)
+            p.drawEllipse(QPointF(px, py), sz * 2.6, sz * 2.6)
+            p.setBrush(QColor(255, 255, 255, a))
+            p.drawEllipse(QPointF(px, py), sz * 0.5, sz * 0.5)
 
     # ── Mouse events ─────────────────────────────────────────
     def mousePressEvent(self, e):

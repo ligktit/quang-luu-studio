@@ -84,74 +84,30 @@ class PremiumVisualizer(QWidget):
         self._peaks = [0.0] * self.BAR_COUNT      # đỉnh rơi chậm
         self._sparkles = [_Sparkle() for _ in range(self.SPARKLE_COUNT)]
 
-        self._capture_running = False
-        self._capture_thread = None
+        # Nguồn audio dùng chung (1 capture cho cả visualizer lẫn nút lấp lánh).
+        try:
+            from ui.components.audio_pulse import AudioPulse
+            self._pulse = AudioPulse.instance()
+            self._pulse.start()
+        except Exception:
+            self._pulse = None
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(33)  # ~30fps
-        self._audio_ready.connect(self.update)
-
-        self._start_capture()
-
-    # ── Audio capture (fail-soft) ────────────────────────────
-    def _start_capture(self):
-        self._capture_running = True
-        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
-        self._capture_thread.start()
-
-    def _capture_loop(self):
-        try:
-            import pyaudiowpatch as paw
-            pa = paw.PyAudio()
-            wasapi = None
-            for i in range(pa.get_host_api_count()):
-                api = pa.get_host_api_info_by_index(i)
-                if api.get("name", "").startswith("Windows WASAPI"):
-                    wasapi = api
-                    break
-            if not wasapi:
-                pa.terminate()
-                return
-            spk = pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
-            dev = None
-            for i in range(pa.get_device_count()):
-                d = pa.get_device_info_by_index(i)
-                if d.get("isLoopbackDevice", False) and d["name"].startswith(spk["name"][:20]):
-                    dev = d
-                    break
-            dev = dev or spk
-            ch = max(1, int(dev.get("maxInputChannels", 2)))
-            rate = int(dev.get("defaultSampleRate", 44100))
-            chunk = self.POINTS * 2
-            stream = pa.open(format=paw.paFloat32, channels=ch, rate=rate, input=True,
-                             input_device_index=int(dev["index"]), frames_per_buffer=chunk)
-            while self._capture_running:
-                try:
-                    data = stream.read(chunk, exception_on_overflow=False)
-                    s = np.frombuffer(data, dtype=np.float32)
-                    if ch > 1:
-                        s = s.reshape(-1, ch).mean(axis=1)
-                    if len(s) >= self.POINTS:
-                        step = len(s) // self.POINTS
-                        self._buffer = s[::step][:self.POINTS]
-                    else:
-                        b = np.zeros(self.POINTS, dtype=np.float32)
-                        b[:len(s)] = s
-                        self._buffer = b
-                    self._audio_ready.emit()
-                except Exception:
-                    break
-            stream.stop_stream(); stream.close(); pa.terminate()
-        except Exception:
-            pass  # không có pyaudiowpatch / lỗi device → chạy animation idle
 
     def stop(self):
-        self._capture_running = False
         self._timer.stop()
+        if self._pulse is not None:
+            try:
+                self._pulse.stop()
+            except Exception:
+                pass
 
     # ── Animation tick ───────────────────────────────────────
     def _tick(self):
+        if self._pulse is not None:
+            self._buffer = self._pulse.latest_buffer()
         self._phase += 0.05
         self._sheen = (self._sheen + 0.006) % 1.4   # quét rồi nghỉ
         for s in self._sparkles:

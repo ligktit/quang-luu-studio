@@ -236,6 +236,21 @@ class MainDashboard(QMainWindow):
         self._dev_mode_shortcut = QShortcut(QKeySequence("Ctrl+Shift+D"), self)
         self._dev_mode_shortcut.activated.connect(self._toggle_dev_mode)
 
+        # Premium: nút lấp lánh theo nhạc (sau khi toàn bộ UI đã dựng).
+        self._enable_premium_button_fx()
+
+    def _enable_premium_button_fx(self):
+        """Bật hiệu ứng glow/lấp lánh theo beat cho mọi PainterButton — chỉ Premium."""
+        try:
+            from core import entitlements
+            if not entitlements.is_premium():
+                return
+            self._fx_buttons = self.findChildren(PainterButton)
+            for btn in self._fx_buttons:
+                btn.set_music_reactive(True)
+        except Exception as e:
+            print(f"[PREMIUM-FX] enable lỗi: {e}")
+
     def _toggle_dev_mode(self):
         self.is_dev_mode = not self.is_dev_mode
         self._show_message(f"Dev Mode: {'ON' if self.is_dev_mode else 'OFF'}")
@@ -272,6 +287,9 @@ class MainDashboard(QMainWindow):
             self._setup_tab_order()
         except Exception as e:
             print(f"[A11Y] Tab order lỗi: {e}")
+
+        # Bật lại lấp lánh theo nhạc cho các nút vừa dựng lại (Premium).
+        self._enable_premium_button_fx()
 
     def _on_add_widget(self, panel_name, widget_type):
         from ui.dialogs.widget_builder import WidgetBuilderDialog
