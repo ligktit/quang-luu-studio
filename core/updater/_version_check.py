@@ -102,12 +102,31 @@ def check_latest_release(timeout: int = 10) -> Optional[ReleaseInfo]:
     if data.get("prerelease") or data.get("draft"):
         return None
 
-    # Find .exe asset
-    exe_asset = next(
-        (a for a in data.get("assets", [])
-         if a["name"].lower().endswith(".exe") and "setup" in a["name"].lower()),
-        None,
-    )
+    # Find .exe asset khớp ĐÚNG biến thể build của máy này.
+    # Release có thể chứa cả 2 file (Heavy + Light); chọn nhầm sẽ tải sai bản.
+    #   - Build Heavy (có QtWebEngine) → lấy asset có "heavy" trong tên.
+    #   - Build Light → lấy asset KHÔNG có "heavy".
+    #   - Fallback: release cũ chỉ 1 file → lấy file setup .exe bất kỳ.
+    try:
+        from core.capabilities import embedded_player_available
+        is_heavy = embedded_player_available()
+    except Exception:
+        is_heavy = False
+
+    setup_exes = [
+        a for a in data.get("assets", [])
+        if a["name"].lower().endswith(".exe") and "setup" in a["name"].lower()
+    ]
+
+    def _is_heavy(a):
+        return "heavy" in a["name"].lower()
+
+    if is_heavy:
+        exe_asset = next((a for a in setup_exes if _is_heavy(a)), None)
+    else:
+        exe_asset = next((a for a in setup_exes if not _is_heavy(a)), None)
+    if exe_asset is None:  # fallback: release 1 file (không phân biệt biến thể)
+        exe_asset = setup_exes[0] if setup_exes else None
     if not exe_asset:
         return None
 
