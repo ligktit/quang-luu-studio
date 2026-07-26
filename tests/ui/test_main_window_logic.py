@@ -243,6 +243,92 @@ def test_is_speaker_loopback_error():
         "Không tải được audio từ YouTube (video bị chặn).")
 
 
+def test_mode_buttons_send_configured_cc(qapp, mock_engine, qtbot):
+    # Regression: nút MODE (Dân Ca/Lofi/Remix/Đa Thể Loại) dùng action
+    # "set_mode_*" nhưng handler thật là _on_mode_selected — không có
+    # _on_set_mode_lofi. Trước fix, getattr trượt → nút rơi xuống nhánh
+    # custom với cc=None → send_midi(None, 127) fail, DAW không đổi mode.
+    from PySide6.QtCore import Qt
+    import backend
+
+    dashboard = _make_dashboard(qtbot)
+    mode_cfg = backend.AppConfig.get_mode_config()
+
+    for label, btn in dashboard._mode_buttons.items():
+        expected_cc = int(mode_cfg[label]["cc"])
+        on_val = int(mode_cfg[label].get("on_value", 127))
+        off_val = int(mode_cfg[label].get("off_value", 0))
+
+        # Bật
+        dashboard.current_mode = None
+        mock_engine.send_midi.reset_mock()
+        qtbot.mouseClick(btn, Qt.LeftButton)
+        assert dashboard.current_mode == label
+        mock_engine.send_midi.assert_called_once_with(expected_cc, on_val)
+
+        # Bấm lại → toggle tắt
+        mock_engine.send_midi.reset_mock()
+        qtbot.mouseClick(btn, Qt.LeftButton)
+        assert dashboard.current_mode is None
+        mock_engine.send_midi.assert_called_once_with(expected_cc, off_val)
+
+    # Không nút nào được gửi CC None (triệu chứng của bug cũ)
+    assert not [c for c in mock_engine.send_midi.call_args_list if c.args[0] is None]
+
+
+def test_be_button_toggles_cc(qapp, mock_engine, qtbot):
+    # Nút Bè (TOOLS): toggle bật/tắt hiệu ứng bè qua CC "be".
+    from PySide6.QtCore import Qt
+    import backend
+
+    dashboard = _make_dashboard(qtbot)
+    expected_cc = int(backend.AppConfig.get_midi_cc()["be"])
+
+    btn = dashboard._func_buttons.get("Bè")
+    assert btn is not None, "Panel TOOLS phải dựng được nút Bè"
+    # Mặc định tắt
+    assert dashboard.be_state is False
+    assert btn._active is False
+
+    mock_engine.send_midi.reset_mock()
+    qtbot.mouseClick(btn, Qt.LeftButton)
+    assert dashboard.be_state is True
+    assert btn._active is True
+    mock_engine.send_midi.assert_called_once_with(expected_cc, 127)
+
+    mock_engine.send_midi.reset_mock()
+    qtbot.mouseClick(btn, Qt.LeftButton)
+    assert dashboard.be_state is False
+    assert btn._active is False
+    mock_engine.send_midi.assert_called_once_with(expected_cc, 0)
+
+
+def test_be_button_syncs_from_midi(qapp, mock_engine, qtbot):
+    # Studio One đổi state → nút Bè sáng/tắt theo (feedback ngược).
+    import backend
+
+    dashboard = _make_dashboard(qtbot)
+    cc = int(backend.AppConfig.get_midi_cc()["be"])
+    btn = dashboard._func_buttons["Bè"]
+
+    dashboard._on_midi_cc_received(cc,127)
+    assert dashboard.be_state is True
+    assert btn._active is True
+
+    dashboard._on_midi_cc_received(cc,0)
+    assert dashboard.be_state is False
+    assert btn._active is False
+
+
+def test_be_cc_not_shared_with_other_controls(qapp, mock_engine, qtbot):
+    # CC của Bè phải RIÊNG — trùng số với nút khác thì bấm cái này sẽ
+    # lật trạng thái cái kia (đúng lỗi 'shared CC' từng gặp ở tone_auto/fix_meo).
+    import backend
+    cc_map = backend.AppConfig.get_midi_cc()
+    others = [k for k, v in cc_map.items() if v == cc_map["be"] and k != "be"]
+    assert not others, f"CC {cc_map['be']} của Bè bị dùng chung với: {others}"
+
+
 def test_quick_score_button(qapp, mock_engine, qtbot):
     # UI-03
     with patch("frontend_qt.backend.SongManager.load_songs", return_value=[]), \

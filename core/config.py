@@ -110,7 +110,7 @@ _DEFAULT_APP_CONFIG = {
     # ── MIDI CC mapping ──────────────────────────────────────
     # QUAN TRỌNG: mỗi chức năng có nút vật lý riêng phải có CC DUY NHẤT.
     # Caller tra theo TÊN key (vd MIDI_CC.get("fix_meo")), KHÔNG theo số —
-    # nên chỉ cần đổi số, không đổi tên. Dải CC trống còn lại: 43-49.
+    # nên chỉ cần đổi số, không đổi tên. Dải CC trống còn lại: 43-44, 48-49.
     "midi_cc": {
         "tone_music": 10, "tone_voice": 11,
         "mix_music": 20, "mix_mic": 21, "mix_reverb": 22, "mix_backing": 23,
@@ -127,7 +127,9 @@ _DEFAULT_APP_CONFIG = {
         # tone_auto (40): nút Auto-Tune thật — frontend_qt.py:474/797. TÁCH khỏi 31.
         # fix_meo  (45): nút chống méo giọng thật — frontend_qt.py:479/809,
         #        tools.py:187. TÁCH khỏi 36. (41–44 đã bị mute_multi_cc.mix_reverb dùng)
-        "tune_on_off": 36, "tone_auto": 40, "fix_meo": 45,
+        # be (47): nút Bè — bật/tắt hiệu ứng bè giọng trên Studio One.
+        #        KHÁC mix_backing (23, âm lượng bè) và mute_backing (53).
+        "tune_on_off": 36, "tone_auto": 40, "fix_meo": 45, "be": 47,
         # mode_danca (46): TÁCH khỏi 30 để không đè live-tuner "mode".
         #        Nút Dân Ca thật đi qua mode_config["Dân Ca"]["cc"], nay cũng = 46
         #        để đồng bộ với key này (xem mode_config bên dưới).
@@ -510,7 +512,8 @@ class UiConfigManager:
             {"id": "btn_fast_mode", "type": "button", "label": "Chế độ: Nhanh", "color": "#f97316", "action": "toggle_scan_mode", "desc": "Chuyển chế độ dò tone giữa Nhanh và Full", "hidden": False},
             {"id": "btn_rescan", "type": "button", "label": "Dò Lại", "color": "#14b8a6", "action": "force_rescan", "desc": "Buộc dò lại tone bài hát đang phát", "hidden": False},
             {"id": "btn_autotune", "type": "button", "label": "Auto-Tune", "color": "#ec4899", "action": "tone_auto", "desc": "Bật tắt Auto-Tune trên Studio One", "hidden": False},
-            {"id": "btn_fixmeo", "type": "button", "label": "Fix Méo", "color": "#8b5cf6", "action": "fix_meo", "desc": "Bật tắt chế độ chống méo giọng", "hidden": False}
+            {"id": "btn_fixmeo", "type": "button", "label": "Fix Méo", "color": "#8b5cf6", "action": "fix_meo", "desc": "Bật tắt chế độ chống méo giọng", "hidden": False},
+            {"id": "btn_be", "type": "button", "label": "Bè", "color": "#eab308", "action": "be", "desc": "Bật tắt hiệu ứng bè giọng", "hidden": False}
         ],
         "mode": [
             {"id": "mode_danca", "type": "button", "label": "Dân Ca", "color": "#ec4899", "action": "set_mode_danca", "hidden": False},

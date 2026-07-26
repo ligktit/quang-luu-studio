@@ -96,6 +96,9 @@ class MainDashboard(QMainWindow):
     _score_btn_reset_signal = Signal()
     _marquee_signal = Signal(str)
     _voice_intent_signal = Signal(object)
+    _embedded_volume_signal = Signal(int)   # set âm lượng player nhúng (thread-safe)
+    _search_results_signal = Signal(list)   # kết quả tìm kiếm YouTube (thread-safe)
+    _stream_resolved_signal = Signal(str, str, str)  # (video_id, stream_url, title)
 
     @property
     def _marquee_text(self):
@@ -143,6 +146,9 @@ class MainDashboard(QMainWindow):
         self._marquee_widget = None
         self._marquee_timer = None
         self._waveform = None
+        self._player_window = None   # KaraokePlayerWindow (chế độ màn hình nhúng)
+        self._search_input = None
+        self._search_results_list = None
         self._func_buttons = {}
         self._mode_buttons = {}
         self._mode_colors = {}
@@ -222,8 +228,12 @@ class MainDashboard(QMainWindow):
         # Auto launch (Studio One + Browser theo settings)
         self._auto_launch_apps()
 
-        # YouTube URL Watcher — tự động dò tone khi mở YouTube
-        self._start_youtube_watcher()
+        # Player nhúng (bản Heavy) hoặc YouTube URL Watcher (mặc định).
+        # Chế độ nhúng KHÔNG dùng watcher trình duyệt ngoài (tránh dò trùng).
+        self._embedded_volume_signal.connect(self._set_embedded_volume)
+        self._search_results_signal.connect(self._on_search_results)
+        self._stream_resolved_signal.connect(self._on_stream_resolved)
+        self._apply_embedded_player_setting()
 
         # Accessibility — TTS, theme, shortcuts (sau khi UI đã build xong)
         self._init_accessibility()
@@ -586,6 +596,11 @@ class MainDashboard(QMainWindow):
                 btn = self._func_buttons.get("Fix Méo")
                 if btn: btn.setActive(self.fix_meo_state)
 
+            if cc == int(MIDI_CC.get("be", 47)):
+                self.be_state = (value >= 64)
+                btn = self._func_buttons.get("Bè")
+                if btn: btn.setActive(self.be_state)
+
             # --- Xử lý phản hồi Chế độ (Mode) từ MIDI ---
             try:
                 mode_config = backend.AppConfig.get_mode_config()
@@ -668,27 +683,292 @@ class MainDashboard(QMainWindow):
         global SCALE_VALUES
         SCALE_VALUES = backend.AppConfig.get_scale_values()
 
-    def _start_youtube_watcher(self):
-        """Khởi động YouTube URL Watcher với callbacks thread-safe."""
+    def _wire_auto_tone_callbacks(self):
+        """Nối callback dò tone tự động (thread-safe) vào engine. Dùng cho CẢ chế độ
+        watcher trình duyệt ngoài lẫn chế độ player nhúng (dò tone cho bài tìm kiếm)."""
         def _auto_on_complete(result):
             self._tone_result_signal.emit(result)
 
         def _auto_on_error(msg):
-            # Route error qua signal để UI reset marquee + button state
             print(f"[YT WATCHER] Auto-detect loi: {msg}")
             self._tone_result_signal.emit({'error': msg, 'auto_detected': True})
 
         def _auto_on_progress(text):
-            # Relay tiến trình THẬT từ backend ra marquee, kèm spinner động cho
-            # biết app còn sống. Callback chạy từ worker thread → route qua signal
-            # (không được set self._marquee_text trực tiếp vì setter đụng QWidget).
             self._marquee_signal.emit(self._spinner_progress_text(text))
-        
+
         self.engine.on_auto_tone_complete = _auto_on_complete
         self.engine.on_tone_detected_callback = _auto_on_complete
         self.engine.on_auto_tone_error = _auto_on_error
         self.engine.on_auto_tone_progress = _auto_on_progress
+
+    def _start_youtube_watcher(self):
+        """Khởi động YouTube URL Watcher với callbacks thread-safe."""
+        self._wire_auto_tone_callbacks()
         self.engine.start_youtube_watcher()
+
+    # ── Màn hình karaoke nhúng (bản Heavy) ───────────────────────────────────
+    def _embedded_player_enabled(self) -> bool:
+        """True nếu user bật player nhúng VÀ build hiện tại hỗ trợ (Heavy)."""
+        try:
+            from core import capabilities
+            return bool(self.settings.get("use_embedded_player", False)) and \
+                capabilities.embedded_player_available()
+        except Exception:
+            return False
+
+    def _embedded_player_active(self) -> bool:
+        return self._player_window is not None
+
+    def _apply_embedded_player_setting(self):
+        """Tạo/đóng cửa sổ karaoke + bật/tắt watcher theo thiết lập hiện tại.
+        Gọi lúc khởi động và mỗi khi lưu Settings."""
+        want = self._embedded_player_enabled()
+        if want and self._player_window is None:
+            self._create_player_window()
+            # Chế độ nhúng: dừng watcher trình duyệt ngoài, chỉ nối callback dò tone.
+            try:
+                self.engine.stop_youtube_watcher()
+            except Exception:
+                pass
+            self._wire_auto_tone_callbacks()
+        elif not want:
+            if self._player_window is not None:
+                self._destroy_player_window()
+            # Quay lại chế độ watcher trình duyệt ngoài nếu chưa chạy.
+            if not getattr(self.engine, "_youtube_watcher_active", False):
+                self._start_youtube_watcher()
+        elif want and self._player_window is not None:
+            # Đã bật sẵn — chỉ cập nhật màn hình hiển thị.
+            self._player_window.move_to_monitor(int(self.settings.get("display_monitor_index", 0)))
+
+    def _create_player_window(self):
+        try:
+            from ui.karaoke_player import KaraokePlayerWindow
+        except ImportError as e:
+            print(f"[PLAYER] Không thể tạo player nhúng: {e}")
+            self._player_window = None
+            return
+        idx = int(self.settings.get("display_monitor_index", 0))
+        self._player_window = KaraokePlayerWindow(monitor_index=idx)
+        self._player_window.video_ended.connect(self._on_embedded_video_ended)
+        self._player_window.embed_blocked.connect(self._on_embedded_embed_blocked)
+        self._player_window.video_meta.connect(self._on_embedded_meta)
+        self._player_window.stream_failed.connect(self._on_stream_failed)
+        # Định tuyến điều khiển âm lượng sang player nhúng (thread-safe qua signal).
+        self.engine.embedded_volume_callback = lambda v: self._embedded_volume_signal.emit(int(v))
+
+    def _destroy_player_window(self):
+        try:
+            self.engine.embedded_volume_callback = None
+        except Exception:
+            pass
+        if self._player_window is not None:
+            try:
+                self._player_window.close()
+            except Exception:
+                pass
+            self._player_window = None
+
+    def _set_embedded_volume(self, volume: int):
+        if self._player_window is not None:
+            self._player_window.set_volume(volume)
+
+    def _embedded_video_id(self, url: str):
+        clean = self.engine._clean_youtube_url(url) or url
+        if "v=" in clean:
+            return clean.split("v=")[-1][:11]
+        return None
+
+    def _load_embedded_video(self, url: str):
+        """play_callback cho engine.open_youtube_url ở chế độ nhúng (Bài đã lưu /
+        Setlist). Lấy luồng trực tiếp (không quảng cáo) rồi phát native; fallback
+        IFrame nếu không được. Tone do engine.open_youtube_url tự lo — KHÔNG dò lại
+        ở đây. An toàn gọi từ thread nền (kết quả marshal về GUI qua signal)."""
+        if self._player_window is None:
+            return
+        self._embedded_current_url = url
+        vid = self._embedded_video_id(url)
+        import threading
+        threading.Thread(
+            target=self._resolve_and_play_stream, args=(url, vid or ""), daemon=True
+        ).start()
+
+    def play_youtube_in_app(self, url: str, autodetect: bool = True):
+        """Phát 1 URL/bài (từ ô tìm kiếm hoặc dán link). Dùng player nhúng nếu bật,
+        ngược lại mở trình duyệt ngoài như cũ."""
+        if not url:
+            return
+        if not self._embedded_player_active():
+            self.engine.open_youtube_url(
+                url,
+                on_video_end_callback=lambda res: None,
+                on_tone_detected=lambda result: self._tone_result_signal.emit(result),
+            )
+            return
+        self._embedded_current_url = url
+        # Dò tone chạy độc lập (đường yt-dlp riêng) — kích ngay.
+        if autodetect:
+            import weakref
+            self.engine._dispatch_auto_detect(url, weakref.ref(self.engine))
+        # Lấy luồng trực tiếp (không quảng cáo) ở nền; xong marshal về GUI để phát.
+        vid = self._embedded_video_id(url)
+        self._marquee_signal.emit(self._spinner_progress_text("Đang tải video…"))
+        import threading
+        threading.Thread(
+            target=self._resolve_and_play_stream, args=(url, vid or ""), daemon=True
+        ).start()
+
+    def _resolve_and_play_stream(self, url: str, video_id: str):
+        """Nền: yt-dlp trích luồng progressive (video+audio 1 file, không cần ffmpeg
+        để phát trực tiếp). Chọn itag 22 (720p) → 18 (360p) → progressive tốt nhất."""
+        stream_url, title = "", ""
+        try:
+            from core.ytdlp_support import extract_info_with_auth, make_ydl_opts
+            # Chỉ client tv_embedded/android/ios còn cấp luồng PROGRESSIVE (itag 22/18
+            # — 1 file video+audio, phát thẳng không cần ffmpeg) VÀ URL mở được trong
+            # QMediaPlayer. Client web đã bỏ progressive → chỉ còn DASH (không phát
+            # trực tiếp được). tv_embedded cũng né chặn bot tốt nhất.
+            opts = make_ydl_opts(
+                skip_download=True,
+                format=("22/18/best[vcodec!=none][acodec!=none][ext=mp4]"
+                        "/best[vcodec!=none][acodec!=none]"),
+                extractor_args={"youtube": {"player_client": ["tv_embedded", "android", "ios"]}},
+            )
+            info = extract_info_with_auth(url, opts, download=False, log_prefix="[STREAM]")
+            if info:
+                title = info.get("title") or ""
+                stream_url = info.get("url") or ""
+                if not stream_url:
+                    # Không có url top-level → quét formats tìm luồng progressive.
+                    for f in info.get("formats", []):
+                        if (f.get("url") and f.get("acodec") not in (None, "none")
+                                and f.get("vcodec") not in (None, "none")):
+                            stream_url = f["url"]
+        except Exception as e:
+            print(f"[STREAM] resolve lỗi: {e}")
+        self._stream_resolved_signal.emit(video_id, stream_url, title)
+
+    def _on_stream_resolved(self, video_id: str, stream_url: str, title: str):
+        """GUI thread: có luồng → phát native (không QC); không có → fallback IFrame."""
+        if self._player_window is None:
+            return
+        if stream_url:
+            # play_stream tự emit video_meta (đã nối tới _on_embedded_meta) nếu có title.
+            self._player_window.play_stream(stream_url, title, video_id)
+        else:
+            self._show_message("Không lấy được luồng trực tiếp — dùng player YouTube")
+            if video_id:
+                self._player_window.load_video(video_id)
+
+    def _on_stream_failed(self, video_id: str):
+        """Luồng native lỗi giữa chừng → lùi sang IFrame YouTube."""
+        if self._player_window is not None and video_id:
+            self._player_window.load_video(video_id)
+
+    def _on_embedded_video_ended(self):
+        try:
+            self.engine.notify_video_ended()
+        except Exception as e:
+            print(f"[PLAYER] notify_video_ended lỗi: {e}")
+
+    def _on_embedded_embed_blocked(self):
+        """Video chặn nhúng → fallback mở trình duyệt ngoài + báo người dùng."""
+        url = getattr(self, "_embedded_current_url", None) or self.engine.current_youtube_url
+        self._show_message("Video không cho nhúng — mở bằng trình duyệt ngoài")
+        if url:
+            self.engine.open_youtube_url(
+                url,
+                on_video_end_callback=lambda res: None,
+                on_tone_detected=lambda result: self._tone_result_signal.emit(result),
+            )
+
+    def _on_embedded_meta(self, title: str, video_id: str):
+        if not title:
+            return
+        try:
+            tone = self.current_tone
+            if self._waveform is not None:
+                self._waveform.set_song_info(title, tone, self.current_scale, 0)
+            self._marquee_text = f"🎵 {title}   ★   {tone}"
+        except Exception:
+            pass
+
+    # ── Tìm kiếm YouTube trong app (chế độ player nhúng) ──────────────────────
+    def _on_search_submit(self):
+        """Người dùng nhấn tìm/Enter: nếu là link → phát ngay, nếu là từ khoá → tìm."""
+        q = self._search_input.text().strip() if self._search_input is not None else ""
+        if not q:
+            return
+        # Là link YouTube? → phát luôn
+        if self._embedded_video_id(q):
+            self.play_youtube_in_app(q, autodetect=True)
+            self._search_input.clear()
+            self._hide_search_results()
+            return
+        # Từ khoá → tìm nền
+        self._marquee_signal.emit(self._spinner_progress_text(f"Đang tìm: {q}"))
+        import threading
+        threading.Thread(target=self._do_youtube_search, args=(q,), daemon=True).start()
+
+    def _do_youtube_search(self, query: str):
+        results = []
+        try:
+            from core.ytdlp_support import extract_info_with_auth, make_ydl_opts
+            info = extract_info_with_auth(
+                f"ytsearch6:{query}",
+                make_ydl_opts(skip_download=True, default_search='ytsearch', extract_flat=True),
+                download=False,
+                log_prefix="[SEARCH]",
+            )
+            for e in (info.get('entries', []) if info else []):
+                if not e:
+                    continue
+                vid = e.get('id', '')
+                if not vid:
+                    continue
+                results.append({
+                    'id': vid,
+                    'title': e.get('title', '(không tên)'),
+                    'uploader': e.get('uploader') or e.get('channel') or '',
+                })
+        except Exception as ex:
+            print(f"[SEARCH] lỗi: {ex}")
+        self._search_results_signal.emit(results)
+
+    def _on_search_results(self, results):
+        lst = getattr(self, "_search_results_list", None)
+        if lst is None:
+            return
+        lst.clear()
+        if not results:
+            self._marquee_signal.emit("Không tìm thấy kết quả")
+            self._hide_search_results()
+            return
+        from PySide6.QtWidgets import QListWidgetItem
+        for r in results:
+            label = r['title']
+            if r.get('uploader'):
+                label += f"  —  {r['uploader']}"
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, r['id'])
+            lst.addItem(item)
+        lst.setVisible(True)
+        self._marquee_signal.emit(f"Tìm thấy {len(results)} kết quả — chọn 1 bài")
+
+    def _on_search_result_clicked(self, item):
+        vid = item.data(Qt.UserRole)
+        if not vid:
+            return
+        url = f"https://www.youtube.com/watch?v={vid}"
+        self.play_youtube_in_app(url, autodetect=True)
+        self._hide_search_results()
+        if self._search_input is not None:
+            self._search_input.clear()
+
+    def _hide_search_results(self):
+        lst = getattr(self, "_search_results_list", None)
+        if lst is not None:
+            lst.setVisible(False)
 
     _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
@@ -1065,6 +1345,20 @@ class MainDashboard(QMainWindow):
             btn.setActive(self.fix_meo_state)
         print(f"[FIX MEO] -> {'ON' if self.fix_meo_state else 'OFF'} (Value {val})")
 
+    def _on_be(self):
+        """Toggle hiệu ứng bè giọng (CC "be") trên Studio One.
+
+        KHÁC mix_backing (âm lượng bè) và mute_backing (tắt tiếng bè) — nút này
+        bật/tắt bản thân hiệu ứng bè.
+        """
+        self.be_state = not getattr(self, 'be_state', False)
+        val = 127 if self.be_state else 0
+        self.engine.send_midi(int(MIDI_CC.get("be", 47)), val)
+        btn = self._func_buttons.get("Bè")
+        if btn:
+            btn.setActive(self.be_state)
+        print(f"[BE] -> {'ON' if self.be_state else 'OFF'} (Value {val})")
+
     def _on_scale_toggle(self):
         """Toggle Major ↔ Minor"""
         self.scale_is_major = not getattr(self, 'scale_is_major', True)
@@ -1247,11 +1541,15 @@ class MainDashboard(QMainWindow):
         try:
             tl_data   = backend.ManualToneTimeline.load_timeline(url)
             manual_tl = tl_data["timeline"] if tl_data and tl_data.get("timeline") else None
+            play_cb   = self._load_embedded_video if self._embedded_player_active() else None
+            if play_cb is not None:
+                self._embedded_current_url = url
             self.engine.open_youtube_url(
                 url,
                 on_video_end_callback=lambda res: None,
                 on_tone_detected=lambda result: self._tone_result_signal.emit(result),
                 manual_timeline=manual_tl,
+                play_callback=play_cb,
             )
             from PySide6.QtCore import QSignalBlocker
             with QSignalBlocker(self.tone_combo):
@@ -2406,6 +2704,14 @@ class MainDashboard(QMainWindow):
                 self.engine._pending_url_queue.clear()
         except Exception:
             pass
+
+        # Đóng cửa sổ màn hình karaoke nhúng (nếu có)
+        if self._player_window is not None:
+            try:
+                self._player_window.close()
+            except Exception:
+                pass
+            self._player_window = None
 
         # ── BƯỚC 2: Qt timers — phải dừng trên main thread ────────────────────
         self._status_timer.stop()

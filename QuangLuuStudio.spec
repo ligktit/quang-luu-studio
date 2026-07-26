@@ -3,6 +3,20 @@ from PyInstaller.utils.hooks import collect_all
 
 import os
 
+# ── Biến thể build: Heavy (có QtWebEngine → màn hình karaoke nhúng) vs Light ──
+# Đặt env QLS_WEBENGINE=1 để build bản Heavy (xem build_installer_heavy.bat).
+# Bản Light (mặc định) loại QtWebEngine để giảm ~250MB cho máy yếu.
+INCLUDE_WEBENGINE = os.environ.get("QLS_WEBENGINE") == "1"
+
+# Nguồn DUY NHẤT cho các tên liên quan QtWebEngine — dùng cho cả 3 cơ chế loại trừ
+# bên dưới (module excludes, DLL filter binaries/datas, TOC filter sau Analysis).
+# QtWebEngine cần QtWebChannel + QtWebSockets lúc chạy, nên 3 cái đi cùng nhau.
+_WEBENGINE_MODULES = [
+    'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngine',
+    'PySide6.QtWebChannel', 'PySide6.QtWebSockets',
+]
+_WEBENGINE_DLLS = ['Qt6WebEngine', 'Qt6WebChannel', 'Qt6WebSockets']
+
 # ── Data files: program-level config + workers + asset folders ──
 # NOTE: User data files (settings.json, saved_songs.json, tone_cache.json,
 #       activation.json, manual_timelines.json) are NO LONGER bundled here.
@@ -16,6 +30,7 @@ datas = [
     ('studio_one', 'studio_one'),
     ('Be_Vietnam_Pro', 'Be_Vietnam_Pro'),
     ('ui/styles', 'ui/styles'),   # QSS stylesheet
+    ('ui/assets', 'ui/assets'),   # youtube_player.html (màn hình karaoke nhúng)
 ]
 
 # Chỉ thêm file tồn tại (tránh lỗi build khi thiếu file optional)
@@ -46,14 +61,21 @@ hiddenimports = [
     'pycaw',
     # WebSocket (CDP connectivity)
     'websocket',
-    # Qt Multimedia
+    # Qt Multimedia (QMediaPlayer + QVideoWidget cho màn hình karaoke native, không QC)
     'PySide6.QtMultimedia',
+    'PySide6.QtMultimediaWidgets',
     # UI dialogs — lazily imported inside stub methods; static analysis may miss them
     'ui.dialogs.settings_dialog',
     'ui.dialogs.calibration',
     'ui.dialogs.scoring_report',
     'ui.dialogs.songs_list',
     'ui.dialogs.edit_song',
+    'ui.dialogs.widget_builder',
+    # Premium-tier dialogs (Phase premium) — cũng lazy import
+    'ui.dialogs.premium_dialog',
+    'ui.dialogs.progress_dialog',
+    'ui.dialogs.setlist_dialog',
+    'ui.dialogs.update_dialog',
     # UI panels — new package extracted from frontend_qt.py (Phase C)
     'ui.panels',
     'ui.panels.header',
@@ -70,10 +92,17 @@ hiddenimports = [
     'sklearn.tree._utils',
 ]
 
+# Bản Heavy: cần QtWebEngine + QtWebChannel cho màn hình karaoke nhúng
+if INCLUDE_WEBENGINE:
+    hiddenimports += [
+        'PySide6.QtWebEngineCore',
+        'PySide6.QtWebEngineWidgets',
+        'PySide6.QtWebChannel',
+    ]
+
 # ── PySide6: chỉ bundle modules cần thiết (QtWidgets/QtCore/QtGui) ──
 # Exclude modules nặng không cần — giảm ~250MB (Qt6WebEngineCore = 192MB, Qt3D, QtQuick, etc.)
 _qt_excludes = [
-    'PySide6.QtWebEngine', 'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets',
     'PySide6.QtQuick', 'PySide6.QtQuickWidgets', 'PySide6.QtQuickControls2',
     'PySide6.QtQml', 'PySide6.QtQmlModels',
     'PySide6.Qt3DCore', 'PySide6.Qt3DRender', 'PySide6.Qt3DInput',
@@ -89,10 +118,14 @@ _qt_excludes = [
     'PySide6.QtNetworkAuth', 'PySide6.QtPositioning',
     'PySide6.QtSpatialAudio', 'PySide6.QtStateMachine',
     'PySide6.QtTextToSpeech', 'PySide6.QtHttpServer',
-    'PySide6.QtWebSockets', 'PySide6.QtWebChannel',
     'PySide6.QtOpenGL', 'PySide6.QtOpenGLWidgets',
     'PySide6.QtScxml',
 ]
+
+# Bản Light: loại QtWebEngine/QtWebChannel/QtWebSockets (giảm ~250MB).
+# Bản Heavy: GIỮ lại để màn hình karaoke nhúng hoạt động.
+if not INCLUDE_WEBENGINE:
+    _qt_excludes += _WEBENGINE_MODULES
 
 tmp_ret = collect_all('PySide6')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
@@ -101,15 +134,19 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 # Lọc bỏ binaries/datas của modules không cần (theo tên file DLL/pyd)
 _exclude_dlls = [
-    'Qt6WebEngine', 'Qt6Quick', 'Qt6Qml', 'Qt63D', 'Qt6Designer',
+    'Qt6Quick', 'Qt6Qml', 'Qt63D', 'Qt6Designer',
     'Qt6Pdf', 'Qt6Bluetooth', 'Qt6Nfc',
     'Qt6RemoteObjects', 'Qt6Sensors', 'Qt6SerialPort', 'Qt6Test',
     'Qt6Sql', 'Qt6Xml', 'Qt6Help', 'Qt6Charts',
     'Qt6DataVisualization', 'Qt6NetworkAuth', 'Qt6Positioning',
     'Qt6SpatialAudio', 'Qt6StateMachine', 'Qt6TextToSpeech',
-    'Qt6HttpServer', 'Qt6WebSockets', 'Qt6WebChannel', 'Qt6OpenGL',
+    'Qt6HttpServer', 'Qt6OpenGL',
     'Qt6Scxml', 'opengl32sw',
 ]
+
+# Bản Light: lọc bỏ DLL QtWebEngine/QtWebChannel/QtWebSockets. Bản Heavy: giữ lại.
+if not INCLUDE_WEBENGINE:
+    _exclude_dlls += _WEBENGINE_DLLS
 
 def _should_exclude(path):
     """Kiểm tra cả basename và full path để bắt files trong subdirectories"""

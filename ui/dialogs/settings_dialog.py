@@ -338,9 +338,15 @@ class SettingsDialog(QDialog):
         outer.addWidget(self._build_footer())
 
     def _build_system_tab(self, settings):
-        tab = QWidget()
-        tab.setStyleSheet("background: transparent;")
-        lay = QVBoxLayout(tab)
+        from PySide6.QtWidgets import QScrollArea
+        tab = QScrollArea()
+        tab.setWidgetResizable(True)
+        tab.setFrameShape(QFrame.NoFrame)
+        tab.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        inner = QWidget()
+        inner.setStyleSheet("background: transparent;")
+        tab.setWidget(inner)
+        lay = QVBoxLayout(inner)
         lay.setContentsMargins(22, 18, 22, 18)
         lay.setSpacing(12)
 
@@ -368,6 +374,11 @@ class SettingsDialog(QDialog):
         self._cb_close_br.setChecked(settings.get("auto_close_browser", False))
         lay.addWidget(self._section_card(self._build_autolaunch))
 
+        # Màn hình karaoke nhúng (chỉ bản Heavy có QtWebEngine)
+        lay.addWidget(self._section_header(SVG_EYE_OPEN, "Màn hình karaoke nhúng"))
+        self._build_karaoke_widgets(settings)
+        lay.addWidget(self._section_card(self._build_karaoke_display))
+
         # Cloud Sync (Premium)
         lay.addWidget(self._section_header(SVG_GLOBE, "Đồng bộ đám mây (Premium)"))
         self._cloud_sync_btn = QPushButton("Đồng bộ ngay")
@@ -377,6 +388,44 @@ class SettingsDialog(QDialog):
 
         lay.addStretch()
         return tab
+
+    def _build_karaoke_widgets(self, settings):
+        from core import capabilities
+        available = capabilities.embedded_player_available()
+
+        self._cb_embedded_player = QCheckBox("Phát YouTube trong màn hình karaoke nhúng (sạch)")
+        self._cb_embedded_player.setStyleSheet(self._checkbox_qss)
+        self._cb_embedded_player.setChecked(bool(settings.get("use_embedded_player", False)) and available)
+        self._cb_embedded_player.setEnabled(available)
+        if not available:
+            self._cb_embedded_player.setToolTip("Cần bản cài đặt đầy đủ (Heavy) có QtWebEngine.")
+
+        self._combo_monitor = QComboBox()
+        self._combo_monitor.setStyleSheet(self._combo_qss)
+        self._combo_monitor.setEnabled(available)
+        from PySide6.QtGui import QGuiApplication
+        screens = QGuiApplication.screens()
+        for i, sc in enumerate(screens):
+            g = sc.geometry()
+            primary = " — chính" if sc is QGuiApplication.primaryScreen() else ""
+            self._combo_monitor.addItem(f"Màn {i + 1}: {sc.name()} ({g.width()}×{g.height()}){primary}")
+        if not screens:
+            self._combo_monitor.addItem("Không tìm thấy màn hình")
+        saved_idx = int(settings.get("display_monitor_index", 0))
+        if 0 <= saved_idx < self._combo_monitor.count():
+            self._combo_monitor.setCurrentIndex(saved_idx)
+
+    def _build_karaoke_display(self, vl):
+        vl.setSpacing(8)
+        self._cb_embedded_player.setMinimumHeight(34)
+        vl.addWidget(self._cb_embedded_player)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        lbl = QLabel("Màn hình hiển thị:")
+        lbl.setStyleSheet(f"color: {C['text']}; font-size: 13px; font-weight: 600; font-family: {FONT}; background: transparent; border: none;")
+        row.addWidget(lbl)
+        row.addWidget(self._combo_monitor, 1)
+        vl.addLayout(row)
 
     def _on_cloud_sync(self):
         """Đồng bộ thư viện qua server (Premium). Chạy nền, marshal kết quả về main thread."""
@@ -1187,6 +1236,9 @@ class SettingsDialog(QDialog):
         s["auto_close_browser"]     = self._cb_close_br.isChecked()
         s["record_loopback_device"] = self._combo_lb.currentData()
         s["record_mic_device"]      = self._combo_mic.currentData()
+        if hasattr(self, "_cb_embedded_player"):
+            s["use_embedded_player"]    = self._cb_embedded_player.isChecked()
+            s["display_monitor_index"]  = max(0, self._combo_monitor.currentIndex())
 
         acc = backend.AppConfig.get("accessibility") or {}
         if hasattr(self, "_cb_tts"):
@@ -1212,6 +1264,13 @@ class SettingsDialog(QDialog):
             self._a11y_collect_and_apply()
         except Exception as e:
             print(f"[SETTINGS] accessibility apply lỗi: {e}")
+
+        # Áp dụng player nhúng ngay (tạo/đóng cửa sổ karaoke theo thiết lập mới)
+        try:
+            if hasattr(self._dashboard, "_apply_embedded_player_setting"):
+                self._dashboard._apply_embedded_player_setting()
+        except Exception as e:
+            print(f"[SETTINGS] apply embedded player lỗi: {e}")
 
         self._dashboard._show_message("Đã lưu thiết lập")
         self.close()

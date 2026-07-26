@@ -1,11 +1,64 @@
 """Tools & Tone panel builder for MainDashboard."""
 import backend
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QFrame
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QFrame,
+    QLineEdit, QListWidget,
+)
 from PySide6.QtCore import Qt, QSignalBlocker
 
 from ui.design_tokens import C, SP, FONT, FONT_MONO, lighten
 from ui.components.painter_button import PainterButton
 from ui.components.painter_panel import GlassPanel
+
+
+def _build_search_bar(dashboard) -> QWidget:
+    """Thanh tìm kiếm YouTube / dán link — chỉ dùng ở chế độ màn hình karaoke nhúng."""
+    wrapper = QWidget()
+    vl = QVBoxLayout(wrapper)
+    vl.setContentsMargins(0, 0, 0, 0)
+    vl.setSpacing(4)
+
+    row = QHBoxLayout()
+    row.setSpacing(6)
+    inp = QLineEdit()
+    inp.setPlaceholderText("Tìm bài hát hoặc dán link YouTube…")
+    inp.setClearButtonEnabled(True)
+    inp.setStyleSheet(
+        f"QLineEdit {{ background: rgba(0,0,0,0.30); color: {C['text']}; border: 1px solid {C['border']};"
+        f" border-radius: 8px; padding: 6px 10px; font-size: 12px; font-family: {FONT}; }}"
+        f" QLineEdit:focus {{ border: 1px solid {C['teal']}; }}"
+    )
+    btn = QPushButton("🔍")
+    btn.setFixedSize(34, 32)
+    btn.setCursor(Qt.PointingHandCursor)
+    btn.setStyleSheet(
+        f"QPushButton {{ background: {C['teal']}; color: #fff; border: none; border-radius: 8px;"
+        f" font-size: 14px; font-weight: 800; }}"
+        f" QPushButton:hover {{ background: {lighten(C['teal'], 0.15)}; }}"
+    )
+    row.addWidget(inp, 1)
+    row.addWidget(btn)
+    vl.addLayout(row)
+
+    results = QListWidget()
+    results.setVisible(False)
+    results.setMaximumHeight(150)
+    results.setStyleSheet(
+        f"QListWidget {{ background: rgba(0,0,0,0.35); color: {C['text']}; border: 1px solid {C['border']};"
+        f" border-radius: 8px; font-size: 11px; font-family: {FONT}; }}"
+        f" QListWidget::item {{ padding: 5px 8px; }}"
+        f" QListWidget::item:hover {{ background: rgba(255,255,255,0.08); }}"
+        f" QListWidget::item:selected {{ background: {C['teal']}; color: #fff; }}"
+    )
+    vl.addWidget(results)
+
+    dashboard._search_input = inp
+    dashboard._search_results_list = results
+    btn.clicked.connect(dashboard._on_search_submit)
+    inp.returnPressed.connect(dashboard._on_search_submit)
+    results.itemClicked.connect(dashboard._on_search_result_clicked)
+
+    return wrapper
 
 
 def _build_tone_knob_widget(dashboard, label: str, cc_key: str, color: str) -> QWidget:
@@ -121,6 +174,11 @@ def build_panel_tools(dashboard) -> GlassPanel:
     panel = GlassPanel("TOOLS")
     panel.body_layout.addSpacing(6)
 
+    # Thanh tìm kiếm YouTube — chỉ hiện khi dùng màn hình karaoke nhúng (bản Heavy)
+    if hasattr(dashboard, "_embedded_player_enabled") and dashboard._embedded_player_enabled():
+        panel.body_layout.addWidget(_build_search_bar(dashboard))
+        panel.body_layout.addSpacing(8)
+
     grid = QGridLayout()
     grid.setSpacing(3)
 
@@ -185,6 +243,8 @@ def build_panel_tools(dashboard) -> GlassPanel:
             btn.setActive(getattr(dashboard, "tune_state", True))
         elif text == "Fix Méo":
             btn.setActive(getattr(dashboard, "fix_meo_state", False))
+        elif text == "Bè":
+            btn.setActive(getattr(dashboard, "be_state", False))
             
         # --- Dev Mode Context Menu ---
         if getattr(dashboard, "is_dev_mode", False):

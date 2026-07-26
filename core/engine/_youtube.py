@@ -308,7 +308,15 @@ class _YouTubeMixin:
 
     # ── open_youtube_url ────────────────────────────────────────────────────────
 
-    def open_youtube_url(self, url, on_video_end_callback=None, on_tone_detected=None, manual_timeline=None):
+    def open_youtube_url(self, url, on_video_end_callback=None, on_tone_detected=None,
+                         manual_timeline=None, play_callback=None):
+        """Phát URL YouTube.
+
+        play_callback: nếu được cung cấp (chế độ màn hình karaoke nhúng), thay vì mở
+        trình duyệt ngoài, gọi play_callback(url) để nạp video vào player nhúng. Toàn
+        bộ logic replay manual timeline được giữ nguyên. Phần giám sát kết thúc video
+        bằng heuristic sleep(duration+5) được bỏ qua vì player nhúng tự báo qua event.
+        """
         if not url:
             return
 
@@ -317,6 +325,23 @@ class _YouTubeMixin:
         self.on_video_end_callback     = on_video_end_callback
         self.on_tone_detected_callback = on_tone_detected
         self._last_watched_url         = url  # sync immediately so watcher doesn't cancel replay
+
+        # ── Chế độ player nhúng: nạp thẳng vào màn hình karaoke, không mở browser ──
+        if play_callback is not None:
+            try:
+                play_callback(url)
+            except Exception as e:
+                print(f"[PLAYER] play_callback lỗi: {e}")
+            if manual_timeline:
+                def replay_manual_embedded():
+                    time.sleep(3)  # chờ player nạp video
+                    self._send_tone_midi(manual_timeline[0])
+                    cancel_ev = self._tone_session.start_scanning(url)
+                    cancel_ev2 = self._tone_session.transition_to_replaying(expected_token=cancel_ev)
+                    if cancel_ev2 is not None:
+                        self._replay_manual_timeline(manual_timeline, cancel_event=cancel_ev2)
+                threading.Thread(target=replay_manual_embedded, daemon=True).start()
+            return
 
         def open_browser():
             browser_path = self.settings.get("browser_path")
@@ -398,6 +423,24 @@ class _YouTubeMixin:
                 time.sleep(2)
                 self._start_youtube_monitoring(url)
             threading.Thread(target=delayed_monitoring, daemon=True).start()
+
+    # ── notify_video_ended ───────────────────────────────────────────────────────
+
+    def notify_video_ended(self):
+        """Báo video đã kết thúc (dùng cho màn hình karaoke nhúng — event IFrame
+        thay cho heuristic sleep(duration+5)). Kích hoạt chấm điểm nếu đang ghi."""
+        try:
+            print("[VIDEO END] Video kết thúc (player nhúng).")
+            self.youtube_monitoring_active = False
+            if getattr(self, "quick_score_active", False):
+                print("[VIDEO END] Quick Score đang ghi âm -> tự động dừng để chấm điểm.")
+                self.quick_score_active = False
+            elif self.on_video_end_callback:
+                self.on_video_end_callback(None)
+        except Exception as e:
+            print(f"[VIDEO END] Lỗi: {e}")
+            if self.on_video_end_callback:
+                self.on_video_end_callback(None)
 
     # ── _start_youtube_monitoring ────────────────────────────────────────────────
 

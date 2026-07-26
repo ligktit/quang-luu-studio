@@ -392,11 +392,16 @@ class SongsListDialog(QDialog):
                 return
             tl_data   = backend.ManualToneTimeline.load_timeline(url)
             manual_tl = tl_data["timeline"] if tl_data and tl_data.get("timeline") else None
-            self._dashboard.engine.open_youtube_url(
+            dash = self._dashboard
+            play_cb = dash._load_embedded_video if dash._embedded_player_active() else None
+            if play_cb is not None:
+                dash._embedded_current_url = url
+            dash.engine.open_youtube_url(
                 url,
                 on_video_end_callback=lambda res: None,
-                on_tone_detected=lambda result: self._dashboard._tone_result_signal.emit(result),
+                on_tone_detected=lambda result: dash._tone_result_signal.emit(result),
                 manual_timeline=manual_tl,
+                play_callback=play_cb,
             )
             from PySide6.QtCore import QSignalBlocker
             with QSignalBlocker(self._dashboard.tone_combo):

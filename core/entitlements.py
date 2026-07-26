@@ -29,15 +29,23 @@ def current_plan() -> str:
     """
     Trả tier hiện tại: "standard" | "premium".
 
-    Offline mode (server license chưa cấu hình) hoặc bất kỳ lỗi nào → "standard"
-    (fail-safe: không vô tình mở Premium).
+    - Online (đã cấu hình server + có license cache): theo server.
+    - Offline: theo mã đã kích hoạt cục bộ — mã Premium offline (checksum theo
+      PREMIUM_SECRET_KEY) → "premium"; còn lại/lỗi → "standard".
     """
     try:
         from core.licensing import client
         if client.server_configured() and client.has_online_license():
             return client.current_plan()
     except Exception as e:  # pragma: no cover - phòng thủ
-        log.debug("current_plan fallback standard: %s", e)
+        log.debug("current_plan online check failed: %s", e)
+    # Offline (chưa cấu hình server): đọc tier từ mã đã kích hoạt cục bộ.
+    # Mã Premium offline (checksum theo PREMIUM_SECRET_KEY) → "premium".
+    try:
+        from core.activation import ActivationManager
+        return ActivationManager.offline_plan()
+    except Exception as e:  # pragma: no cover - phòng thủ
+        log.debug("current_plan offline fallback standard: %s", e)
     return "standard"
 
 

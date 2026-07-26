@@ -12,11 +12,24 @@
 ; ============================================================
 
 #define MyAppName "Quang Luu Studio"
-#define MyAppVersion "1.5.1"
+#define MyAppVersion "1.6.0"
 #define MyAppPublisher "Quang Luu"
 #define MyAppExeName "QuangLuuStudio.exe"
 #define MyAppURL "https://github.com/ligktit/quang-luu-studio"
 #define MyAppDataFolder "QuangLuuStudio"
+
+; ── Biến thể build: "light" (mặc định) hoặc "heavy" (có màn hình karaoke nhúng) ──
+; Truyền từ dòng lệnh: ISCC.exe /DVariant=heavy QuangLuuStudio_Setup.iss
+#ifndef Variant
+  #define Variant "light"
+#endif
+#if Variant == "heavy"
+  #define DistDir "dist_heavy"
+  #define VariantSuffix "_Heavy"
+#else
+  #define DistDir "dist"
+  #define VariantSuffix ""
+#endif
 
 [Setup]
 ; Thông tin cơ bản
@@ -35,7 +48,7 @@ DefaultGroupName={#MyAppName}
 
 ; Output
 OutputDir=installer_output
-OutputBaseFilename=Setup_QuangLuuStudio_v{#MyAppVersion}
+OutputBaseFilename=Setup_QuangLuuStudio{#VariantSuffix}_v{#MyAppVersion}
 
 ; Icon
 SetupIconFile=app_icon.ico
@@ -75,7 +88,7 @@ Name: "startmenuicon"; Description: "Tạo shortcut trong Start Menu"; GroupDesc
 ; === PROGRAM FILES (read-only, {app}) ===
 
 ; File EXE chính (từ PyInstaller output)
-Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#DistDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Icon
 Source: "app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
@@ -161,6 +174,11 @@ begin
   if not FileExists(FilePath) then
     SaveStringToFile(FilePath, '[]', False);
 
+  // playlists.json
+  FilePath := DataDir + '\playlists.json';
+  if not FileExists(FilePath) then
+    SaveStringToFile(FilePath, '{}', False);
+
   // tone_cache.json
   FilePath := DataDir + '\tone_cache.json';
   if not FileExists(FilePath) then
@@ -183,12 +201,13 @@ begin
   AppDir := ExpandConstant('{app}');
   DataDir := ExpandConstant('{userappdata}\{#MyAppDataFolder}');
 
-  SetArrayLength(Files, 5);
+  SetArrayLength(Files, 6);
   Files[0] := 'settings.json';
   Files[1] := 'saved_songs.json';
   Files[2] := 'activation.json';
   Files[3] := 'tone_cache.json';
   Files[4] := 'manual_timelines.json';
+  Files[5] := 'playlists.json';
 
   for I := 0 to GetArrayLength(Files) - 1 do
   begin
@@ -265,6 +284,7 @@ Type: files; Name: "{app}\settings.json"
 Type: files; Name: "{app}\saved_songs.json"
 Type: files; Name: "{app}\tone_cache.json"
 Type: files; Name: "{app}\manual_timelines.json"
+Type: files; Name: "{app}\playlists.json"
 Type: filesandordirs; Name: "{app}\temp_audio"
 Type: dirifempty; Name: "{app}"
 ; Dữ liệu user trong %APPDATA% và Documents được xử lý bởi [Code] ở trên

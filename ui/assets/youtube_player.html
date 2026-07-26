@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<!--
+  Quang Lưu Studio — Màn hình karaoke nhúng (YouTube IFrame Player API).
+
+  Trang này được KaraokePlayerWindow (ui/karaoke_player.py) load qua QWebEngineView.
+  Cầu nối JS <-> Python qua QWebChannel: object "bridge" do Python đăng ký.
+
+  - JS  -> Python: bridge.on_ready / on_state_change / on_error / on_time / on_meta
+  - Python -> JS : window.qlsLoad / qlsPlay / qlsPause / qlsSetVolume / qlsSeek
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    html, body {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      background: #000; overflow: hidden;
+    }
+    #player { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+    /* Logo chờ khi chưa có bài — nền đen sạch */
+    #idle {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      display: flex; align-items: center; justify-content: center;
+      color: #444; font-family: sans-serif; font-size: 2vw; letter-spacing: .3em;
+      text-transform: uppercase;
+    }
+  </style>
+</head>
+<body>
+  <div id="idle">Quang Lưu Studio</div>
+  <div id="player"></div>
+
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <script>
+    var bridge = null;
+    var player = null;
+    var playerReady = false;
+    var pendingVideoId = null;   // bài được yêu cầu trước khi player sẵn sàng
+    var timeTimer = null;
+    var lastMetaTitle = "";
+
+    // ---- Cầu QWebChannel ----
+    function initBridge() {
+      if (typeof qt === "undefined" || !qt.webChannelTransport) {
+        // Chạy ngoài QtWebEngine (debug trình duyệt thường) — bỏ qua bridge.
+        return;
+      }
+      new QWebChannel(qt.webChannelTransport, function (channel) {
+        bridge = channel.objects.bridge;
+        if (playerReady && bridge && bridge.on_ready) bridge.on_ready();
+      });
+    }
+
+    // ---- YouTube IFrame API ----
+    function onYouTubeIframeAPIReady() {
+      player = new YT.Player("player", {
+        width: "100%",
+        height: "100%",
+        playerVars: {
+          autoplay: 1,
+          controls: 0,           // không thanh điều khiển
+          rel: 0,                // không gợi ý video liên quan (cùng kênh)
+          modestbranding: 1,
+          iv_load_policy: 3,     // không annotation
+          fs: 0,                 // không nút fullscreen
+          disablekb: 1,          // người xem không điều khiển bằng bàn phím
+          playsinline: 1,
+          enablejsapi: 1,
+          origin: window.location.origin,  // http://127.0.0.1:<port> — tránh lỗi 153
+        },
+        events: {
+          onReady: onPlayerReady,
+          onStateChange: onPlayerStateChange,
+          onError: onPlayerError,
+        },
+      });
+    }
+
+    function onPlayerReady() {
+      playerReady = true;
+      if (bridge && bridge.on_ready) bridge.on_ready();
+      if (pendingVideoId) {
+        var id = pendingVideoId;
+        pendingVideoId = null;
+        qlsLoad(id);
+      }
+    }
+
+    function onPlayerStateChange(e) {
+      if (bridge && bridge.on_state_change) bridge.on_state_change(e.data);
+
+      // Bắt đầu phát → ẩn idle, đẩy metadata + bật bộ đếm thời gian
+      if (e.data === YT.PlayerState.PLAYING) {
+        document.getElementById("idle").style.display = "none";
+        pushMeta();
+        startTimeTicker();
+      }
+      // Kết thúc → dừng bộ đếm (Python dùng để chấm điểm)
+      if (e.data === YT.PlayerState.ENDED) {
+        stopTimeTicker();
+      }
+    }
+
+    function onPlayerError(e) {
+      // 101 / 150: video không cho nhúng → Python fallback sang trình duyệt ngoài.
+      if (bridge && bridge.on_error) bridge.on_error(e.data);
+    }
+
+    function pushMeta() {
+      try {
+        var data = player.getVideoData ? player.getVideoData() : null;
+        if (data && bridge && bridge.on_meta) {
+          if (data.title && data.title !== lastMetaTitle) {
+            lastMetaTitle = data.title;
+            bridge.on_meta(data.title || "", data.video_id || "");
+          }
+        }
+      } catch (err) {}
+    }
+
+    function startTimeTicker() {
+      stopTimeTicker();
+      timeTimer = setInterval(function () {
+        if (!player || !player.getCurrentTime) return;
+        try {
+          var pos = player.getCurrentTime() || 0;
+          var dur = player.getDuration() || 0;
+          if (bridge && bridge.on_time) bridge.on_time(pos, dur);
+          pushMeta();   // title có thể đến trễ
+        } catch (err) {}
+      }, 1000);
+    }
+
+    function stopTimeTicker() {
+      if (timeTimer) { clearInterval(timeTimer); timeTimer = null; }
+    }
+
+    // ---- API gọi từ Python (runJavaScript) ----
+    function qlsLoad(videoId) {
+      if (!videoId) return;
+      if (!playerReady || !player) { pendingVideoId = videoId; return; }
+      lastMetaTitle = "";
+      player.loadVideoById(videoId);
+      document.getElementById("idle").style.display = "none";
+    }
+    function qlsPlay()  { if (player && player.playVideo)  player.playVideo(); }
+    function qlsPause() { if (player && player.pauseVideo) player.pauseVideo(); }
+    function qlsSetVolume(v) {
+      if (player && player.setVolume) player.setVolume(Math.max(0, Math.min(100, v)));
+    }
+    function qlsSeek(sec) { if (player && player.seekTo) player.seekTo(sec, true); }
+
+    // ---- Khởi động ----
+    initBridge();
+    (function loadYT() {
+      var tag = document.createElement("script");
+      tag.src = "https://www.youtube.com/iframe_api";
+      document.head.appendChild(tag);
+    })();
+  </script>
+</body>
+</html>

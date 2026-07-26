@@ -90,6 +90,15 @@ class _RecordingMixin:
     _original_browser_volume = None
 
     def set_browser_volume(self, volume_percent):
+        # Ưu tiên 0: màn hình karaoke nhúng (nếu đang dùng) — dashboard gán callback.
+        cb = getattr(self, 'embedded_volume_callback', None)
+        if cb is not None:
+            try:
+                cb(volume_percent)
+                return True
+            except Exception as e:
+                print(f"[VOL] embedded player lỗi: {e}")
+
         # Ưu tiên 1: CDP (Điều khiển trực tiếp thanh volume trên YouTube)
         if hasattr(self, 'cdp_monitor') and self.cdp_monitor.is_connected:
             if self.cdp_monitor.set_player_volume(volume_percent):

@@ -41,7 +41,60 @@ class ActivationManager:
         "QUANGLUU_STUDIO_SECRET_KEY",
         "936c3f6655acc46ba5c41603446addb7e5b25df85c953d003eba554527e267e4"
     )
-    
+
+    # Secret RIÊNG cho mã Premium *offline*. Mã Premium dùng checksum tính bằng
+    # secret này (khác SECRET_KEY của Standard) → app phân biệt được tier NGAY
+    # CẢ KHI KHÔNG có server. Đổi secret này sẽ vô hiệu mọi mã premium đã phát.
+    # Có thể override qua biến môi trường QUANGLUU_STUDIO_PREMIUM_SECRET.
+    PREMIUM_SECRET_KEY = os.environ.get(
+        "QUANGLUU_STUDIO_PREMIUM_SECRET",
+        "14476200f1a7736b05c54df0c08909f4cea134cf017543325c32f5b1f64d0a74"
+    )
+
+    @staticmethod
+    def _calc_checksum(base_code, secret):
+        """Checksum 4 ký tự HOA từ base_code + secret (md5)."""
+        return hashlib.md5((base_code + secret).encode()).hexdigest()[:4].upper()
+
+    @staticmethod
+    def _detect_plan(code):
+        """Suy ra tier từ checksum: 'premium' | 'standard' | None (không hợp lệ).
+
+        Mã Premium offline dùng PREMIUM_SECRET_KEY; Standard dùng SECRET_KEY.
+        Nhờ vậy app biết mã là Premium mà KHÔNG cần server.
+        """
+        if not ActivationManager._validate_code_structure(code):
+            return None
+        parts = code.strip().upper().split('-')
+        base = '-'.join(parts[:4])
+        provided = parts[4]
+        if provided == ActivationManager._calc_checksum(base, ActivationManager.SECRET_KEY):
+            return "standard"
+        if provided == ActivationManager._calc_checksum(base, ActivationManager.PREMIUM_SECRET_KEY):
+            return "premium"
+        return None
+
+    @staticmethod
+    def offline_plan():
+        """Tier đã lưu khi kích hoạt offline: 'premium' | 'standard'.
+
+        Trial hoặc chưa kích hoạt → 'standard'. Có xử lý tương thích ngược cho
+        activation.json cũ (không có field 'plan') bằng cách suy lại từ checksum.
+        """
+        activation = ActivationManager.load_activation()
+        if not activation:
+            return "standard"
+        plan = activation.get("plan")
+        if plan:
+            return str(plan).lower()
+        code = activation.get("activation_code")
+        if code:
+            detected = ActivationManager._detect_plan(code)
+            if detected:
+                return detected
+        return "standard"
+
+
     @staticmethod
     def _validate_code_structure(code):
         """Kiểm tra format của code: XXXX-XXXX-XXXX-XXXX-XXXX"""
@@ -112,12 +165,16 @@ class ActivationManager:
         return None
     
     @staticmethod
-    def save_activation(code):
-        """Lưu thông tin activation sau khi kích hoạt thành công"""
+    def save_activation(code, plan="standard"):
+        """Lưu thông tin activation sau khi kích hoạt thành công.
+
+        `plan` ('standard'|'premium') được lưu để entitlements đọc tier offline.
+        """
         activation_data = {
             "activation_code": code.strip().upper(),
             "activation_date": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "activation_timestamp": time.time()
+            "activation_timestamp": time.time(),
+            "plan": str(plan or "standard").lower(),
         }
         try:
             with open(ACTIVATION_FILE, "w", encoding="utf-8") as f:
@@ -224,11 +281,13 @@ class ActivationManager:
             return online.activate_online(code)
 
         # Offline mode (server chưa cấu hình): checksum cục bộ như cũ.
-        if not ActivationManager._validate_code(code):
+        # _detect_plan trả tier từ checksum (premium nếu khớp PREMIUM_SECRET_KEY).
+        plan = ActivationManager._detect_plan(code)
+        if plan is None:
             return {"success": False, "error": "Mã kích hoạt không hợp lệ. Vui lòng kiểm tra lại."}
 
-        # Lưu activation
-        if ActivationManager.save_activation(code):
+        # Lưu activation kèm tier
+        if ActivationManager.save_activation(code, plan):
             return {"success": True, "error": ""}
         else:
             return {"success": False, "error": "Lỗi khi lưu thông tin kích hoạt."}

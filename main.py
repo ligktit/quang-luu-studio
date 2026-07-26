@@ -29,6 +29,16 @@ except Exception:
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
 os.environ["QT_OPENGL"] = "angle"
 
+# ── QtWebEngine: chia sẻ OpenGL context ──────────────────────────────────────
+# Bắt buộc set TRƯỚC khi QApplication được tạo, nếu không QWebEngineView (màn hình
+# karaoke nhúng của bản Heavy) chỉ hiện màn đen. Vô hại với bản Light (không có
+# QtWebEngine) — chỉ là 1 cờ thuộc tính của Qt.
+try:
+    from PySide6.QtCore import Qt, QCoreApplication
+    QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
+except Exception:
+    pass
+
 # ── Logging — init before any core import ─────────────────────────────────────
 from pathlib import Path
 from core.logger import setup_logging, get_logger

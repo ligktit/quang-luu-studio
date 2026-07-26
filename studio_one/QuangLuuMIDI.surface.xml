@@ -10,19 +10,26 @@
   4. Chọn MIDI input port: QuangLuuMIDI (loopMIDI)
   5. Dùng Control Link để gán controls vào parameters
   
-  CC Mapping (đồng bộ với backend.py _DEFAULT_APP_CONFIG["midi_cc"]):
+  CC Mapping (đồng bộ với core/config.py _DEFAULT_APP_CONFIG["midi_cc"]).
+  ⚠ Sửa CC bên config.py thì phải sửa file này — test
+  tests/test_surface_xml.py sẽ FAIL nếu hai bên lệch nhau.
   - CC 10-11: Tone controls (knobs)
   - CC 20-23: Mixer controls (faders)
-  - CC 30:    Mode Dân Ca (button)
-  - CC 31:    AutoKey / Tone Auto (button, shared CC)
+  - CC 30:    Mode của live-tuner (knob) — KHÔNG phải nút Dân Ca
+  - CC 31:    AutoKey (button)
   - CC 32:    Score Trigger (button)
   - CC 33:    Key Root (knob)
-  - CC 34:    Key Scale (knob)
+  - CC 34:    Key Scale (knob, deprecated — code thật dùng CC 35)
   - CC 35:    Scale Type (knob)
-  - CC 36:    Tune On/Off / Fix Méo (button, shared CC)
+  - CC 36:    Tune On/Off — Auto-Tune bypass (button)
   - CC 37:    Mode Lofi (button)
   - CC 38:    Mode Remix (button)
   - CC 39:    Mode Đa Thể Loại (button)
+  - CC 40:    Auto-Tune (button) — nút thật trên app, TÁCH khỏi 31
+  - CC 41-44: Mute Vang phụ trợ (buttons, mute_multi_cc)
+  - CC 45:    Fix Méo (button) — nút thật trên app, TÁCH khỏi 36
+  - CC 46:    Mode Dân Ca (button) — TÁCH khỏi 30
+  - CC 47:    Bè (button)
   - CC 50-53: Mute toggles (buttons)
 -->
 <ControlSurface name="QuangLuuMIDI" 
@@ -74,11 +81,18 @@
     <!-- FUNCTION BUTTONS (CC 30-32)                  -->
     <!-- ============================================ -->
     
-    <!-- mode_danca: Chế độ Dân Ca (0=Off, 127=On) -->
-    <Control name="modeDanca" title="Mode Dân Ca" type="button" options="receive public">
+    <!-- mode: Control "Mode" của live-tuner (calibration.py đọc MIDI_CC["mode"]).
+         KHÔNG phải nút Dân Ca — nút đó nằm ở CC 46 bên dưới. -->
+    <Control name="liveTunerMode" title="Mode (Live Tuner)" type="knob" options="receive public">
       <MidiMessage status="#B0" address="30"/>
     </Control>
-    
+
+    <!-- mode_danca: Chế độ Dân Ca (0=Off, 127=On) — TÁCH khỏi CC 30 để không
+         đè control live-tuner ở trên. -->
+    <Control name="modeDanca" title="Mode Dân Ca" type="button" options="receive public">
+      <MidiMessage status="#B0" address="46"/>
+    </Control>
+
     <!-- mode_lofi: Chế độ Lofi (0=Off, 127=On) -->
     <Control name="modeLofi" title="Mode Lofi" type="button" options="receive public">
       <MidiMessage status="#B0" address="37"/>
@@ -94,7 +108,8 @@
       <MidiMessage status="#B0" address="39"/>
     </Control>
     
-    <!-- autokey / tone_auto: Bật/tắt AutoKey / Tone Auto (0=Off, 127=On) — shared CC 31 -->
+    <!-- autokey: Bật/tắt AutoKey (0=Off, 127=On).
+         Nút Auto-Tune của app KHÔNG dùng CC này — xem toneAuto (CC 40). -->
     <Control name="autokey" title="AutoKey" type="button" options="receive public">
       <MidiMessage status="#B0" address="31"/>
     </Control>
@@ -123,9 +138,26 @@
       <MidiMessage status="#B0" address="35"/>
     </Control>
     
-    <!-- tune_on_off / fix_meo: Bật/tắt Auto-Tune bypass / Fix Méo (0=Off, 127=On) — shared CC 36 -->
+    <!-- tune_on_off: Auto-Tune bypass (0=Off, 127=On).
+         Nút Fix Méo của app KHÔNG dùng CC này — xem fixMeo (CC 45). -->
     <Control name="tuneOnOff" title="Tune On/Off" type="button" options="receive public">
       <MidiMessage status="#B0" address="36"/>
+    </Control>
+
+    <!-- tone_auto: nút Auto-Tune THẬT trên app (0=Off, 127=On) — TÁCH khỏi CC 31. -->
+    <Control name="toneAuto" title="Auto-Tune" type="button" options="receive public">
+      <MidiMessage status="#B0" address="40"/>
+    </Control>
+
+    <!-- fix_meo: nút Fix Méo THẬT trên app (0=Off, 127=On) — TÁCH khỏi CC 36. -->
+    <Control name="fixMeo" title="Fix Méo" type="button" options="receive public">
+      <MidiMessage status="#B0" address="45"/>
+    </Control>
+
+    <!-- be: Bật/tắt hiệu ứng bè giọng (0=Off, 127=On) — CC 47.
+         KHÁC mixBacking (CC 23, âm lượng bè) và muteBacking (CC 53). -->
+    <Control name="be" title="Bè" type="button" options="receive public">
+      <MidiMessage status="#B0" address="47"/>
     </Control>
 
     <!-- ============================================ -->

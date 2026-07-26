@@ -49,6 +49,12 @@ def build_panel_mode(dashboard) -> GlassPanel:
             cb = None
         else:
             cb = getattr(dashboard, f"_on_{action_name}", None)
+            # Mode built-in dùng action "set_mode_*" (vd set_mode_lofi) nhưng
+            # handler thật là _on_mode_selected(label) — không có
+            # _on_set_mode_lofi. Thiếu nhánh này thì nút rơi xuống path custom
+            # với cc=None → send_midi(None, 127) fail, Studio One không đổi mode.
+            if not cb and action_name.startswith("set_mode"):
+                cb = dashboard._on_mode_selected
         if not cb:
             # Custom action (hoặc built-in bị CC số override)
             on_val = m_cfg.get("on_value", 127)
