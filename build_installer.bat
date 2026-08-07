@@ -104,7 +104,7 @@ echo ========================================
 echo  THANH CONG!
 echo ========================================
 echo.
-echo  File cai dat: installer_output\Setup_QuangLuuStudio_v1.6.1exe
+echo  File cai dat: installer_output\Setup_QuangLuuStudio_v1.6.2exe
 echo.
 echo  Ban co the gui file nay cho nguoi khac
 echo  de ho cai dat Quang Luu Studio.

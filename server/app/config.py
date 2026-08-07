@@ -26,8 +26,17 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg2://qls:qls@localhost:5432/qls"
 
     # ── Licensing ──
-    # Secret ký license token (JWT). PHẢI đặt qua env trên production.
-    license_secret: str = "CHANGE_ME_license_secret"
+    # Khoá RSA ký license token (RS256). Client nhúng public key tương ứng trong
+    # core/licensing/jwt_verify.py và TỰ XÁC MINH chữ ký, nên private key này là
+    # thứ duy nhất ngăn người dùng tự chế token Premium.
+    # Ưu tiên PEM dán thẳng vào env, sau đó mới tới file.
+    # Sinh bằng: python -m app.cli gen-license-keys
+    license_private_key: str = ""
+    license_private_key_path: str = "./license_key.pem"
+    # LEGACY: secret HMAC của cơ chế HS256 cũ. CHỈ còn dùng để ĐỌC token đã phát
+    # trước khi chuyển sang RS256 (client cũ gửi lên lúc check-in). Không bao giờ
+    # dùng để ký token mới. Bỏ trống khi mọi máy đã cập nhật.
+    license_secret: str = ""
     # Secret tính checksum activation code — dùng chung thuật toán với client cũ.
     # Để rỗng = server tự sinh mã ngẫu nhiên không cần checksum tương thích.
     code_secret: str = "936c3f6655acc46ba5c41603446addb7e5b25df85c953d003eba554527e267e4"
@@ -35,6 +44,9 @@ class Settings(BaseSettings):
     grace_days: int = 7
     # Hạn license mặc định khi kích hoạt lần đầu (ngày). 0 = vĩnh viễn.
     license_duration_days: int = 365
+    # Số ngày dùng thử, neo theo device fingerprint ở server (không reset được
+    # bằng cách xoá file dưới máy người dùng).
+    trial_days: int = 3
 
     # ── Admin ──
     admin_username: str = "admin"

@@ -23,9 +23,13 @@ services:
         condition: service_healthy
     volumes:
       - releases:/data/releases
+      # Khoá ký license. Để trong volume riêng để rebuild image không mất khoá,
+      # và để backup/rotate tách bạch với dữ liệu khác.
+      - keys:/data/keys
     ports:
       - "127.0.0.1:8000:8000"   # chỉ mở local — Nginx ở host proxy ra ngoài
 
 volumes:
   pgdata:
   releases:
+  keys:

@@ -5,8 +5,11 @@ Nguồn chân lý DUY NHẤT cho UI/engine khi quyết định mở/khóa tính 
 Mọi nơi cần kiểm tra quyền nên import module này, KHÔNG tự đọc activation.json.
 
 Quy ước tier:
-  - "standard": mặc định (mọi mã offline, trial, và mã online gói standard).
-  - "premium" : chỉ khi có license online gói premium còn hiệu lực.
+  - "standard": mặc định — chưa kích hoạt, đang dùng thử, hoặc license gói standard.
+  - "premium" : chỉ khi license token còn hiệu lực và claim `plan` là premium.
+
+Tier nằm trong claim của token đã ký RS256, nên sửa tay activation.json chỉ làm
+hỏng chữ ký → tụt về standard, không lên được premium.
 
 Trial 3 ngày = Standard (theo quyết định sản phẩm) → is_premium() luôn False
 khi đang trial.
@@ -22,37 +25,24 @@ PREMIUM_FEATURES = frozenset({
     "cloud_sync",    # Đồng bộ thư viện
     "progress",      # Bảng tiến bộ luyện hát
     "setlist",       # Live Setlist / Auto-Pilot
+    "auto_echo",     # Tự động bật/tắt Vang theo nhạc
 })
 
 
 def current_plan() -> str:
-    """
-    Trả tier hiện tại: "standard" | "premium".
-
-    - Online (đã cấu hình server + có license cache): theo server.
-    - Offline: theo mã đã kích hoạt cục bộ — mã Premium offline (checksum theo
-      PREMIUM_SECRET_KEY) → "premium"; còn lại/lỗi → "standard".
-    """
+    """Trả tier hiện tại: "standard" | "premium" (theo claim đã xác minh chữ ký)."""
     try:
         from core.licensing import client
-        if client.server_configured() and client.has_online_license():
-            return client.current_plan()
+        return client.current_plan()
     except Exception as e:  # pragma: no cover - phòng thủ
-        log.debug("current_plan online check failed: %s", e)
-    # Offline (chưa cấu hình server): đọc tier từ mã đã kích hoạt cục bộ.
-    # Mã Premium offline (checksum theo PREMIUM_SECRET_KEY) → "premium".
-    try:
-        from core.activation import ActivationManager
-        return ActivationManager.offline_plan()
-    except Exception as e:  # pragma: no cover - phòng thủ
-        log.debug("current_plan offline fallback standard: %s", e)
-    return "standard"
+        log.debug("current_plan fallback standard: %s", e)
+        return "standard"
 
 
 def is_premium() -> bool:
     """
-    True khi: có license online gói premium VÀ license còn hiệu lực
-    (đã kích hoạt, chưa hết hạn/grace). Trial → False.
+    True khi: license gói premium VÀ còn hiệu lực (đã kích hoạt, chưa hết hạn,
+    chưa lapse grace). Trial → False.
     """
     try:
         if current_plan() != "premium":

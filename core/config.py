@@ -98,19 +98,25 @@ TEMP_AUDIO_PREFIX = "qls_tmp_"
 # --- APP CONFIG (read-only, nằm cạnh exe → APP_DIR) ---
 APP_CONFIG_FILE = "app_config.json"
 
+# URL server license mặc định — HẰNG SỐ TRONG CODE, cố tình không đọc từ file.
+# app_config.json nằm cạnh exe và người dùng sửa được; nếu URL chỉ nằm ở đó thì
+# xoá một dòng là app mất đường kiểm tra license. Cho phép trỏ sang server khác
+# qua app_config.json, nhưng không cho phép bỏ trống.
+DEFAULT_LICENSE_SERVER_URL = "https://qlstudio.duckdns.org"
+
 # Defaults nếu file không tồn tại hoặc thiếu field
 _DEFAULT_APP_CONFIG = {
     "midi_port_name": "QuangLuuMIDI",
-    # URL server license/update/crash. Rỗng = chế độ kích hoạt offline cũ (fallback).
-    # VD: "https://license.quangluustudio.com"
-    "license_server_url": "",
+    # URL server license/update/crash. Bỏ trống → dùng DEFAULT_LICENSE_SERVER_URL.
+    # Chỉ đặt giá trị khác khi cần trỏ sang server nội bộ/staging.
+    "license_server_url": DEFAULT_LICENSE_SERVER_URL,
     "youtube_cookie_browser": "auto",
     "youtube_cookie_profile": "",
     "youtube_cookie_file": "",
     # ── MIDI CC mapping ──────────────────────────────────────
     # QUAN TRỌNG: mỗi chức năng có nút vật lý riêng phải có CC DUY NHẤT.
     # Caller tra theo TÊN key (vd MIDI_CC.get("fix_meo")), KHÔNG theo số —
-    # nên chỉ cần đổi số, không đổi tên. Dải CC trống còn lại: 43-44, 48-49.
+    # nên chỉ cần đổi số, không đổi tên. Dải CC trống còn lại: 43-44, 49.
     "midi_cc": {
         "tone_music": 10, "tone_voice": 11,
         "mix_music": 20, "mix_mic": 21, "mix_reverb": 22, "mix_backing": 23,
@@ -129,7 +135,9 @@ _DEFAULT_APP_CONFIG = {
         #        tools.py:187. TÁCH khỏi 36. (41–44 đã bị mute_multi_cc.mix_reverb dùng)
         # be (47): nút Bè — bật/tắt hiệu ứng bè giọng trên Studio One.
         #        KHÁC mix_backing (23, âm lượng bè) và mute_backing (53).
-        "tune_on_off": 36, "tone_auto": 40, "fix_meo": 45, "be": 47,
+        # tat_on (48): nút Tắt Ồn — bật/tắt bộ khử ồn (noise gate) cho mic.
+        #        KHÁC mute_mic (51, tắt hẳn tiếng mic): nút này chỉ chặn tiếng ồn nền.
+        "tune_on_off": 36, "tone_auto": 40, "fix_meo": 45, "be": 47, "tat_on": 48,
         # mode_danca (46): TÁCH khỏi 30 để không đè live-tuner "mode".
         #        Nút Dân Ca thật đi qua mode_config["Dân Ca"]["cc"], nay cũng = 46
         #        để đồng bộ với key này (xem mode_config bên dưới).
@@ -513,7 +521,8 @@ class UiConfigManager:
             {"id": "btn_rescan", "type": "button", "label": "Dò Lại", "color": "#14b8a6", "action": "force_rescan", "desc": "Buộc dò lại tone bài hát đang phát", "hidden": False},
             {"id": "btn_autotune", "type": "button", "label": "Auto-Tune", "color": "#ec4899", "action": "tone_auto", "desc": "Bật tắt Auto-Tune trên Studio One", "hidden": False},
             {"id": "btn_fixmeo", "type": "button", "label": "Fix Méo", "color": "#8b5cf6", "action": "fix_meo", "desc": "Bật tắt chế độ chống méo giọng", "hidden": False},
-            {"id": "btn_be", "type": "button", "label": "Bè", "color": "#eab308", "action": "be", "desc": "Bật tắt hiệu ứng bè giọng", "hidden": False}
+            {"id": "btn_be", "type": "button", "label": "Bè", "color": "#eab308", "action": "be", "desc": "Bật tắt hiệu ứng bè giọng", "hidden": False},
+            {"id": "btn_tat_on", "type": "button", "label": "Tắt Ồn", "color": "#3b82f6", "action": "tat_on", "desc": "Bật tắt bộ khử tiếng ồn nền cho mic", "hidden": False}
         ],
         "mode": [
             {"id": "mode_danca", "type": "button", "label": "Dân Ca", "color": "#ec4899", "action": "set_mode_danca", "hidden": False},
@@ -524,11 +533,37 @@ class UiConfigManager:
     }
 
     @staticmethod
+    def _merge_new_defaults(ui_config):
+        """Thêm các widget mặc định MỚI mà ui_config.json của user chưa có.
+
+        ui_config.json được ghi đè nguyên khối mỗi lần user sửa layout ở Dev Mode,
+        nên nếu chỉ đọc file thì nút mới thêm vào bản cập nhật sẽ KHÔNG BAO GIỜ
+        hiện ra với máy đã dùng app từ trước. Ở đây ta so theo "id": id nào có
+        trong mặc định mà file thiếu thì nối vào cuối panel tương ứng.
+
+        Không đụng tới entry user đã có (kể cả khi họ đổi nhãn/màu/CC hoặc đặt
+        hidden=True) — chỉ bổ sung cái còn thiếu.
+        """
+        for panel, defaults in UiConfigManager._DEFAULT_UI_CONFIG.items():
+            entries = ui_config.get(panel)
+            if not isinstance(entries, list):
+                # Panel thiếu hẳn (file cũ/hỏng) → lấy nguyên bản mặc định
+                ui_config[panel] = copy.deepcopy(defaults)
+                continue
+            have = {e.get("id") for e in entries if isinstance(e, dict)}
+            for d in defaults:
+                if d.get("id") not in have:
+                    entries.append(copy.deepcopy(d))
+        return ui_config
+
+    @staticmethod
     def load_ui_config():
         if os.path.exists(UI_CONFIG_FILE):
             try:
                 with open(UI_CONFIG_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    user_config = json.load(f)
+                if isinstance(user_config, dict):
+                    return UiConfigManager._merge_new_defaults(user_config)
             except Exception:
                 pass
         return copy.deepcopy(UiConfigManager._DEFAULT_UI_CONFIG)

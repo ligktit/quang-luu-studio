@@ -92,6 +92,15 @@ Từ:  studio_one\QuangLuuMIDI.surface.xml
 | Nhạc | 42 | Button | 0/127 | Toggle nhạc |
 | Fix Méo | 43 | Button | 0/127 | Toggle fix méo |
 
+### Nút chức năng trên app (nguồn: `core/config.py` → `midi_cc`)
+| Control | CC | Loại | Values | Chức năng |
+|---------|-----|------|--------|-----------|
+| Auto-Tune | 40 | Button | 0/127 | Nút Auto-Tune thật trên app |
+| Fix Méo | 45 | Button | 0/127 | Toggle chống méo giọng |
+| Mode Dân Ca | 46 | Button | 0/127 | Chế độ Dân Ca |
+| Bè | 47 | Button | 0/127 | Toggle hiệu ứng bè giọng |
+| Tắt Ồn | 48 | Button | 0/127 | Bật/tắt khử tiếng ồn nền cho mic |
+
 ### Mixer Mute Toggles (Icon buttons bên dưới thanh cuộn)
 | Control | CC | Loại | Values | Chức năng |
 |---------|-----|------|--------|-----------|

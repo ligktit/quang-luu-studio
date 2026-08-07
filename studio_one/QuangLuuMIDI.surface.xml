@@ -30,6 +30,7 @@
   - CC 45:    Fix Méo (button) — nút thật trên app, TÁCH khỏi 36
   - CC 46:    Mode Dân Ca (button) — TÁCH khỏi 30
   - CC 47:    Bè (button)
+  - CC 48:    Tắt Ồn — khử ồn mic (button)
   - CC 50-53: Mute toggles (buttons)
 -->
 <ControlSurface name="QuangLuuMIDI" 
@@ -158,6 +159,13 @@
          KHÁC mixBacking (CC 23, âm lượng bè) và muteBacking (CC 53). -->
     <Control name="be" title="Bè" type="button" options="receive public">
       <MidiMessage status="#B0" address="47"/>
+    </Control>
+
+    <!-- tat_on: Bật/tắt bộ khử tiếng ồn nền cho mic (0=Off, 127=On) — CC 48.
+         KHÁC muteMic (CC 51, tắt hẳn kênh mic): control này chỉ đóng/mở
+         noise gate nên người hát vẫn nghe được giọng mình. -->
+    <Control name="tatOn" title="Tắt Ồn" type="button" options="receive public">
+      <MidiMessage status="#B0" address="48"/>
     </Control>
 
     <!-- ============================================ -->

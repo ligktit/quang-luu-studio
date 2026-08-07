@@ -471,6 +471,11 @@ class SettingsDialog(QDialog):
         self._combo_lb, self._combo_mic = self._create_audio_combos(settings)
         lay.addWidget(self._section_card(self._build_audio))
 
+        # Vang tự động theo nhạc (Premium)
+        lay.addWidget(self._section_header(SVG_MIC, "Vang tự động theo nhạc (Premium)"))
+        self._build_auto_echo_widgets(settings)
+        lay.addWidget(self._section_card(self._build_auto_echo))
+
         lay.addWidget(self._section_header(SVG_SETTINGS, "Calibration"))
         cal_btn = QPushButton("Mở Calibration Auto-Tune")
         cal_btn.setIcon(self._svg_icon(SVG_SETTINGS, "white", 17))
@@ -484,6 +489,53 @@ class SettingsDialog(QDialog):
 
         lay.addStretch()
         return tab
+
+    def _build_auto_echo_widgets(self, settings):
+        """Ô bật "tự động bật/tắt Vang theo nhạc" — tính năng Premium.
+
+        Standard vẫn THẤY ô này (để biết Premium có gì) nhưng tick vào sẽ mở
+        dialog nâng cấp và ô tự bỏ tick — giống cách Cloud Sync đang làm.
+        """
+        self._cb_auto_echo = QCheckBox("Tự bật Vang khi có nhạc, tự tắt Vang khi hết nhạc")
+        self._cb_auto_echo.setStyleSheet(self._checkbox_qss)
+        self._cb_auto_echo.setChecked(bool(settings.get("auto_echo_enabled", False)))
+        self._cb_auto_echo.setToolTip(
+            "Nhạc chạy → mở kênh Vang. Hết nhạc (dừng/chuyển bài) → tắt Vang "
+            "sau khoảng 3 giây, để nói chuyện giữa các bài không bị vọng."
+        )
+        self._cb_auto_echo.toggled.connect(self._on_auto_echo_toggled)
+
+    def _on_auto_echo_toggled(self, checked):
+        if not checked:
+            return
+        try:
+            from core import entitlements
+            if entitlements.has_feature("auto_echo"):
+                return
+            from ui.dialogs.premium_dialog import PremiumUpsellDialog
+            dlg = PremiumUpsellDialog("auto_echo", "Vang tự động theo nhạc", self)
+            if dlg.exec() == QDialog.Accepted:
+                self._dashboard._open_activation_upgrade()
+                if entitlements.has_feature("auto_echo"):
+                    return  # đã nâng cấp xong → giữ tick
+        except Exception as e:
+            print(f"[AUTO ECHO] kiểm tra quyền lỗi: {e}")
+        # Chưa có quyền → bỏ tick (chặn signal để không gọi lại chính mình)
+        self._cb_auto_echo.blockSignals(True)
+        self._cb_auto_echo.setChecked(False)
+        self._cb_auto_echo.blockSignals(False)
+
+    def _build_auto_echo(self, vl):
+        vl.setSpacing(8)
+        self._cb_auto_echo.setMinimumHeight(34)
+        vl.addWidget(self._cb_auto_echo)
+        note = QLabel(
+            "Chỉ tác động lúc nhạc bắt đầu và lúc nhạc dừng — giữa chừng bạn vẫn "
+            "chỉnh Vang bằng tay như thường."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(self._field_label_qss(11, C["text_muted"], 600, True))
+        vl.addWidget(note)
 
     def _build_tools_tab(self):
         tab = QWidget()
@@ -1239,6 +1291,8 @@ class SettingsDialog(QDialog):
         if hasattr(self, "_cb_embedded_player"):
             s["use_embedded_player"]    = self._cb_embedded_player.isChecked()
             s["display_monitor_index"]  = max(0, self._combo_monitor.currentIndex())
+        if hasattr(self, "_cb_auto_echo"):
+            s["auto_echo_enabled"]      = self._cb_auto_echo.isChecked()
 
         acc = backend.AppConfig.get("accessibility") or {}
         if hasattr(self, "_cb_tts"):
@@ -1271,6 +1325,13 @@ class SettingsDialog(QDialog):
                 self._dashboard._apply_embedded_player_setting()
         except Exception as e:
             print(f"[SETTINGS] apply embedded player lỗi: {e}")
+
+        # Áp dụng Vang tự động ngay (bật/tắt vòng theo dõi nhạc)
+        try:
+            if hasattr(self._dashboard, "_apply_auto_echo_setting"):
+                self._dashboard._apply_auto_echo_setting()
+        except Exception as e:
+            print(f"[SETTINGS] apply auto echo lỗi: {e}")
 
         self._dashboard._show_message("Đã lưu thiết lập")
         self.close()

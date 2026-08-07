@@ -245,6 +245,8 @@ def build_panel_tools(dashboard) -> GlassPanel:
             btn.setActive(getattr(dashboard, "fix_meo_state", False))
         elif text == "Bè":
             btn.setActive(getattr(dashboard, "be_state", False))
+        elif text == "Tắt Ồn":
+            btn.setActive(getattr(dashboard, "tat_on_state", False))
             
         # --- Dev Mode Context Menu ---
         if getattr(dashboard, "is_dev_mode", False):

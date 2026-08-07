@@ -329,13 +329,190 @@ def test_be_cc_not_shared_with_other_controls(qapp, mock_engine, qtbot):
     assert not others, f"CC {cc_map['be']} của Bè bị dùng chung với: {others}"
 
 
+def test_tat_on_button_toggles_cc(qapp, mock_engine, qtbot):
+    # Nút Tắt Ồn (TOOLS): toggle khử ồn mic qua CC "tat_on" — có ở MỌI phiên bản.
+    from PySide6.QtCore import Qt
+    import backend
+
+    dashboard = _make_dashboard(qtbot)
+    expected_cc = int(backend.AppConfig.get_midi_cc()["tat_on"])
+
+    btn = dashboard._func_buttons.get("Tắt Ồn")
+    assert btn is not None, "Panel TOOLS phải dựng được nút Tắt Ồn"
+    assert dashboard.tat_on_state is False
+    assert btn._active is False
+
+    mock_engine.send_midi.reset_mock()
+    qtbot.mouseClick(btn, Qt.LeftButton)
+    assert dashboard.tat_on_state is True
+    assert btn._active is True
+    mock_engine.send_midi.assert_called_once_with(expected_cc, 127)
+
+    mock_engine.send_midi.reset_mock()
+    qtbot.mouseClick(btn, Qt.LeftButton)
+    assert dashboard.tat_on_state is False
+    assert btn._active is False
+    mock_engine.send_midi.assert_called_once_with(expected_cc, 0)
+
+
+def test_tat_on_button_syncs_from_midi(qapp, mock_engine, qtbot):
+    # Studio One đổi state → nút Tắt Ồn sáng/tắt theo (feedback ngược).
+    import backend
+
+    dashboard = _make_dashboard(qtbot)
+    cc = int(backend.AppConfig.get_midi_cc()["tat_on"])
+    btn = dashboard._func_buttons["Tắt Ồn"]
+
+    dashboard._on_midi_cc_received(cc, 127)
+    assert dashboard.tat_on_state is True
+    assert btn._active is True
+
+    dashboard._on_midi_cc_received(cc, 0)
+    assert dashboard.tat_on_state is False
+    assert btn._active is False
+
+
+def test_tat_on_cc_not_shared_with_other_controls(qapp, mock_engine, qtbot):
+    # CC riêng — trùng số với nút khác thì bấm cái này lật trạng thái cái kia.
+    import backend
+    cc_map = backend.AppConfig.get_midi_cc()
+    others = [k for k, v in cc_map.items() if v == cc_map["tat_on"] and k != "tat_on"]
+    assert not others, f"CC {cc_map['tat_on']} của Tắt Ồn bị dùng chung với: {others}"
+
+
+# ── Vang tự động theo nhạc (Premium) ────────────────────────────────────────
+
+def _auto_echo_dashboard(qtbot, premium=True, enabled=True):
+    dashboard = _make_dashboard(qtbot)
+    dashboard.settings["auto_echo_enabled"] = enabled
+    patcher = patch("core.entitlements.has_feature",
+                    side_effect=lambda name: premium or name != "auto_echo")
+    patcher.start()
+    qtbot.addWidget(dashboard)
+    dashboard._set_reverb_muted = MagicMock()
+    return dashboard, patcher
+
+
+def _stop_auto_echo(dashboard, patcher):
+    """Dừng timer thật + gỡ patch entitlements sau mỗi test."""
+    dashboard.settings["auto_echo_enabled"] = False
+    if dashboard._auto_echo_timer is not None:
+        dashboard._auto_echo_timer.stop()
+        dashboard._auto_echo_timer = None
+    patcher.stop()
+
+
+def test_auto_echo_requires_premium(qapp, mock_engine, qtbot):
+    # Standard bật thiết lập cũng KHÔNG chạy vòng theo dõi nhạc.
+    dashboard, patcher = _auto_echo_dashboard(qtbot, premium=False)
+    try:
+        dashboard._apply_auto_echo_setting()
+        assert dashboard._auto_echo_timer is None
+    finally:
+        patcher.stop()
+
+
+def test_auto_echo_off_when_setting_disabled(qapp, mock_engine, qtbot):
+    # Premium nhưng chưa bật trong Cài đặt → không theo dõi.
+    dashboard, patcher = _auto_echo_dashboard(qtbot, premium=True, enabled=False)
+    try:
+        dashboard._apply_auto_echo_setting()
+        assert dashboard._auto_echo_timer is None
+    finally:
+        patcher.stop()
+
+
+def test_auto_echo_opens_and_closes_reverb(qapp, mock_engine, qtbot):
+    # Premium + bật: có nhạc → mở Vang; hết nhạc (đủ số nhịp) → tắt Vang.
+    dashboard, patcher = _auto_echo_dashboard(qtbot, premium=True)
+    try:
+        dashboard._music_is_playing = MagicMock(return_value=False)
+        dashboard._apply_auto_echo_setting()
+        assert dashboard._auto_echo_timer is not None
+        assert dashboard._auto_echo_playing is False
+
+        # Nhạc chạy → mở Vang ngay ở nhịp đầu
+        dashboard._music_is_playing.return_value = True
+        dashboard._auto_echo_tick()
+        dashboard._set_reverb_muted.assert_called_once_with(False)
+
+        # Nhạc dừng: các nhịp đầu chưa lật (chống rung khi tua/chuyển bài)
+        dashboard._set_reverb_muted.reset_mock()
+        dashboard._music_is_playing.return_value = False
+        for _ in range(dashboard._AUTO_ECHO_OFF_TICKS - 1):
+            dashboard._auto_echo_tick()
+        dashboard._set_reverb_muted.assert_not_called()
+
+        # Đủ số nhịp → tắt Vang
+        dashboard._auto_echo_tick()
+        dashboard._set_reverb_muted.assert_called_once_with(True)
+    finally:
+        _stop_auto_echo(dashboard, patcher)
+
+
+def test_auto_echo_ignores_short_gap(qapp, mock_engine, qtbot):
+    # Nhạc khựng 1 nhịp rồi chạy lại → KHÔNG được tắt Vang.
+    dashboard, patcher = _auto_echo_dashboard(qtbot, premium=True)
+    try:
+        dashboard._music_is_playing = MagicMock(return_value=True)
+        dashboard._apply_auto_echo_setting()
+        assert dashboard._auto_echo_playing is True
+
+        dashboard._music_is_playing.return_value = False
+        dashboard._auto_echo_tick()
+        dashboard._music_is_playing.return_value = True
+        dashboard._auto_echo_tick()
+
+        dashboard._set_reverb_muted.assert_not_called()
+        assert dashboard._auto_echo_playing is True
+    finally:
+        _stop_auto_echo(dashboard, patcher)
+
+
+def test_auto_echo_reverb_mute_uses_mixer_button(qapp, mock_engine, qtbot):
+    # _set_reverb_muted phải đi qua nút mute của Mixer (đồng bộ UI + CC phụ),
+    # và không bấm lại khi trạng thái đã đúng.
+    dashboard = _make_dashboard(qtbot)
+    ch = dashboard._mixer_channels["mix_reverb"]
+
+    assert ch.is_muted() is False
+    dashboard._set_reverb_muted(True)
+    assert ch.is_muted() is True
+    assert dashboard.mute_states["mix_reverb"] is True
+
+    dashboard._set_reverb_muted(True)   # gọi lại: không đổi gì
+    assert ch.is_muted() is True
+
+    dashboard._set_reverb_muted(False)
+    assert ch.is_muted() is False
+
+
+def test_music_is_playing_prefers_embedded_player(qapp, mock_engine, qtbot):
+    # Player nhúng phát bằng QMediaPlayer thì WinRT/CDP không thấy → phải hỏi
+    # thẳng cửa sổ player.
+    dashboard = _make_dashboard(qtbot)
+    mock_engine.cdp_monitor.is_connected = True
+    mock_engine.cdp_monitor.is_playing = False
+    mock_engine.media_monitor.is_playing = False
+
+    assert dashboard._music_is_playing() is False
+
+    dashboard._player_window = MagicMock()
+    dashboard._player_window.is_playing.return_value = True
+    assert dashboard._music_is_playing() is True
+    dashboard._player_window = None
+
+
 def test_quick_score_button(qapp, mock_engine, qtbot):
     # UI-03
+    # Chấm điểm là tính năng Premium → phải giả lập quyền, nếu không test chỉ
+    # pass trên máy đang cắm license Premium (máy Standard sẽ ra dialog upsell).
     with patch("frontend_qt.backend.SongManager.load_songs", return_value=[]), \
          patch("frontend_qt.backend.ActivationManager.is_activated", return_value=True), \
          patch("frontend_qt.backend.ActivationManager.needs_activation", return_value=False), \
+         patch("core.entitlements.has_feature", return_value=True), \
          patch("frontend_qt.QTimer.start"):
-        
+
         dashboard = MainDashboard()
         qtbot.addWidget(dashboard)
         

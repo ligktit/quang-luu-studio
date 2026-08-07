@@ -30,6 +30,22 @@ class LicenseResponse(BaseModel):
     message:        str = ""
 
 
+# ── Trial (dùng thử, neo theo máy) ──
+class TrialRequest(BaseModel):
+    device_fingerprint: str = Field(min_length=8, max_length=128)
+    hostname:           str | None = None
+    os:                 str | None = None
+    app_version:        str | None = None
+
+
+class TrialResponse(BaseModel):
+    allowed:        bool
+    # epoch giây lúc máy này bắt đầu dùng thử (lần đầu tiên, không reset được).
+    started_at:     float = 0.0
+    days_remaining: float = 0.0
+    message:        str = ""
+
+
 # ── Updates ──
 class UpdateCheckResponse(BaseModel):
     """Giữ shape tương thích với core.updater._version_check.ReleaseInfo."""

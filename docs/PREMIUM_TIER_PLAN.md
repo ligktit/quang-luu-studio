@@ -105,6 +105,19 @@ Hàng đợi bài cho buổi live: tự dò tone trước, áp preset, hỗ tr�
 
 ---
 
+## Phase 6 — Vang tự động theo nhạc (`auto_echo`) — ĐÃ LÀM
+
+Có nhạc → mở kênh Vang; hết nhạc → tắt Vang, để MC nói giữa hai bài không bị vọng.
+
+- **Nguồn trạng thái nhạc:** `MainDashboard._music_is_playing()` gom 3 nguồn theo thứ tự ưu tiên — cửa sổ karaoke nhúng (`KaraokePlayerWindow.is_playing()`, vì QMediaPlayer không hiện trong Windows Media Transport Controls) → `cdp_monitor` khi đã kết nối → `media_monitor` (WinRT).
+- **Chống rung:** lấy mẫu 500 ms; bật cần 1 mẫu (~0,5 s), tắt cần 6 mẫu (~3 s) để không rớt Vang khi tua/chuyển bài.
+- **Đường tác động:** bấm chính nút mute của kênh Vang (`_set_reverb_muted`) thay vì gửi CC thẳng — nút Mixer, `mute_states` và `mute_multi_cc` tự đồng bộ theo.
+- **Gate:** `entitlements.has_feature("auto_echo")` + `settings["auto_echo_enabled"]`; ô bật nằm ở Cài đặt → tab Âm thanh, Standard tick vào sẽ thấy dialog nâng cấp.
+
+**Verify:** Premium bật ô này → phát nhạc, Vang tự mở; dừng nhạc 3 s, Vang tự tắt. Standard tick vào → hiện upsell và ô tự bỏ tick.
+
+---
+
 ## Thứ tự triển khai đề xuất
 **Phase 0 → 1** trước (nền + chốt mô hình gate qua 1 tính năng thật). Sau đó 2 (Smart Recall, độc lập, nền cho Phase 5) → 3 (Progress, nhẹ) → 4 (Cloud Sync, nặng server) → 5 (Setlist, phụ thuộc 2). Mỗi phase commit riêng trên branch mới `feat/premium-tier` (KHÔNG commit thẳng `main`).
 

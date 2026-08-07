@@ -83,7 +83,8 @@ def test_activate_default_plan_standard(client):
 
 def test_activate_premium_plan_in_response_and_token(client):
     import jwt
-    from app.config import settings
+
+    from app.security import license_public_key_pem
 
     code = _make_license(plan="premium")
     r = client.post("/api/v1/activate", json={"code": code, "device_fingerprint": "device-aaaaaa"})
@@ -91,8 +92,9 @@ def test_activate_premium_plan_in_response_and_token(client):
     data = r.json()
     # plan có trong response
     assert data["plan"] == "premium"
-    # plan có trong JWT claim (để client biết tier khi offline)
-    claims = jwt.decode(data["token"], settings.license_secret, algorithms=["HS256"])
+    # plan có trong JWT claim (để client biết tier khi offline), ký RS256 để
+    # client tự xác minh được bằng public key nhúng sẵn.
+    claims = jwt.decode(data["token"], license_public_key_pem(), algorithms=["RS256"])
     assert claims["plan"] == "premium"
     # verify cũng giữ plan
     v = client.post("/api/v1/license/verify", json={

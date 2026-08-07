@@ -9,9 +9,13 @@ from slowapi.errors import RateLimitExceeded
 from app.config import settings
 from app.deps import AdminRequired
 from app.routers import activation, admin, crashes, sync, updates
-from app.security import limiter
+from app.security import check_signing_key_ready, limiter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+
+# Chết sớm nếu thiếu khoá ký: server license không có khoá thì mọi lần kích hoạt
+# sẽ lỗi 500 giữa chừng — thà không khởi động được với thông báo rõ ràng.
+check_signing_key_ready()
 
 app = FastAPI(title=settings.app_name, docs_url="/api/docs" if settings.debug else None)
 

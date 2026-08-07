@@ -1,161 +1,59 @@
 """
 Quang Lưu Studio — Activation Manager
 Class: ActivationManager
+
+Kích hoạt CHỈ chạy online: server license là thẩm quyền duy nhất quyết định mã
+có thật, thuộc gói nào, còn hạn không, và được cài trên mấy máy. Client không
+còn thuật toán checksum cục bộ nào — nghĩa là không còn secret nào nằm trong
+file exe để rút ra và tự sinh mã.
+
+Quyền của app đọc từ claims đã xác minh chữ ký của license token
+(core/licensing/client.py), không đọc field thô trong activation.json.
 """
-import os
 import json
+import os
 import time
-import hashlib
 
 from core.config import ACTIVATION_FILE
-
-
-def _online():
-    """Trả module core.licensing.client nếu server được cấu hình, ngược lại None.
-
-    Import lazy để tránh chi phí/khả năng circular import lúc nạp module.
-    Khi app_config.json KHÔNG có 'license_server_url' → trả None → giữ nguyên
-    luồng kích hoạt offline cũ (tương thích ngược hoàn toàn).
-    """
-    try:
-        from core.licensing import client
-        return client if client.server_configured() else None
-    except Exception:
-        return None
+from core.licensing import client as _lic
+from core.licensing import trial_marker
 
 
 class ActivationManager:
     """Quản lý activation code, thời hạn sử dụng, và bản dùng thử"""
 
-    # Thời hạn sử dụng: 1 năm (365 ngày)
-    LICENSE_DURATION_DAYS = 365
-    
-    # Thời hạn dùng thử: 3 ngày
+    # Hạn dùng thử. Server mới là nơi chốt (settings.trial_days) — hằng này chỉ
+    # dùng để hiển thị và để tính tiếp khi máy đã bắt đầu dùng thử rồi mất mạng.
     TRIAL_DURATION_DAYS = 3
-    
-    # Secret key - PHẢI GIỐNG VỚI tools/generate_code.py
-    # Key cũ (placeholder) đã bị lộ trên GitHub → đổi key mới làm mọi code
-    # đã phát hành trước đó (kể cả code bị leak) mất hiệu lực.
-    # Có thể override qua biến môi trường QUANGLUU_STUDIO_SECRET_KEY.
-    SECRET_KEY = os.environ.get(
-        "QUANGLUU_STUDIO_SECRET_KEY",
-        "936c3f6655acc46ba5c41603446addb7e5b25df85c953d003eba554527e267e4"
-    )
-
-    # Secret RIÊNG cho mã Premium *offline*. Mã Premium dùng checksum tính bằng
-    # secret này (khác SECRET_KEY của Standard) → app phân biệt được tier NGAY
-    # CẢ KHI KHÔNG có server. Đổi secret này sẽ vô hiệu mọi mã premium đã phát.
-    # Có thể override qua biến môi trường QUANGLUU_STUDIO_PREMIUM_SECRET.
-    PREMIUM_SECRET_KEY = os.environ.get(
-        "QUANGLUU_STUDIO_PREMIUM_SECRET",
-        "14476200f1a7736b05c54df0c08909f4cea134cf017543325c32f5b1f64d0a74"
-    )
-
-    @staticmethod
-    def _calc_checksum(base_code, secret):
-        """Checksum 4 ký tự HOA từ base_code + secret (md5)."""
-        return hashlib.md5((base_code + secret).encode()).hexdigest()[:4].upper()
-
-    @staticmethod
-    def _detect_plan(code):
-        """Suy ra tier từ checksum: 'premium' | 'standard' | None (không hợp lệ).
-
-        Mã Premium offline dùng PREMIUM_SECRET_KEY; Standard dùng SECRET_KEY.
-        Nhờ vậy app biết mã là Premium mà KHÔNG cần server.
-        """
-        if not ActivationManager._validate_code_structure(code):
-            return None
-        parts = code.strip().upper().split('-')
-        base = '-'.join(parts[:4])
-        provided = parts[4]
-        if provided == ActivationManager._calc_checksum(base, ActivationManager.SECRET_KEY):
-            return "standard"
-        if provided == ActivationManager._calc_checksum(base, ActivationManager.PREMIUM_SECRET_KEY):
-            return "premium"
-        return None
-
-    @staticmethod
-    def offline_plan():
-        """Tier đã lưu khi kích hoạt offline: 'premium' | 'standard'.
-
-        Trial hoặc chưa kích hoạt → 'standard'. Có xử lý tương thích ngược cho
-        activation.json cũ (không có field 'plan') bằng cách suy lại từ checksum.
-        """
-        activation = ActivationManager.load_activation()
-        if not activation:
-            return "standard"
-        plan = activation.get("plan")
-        if plan:
-            return str(plan).lower()
-        code = activation.get("activation_code")
-        if code:
-            detected = ActivationManager._detect_plan(code)
-            if detected:
-                return detected
-        return "standard"
-
 
     @staticmethod
     def _validate_code_structure(code):
-        """Kiểm tra format của code: XXXX-XXXX-XXXX-XXXX-XXXX"""
+        """Kiểm tra format của code: XXXX-XXXX-XXXX-XXXX-XXXX
+
+        Chỉ để báo lỗi nhanh cho người gõ nhầm — KHÔNG phải bước bảo mật.
+        Việc mã có tồn tại thật hay không do server trả lời.
+        """
         if not code:
             return False
-        
+
         code = code.strip().upper()
         parts = code.split('-')
-        
+
         if len(parts) != 5:
             return False
-        
+
         for part in parts:
             if len(part) != 4:
                 return False
             # Mỗi phần phải có chữ và số
             if not any(c.isalpha() for c in part) or not any(c.isdigit() for c in part):
                 return False
-        
+
         return True
-    
-    @staticmethod
-    def _verify_code_checksum(code):
-        """Xác minh checksum của code"""
-        parts = code.split('-')
-        if len(parts) != 5:
-            return False
-        
-        base_code = '-'.join(parts[:4])
-        provided_checksum = parts[4]
-        
-        # Tính checksum
-        checksum_input = base_code + ActivationManager.SECRET_KEY
-        calculated_checksum = hashlib.md5(checksum_input.encode()).hexdigest()[:4].upper()
-        
-        return provided_checksum == calculated_checksum
-    
-    @staticmethod
-    def _validate_code(code):
-        """
-        Xác thực activation code
-        Kiểm tra cả format và checksum
-        """
-        if not code:
-            return False
-        
-        code = code.strip().upper()
-        
-        # Kiểm tra format
-        if not ActivationManager._validate_code_structure(code):
-            return False
-        
-        # Kiểm tra checksum
-        if not ActivationManager._verify_code_checksum(code):
-            return False
-        
-        return True
-    
+
     @staticmethod
     def load_activation():
-        """Load thông tin activation từ file"""
+        """Load thông tin activation từ file (chỉ còn dùng cho dữ liệu dùng thử)."""
         if os.path.exists(ACTIVATION_FILE):
             try:
                 with open(ACTIVATION_FILE, "r", encoding="utf-8") as f:
@@ -163,216 +61,146 @@ class ActivationManager:
             except Exception:
                 return None
         return None
-    
-    @staticmethod
-    def save_activation(code, plan="standard"):
-        """Lưu thông tin activation sau khi kích hoạt thành công.
 
-        `plan` ('standard'|'premium') được lưu để entitlements đọc tier offline.
-        """
-        activation_data = {
-            "activation_code": code.strip().upper(),
-            "activation_date": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "activation_timestamp": time.time(),
-            "plan": str(plan or "standard").lower(),
-        }
-        try:
-            with open(ACTIVATION_FILE, "w", encoding="utf-8") as f:
-                json.dump(activation_data, f, indent=4)
-            return True
-        except Exception as e:
-            print(f"Lỗi lưu activation: {e}")
-            return False
-    
     @staticmethod
     def is_activated():
-        """Kiểm tra xem app đã được kích hoạt chưa"""
-        # Online mode: đã kích hoạt nếu có license token cache.
-        online = _online()
-        if online is not None and online.has_online_license():
-            return True
+        """Máy có license token hợp lệ (đúng chữ ký, đúng máy) hay không."""
+        return _lic.has_online_license()
 
-        activation = ActivationManager.load_activation()
-        if not activation:
-            return False
-
-        # Kiểm tra xem có activation_date không
-        if "activation_date" not in activation:
-            return False
-
-        return True
-    
     @staticmethod
     def is_expired():
-        """Kiểm tra xem activation đã hết hạn chưa (sau 1 năm)"""
-        # Online mode: hết hạn nếu có license nhưng grace đã lapse hoặc license
-        # quá hạn theo server. is_grace_valid() bao cả 2 trường hợp.
-        online = _online()
-        if online is not None and online.has_online_license():
-            return not online.is_grace_valid()
+        """License hết hiệu lực: quá hạn thật, hoặc quá lâu không check-in online."""
+        if not _lic.has_online_license():
+            return True
+        return not _lic.is_grace_valid()
 
-        activation = ActivationManager.load_activation()
-        if not activation:
-            return True  # Chưa kích hoạt = hết hạn
-        
-        # Lấy timestamp từ activation
-        if "activation_timestamp" in activation:
-            activation_time = activation["activation_timestamp"]
-        elif "activation_date" in activation:
-            # Parse date string nếu không có timestamp
-            try:
-                from datetime import datetime
-                activation_time = datetime.strptime(
-                    activation["activation_date"], 
-                    "%Y-%m-%d %H:%M:%S"
-                ).timestamp()
-            except Exception:
-                return True  # Lỗi parse = hết hạn
-        else:
-            return True  # Không có thông tin = hết hạn
-        
-        # Tính số ngày đã trôi qua
-        current_time = time.time()
-        days_passed = (current_time - activation_time) / (24 * 60 * 60)
-        
-        # Kiểm tra xem đã vượt quá thời hạn chưa
-        return days_passed >= ActivationManager.LICENSE_DURATION_DAYS
-    
     @staticmethod
     def get_days_remaining():
-        """Lấy số ngày còn lại của license"""
-        online = _online()
-        if online is not None and online.has_online_license():
-            return online.days_remaining()
+        """Số ngày còn lại của license."""
+        if not _lic.has_online_license():
+            return 0
+        return _lic.days_remaining()
 
-        activation = ActivationManager.load_activation()
-        if not activation:
-            return 0
-        
-        if "activation_timestamp" in activation:
-            activation_time = activation["activation_timestamp"]
-        elif "activation_date" in activation:
-            try:
-                from datetime import datetime
-                activation_time = datetime.strptime(
-                    activation["activation_date"], 
-                    "%Y-%m-%d %H:%M:%S"
-                ).timestamp()
-            except Exception:
-                return 0
-        else:
-            return 0
-        
-        current_time = time.time()
-        days_passed = (current_time - activation_time) / (24 * 60 * 60)
-        days_remaining = ActivationManager.LICENSE_DURATION_DAYS - days_passed
-        
-        return max(0, int(days_remaining))
-    
     @staticmethod
     def activate(code):
         """Kích hoạt app với code được cung cấp. Returns dict: {success: bool, error: str}"""
-        # Online mode: server là thẩm quyền — kiểm format trước cho phản hồi nhanh,
-        # rồi kích hoạt + ràng máy qua server.
-        online = _online()
-        if online is not None:
-            if not ActivationManager._validate_code_structure(code):
-                return {"success": False, "error": "Mã kích hoạt không hợp lệ. Vui lòng kiểm tra lại."}
-            return online.activate_online(code)
-
-        # Offline mode (server chưa cấu hình): checksum cục bộ như cũ.
-        # _detect_plan trả tier từ checksum (premium nếu khớp PREMIUM_SECRET_KEY).
-        plan = ActivationManager._detect_plan(code)
-        if plan is None:
+        if not ActivationManager._validate_code_structure(code):
             return {"success": False, "error": "Mã kích hoạt không hợp lệ. Vui lòng kiểm tra lại."}
+        return _lic.activate_online(code)
 
-        # Lưu activation kèm tier
-        if ActivationManager.save_activation(code, plan):
-            return {"success": True, "error": ""}
-        else:
-            return {"success": False, "error": "Lỗi khi lưu thông tin kích hoạt."}
-    
     @staticmethod
     def needs_activation():
         """Kiểm tra xem app có cần kích hoạt không (cho phép trial qua)"""
         # Đã kích hoạt bằng code và chưa hết hạn
         if ActivationManager.is_activated() and not ActivationManager.is_expired():
             return False
-        
+
         # Đang trong thời gian dùng thử
         if ActivationManager.is_trial_active():
             return False
-        
+
         return True
-    
+
     # ── Trial (Dùng thử) ──
-    
+
+    @staticmethod
+    def _trial_start_ts():
+        """
+        Mốc bắt đầu dùng thử của máy này — lấy mốc SỚM NHẤT trong các nguồn đã
+        biết (file cache + registry). Xoá một nguồn không đẩy được hạn về sau.
+        0.0 nghĩa là máy chưa từng dùng thử.
+        """
+        candidates = []
+
+        activation = ActivationManager.load_activation() or {}
+        try:
+            local = float(activation.get("trial_start") or 0)
+            if local > 0:
+                candidates.append(local)
+        except (TypeError, ValueError):
+            pass
+
+        registry = trial_marker.read()
+        if registry > 0:
+            candidates.append(registry)
+
+        return min(candidates) if candidates else 0.0
+
+    @staticmethod
+    def _remember_trial_start(started_at):
+        """Ghi mốc bắt đầu vào cả file cache lẫn registry."""
+        started_at = float(started_at)
+        activation = ActivationManager.load_activation() or {}
+        existing = 0.0
+        try:
+            existing = float(activation.get("trial_start") or 0)
+        except (TypeError, ValueError):
+            existing = 0.0
+        # Không cho ghi đè bằng mốc muộn hơn (chống kéo dài hạn).
+        if not existing or started_at < existing:
+            activation["trial_start"] = started_at
+            try:
+                with open(ACTIVATION_FILE, "w", encoding="utf-8") as f:
+                    json.dump(activation, f, indent=4)
+            except Exception as e:
+                print(f"Lỗi lưu trial: {e}")
+        trial_marker.write(started_at)
+
     @staticmethod
     def start_trial():
         """
-        Bắt đầu dùng thử 3 ngày. Lưu timestamp lần đầu mở app.
-        Nếu đã có trial trước đó → không reset (chống gian lận).
-        Returns: dict {success: bool, days_remaining: int}
+        Bắt đầu dùng thử 3 ngày. Server neo theo fingerprint máy nên xoá dữ liệu
+        dưới máy không xin lại được lần hai.
+        Returns: dict {success: bool, days_remaining: float, error: str}
         """
-        activation = ActivationManager.load_activation() or {}
-        
-        # Nếu đã có trial_start → không cho bắt đầu lại
-        if "trial_start" in activation:
-            remaining = ActivationManager.get_trial_days_remaining()
-            if remaining > 0:
-                return {"success": True, "days_remaining": remaining}
-            else:
-                return {"success": False, "days_remaining": 0}
-        
-        # Lần đầu → ghi trial_start
-        activation["trial_start"] = time.time()
-        try:
-            with open(ACTIVATION_FILE, "w", encoding="utf-8") as f:
-                json.dump(activation, f, indent=4)
-            return {"success": True, "days_remaining": ActivationManager.TRIAL_DURATION_DAYS}
-        except Exception as e:
-            print(f"Lỗi lưu trial: {e}")
-            return {"success": False, "days_remaining": 0}
-    
+        result = _lic.start_trial_online()
+
+        if result.get("success"):
+            ActivationManager._remember_trial_start(result["started_at"])
+            return {
+                "success": True,
+                "days_remaining": result.get("days_remaining", ActivationManager.TRIAL_DURATION_DAYS),
+                "error": "",
+            }
+
+        # Server đã cấp trước đó nhưng hết hạn → ghi lại mốc để lần sau khỏi hỏi.
+        started_at = result.get("started_at") or 0.0
+        if started_at:
+            ActivationManager._remember_trial_start(started_at)
+
+        return {
+            "success": False,
+            "days_remaining": 0,
+            "error": result.get("error", "Thời gian dùng thử đã hết."),
+        }
+
     @staticmethod
     def is_trial_active():
         """Kiểm tra xem đang trong thời gian dùng thử hay không"""
-        activation = ActivationManager.load_activation()
-        if not activation:
-            return False
-        
-        trial_start = activation.get("trial_start")
+        trial_start = ActivationManager._trial_start_ts()
         if not trial_start:
             return False
-        
+
         days_passed = (time.time() - trial_start) / (24 * 60 * 60)
         return days_passed < ActivationManager.TRIAL_DURATION_DAYS
-    
+
     @staticmethod
     def get_trial_days_remaining():
         """Lấy số ngày dùng thử còn lại"""
-        activation = ActivationManager.load_activation()
-        if not activation:
-            return 0
-        
-        trial_start = activation.get("trial_start")
+        trial_start = ActivationManager._trial_start_ts()
         if not trial_start:
             return 0
-        
+
         days_passed = (time.time() - trial_start) / (24 * 60 * 60)
         remaining = ActivationManager.TRIAL_DURATION_DAYS - days_passed
         return max(0, remaining)
-    
+
     @staticmethod
     def is_trial_expired():
         """Kiểm tra xem trial đã hết hạn chưa"""
-        activation = ActivationManager.load_activation()
-        if not activation:
-            return False  # Chưa bắt đầu trial
-        
-        trial_start = activation.get("trial_start")
+        trial_start = ActivationManager._trial_start_ts()
         if not trial_start:
             return False  # Chưa bắt đầu trial
-        
+
         days_passed = (time.time() - trial_start) / (24 * 60 * 60)
         return days_passed >= ActivationManager.TRIAL_DURATION_DAYS

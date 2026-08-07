@@ -71,6 +71,8 @@ settings.json
 tone_cache.json
 manual_timelines.json
 ui_config.json
+accessibility_overrides.json
+calibration_overrides.json
 crash_queue.json
 activation_codes.txt
 cdp_profile/

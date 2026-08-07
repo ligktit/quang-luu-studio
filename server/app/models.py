@@ -73,6 +73,24 @@ class Device(Base):
     license: Mapped["License"] = relationship(back_populates="devices")
 
 
+class TrialGrant(Base):
+    """Bản dùng thử đã cấp cho một máy, neo theo device fingerprint.
+
+    Đây là nguồn chân lý cho hạn dùng thử: xoá activation.json dưới máy người
+    dùng không reset được, vì lần xin dùng thử tiếp theo server vẫn trả về
+    started_at cũ của chính fingerprint đó.
+    """
+    __tablename__ = "trial_grants"
+
+    id:          Mapped[int] = mapped_column(Integer, primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    hostname:    Mapped[str | None] = mapped_column(String(200), nullable=True)
+    os:          Mapped[str | None] = mapped_column(String(200), nullable=True)
+    app_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    started_at:  Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen:   Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class AppVersion(Base):
     __tablename__ = "app_versions"
 

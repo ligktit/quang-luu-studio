@@ -320,6 +320,12 @@ Không có (urllib + zipfile + json stdlib). Không `requests`/`sentry-sdk` đ�
 
 ## Feature 5: Licensing nâng cấp
 
+> **ĐÃ LỖI THỜI (2026-08-04).** Phần này mô tả phương án ký bản ghi bằng HMAC với
+> secret nằm trong client — phương án đó KHÔNG được dùng, vì secret nằm trong exe
+> thì người dùng rút ra được. Bản đã triển khai dùng license token ký RS256, client
+> chỉ mang public key, và bỏ hẳn kích hoạt offline. Xem `docs/LICENSING_HARDENING.md`
+> và `core/licensing/jwt_verify.py`. Giữ lại phần dưới làm hồ sơ lịch sử.
+
 ### Mục tiêu
 - **Phase 1 (offline):** code gắn máy (HWID), bản ghi activation có chữ ký chống sửa, phát hiện vặn ngược đồng hồ, chống reset trial — **giữ nguyên UX nhập code**.
 - **Phase 2 (online, tuỳ chọn):** server license tối giản, activate/validate/deactivate, grace period offline, migrate khách cũ.

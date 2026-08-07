@@ -20,6 +20,7 @@ _FEATURE_BLURB = {
     "cloud_sync":   "Đồng bộ thư viện bài, timeline và lịch sử điểm qua nhiều thiết bị.",
     "progress":     "Theo dõi tiến bộ luyện hát qua biểu đồ điểm số theo thời gian.",
     "setlist":      "Hàng đợi bài cho buổi live: tự dò tone trước và chuyển bài mượt mà.",
+    "auto_echo":    "Tự mở Vang khi nhạc chạy và tắt Vang khi hết nhạc — nói chuyện giữa bài không bị vọng.",
 }
 
 

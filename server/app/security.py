@@ -2,15 +2,21 @@
 Bảo mật: license token (JWT), hash mật khẩu admin, session cookie admin, rate-limit.
 """
 import hashlib
+import logging
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
+from pathlib import Path
 
 import jwt
+from cryptography.hazmat.primitives import serialization
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from passlib.context import CryptContext
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.config import settings
+
+log = logging.getLogger(__name__)
 
 # ── Rate limiter (gắn vào app.state.limiter trong main.py) ──
 limiter = Limiter(key_func=get_remote_address)
@@ -30,8 +36,55 @@ def verify_password(raw: str, hashed: str) -> bool:
         return False
 
 
-# ── License token (JWT ký bằng license_secret) ──
-_ALGO = "HS256"
+# ── License token (JWT ký RS256 bằng private key RSA) ──
+_ALGO = "RS256"
+_LEGACY_ALGO = "HS256"
+
+_MISSING_KEY_HINT = (
+    "Chưa cấu hình khoá ký license. Sinh bằng:\n"
+    "    python -m app.cli gen-license-keys\n"
+    "rồi đặt LICENSE_PRIVATE_KEY (PEM) vào .env, hoặc trỏ "
+    "LICENSE_PRIVATE_KEY_PATH tới file .pem."
+)
+
+
+@lru_cache(maxsize=1)
+def _private_key():
+    """Nạp private key RSA một lần. Raise nếu chưa cấu hình — server license
+    không được phép chạy ở chế độ 'ký bằng khoá mặc định'."""
+    pem = (settings.license_private_key or "").strip()
+    if not pem:
+        path = Path(settings.license_private_key_path)
+        if path.is_file():
+            pem = path.read_text(encoding="utf-8").strip()
+    if not pem:
+        raise RuntimeError(_MISSING_KEY_HINT)
+    # PEM dán vào .env thường bị nuốt xuống dòng — khôi phục lại '\n'.
+    pem = pem.replace("\\n", "\n")
+    return serialization.load_pem_private_key(pem.encode("utf-8"), password=None)
+
+
+@lru_cache(maxsize=1)
+def _public_key():
+    return _private_key().public_key()
+
+
+def license_public_key_pem() -> str:
+    return _public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+
+
+def license_public_modulus_hex() -> str:
+    """Modulus hex HOA — giá trị nhúng vào core/licensing/jwt_verify.py của client."""
+    n = _public_key().public_numbers().n
+    return f"{n:X}"
+
+
+def check_signing_key_ready() -> None:
+    """Gọi lúc khởi động để chết sớm với thông báo rõ, thay vì lỗi 500 lúc kích hoạt."""
+    _private_key()
 
 
 def issue_license_token(
@@ -40,7 +93,8 @@ def issue_license_token(
     """
     Sinh license token cho client cache. exp = min(grace_days, license expiry).
     Client chạy offline tới khi token hết hạn thì phải verify lại online.
-    Claim `plan` cho phép client biết tier (standard|premium) cả khi offline.
+    Claim `plan` cho phép client biết tier (standard|premium) cả khi offline —
+    và vì token ký RS256, client tự xác minh được là plan không bị sửa tay.
     """
     now = datetime.now(timezone.utc)
     grace_exp = now + timedelta(days=settings.grace_days)
@@ -55,14 +109,30 @@ def issue_license_token(
         "exp":  int(exp.timestamp()),
         "lexp": int(expires_at.timestamp()) if expires_at else 0,  # hạn license thật
     }
-    return jwt.encode(payload, settings.license_secret, algorithm=_ALGO)
+    return jwt.encode(payload, _private_key(), algorithm=_ALGO)
 
 
 def decode_license_token(token: str) -> dict | None:
+    """
+    Đọc token client gửi lên. Nhận RS256 (hiện hành) và HS256 (token cũ, chỉ khi
+    LICENSE_SECRET còn được cấu hình) để máy chưa cập nhật vẫn check-in được —
+    lần check-in đó sẽ trả về token RS256 mới.
+    """
     try:
-        return jwt.decode(token, settings.license_secret, algorithms=[_ALGO])
+        return jwt.decode(token, _public_key(), algorithms=[_ALGO])
     except jwt.PyJWTError:
-        return None
+        pass
+
+    legacy_secret = (settings.license_secret or "").strip()
+    if legacy_secret:
+        try:
+            claims = jwt.decode(token, legacy_secret, algorithms=[_LEGACY_ALGO])
+            log.info("Chấp nhận token HS256 cũ của mã %s — sẽ cấp lại token RS256",
+                     claims.get("code"))
+            return claims
+        except jwt.PyJWTError:
+            pass
+    return None
 
 
 # ── Admin session cookie ──

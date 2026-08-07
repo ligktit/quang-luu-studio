@@ -133,6 +133,7 @@ class KaraokePlayerWindow(QMainWindow):
 
         self._active_backend = "web"     # "web" | "native"
         self._current_video_id = None
+        self._web_playing = False        # theo YT.PlayerState (1 = PLAYING)
 
         # ── Backend 1: WebEngine IFrame ──────────────────────────────────────
         self._view = QWebEngineView()
@@ -259,8 +260,26 @@ class KaraokePlayerWindow(QMainWindow):
             self.load_video(vid)
 
     def _on_state_changed(self, state):
+        self._web_playing = (state == 1)  # PLAYING
         if state == 0:  # ENDED
             self.video_ended.emit()
+
+    def is_playing(self) -> bool:
+        """Có đang phát không — hỏi đúng backend đang hoạt động.
+
+        Nhạc phát bằng QMediaPlayer (backend native) KHÔNG hiện trong Windows
+        Media Transport Controls, nên dashboard phải hỏi thẳng cửa sổ này thay
+        vì dựa vào media_monitor (xem MainDashboard._music_is_playing).
+        """
+        if self._active_backend == "native":
+            if self._media is None:
+                return False
+            try:
+                from PySide6.QtMultimedia import QMediaPlayer
+                return self._media.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+            except Exception:
+                return False
+        return self._web_playing
 
     def _on_error(self, code):
         if code in self._EMBED_ERROR_CODES:

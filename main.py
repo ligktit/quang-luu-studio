@@ -165,30 +165,85 @@ def _license_or_trial_expired():
     return (am.is_activated() and am.is_expired()) or am.is_trial_expired()
 
 
-def _background_maintenance():
-    """Nền (daemon): flush crash queue + re-verify license online để làm mới grace."""
+class _LicenseNotifier(QObject):
+    """Cầu nối thread cho cảnh báo license (worker → dialog ở main thread)."""
+    license_lost = Signal(str)
+
+
+def _show_license_lost_dialog(message):
+    """Slot main-thread: báo license không còn hiệu lực giữa phiên đang chạy.
+
+    Cố tình KHÔNG đóng app: máy này thường đang hát trực tiếp trước khán giả.
+    Quyền Premium đã bị thu ngay khi cache bị xoá; cổng kích hoạt sẽ chặn ở lần
+    mở app kế tiếp.
+    """
+    try:
+        from PySide6.QtWidgets import QMessageBox
+        box = QMessageBox()
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Giấy phép không còn hiệu lực")
+        box.setText(message)
+        box.setInformativeText(
+            "Các tính năng Premium đã được tắt. Buổi đang chạy vẫn tiếp tục, "
+            "nhưng lần mở app sau sẽ cần kích hoạt lại."
+        )
+        box.exec()
+    except Exception as e:
+        log.warning("Không hiện được cảnh báo license: %s", e)
+
+
+# Khoảng cách giữa hai lần check-in trong cùng một phiên. Máy hát thường mở
+# liên tục nhiều ngày; nếu chỉ check-in lúc khởi động thì lệnh thu hồi phải chờ
+# tới lần khởi động sau mới tới nơi.
+_LICENSE_RECHECK_SECONDS = 6 * 3600
+_LICENSE_LOST_STATUSES = frozenset({"revoked", "expired", "not_activated", "invalid"})
+
+
+def _background_maintenance(notifier=None):
+    """
+    Nền (daemon): flush crash queue, rồi lặp check-in license + cloud sync.
+
+    Vòng lặp ngủ theo lát nhỏ để process thoát dứt điểm khi user đóng app.
+    """
+    import time as _t
+
     try:
         from core.crash_reporter import flush_queue
         flush_queue()
     except Exception as e:
         log.debug("crash flush skipped: %s", e)
-    try:
-        from core.licensing import client as _lic
-        if _lic.server_configured() and _lic.has_online_license():
-            result = _lic.verify_online()
-            if result.get("status") == "revoked":
-                log.warning("License đã bị thu hồi từ server")
-    except Exception as e:
-        log.debug("license re-verify skipped: %s", e)
-    # Cloud Sync nền (Premium). Fail-soft: lỗi mạng/không cấu hình → bỏ qua.
-    try:
-        from core import entitlements
-        if entitlements.is_premium():
-            from core.licensing import sync as _sync
-            res = _sync.sync_all()
-            log.info("Cloud sync nền: %s", res.get("results", res))
-    except Exception as e:
-        log.debug("cloud sync skipped: %s", e)
+
+    while True:
+        try:
+            from core.licensing import client as _lic
+            if _lic.has_online_license():
+                result = _lic.verify_online()
+                status = result.get("status")
+                if status in _LICENSE_LOST_STATUSES:
+                    # verify_online đã xoá cache → Premium tắt ngay lập tức.
+                    log.warning("License không còn hiệu lực (%s)", status)
+                    if notifier is not None:
+                        notifier.license_lost.emit(
+                            result.get("error")
+                            or "Giấy phép của máy này đã bị thu hồi hoặc hết hạn."
+                        )
+        except Exception as e:
+            log.debug("license re-verify skipped: %s", e)
+
+        # Cloud Sync nền (Premium). Fail-soft: lỗi mạng/không cấu hình → bỏ qua.
+        try:
+            from core import entitlements
+            if entitlements.is_premium():
+                from core.licensing import sync as _sync
+                res = _sync.sync_all()
+                log.info("Cloud sync nền: %s", res.get("results", res))
+        except Exception as e:
+            log.debug("cloud sync skipped: %s", e)
+
+        slept = 0
+        while slept < _LICENSE_RECHECK_SECONDS:
+            _t.sleep(30)
+            slept += 30
 
 
 def main():
@@ -196,6 +251,14 @@ def main():
     App lifecycle loop — avoid recursion to prevent stack accumulation
     when the user reactivates or saves setup multiple times.
     """
+    # Dọn cache license trước cổng kiểm tra: máy nâng cấp từ bản cũ còn giữ
+    # token định dạng cũ, đổi lấy token mới ở đây để không bị đá ra vô cớ.
+    try:
+        from core.licensing import client as _lic
+        _lic.startup_reconcile()
+    except Exception as e:
+        log.debug("startup reconcile skipped: %s", e)
+
     while True:
         # 1. Activation / trial gate
         if backend.ActivationManager.needs_activation():
@@ -223,8 +286,12 @@ def main():
             threading.Thread(
                 target=_schedule_update_check, args=(notifier,), daemon=True
             ).start()
-            # Nền: gửi lại crash report tồn đọng + re-verify license (làm mới grace).
-            threading.Thread(target=_background_maintenance, daemon=True).start()
+            # Nền: gửi lại crash report tồn đọng + check-in license định kỳ.
+            lic_notifier = _LicenseNotifier()
+            lic_notifier.license_lost.connect(_show_license_lost_dialog)
+            threading.Thread(
+                target=_background_maintenance, args=(lic_notifier,), daemon=True
+            ).start()
             dashboard.mainloop()
             log.info("Dashboard closed, exiting")
             # Chờ bg-shutdown (closeEvent) xong với timeout ngắn — os._exit(0)

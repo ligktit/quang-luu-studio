@@ -5,7 +5,13 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.schemas import ActivateRequest, LicenseResponse, VerifyRequest
+from app.schemas import (
+    ActivateRequest,
+    LicenseResponse,
+    TrialRequest,
+    TrialResponse,
+    VerifyRequest,
+)
 from app.security import decode_license_token, limiter
 from app.services import licensing
 from app.services.licensing import LicenseError
@@ -33,6 +39,20 @@ def activate(request: Request, payload: ActivateRequest, db: Session = Depends(g
         return LicenseResponse(**result)
     except LicenseError as e:
         return _error(e)
+
+
+@router.post("/trial/start", response_model=TrialResponse)
+@limiter.limit(settings.rate_limit_activate)
+def trial_start(request: Request, payload: TrialRequest, db: Session = Depends(get_db)):
+    """Xin dùng thử cho một máy. Máy đã dùng rồi sẽ nhận lại đúng mốc bắt đầu cũ."""
+    result = licensing.start_trial(
+        db,
+        fingerprint=payload.device_fingerprint,
+        hostname=payload.hostname,
+        os=payload.os,
+        app_version=payload.app_version,
+    )
+    return TrialResponse(**result)
 
 
 @router.post("/license/verify", response_model=LicenseResponse)

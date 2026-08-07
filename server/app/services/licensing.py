@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Device, License
+from app.models import Device, License, TrialGrant
 from app.security import issue_license_token
 from app.services import codegen
 
@@ -37,7 +37,7 @@ def _days_remaining(expires_at: datetime | None) -> int | None:
     return max(0, delta.days)
 
 
-def _is_expired(lic: License) -> bool:
+def is_expired(lic: License) -> bool:
     exp = _aware(lic.expires_at)
     return exp is not None and exp < datetime.now(timezone.utc)
 
@@ -71,7 +71,7 @@ def activate(
     if lic.status == "revoked":
         raise LicenseError("Mã đã bị thu hồi.", status="revoked", http_status=403)
 
-    if _is_expired(lic):
+    if is_expired(lic):
         lic.status = "expired"
         db.commit()
         raise LicenseError("Mã đã hết hạn.", status="expired", http_status=403)
@@ -126,6 +126,64 @@ def activate(
     }
 
 
+def start_trial(
+    db: Session,
+    fingerprint: str,
+    hostname: str | None = None,
+    os: str | None = None,
+    app_version: str | None = None,
+) -> dict:
+    """
+    Cấp (hoặc trả lại) bản dùng thử của MỘT máy. Trả dict cho TrialResponse.
+
+    Máy đã từng dùng thử luôn nhận lại đúng started_at cũ — kể cả khi người dùng
+    đã xoá sạch dữ liệu dưới máy — nên hạn dùng thử không reset được.
+    """
+    now = datetime.now(timezone.utc)
+    grant = db.scalar(select(TrialGrant).where(TrialGrant.fingerprint == fingerprint))
+
+    if grant is None:
+        grant = TrialGrant(
+            fingerprint=fingerprint,
+            hostname=hostname,
+            os=os,
+            app_version=app_version,
+            started_at=now,
+            last_seen=now,
+        )
+        db.add(grant)
+        db.commit()
+        return {
+            "allowed": True,
+            "started_at": now.timestamp(),
+            "days_remaining": float(settings.trial_days),
+            "message": f"Bắt đầu dùng thử {settings.trial_days} ngày.",
+        }
+
+    grant.last_seen = now
+    grant.hostname = hostname or grant.hostname
+    grant.os = os or grant.os
+    grant.app_version = app_version or grant.app_version
+    db.commit()
+
+    started = _aware(grant.started_at) or now
+    elapsed_days = (now - started).total_seconds() / 86400
+    remaining = settings.trial_days - elapsed_days
+    if remaining <= 0:
+        return {
+            "allowed": False,
+            "started_at": started.timestamp(),
+            "days_remaining": 0.0,
+            "message": "Máy này đã dùng hết thời gian dùng thử.",
+        }
+    return {
+        "allowed": True,
+        "started_at": started.timestamp(),
+        "days_remaining": remaining,
+        "message": "Đang trong thời gian dùng thử.",
+    }
+
+
 def verify(db: Session, code: str, fingerprint: str, app_version: str | None = None) -> dict:
     """
     Check-in định kỳ: xác nhận mã còn hiệu lực + device còn được phép.
@@ -137,7 +195,7 @@ def verify(db: Session, code: str, fingerprint: str, app_version: str | None = N
         raise LicenseError("Mã không tồn tại.", status="invalid", http_status=404)
     if lic.status == "revoked":
         raise LicenseError("Mã đã bị thu hồi.", status="revoked", http_status=403)
-    if _is_expired(lic):
+    if is_expired(lic):
         lic.status = "expired"
         db.commit()
         raise LicenseError("Mã đã hết hạn.", status="expired", http_status=403)

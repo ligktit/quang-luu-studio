@@ -127,6 +127,7 @@ class MainDashboard(QMainWindow):
         self.be_state = False
         self.vang_state = False
         self.fix_meo_state = False
+        self.tat_on_state = False   # nút Tắt Ồn (khử ồn mic) — mọi phiên bản
         self.mute_states = {
             "mix_music": False, "mix_mic": False,
             "mix_reverb": False, "mix_backing": False
@@ -153,6 +154,11 @@ class MainDashboard(QMainWindow):
         self._mode_buttons = {}
         self._mode_colors = {}
         self._marquee_text_value = ""
+
+        # Tự động bật/tắt Vang theo nhạc (Premium) — xem _apply_auto_echo_setting
+        self._auto_echo_timer = None
+        self._auto_echo_playing = None   # trạng thái nhạc đã CHỐT (None = chưa biết)
+        self._auto_echo_streak = 0       # số lần lấy mẫu liên tiếp cho trạng thái mới
 
         # Expose module-level config to panels (avoids circular imports in ui/panels/*)
         self.MIDI_CC = MIDI_CC
@@ -234,6 +240,9 @@ class MainDashboard(QMainWindow):
         self._search_results_signal.connect(self._on_search_results)
         self._stream_resolved_signal.connect(self._on_stream_resolved)
         self._apply_embedded_player_setting()
+
+        # Tự động bật/tắt Vang theo nhạc (Premium) — chỉ chạy nếu bật trong Cài đặt
+        self._apply_auto_echo_setting()
 
         # Accessibility — TTS, theme, shortcuts (sau khi UI đã build xong)
         self._init_accessibility()
@@ -600,6 +609,11 @@ class MainDashboard(QMainWindow):
                 self.be_state = (value >= 64)
                 btn = self._func_buttons.get("Bè")
                 if btn: btn.setActive(self.be_state)
+
+            if cc == int(MIDI_CC.get("tat_on", 48)):
+                self.tat_on_state = (value >= 64)
+                btn = self._func_buttons.get("Tắt Ồn")
+                if btn: btn.setActive(self.tat_on_state)
 
             # --- Xử lý phản hồi Chế độ (Mode) từ MIDI ---
             try:
@@ -1358,6 +1372,121 @@ class MainDashboard(QMainWindow):
         if btn:
             btn.setActive(self.be_state)
         print(f"[BE] -> {'ON' if self.be_state else 'OFF'} (Value {val})")
+
+    def _on_tat_on(self):
+        """Toggle bộ khử tiếng ồn nền cho mic (CC "tat_on") — có ở MỌI phiên bản.
+
+        KHÁC mute_mic (tắt hẳn kênh mic): nút này chỉ đóng/mở noise gate bên
+        Studio One nên người hát vẫn nghe giọng mình, chỉ bớt tiếng ồn phòng.
+        """
+        self.tat_on_state = not getattr(self, 'tat_on_state', False)
+        val = 127 if self.tat_on_state else 0
+        self.engine.send_midi(int(MIDI_CC.get("tat_on", 48)), val)
+        btn = self._func_buttons.get("Tắt Ồn")
+        if btn:
+            btn.setActive(self.tat_on_state)
+        self._a11y_speak(f"Tắt ồn {'bật' if self.tat_on_state else 'tắt'}")
+        print(f"[TAT ON] -> {'ON' if self.tat_on_state else 'OFF'} (Value {val})")
+
+    # ── Tự động bật/tắt Vang theo nhạc (Premium) ────────────────────────────
+    # Chu kỳ lấy mẫu + số mẫu liên tiếp cần có trước khi CHỐT trạng thái mới.
+    # Bật nhanh (nhạc vào là có vang ngay), tắt chậm hơn để không rớt vang khi
+    # nhạc khựng 1 nhịp / chuyển bài / tua.
+    _AUTO_ECHO_TICK_MS = 500
+    _AUTO_ECHO_ON_TICKS = 1    # ~0.5s
+    _AUTO_ECHO_OFF_TICKS = 6   # ~3s
+
+    def _music_is_playing(self) -> bool:
+        """Có nhạc đang phát không — gom cả 3 nguồn app biết được.
+
+        Ưu tiên giống _update_browser_status: CDP (chính xác nhất) → WinRT.
+        Riêng màn hình karaoke nhúng phát bằng QMediaPlayer thì Windows không
+        thấy, nên phải hỏi thẳng cửa sổ player.
+        """
+        try:
+            player = self._player_window
+            if player is not None and player.is_playing():
+                return True
+            cdp = getattr(self.engine, 'cdp_monitor', None)
+            if cdp is not None and getattr(cdp, 'is_connected', False):
+                return bool(cdp.is_playing)
+            win_media = getattr(self.engine, 'media_monitor', None)
+            if win_media is not None:
+                return bool(win_media.is_playing)
+        except Exception as e:
+            print(f"[AUTO ECHO] đọc trạng thái nhạc lỗi: {e}")
+        return False
+
+    def _auto_echo_enabled(self) -> bool:
+        """Tính năng đang bật trong Cài đặt VÀ license còn quyền Premium."""
+        if not self.settings.get("auto_echo_enabled", False):
+            return False
+        try:
+            from core import entitlements
+            return entitlements.has_feature("auto_echo")
+        except Exception:
+            return False
+
+    def _apply_auto_echo_setting(self):
+        """Bật/tắt vòng lặp theo dõi nhạc theo thiết lập hiện tại.
+
+        Gọi lúc khởi động và mỗi lần user lưu Cài đặt. Khi tắt tính năng thì
+        KHÔNG tự đụng vào Vang — giữ nguyên trạng thái user đang nghe.
+        """
+        want = self._auto_echo_enabled()
+        if want and self._auto_echo_timer is None:
+            self._auto_echo_timer = QTimer(self)
+            self._auto_echo_timer.timeout.connect(self._auto_echo_tick)
+            self._auto_echo_timer.start(self._AUTO_ECHO_TICK_MS)
+            # Chốt theo hiện trạng để không lật Vang ngay khi vừa bật tính năng
+            self._auto_echo_playing = self._music_is_playing()
+            self._auto_echo_streak = 0
+            print("[AUTO ECHO] Bật theo dõi nhạc")
+        elif not want and self._auto_echo_timer is not None:
+            self._auto_echo_timer.stop()
+            self._auto_echo_timer.deleteLater()
+            self._auto_echo_timer = None
+            self._auto_echo_playing = None
+            self._auto_echo_streak = 0
+            print("[AUTO ECHO] Tắt theo dõi nhạc")
+
+    def _auto_echo_tick(self):
+        """Một nhịp lấy mẫu: đủ số mẫu liên tiếp thì mới lật Vang."""
+        # License có thể hết hạn / bị thu hồi giữa phiên → dừng luôn.
+        if not self._auto_echo_enabled():
+            self._apply_auto_echo_setting()
+            return
+
+        playing = self._music_is_playing()
+        if playing == self._auto_echo_playing:
+            self._auto_echo_streak = 0
+            return
+
+        self._auto_echo_streak += 1
+        needed = self._AUTO_ECHO_ON_TICKS if playing else self._AUTO_ECHO_OFF_TICKS
+        if self._auto_echo_streak < needed:
+            return
+
+        self._auto_echo_playing = playing
+        self._auto_echo_streak = 0
+        # Có nhạc → mở Vang; hết nhạc → tắt Vang (mute kênh Vang).
+        self._set_reverb_muted(not playing)
+        self._show_message("🎚️ Tự động bật Vang" if playing else "🎚️ Tự động tắt Vang")
+
+    def _set_reverb_muted(self, muted: bool):
+        """Đặt trạng thái mute kênh Vang, đi ĐÚNG đường như user tự bấm.
+
+        Bấm mute_btn thay vì gửi CC thẳng để nút mute trong Mixer, mute_states
+        và các CC phụ (mute_multi_cc) đều đồng bộ — chỉ một nguồn logic duy nhất.
+        """
+        try:
+            ch = self._mixer_channels.get("mix_reverb")
+            if ch is None or not getattr(ch, "mute_btn", None):
+                return
+            if ch.is_muted() != muted:
+                ch.mute_btn.click()
+        except Exception as e:
+            print(f"[AUTO ECHO] đặt mute Vang lỗi: {e}")
 
     def _on_scale_toggle(self):
         """Toggle Major ↔ Minor"""
@@ -2715,6 +2844,9 @@ class MainDashboard(QMainWindow):
 
         # ── BƯỚC 2: Qt timers — phải dừng trên main thread ────────────────────
         self._status_timer.stop()
+        if self._auto_echo_timer is not None:
+            self._auto_echo_timer.stop()
+            self._auto_echo_timer = None
         if self._marquee_timer is not None:
             self._marquee_timer.stop()
         if self._marquee_widget is not None and hasattr(self._marquee_widget, 'timer'):
@@ -2999,7 +3131,7 @@ class ActivationDialog(QDialog):
             self.status_label.setStyleSheet(f"color: {C['accent']}; font-size:13px;")
     
     def _start_trial(self):
-        """Bắt đầu dùng thử 3 ngày"""
+        """Bắt đầu dùng thử 3 ngày (server neo theo máy nên không xin lại được)"""
         result = backend.ActivationManager.start_trial()
         if result.get("success"):
             self.activated = True
@@ -3008,7 +3140,9 @@ class ActivationDialog(QDialog):
             self.status_label.setStyleSheet(f"color: {C['green']}; font-size:13px;")
             QTimer.singleShot(1200, self._close_and_continue)
         else:
-            self.status_label.setText("⚠️ Thời gian dùng thử đã hết. Vui lòng nhập mã kích hoạt.")
+            self.status_label.setText(
+                f"⚠️ {result.get('error') or 'Thời gian dùng thử đã hết.'}"
+            )
             self.status_label.setStyleSheet(f"color: {C['accent']}; font-size:13px;")
 
     def _close_and_continue(self):
