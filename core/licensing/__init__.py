@@ -9,7 +9,10 @@ file exe không còn secret nào để rút ra và tự sinh mã.
 """
 from core.licensing.client import (
     activate_online,
+    cached_code,
     clear_license_cache,
+    days_since_verify,
+    in_license_term,
     server_configured,
     server_url,
     start_trial_online,
@@ -25,6 +28,9 @@ __all__ = [
     "startup_reconcile",
     "start_trial_online",
     "clear_license_cache",
+    "cached_code",
+    "days_since_verify",
+    "in_license_term",
     "verified_claims",
     "server_configured",
     "server_url",
