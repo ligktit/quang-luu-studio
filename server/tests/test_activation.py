@@ -104,10 +104,34 @@ def test_activate_premium_plan_in_response_and_token(client):
     assert v.json()["plan"] == "premium"
 
 
-def test_verify_token_wrong_device(client):
+def test_verify_token_wrong_device_strict_for_new_clients(client):
+    """
+    Client MỚI (có gửi legacy_fingerprint) chịu quy tắc chặt: token phải thuộc
+    đúng máy này hoặc đúng danh tính cũ mà máy tự tính lại được từ phần cứng.
+    """
+    code = _make_license()
+    act = client.post("/api/v1/activate", json={"code": code, "device_fingerprint": "device-aaaaaa"}).json()
+    r = client.post("/api/v1/license/verify", json={
+        "token": act["token"], "device_fingerprint": "device-otherxx",
+        "legacy_fingerprint": "device-khac-hoan-toan",
+    })
+    assert r.status_code == 403
+
+
+def test_verify_token_migrates_for_old_clients(client):
+    """
+    Client CŨ (≤1.6.2) không biết gửi legacy_fingerprint. Với nó, claim `fp`
+    trong token là bằng chứng duy nhất về danh tính cũ, nên fingerprint lệch
+    được hiểu là "máy này vừa đổi fingerprint" chứ không phải "máy khác".
+
+    Đây là nhượng bộ CÓ CHỦ ĐÍCH để đội hình đang chạy không bị đá ra trước khi
+    bản 1.6.3 kịp phát hành — đổi lại, ai chép activation.json sang máy khác thì
+    chuyển được giấy phép. Nhánh này tự vô hiệu với từng máy ngay khi máy đó cập
+    nhật, và sẽ xoá hẳn khi /admin/devices không còn bản ≤1.6.2.
+    """
     code = _make_license()
     act = client.post("/api/v1/activate", json={"code": code, "device_fingerprint": "device-aaaaaa"}).json()
     r = client.post("/api/v1/license/verify", json={
         "token": act["token"], "device_fingerprint": "device-otherxx",
     })
-    assert r.status_code == 403
+    assert r.status_code == 200, r.text

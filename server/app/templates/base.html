@@ -33,7 +33,9 @@
     .badge { padding:2px 8px; border-radius:999px; font-size:12px; }
     .badge.active{background:#064e3b;color:#6ee7b7} .badge.unused{background:#334155;color:#cbd5e1}
     .badge.revoked{background:#7f1d1d;color:#fecaca} .badge.expired{background:#78350f;color:#fed7aa}
-    .badge.new{background:#7f1d1d;color:#fecaca} .badge.seen{background:#334155;color:#cbd5e1} .badge.resolved{background:#064e3b;color:#6ee7b7}
+    .badge.new{background:#7f1d1d;color:#fecaca} .badge.open{background:#1e3a8a;color:#bfdbfe}
+    .badge.answered{background:#064e3b;color:#6ee7b7} .badge.closed{background:#334155;color:#cbd5e1}
+    .badge.seen{background:#334155;color:#cbd5e1} .badge.resolved{background:#064e3b;color:#6ee7b7}
     pre { background:#0b1220; padding:14px; border-radius:8px; overflow:auto; font-size:13px; }
   </style>
 </head>
@@ -45,8 +47,11 @@
       <a href="/admin">Tổng quan</a>
       <a href="/admin/users">Người dùng</a>
       <a href="/admin/licenses">Mã kích hoạt</a>
+      <a href="/admin/devices">Thiết bị</a>
       <a href="/admin/versions">Phiên bản</a>
       <a href="/admin/crashes">Báo lỗi</a>
+      <a href="/admin/support">Hỗ trợ</a>
+      <a href="/admin/library">Thư viện tone</a>
     </nav>
     <span class="right">{{ admin }} · <a href="/admin/logout">Đăng xuất</a></span>
   </header>

@@ -32,6 +32,8 @@ os.environ["STORAGE_DIR"] = os.path.join(tempfile.gettempdir(), "qls_test_releas
 os.environ["RATE_LIMIT_ACTIVATE"] = "10000/minute"
 os.environ["RATE_LIMIT_VERIFY"] = "10000/minute"
 os.environ["RATE_LIMIT_CRASH"] = "10000/minute"
+os.environ["RATE_LIMIT_SUPPORT"] = "10000/minute"
+os.environ["RATE_LIMIT_LIBRARY"] = "10000/minute"
 
 import pytest
 from fastapi.testclient import TestClient

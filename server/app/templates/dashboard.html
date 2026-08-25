@@ -8,5 +8,40 @@
   <div class="stat"><div class="n">{{ stats.devices }}</div><div class="l">Thiết bị</div></div>
   <div class="stat"><div class="n">{{ stats.versions }}</div><div class="l">Phiên bản</div></div>
   <div class="stat"><div class="n">{{ stats.crashes_new }}</div><div class="l">Lỗi mới</div></div>
+  <a class="stat" href="/admin/support?status=new" style="text-decoration:none">
+    <div class="n" style="color:{{ '#fecaca' if stats.support_new else '#6ee7b7' }}">{{ stats.support_new }}</div>
+    <div class="l">Hỗ trợ mới</div>
+  </a>
+</div>
+
+<h1 style="margin-top:26px">Sức khoẻ giấy phép</h1>
+<div style="color:var(--muted);font-size:13px;margin-bottom:12px">
+  Ba số này là dấu hiệu sớm của sự cố “máy dùng vài ngày bị đá ra”. Bấm để xem chi tiết.
+</div>
+<div class="grid">
+  <a class="stat" href="/admin/devices?state=stale" style="text-decoration:none">
+    <div class="n" style="color:{{ '#fed7aa' if health.stale else '#6ee7b7' }}">{{ health.stale }}</div>
+    <div class="l">Máy im &gt;7 ngày</div>
+  </a>
+  <a class="stat" href="/admin/devices?state=stale" style="text-decoration:none">
+    <div class="n" style="color:{{ '#fecaca' if health.stale30 else '#6ee7b7' }}">{{ health.stale30 }}</div>
+    <div class="l">Đã hết grace (&gt;30 ngày)</div>
+  </a>
+  <a class="stat" href="/admin/devices?state=blocked" style="text-decoration:none">
+    <div class="n" style="color:{{ '#fecaca' if health.blocked else '#6ee7b7' }}">{{ health.blocked }}</div>
+    <div class="l">Thiết bị bị chặn</div>
+  </a>
+  <a class="stat" href="/admin/licenses?flag=drift" style="text-decoration:none">
+    <div class="n" style="color:{{ '#fed7aa' if health.drift else '#6ee7b7' }}">{{ health.drift }}</div>
+    <div class="l">Mã nghi fingerprint đổi</div>
+  </a>
+  <a class="stat" href="/admin/licenses?flag=full" style="text-decoration:none">
+    <div class="n">{{ health.full }}</div>
+    <div class="l">Mã đã đủ slot máy</div>
+  </a>
+  <a class="stat" href="/admin/devices" style="text-decoration:none">
+    <div class="n" style="font-size:20px">{{ health.top_version }}</div>
+    <div class="l">Phiên bản phổ biến nhất</div>
+  </a>
 </div>
 {% endblock %}

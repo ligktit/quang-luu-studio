@@ -43,6 +43,18 @@ docker compose logs -f api      # xem log, đảm bảo "init-db" chạy xong
 curl http://127.0.0.1:8000/healthz
 ```
 
+> **Nâng cấp lên bản có Hỗ trợ + Thư viện tone (1.8.x):** hai tính năng này thêm
+> 4 bảng mới (`support_tickets`, `support_messages`, `shared_tones`,
+> `shared_tone_votes`). Dự án không dùng Alembic, nên sau khi `docker compose up`
+> phải chạy tay một lần:
+>
+> ```bash
+> docker compose exec api python -m app.cli init-db
+> ```
+>
+> Lệnh này chỉ TẠO BẢNG CÒN THIẾU, không đụng tới dữ liệu sẵn có. Bỏ qua bước
+> này thì `/admin/support` và `/admin/library` sẽ lỗi 500 ngay lần mở đầu tiên.
+
 ## 4. Nginx + HTTPS
 
 ```bash

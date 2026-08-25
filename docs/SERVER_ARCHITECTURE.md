@@ -37,7 +37,9 @@ server/
     main.py              # FastAPI app, mount routers + admin
     config.py            # đọc env: DB_URL, LICENSE_SECRET, ADMIN_*, STORAGE_DIR, GRACE_DAYS
     db.py                # engine + SessionLocal + get_db dependency
-    models.py            # SQLAlchemy: User, License, Device, AppVersion, CrashReport, AdminUser
+    models.py            # SQLAlchemy: User, License, Device, AppVersion, CrashReport,
+                         #   SyncBlob, SupportTicket, SupportMessage, SharedTone,
+                         #   SharedToneVote, AdminUser
     schemas.py           # Pydantic request/response
     security.py          # HMAC/JWT license token, device binding, admin session auth, rate-limit
     deps.py              # shared dependencies
@@ -45,10 +47,17 @@ server/
       activation.py      # POST /api/v1/activate, POST /api/v1/license/verify
       updates.py         # GET /api/v1/updates/check, GET /api/v1/updates/download/{version}
       crashes.py         # POST /api/v1/crash
-      admin.py           # /admin/* web UI (login, users, licenses, versions, crashes)
+      support.py         # POST /api/v1/support/* — hỗ trợ hai chiều khách ↔ dev
+      library.py         # POST /api/v1/library/* — thư viện tone cộng đồng
+      sync.py            # POST/PUT /api/v1/sync/* — Cloud Sync riêng tư (Premium)
+      admin.py           # /admin/* web UI (login, users, licenses, versions,
+                         #   crashes, support, library)
     services/
       codegen.py         # sinh mã + checksum (thuật toán dùng chung với client)
       licensing.py       # logic activate/verify/revoke/expiry/device-limit
+                         #   + authorize_device(require_premium=...) dùng chung
+                         #     cho sync.py (True) và library.py (False)
+      tonelib.py         # chuẩn hoá/băm/xếp hạng biến thể tone cộng đồng
       storage.py         # lưu/đọc .exe, tính sha256, stream + Range
     templates/           # Jinja2 admin
     static/
@@ -70,6 +79,10 @@ server/
 - **devices**: id, license_id, fingerprint(unique per license), hostname, os, app_version, first_seen, last_seen, last_check_in, revoked
 - **app_versions**: id, version, channel(`stable|beta`), filename, sha256, size_bytes, release_notes, mandatory(bool), min_supported_version?, rollout_percent(0-100), is_active, published_at
 - **crash_reports**: id, fingerprint_hash(dedupe), license_id?, device_id?, app_version, os_info, traceback, log_excerpt, count, status(`new|seen|resolved`), first_seen, last_seen
+- **support_tickets**: id, ticket_code(`HT-000123`), license_code?, device_fp?, hostname?, os_info?, app_version?, contact?, category(`loi|huong_dan|tinh_nang|khac`), subject, status(`new|open|answered|closed`), log_excerpt?, unread_client, created_at, updated_at
+- **support_messages**: id, ticket_id, sender(`customer|dev`), body, created_at
+- **shared_tones**: id, song_key(YouTube video_id), payload_hash(sha256 timeline đã chuẩn hoá), title, primary_key, timeline(JSON), source(`auto|human`), votes, reports, pinned, status(`ok|hidden`), first_seen, last_seen — unique(song_key, payload_hash)
+- **shared_tone_votes**: id, tone_id, device_fp, kind(`vote|report`), created_at — unique(tone_id, device_fp, kind)
 - **admin_users**: id, username, password_hash
 
 ## API client-facing (`/api/v1`)
@@ -80,6 +93,14 @@ server/
 - `GET /updates/check?version=&channel=&fingerprint=` — trả bản mới nhất áp dụng được (tôn trọng rollout_percent theo hash fingerprint), `{version, download_url, sha256, size, mandatory, notes}` — **giữ nguyên shape `ReleaseInfo`** để client tái dùng.
 - `GET /updates/download/{version}` — stream `.exe`, hỗ trợ `Range` (downloader hiện tại đã gửi Range để resume).
 - `POST /crash` — body `{fingerprint, app_version, os, traceback, log_excerpt}`. Dedupe theo hash(traceback), rate-limit, tăng `count`.
+- `POST /support/ticket` · `/support/ticket/reply` · `/support/inbox` · `/support/ticket/read` —
+  kênh hỗ trợ hai chiều. **Không đòi license token**: máy đang không kích hoạt được chính là máy
+  cần hỗ trợ nhất. Ràng theo `device_fingerprint` (biết mã ticket thôi không đọc được), chống lạm
+  dụng bằng `RATE_LIMIT_SUPPORT` (mặc định 6/giờ).
+- `POST /library/lookup` · `/library/contribute` · `/library/report` — thư viện tone cộng đồng.
+  Cần license token nhưng **không giới hạn Premium** (khác `/sync`): thư viện sống bằng hiệu ứng
+  mạng, chặn Standard đóng góp là tự bóp nguồn dữ liệu. Mỗi máy 1 phiếu/biến thể; bản `human`
+  nhân hệ số 3, mỗi lượt báo sai trừ 2; `song_key` chỉ nhận video_id YouTube 11 ký tự.
 
 ## Admin Web UI (`/admin`, đăng nhập mật khẩu)
 
@@ -88,13 +109,15 @@ server/
 - **Licenses**: sinh hàng loạt, gán user, thu hồi (`revoked`), gia hạn (`expires_at`), **reset device** (gỡ ràng máy để user đổi máy).
 - **Versions**: upload `.exe` (tự tính sha256, lưu vào `STORAGE_DIR`), đặt channel/rollout/mandatory/min_version, bật/tắt active.
 - **Crashes**: danh sách gom theo fingerprint, xem traceback + log, đánh dấu resolved.
+- **Support**: hộp thư hỗ trợ, lọc theo trạng thái, xem hội thoại, trả lời (khách đọc trong app), đổi trạng thái.
+- **Library**: các biến thể tone của từng bài kèm điểm; ghim / ẩn / xoá biến thể rác — van an toàn duy nhất để sửa dữ liệu cộng đồng từ xa.
 
 ## Bảo mật
 
 - HTTPS-only (Nginx + Certbot). HSTS.
 - `LICENSE_SECRET`, mật khẩu admin, DB password: **chỉ trong `.env`**, không commit. `.env.example` làm mẫu.
 - License token JWT có `exp` ngắn (vd 7 ngày = grace) + nhúng fingerprint → client chạy offline trong hạn, hết hạn phải verify lại.
-- Rate-limit `/activate`, `/license/verify`, `/crash` (slowapi + nginx).
+- Rate-limit `/activate`, `/license/verify`, `/crash`, `/support/*`, `/library/*` (slowapi + nginx).
 - Client KHÔNG còn giữ secret kích hoạt (chỉ check format). Thẩm quyền checksum chuyển hẳn về server.
 
 ## Thay đổi phía client (`core/`)

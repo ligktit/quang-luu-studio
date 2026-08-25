@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Thư viện tone cộng đồng</h1>
+<div style="color:var(--muted);font-size:13px;margin-bottom:12px">
+  Mỗi bài có thể có nhiều biến thể do các máy gửi lên. Bản <b>thắng</b> là bản được
+  trả về cho toàn mạng lưới: điểm cao nhất, bản người sửa tay nhân hệ số 3, mỗi lượt
+  báo sai trừ 2. Ghim để chốt cứng một bản, ẩn để loại bản rác.
+</div>
+
+<form method="get" action="/admin/library" class="row" style="margin-bottom:16px">
+  <input type="text" name="q" value="{{ q }}" placeholder="Tìm theo mã video hoặc tên bài" style="min-width:280px">
+  <button>Tìm</button>
+</form>
+
+{% for song in groups %}
+<div class="card">
+  <div style="margin-bottom:10px">
+    <b>{{ song.title or '(chưa có tên)' }}</b> ·
+    <code>{{ song.song_key }}</code> ·
+    <a href="https://youtu.be/{{ song.song_key }}" target="_blank" rel="noopener">mở YouTube</a>
+  </div>
+  <table>
+    <tr><th>Tone</th><th>Nguồn</th><th>Phiếu</th><th>Báo sai</th><th>Điểm</th><th>Mốc</th><th>Trạng thái</th><th></th></tr>
+    {% for v in song.variants %}
+    <tr>
+      <td>
+        {{ v.primary_key or '—' }}
+        {% if v.id == song.best_id %}<span class="badge active">thắng</span>{% endif %}
+      </td>
+      <td>{{ 'người sửa' if v.source == 'human' else 'máy dò' }}</td>
+      <td>{{ v.votes }}</td>
+      <td>{{ v.reports }}</td>
+      <td>{{ song.scores[v.id] }}</td>
+      <td>{{ song.segments[v.id] }}</td>
+      <td>
+        {% if v.pinned %}<span class="badge answered">đã ghim</span>{% endif %}
+        {% if v.status == 'hidden' %}<span class="badge revoked">đã ẩn</span>{% endif %}
+      </td>
+      <td>
+        <div class="row">
+          <form method="post" action="/admin/library/{{ v.id }}/pin">
+            <button class="ghost">{{ 'Bỏ ghim' if v.pinned else 'Ghim' }}</button>
+          </form>
+          <form method="post" action="/admin/library/{{ v.id }}/hide">
+            <button class="ghost">{{ 'Hiện lại' if v.status == 'hidden' else 'Ẩn' }}</button>
+          </form>
+          <form method="post" action="/admin/library/{{ v.id }}/delete">
+            <button class="danger">Xoá</button>
+          </form>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endfor %}
+{% if not groups %}<p style="color:var(--muted)">Thư viện chung chưa có dữ liệu nào.</p>{% endif %}
+{% endblock %}

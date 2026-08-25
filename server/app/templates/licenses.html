@@ -14,6 +14,49 @@
     <button type="submit">Sinh mã</button>
   </form>
 </div>
+
+<div class="card">
+  <form method="get" action="/admin/licenses" class="row">
+    <div style="flex:1;min-width:200px">
+      <label>Tìm (mã / tên khách / tên máy)</label>
+      <input name="q" value="{{ q }}" placeholder="VD: DESKTOP-VUD hoặc YA96" style="width:100%">
+    </div>
+    <div><label>Trạng thái</label>
+      <select name="status">
+        <option value="">— tất cả —</option>
+        {% for s in ['unused','active','expired','revoked'] %}
+        <option value="{{ s }}" {% if status==s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div><label>Gói</label>
+      <select name="plan">
+        <option value="">— tất cả —</option>
+        {% for p in ['standard','premium'] %}
+        <option value="{{ p }}" {% if plan==p %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <input type="hidden" name="flag" value="{{ flag }}">
+    <button type="submit">Lọc</button>
+    <a href="/admin/licenses" style="align-self:center">Xoá lọc</a>
+  </form>
+
+  <div class="row" style="margin-top:12px;gap:8px">
+    <span style="color:var(--muted);font-size:13px;align-self:center">Theo dõi:</span>
+    {% for slug, label in flags.items() %}
+    <a href="?q={{ q }}&status={{ status }}&plan={{ plan }}{% if flag != slug %}&flag={{ slug }}{% endif %}"
+       class="badge {% if flag == slug %}revoked{% else %}unused{% endif %}"
+       style="text-decoration:none">{{ label }}: {{ counts[slug] }}</a>
+    {% endfor %}
+  </div>
+  <div style="color:var(--muted);font-size:12px;margin-top:10px">
+    Hiện <b>{{ licenses|length }}</b>/{{ total }} mã.
+    “Nghi fingerprint đổi” = một tên máy có nhiều bản ghi thiết bị — bấm <i>chi tiết</i>
+    ở cột Thiết bị rồi <b>Gỡ</b> bản ghi cũ, đừng bấm “Reset máy”.
+  </div>
+</div>
+
 <table>
   <tr><th>Mã</th><th>Trạng thái</th><th>Gói</th><th>User</th><th>Thiết bị</th><th>Hết hạn</th><th>Thao tác</th></tr>
   {% for lic in licenses %}
@@ -38,11 +81,38 @@
         <button class="ghost">Gán</button>
       </form>
     </td>
-    <td>{{ lic.active_devices|length }}/{{ lic.max_devices }}</td>
+    <td>
+      {{ lic.active_devices|length }}/{{ lic.max_devices }}
+      {% if lic.devices %}
+      <details>
+        <summary style="cursor:pointer;color:var(--muted);font-size:12px">chi tiết</summary>
+        {% for d in lic.devices %}
+        {% set quiet = days_quiet(d) %}
+        <div class="row" style="gap:6px;font-size:12px;margin-top:6px;align-items:center">
+          <code title="{{ d.fingerprint }}">{{ d.fingerprint[:8] }}</code>
+          <span>{{ d.hostname or '?' }}</span>
+          <span style="color:var(--muted)">v{{ d.app_version or '?' }}</span>
+          {% if d.revoked %}<span class="badge revoked">đã chặn</span>{% endif %}
+          {% if quiet is none %}
+            <span class="badge expired">chưa check-in</span>
+          {% elif quiet > stale_days and not d.revoked %}
+            <span class="badge expired">im {{ quiet|round|int }} ngày</span>
+          {% else %}
+            <span style="color:var(--muted)">{{ d.last_check_in.strftime('%d/%m') }}</span>
+          {% endif %}
+          <form method="post" action="/admin/devices/{{ d.id }}/delete"
+                onsubmit="return confirm('Gỡ máy {{ d.hostname or d.fingerprint[:8] }} khỏi mã này? Khách sẽ kích hoạt lại được.')">
+            <button class="ghost" style="padding:2px 8px">Gỡ</button>
+          </form>
+        </div>
+        {% endfor %}
+      </details>
+      {% endif %}
+    </td>
     <td>{{ lic.expires_at.strftime('%Y-%m-%d') if lic.expires_at else '—' }}</td>
     <td class="row" style="gap:4px">
       <form method="post" action="/admin/licenses/{{ lic.id }}/extend"><input name="days" type="number" value="365" style="width:70px"><button class="ghost">Gia hạn</button></form>
-      <form method="post" action="/admin/licenses/{{ lic.id }}/reset-devices" onsubmit="return confirm('Reset toàn bộ thiết bị?')"><button class="ghost">Reset máy</button></form>
+      <form method="post" action="/admin/licenses/{{ lic.id }}/reset-devices" onsubmit="return confirm('Gỡ TOÀN BỘ thiết bị khỏi mã này? Khách sẽ kích hoạt lại từ đầu.')"><button class="ghost">Reset máy</button></form>
       <form method="post" action="/admin/licenses/{{ lic.id }}/revoke" onsubmit="return confirm('Thu hồi mã?')"><button class="danger">Thu hồi</button></form>
     </td>
   </tr>

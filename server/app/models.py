@@ -155,3 +155,107 @@ class AdminUser(Base):
     username:      Mapped[str] = mapped_column(String(80), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     created_at:    Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SupportTicket(Base):
+    """Yêu cầu hỗ trợ khách gửi từ trong app (kênh HAI CHIỀU).
+
+    Khác CrashReport ở chỗ: crash là tự động, một chiều, gộp theo hash traceback;
+    còn ticket là do người viết, có hội thoại qua lại, không bao giờ gộp.
+
+    Mọi trường định danh đều nullable: máy ĐANG KHÔNG KÍCH HOẠT ĐƯỢC chính là
+    máy cần hỗ trợ nhất, nên không được đòi license_code mới cho gửi.
+    """
+    __tablename__ = "support_tickets"
+
+    id:            Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Mã người đọc được, dạng HT-000123 — khách đọc qua điện thoại cho dev.
+    ticket_code:   Mapped[str] = mapped_column(String(16), unique=True, index=True)
+    license_code:  Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    device_fp:     Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    hostname:      Mapped[str | None] = mapped_column(String(200), nullable=True)
+    os_info:       Mapped[str | None] = mapped_column(String(255), nullable=True)
+    app_version:   Mapped[str | None] = mapped_column(String(40), nullable=True)
+    contact:       Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # loi | huong_dan | tinh_nang | khac
+    category:      Mapped[str] = mapped_column(String(20), default="khac", index=True)
+    subject:       Mapped[str] = mapped_column(String(200))
+    # new | open | answered | closed
+    status:        Mapped[str] = mapped_column(String(20), default="new", index=True)
+    log_excerpt:   Mapped[str | None] = mapped_column(Text, nullable=True)
+    # True khi dev vừa trả lời mà khách chưa mở hộp thư → app hiện chấm đỏ.
+    unread_client: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at:    Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at:    Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    messages: Mapped[list["SupportMessage"]] = relationship(
+        back_populates="ticket",
+        cascade="all, delete-orphan",
+        order_by="SupportMessage.id",
+    )
+
+
+class SupportMessage(Base):
+    """Một lượt trong hội thoại hỗ trợ. sender ∈ {customer, dev}."""
+    __tablename__ = "support_messages"
+
+    id:         Mapped[int] = mapped_column(Integer, primary_key=True)
+    ticket_id:  Mapped[int] = mapped_column(ForeignKey("support_tickets.id", ondelete="CASCADE"), index=True)
+    sender:     Mapped[str] = mapped_column(String(10), default="customer")
+    body:       Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    ticket: Mapped["SupportTicket"] = relationship(back_populates="messages")
+
+
+class SharedTone(Base):
+    """Một BIẾN THỂ kết quả dò tone của một bài, dùng chung cho cả mạng lưới.
+
+    Vì sao nhiều biến thể cho một bài chứ không phải một bản duy nhất: dữ liệu do
+    máy khách gửi lên là KHÔNG ĐÁNG TIN. Nếu để "ai gửi sau đè lên người trước"
+    thì một máy dò sai một lần là cả mạng lưới hát sai. Thay vào đó mỗi kết quả
+    khác nhau là một biến thể riêng (phân biệt bằng payload_hash), và biến thể
+    thắng là biến thể được nhiều máy xác nhận nhất — bản do NGƯỜI sửa tay được
+    nhân trọng số cao hơn hẳn máy dò.
+
+    song_key luôn là YouTube video_id 11 ký tự: đường dẫn file local vừa là dữ
+    liệu cá nhân vừa không khớp được giữa các máy nên không bao giờ lên đây.
+    """
+    __tablename__ = "shared_tones"
+    __table_args__ = (UniqueConstraint("song_key", "payload_hash", name="uq_shared_song_variant"),)
+
+    id:           Mapped[int] = mapped_column(Integer, primary_key=True)
+    song_key:     Mapped[str] = mapped_column(String(24), index=True)
+    # sha256 của timeline đã CHUẨN HOÁ — hai máy dò ra cùng kết quả thì trùng
+    # hash và cộng phiếu, thay vì đẻ thêm bản ghi.
+    payload_hash: Mapped[str] = mapped_column(String(64), index=True)
+    title:        Mapped[str] = mapped_column(String(300), default="")
+    primary_key:  Mapped[str] = mapped_column(String(20), default="")
+    timeline:     Mapped[str] = mapped_column(Text, default="[]")  # JSON string
+    # auto (máy dò) | human (người sửa tay)
+    source:       Mapped[str] = mapped_column(String(10), default="auto", index=True)
+    votes:        Mapped[int] = mapped_column(Integer, default=0)
+    reports:      Mapped[int] = mapped_column(Integer, default=0)
+    # Dev ghim → thắng tuyệt đối, bất kể phiếu. Van an toàn khi có tranh chấp.
+    pinned:       Mapped[bool] = mapped_column(Boolean, default=False)
+    # ok | hidden (dev ẩn vì rác)
+    status:       Mapped[str] = mapped_column(String(10), default="ok", index=True)
+    first_seen:   Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen:    Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SharedToneVote(Base):
+    """Phiếu của MỘT máy cho MỘT biến thể. Unique để một máy không bỏ phiếu hai lần.
+
+    Không có bảng này thì một máy chạy vòng lặp gửi 1000 lần là tự phong cho
+    biến thể của mình thành chân lý.
+    """
+    __tablename__ = "shared_tone_votes"
+    __table_args__ = (UniqueConstraint("tone_id", "device_fp", "kind", name="uq_tone_vote"),)
+
+    id:         Mapped[int] = mapped_column(Integer, primary_key=True)
+    tone_id:    Mapped[int] = mapped_column(ForeignKey("shared_tones.id", ondelete="CASCADE"), index=True)
+    device_fp:  Mapped[str] = mapped_column(String(128), index=True)
+    # vote (xác nhận đúng) | report (báo sai)
+    kind:       Mapped[str] = mapped_column(String(10), default="vote")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

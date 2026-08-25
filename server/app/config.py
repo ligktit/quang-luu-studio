@@ -41,7 +41,11 @@ class Settings(BaseSettings):
     # Để rỗng = server tự sinh mã ngẫu nhiên không cần checksum tương thích.
     code_secret: str = "936c3f6655acc46ba5c41603446addb7e5b25df85c953d003eba554527e267e4"
     # Số ngày app được chạy offline sau lần verify online gần nhất (grace).
-    grace_days: int = 7
+    # 30 chứ không phải 7: máy hát ở quán thường dùng 4G chập chờn, hết grace là
+    # bị đá ra màn hình kích hoạt. Không làm yếu khả năng thu hồi — lệnh thu hồi
+    # vẫn có hiệu lực ngay ở lần check-in kế tiếp (mỗi 6 giờ), client xoá cache
+    # tức thì chứ không đợi token hết hạn.
+    grace_days: int = 30
     # Hạn license mặc định khi kích hoạt lần đầu (ngày). 0 = vĩnh viễn.
     license_duration_days: int = 365
     # Số ngày dùng thử, neo theo device fingerprint ở server (không reset được
@@ -63,9 +67,19 @@ class Settings(BaseSettings):
     max_upload_mb: int = 500
 
     # ── Rate limit ──
-    rate_limit_activate: str = "20/minute"
-    rate_limit_verify: str = "60/minute"
+    # Tính theo IP THẬT của khách (cần --forwarded-allow-ips trong Dockerfile,
+    # nếu không mọi khách hàng dùng chung một hạn mức vì server chỉ thấy IP của
+    # Nginx). Một máy check-in ~4 lần/ngày, nên các con số dưới đây là để chịu
+    # được cả quán nhiều máy sau chung một NAT.
+    rate_limit_activate: str = "30/minute"
+    rate_limit_verify: str = "120/minute"
     rate_limit_crash: str = "30/minute"
+    # Ticket hỗ trợ do NGƯỜI viết tay nên rất thưa; siết chặt để một máy
+    # (hoặc một script) không bơm rác vào hộp thư của dev.
+    rate_limit_support: str = "6/hour"
+    # Thư viện tone cộng đồng: tra cứu theo lô nên thưa hơn check-in, nhưng
+    # lúc bấm "Đồng bộ tone" cho cả danh sách thì bắn liên tiếp vài nhịp.
+    rate_limit_library: str = "60/minute"
 
     @property
     def storage_path(self) -> Path:

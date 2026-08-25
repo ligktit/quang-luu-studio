@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/admin/support">← Danh sách hỗ trợ</a></p>
+{% if not ticket %}
+<p>Không tìm thấy yêu cầu hỗ trợ.</p>
+{% else %}
+<h1>{{ ticket.ticket_code }} — {{ ticket.subject }}
+  <span class="badge {{ ticket.status }}">{{ ticket.status }}</span></h1>
+<div class="card">
+  <p><b>Loại:</b> {{ ticket.category }} · <b>Liên hệ:</b> {{ ticket.contact or '—' }}</p>
+  <p><b>Version:</b> {{ ticket.app_version or '—' }} · <b>OS:</b> {{ ticket.os_info or '—' }} ·
+     <b>Máy:</b> {{ ticket.hostname or '—' }}</p>
+  <p><b>Thiết bị:</b> <code>{{ ticket.device_fp or '—' }}</code> ·
+     <b>Mã KH:</b> <code>{{ ticket.license_code or '—' }}</code></p>
+  <p><b>Tạo:</b> {{ ticket.created_at }} · <b>Cập nhật:</b> {{ ticket.updated_at }}</p>
+  <form method="post" action="/admin/support/{{ ticket.id }}/status" class="row">
+    <select name="status">
+      <option value="open" {{ 'selected' if ticket.status == 'open' }}>open</option>
+      <option value="answered" {{ 'selected' if ticket.status == 'answered' }}>answered</option>
+      <option value="closed" {{ 'selected' if ticket.status == 'closed' }}>closed</option>
+    </select>
+    <button class="ghost">Đổi trạng thái</button>
+  </form>
+</div>
+
+<h3>Hội thoại</h3>
+{% for m in ticket.messages %}
+<div class="card" style="border-left:3px solid {{ '#14b8a6' if m.sender == 'dev' else '#64748b' }}">
+  <div style="color:var(--muted);font-size:12px;margin-bottom:6px">
+    {{ 'Dev' if m.sender == 'dev' else 'Khách' }} · {{ m.created_at.strftime('%Y-%m-%d %H:%M') if m.created_at else '' }}
+  </div>
+  <div style="white-space:pre-wrap">{{ m.body }}</div>
+</div>
+{% endfor %}
+
+<div class="card">
+  <form method="post" action="/admin/support/{{ ticket.id }}/reply">
+    <label>Trả lời khách (khách đọc được ngay trong app)</label>
+    <textarea name="body" rows="5" style="width:100%" required></textarea>
+    <div style="margin-top:10px"><button>Gửi trả lời</button></div>
+  </form>
+</div>
+
+{% if ticket.log_excerpt %}
+<h3>Nhật ký khách gửi kèm</h3>
+<pre>{{ ticket.log_excerpt }}</pre>
+{% endif %}
+{% endif %}
+{% endblock %}

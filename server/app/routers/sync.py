@@ -13,7 +13,7 @@ from app.config import settings
 from app.db import get_db
 from app.models import SyncBlob
 from app.schemas import SyncGetRequest, SyncPutRequest, SyncResponse
-from app.security import decode_license_token, limiter
+from app.security import limiter
 from app.services import licensing
 
 router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
@@ -28,43 +28,11 @@ def _error(message: str, http_status: int) -> JSONResponse:
 
 
 def _authorize(token: str | None, fingerprint: str, db: Session) -> tuple[str | None, JSONResponse | None]:
-    """
-    Xác thực BẮT BUỘC bằng token đã ký, ràng đúng máy, rồi kiểm lại license
-    trong DB. Trả (license_code, lỗi).
-
-    Không có fallback bằng mã thô: mã kích hoạt là chuỗi ngắn người dùng đọc
-    được và hay bị chụp màn hình gửi cho nhau — ai biết mã của người khác cũng
-    đọc/ghi được thư viện của họ.
-
-    Kiểm DB ở đây (chứ không chỉ tin claim trong token) để lệnh thu hồi hoặc hạ
-    gói có hiệu lực NGAY, thay vì phải chờ token cũ hết hạn grace.
-    """
-    if not token:
-        return None, _error("Thiếu license token. Hãy mở lại app để kích hoạt lại.", 401)
-    claims = decode_license_token(token)
-    if claims is None:
-        return None, _error("Token không hợp lệ hoặc hết hạn.", 401)
-    if claims.get("fp") != fingerprint:
-        return None, _error("Token không khớp thiết bị.", 403)
-    code = claims.get("code")
-    if not code:
-        return None, _error("Token thiếu mã license.", 401)
-
-    lic = licensing.get_license(db, code)
-    if lic is None:
-        return None, _error("Mã không tồn tại.", 404)
-    if lic.status == "revoked":
-        return None, _error("Mã đã bị thu hồi.", 403)
-    if licensing.is_expired(lic):
-        return None, _error("Mã đã hết hạn.", 403)
-    if (lic.plan or "standard").lower() != "premium":
-        return None, _error("Đồng bộ đám mây là tính năng của gói Premium.", 403)
-
-    device = next((d for d in lic.devices if d.fingerprint == fingerprint), None)
-    if device is None or device.revoked:
-        return None, _error("Thiết bị chưa được kích hoạt hoặc đã bị thu hồi.", 403)
-
-    return lic.code, None
+    """Cổng Premium của Cloud Sync — mỏng, mọi luật nằm ở licensing.authorize_device."""
+    code, message, status = licensing.authorize_device(db, token, fingerprint, require_premium=True)
+    if message is not None:
+        return None, _error(message, status)
+    return code, None
 
 
 def _to_epoch(value) -> float | None:

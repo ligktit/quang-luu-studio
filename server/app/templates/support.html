@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Hỗ trợ khách hàng</h1>
+<div class="row" style="margin-bottom:14px">
+  <a href="/admin/support"><button class="ghost">Tất cả</button></a>
+  {% for s in statuses %}
+  <a href="/admin/support?status={{ s }}"><button class="{{ '' if status == s else 'ghost' }}">{{ s }}</button></a>
+  {% endfor %}
+</div>
+<table>
+  <tr><th>Mã</th><th>Trạng thái</th><th>Loại</th><th>Tiêu đề</th><th>Liên hệ</th><th>Version</th><th>Cập nhật</th><th></th></tr>
+  {% for t in tickets %}
+  <tr>
+    <td><code>{{ t.ticket_code }}</code></td>
+    <td>
+      <span class="badge {{ t.status }}">{{ t.status }}</span>
+      {% if t.unread_client %}<span class="badge new" title="Khách chưa đọc trả lời">•</span>{% endif %}
+    </td>
+    <td>{{ t.category }}</td>
+    <td>{{ t.subject }}</td>
+    <td>{{ t.contact or '—' }}</td>
+    <td>{{ t.app_version or '—' }}</td>
+    <td>{{ t.updated_at.strftime('%Y-%m-%d %H:%M') if t.updated_at else '' }}</td>
+    <td><a href="/admin/support/{{ t.id }}">Xem</a></td>
+  </tr>
+  {% endfor %}
+</table>
+{% if not tickets %}<p style="color:var(--muted)">Chưa có yêu cầu hỗ trợ nào.</p>{% endif %}
+{% endblock %}

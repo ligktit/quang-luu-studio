@@ -112,21 +112,29 @@ def issue_license_token(
     return jwt.encode(payload, _private_key(), algorithm=_ALGO)
 
 
-def decode_license_token(token: str) -> dict | None:
+def decode_license_token(token: str, verify_exp: bool = True) -> dict | None:
     """
     Đọc token client gửi lên. Nhận RS256 (hiện hành) và HS256 (token cũ, chỉ khi
     LICENSE_SECRET còn được cấu hình) để máy chưa cập nhật vẫn check-in được —
     lần check-in đó sẽ trả về token RS256 mới.
+
+    verify_exp=False: chỉ dùng token để biết "mã nào, máy nào", không đòi token
+    còn hạn. Cần cho check-in, vì token QUÁ HẠN chính là lúc client cần token
+    mới — từ chối lúc đó thì máy hết grace không bao giờ tự phục hồi được.
+    Hiệu lực thật vẫn do DB quyết (status/expires_at/device.revoked), và caller
+    vẫn phải đối chiếu claim `fp` với fingerprint máy gửi lên.
     """
+    options = {"verify_exp": verify_exp}
     try:
-        return jwt.decode(token, _public_key(), algorithms=[_ALGO])
+        return jwt.decode(token, _public_key(), algorithms=[_ALGO], options=options)
     except jwt.PyJWTError:
         pass
 
     legacy_secret = (settings.license_secret or "").strip()
     if legacy_secret:
         try:
-            claims = jwt.decode(token, legacy_secret, algorithms=[_LEGACY_ALGO])
+            claims = jwt.decode(token, legacy_secret, algorithms=[_LEGACY_ALGO],
+                                options=options)
             log.info("Chấp nhận token HS256 cũ của mã %s — sẽ cấp lại token RS256",
                      claims.get("code"))
             return claims

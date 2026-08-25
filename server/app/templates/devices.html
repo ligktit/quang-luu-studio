@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Thiết bị</h1>
+
+<div class="grid" style="margin-bottom:18px">
+  <a class="stat" href="/admin/devices" style="text-decoration:none">
+    <div class="n">{{ summary.total }}</div><div class="l">Tổng thiết bị</div>
+  </a>
+  <a class="stat" href="/admin/devices?state=stale" style="text-decoration:none">
+    <div class="n" style="color:#fed7aa">{{ summary.stale }}</div>
+    <div class="l">Im &gt;{{ stale_days }} ngày</div>
+  </a>
+  <a class="stat" href="/admin/devices?state=stale" style="text-decoration:none">
+    <div class="n" style="color:#fecaca">{{ summary.stale30 }}</div>
+    <div class="l">Im &gt;30 ngày (hết grace)</div>
+  </a>
+  <a class="stat" href="/admin/devices?state=blocked" style="text-decoration:none">
+    <div class="n" style="color:#fecaca">{{ summary.blocked }}</div>
+    <div class="l">Đang bị chặn</div>
+  </a>
+</div>
+
+<div class="card">
+  <div style="color:var(--muted);font-size:13px;margin-bottom:8px">
+    Phủ sóng phiên bản — bấm để lọc. Đây là cách biết bản vá đã tới bao nhiêu máy.
+  </div>
+  <div class="row" style="gap:8px">
+    {% for v, n in versions.items() %}
+    <a href="?q={{ q }}&state={{ state }}{% if version != v %}&version={{ v }}{% endif %}"
+       class="badge {% if version == v %}revoked{% else %}active{% endif %}"
+       style="text-decoration:none">v{{ v }}: {{ n }}</a>
+    {% endfor %}
+  </div>
+
+  <form method="get" action="/admin/devices" class="row" style="margin-top:14px">
+    <div style="flex:1;min-width:200px">
+      <label>Tìm (tên máy / mã máy / mã kích hoạt)</label>
+      <input name="q" value="{{ q }}" placeholder="VD: DESKTOP-VUD hoặc 7dfcd5a6" style="width:100%">
+    </div>
+    <div><label>Trạng thái</label>
+      <select name="state">
+        <option value="">— tất cả —</option>
+        <option value="active"  {% if state=='active'  %}selected{% endif %}>đang dùng</option>
+        <option value="stale"   {% if state=='stale'   %}selected{% endif %}>im &gt;{{ stale_days }} ngày</option>
+        <option value="blocked" {% if state=='blocked' %}selected{% endif %}>đã chặn</option>
+      </select>
+    </div>
+    <input type="hidden" name="version" value="{{ version }}">
+    <button type="submit">Lọc</button>
+    <a href="/admin/devices" style="align-self:center">Xoá lọc</a>
+  </form>
+</div>
+
+<table>
+  <tr>
+    <th>Tên máy</th><th>Mã máy</th><th>Mã kích hoạt</th><th>Phiên bản</th>
+    <th>Check-in cuối</th><th>Trạng thái</th><th></th>
+  </tr>
+  {% for d in devices %}
+  {% set quiet = days_quiet(d) %}
+  <tr>
+    <td>{{ d.hostname or '—' }}<div style="color:var(--muted);font-size:12px">{{ d.os or '' }}</div></td>
+    <td><code title="{{ d.fingerprint }}">{{ d.fingerprint[:8] }}</code></td>
+    <td>
+      {% if d.license %}
+      <a href="/admin/licenses?q={{ d.license.code }}"><code>{{ d.license.code }}</code></a>
+      {% else %}—{% endif %}
+    </td>
+    <td>v{{ d.app_version or '?' }}</td>
+    <td>
+      {% if quiet is none %}
+        <span class="badge expired">chưa bao giờ</span>
+      {% else %}
+        {{ d.last_check_in.strftime('%d/%m/%Y') }}
+        <div style="color:var(--muted);font-size:12px">{{ quiet|round|int }} ngày trước</div>
+      {% endif %}
+    </td>
+    <td>
+      {% if d.revoked %}<span class="badge revoked">đã chặn</span>
+      {% elif quiet is not none and quiet > 30 %}<span class="badge expired">hết grace</span>
+      {% elif quiet is none or quiet > stale_days %}<span class="badge unused">im lâu</span>
+      {% else %}<span class="badge active">bình thường</span>{% endif %}
+    </td>
+    <td>
+      <form method="post" action="/admin/devices/{{ d.id }}/delete"
+            onsubmit="return confirm('Gỡ máy {{ d.hostname or d.fingerprint[:8] }} khỏi mã này? Khách sẽ kích hoạt lại được.')">
+        <button class="ghost" style="padding:4px 10px">Gỡ</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% if not devices %}
+<p style="color:var(--muted)">Không có thiết bị nào khớp bộ lọc.</p>
+{% endif %}
+{% endblock %}
