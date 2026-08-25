@@ -4,6 +4,11 @@
     "youtube_cookie_browser": "auto",
     "youtube_cookie_profile": "",
     "youtube_cookie_file": "",
+    "ytdlp_auto_update": true,
+    "youtube_player_clients": [],
+    "youtube_pot_enabled": true,
+    "youtube_pot_auto_download": true,
+    "js_runtime_path": "",
     "midi_cc": {
         "tone_music": 10,
         "tone_voice": 11,
@@ -21,6 +26,7 @@
         "tone_auto": 40,
         "fix_meo": 45,
         "be": 47,
+        "tat_on": 48,
         "mode_danca": 46,
         "mode_lofi": 37,
         "mode_remix": 38,
@@ -109,18 +115,18 @@
         "mix_backing": []
     },
     "accessibility": {
-        "tts_enabled": true,
+        "tts_enabled": false,
         "tts_voice": "",
         "tts_rate": 180,
         "tts_engine": "piper",
         "tts_piper_voice": "",
         "voice_model": "small",
-        "voice_command_enabled": true,
+        "voice_command_enabled": false,
         "voice_command_hotkey": "Ctrl+Space",
         "high_contrast": false,
         "font_scale": 1.0,
         "focus_ring_thick": false,
-        "announce_focus": true,
-        "announce_state": true
+        "announce_focus": false,
+        "announce_state": false
     }
 }

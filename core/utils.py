@@ -58,18 +58,45 @@ def find_ffmpeg():
                       os.path.join(local_appdata, "Programs", "FFmpeg", "bin") if local_appdata else ""]:
         if candidate and os.path.isfile(os.path.join(candidate, "ffmpeg.exe")):
             return candidate
-    # 5. Tìm ffmpeg.exe cùng thư mục với app (PyInstaller bundle)
-    if getattr(sys, 'frozen', False):
-        app_dir = os.path.dirname(sys.executable)
-    else:
-        app_dir = os.path.dirname(os.path.abspath(__file__))
-        # Also check parent directory (project root) when running from core/
-        parent_dir = os.path.dirname(app_dir)
-        if os.path.isfile(os.path.join(parent_dir, "ffmpeg.exe")):
-            return parent_dir
-    if os.path.isfile(os.path.join(app_dir, "ffmpeg.exe")):
-        return app_dir
+    # 5. Bản đóng gói kèm bộ cài: <app>\ffmpeg\ hoặc ngay cạnh exe.
+    #    Đây mới là nguồn CHẮC CHẮN có — 4 nấc trên đều phụ thuộc máy khách đã
+    #    cài sẵn ffmpeg ở đâu đó, mà rất nhiều máy thì không.
+    for base in _app_search_dirs():
+        bundled = os.path.join(base, "ffmpeg")
+        if os.path.isfile(os.path.join(bundled, "ffmpeg.exe")):
+            return bundled
+        if os.path.isfile(os.path.join(base, "ffmpeg.exe")):
+            return base
     return None
+
+
+def _app_search_dirs():
+    """Các thư mục để tìm binary đi kèm app: cạnh exe (frozen) / gốc dự án (dev)."""
+    if getattr(sys, 'frozen', False):
+        return [os.path.dirname(sys.executable)]
+    core_dir = os.path.dirname(os.path.abspath(__file__))
+    return [os.path.dirname(core_dir), core_dir]
+
+
+def find_js_runtime():
+    """Tìm `qjs.exe` (QuickJS-ng) đi kèm app — runtime JavaScript cho yt-dlp.
+
+    Vì sao cần: từ cuối 2025 yt-dlp phải chạy JavaScript ngoài để giải "n
+    challenge" của YouTube. Không có runtime nào thì link tải bị bóp băng thông
+    hoặc trả 403, kể cả khi bóc được định dạng. Deno là mặc định của yt-dlp
+    nhưng nặng ~40MB; QuickJS-ng chỉ ~2MB nên gói kèm được cả bản Nhẹ.
+
+    Trả đường dẫn tới file, hoặc None nếu không tìm thấy (yt-dlp sẽ tự tìm
+    `deno` trên PATH — vẫn dùng được nếu máy khách có sẵn).
+    """
+    import shutil
+    for base in _app_search_dirs():
+        for candidate in (os.path.join(base, "qjs.exe"),
+                          os.path.join(base, "bin", "qjs.exe")):
+            if os.path.isfile(candidate):
+                return candidate
+    found = shutil.which("qjs")
+    return found or None
 
 
 def extract_video_id(url):

@@ -1,6 +1,20 @@
 # PO Token Provider Integration Plan
 
-> ## ⚠️ DEPRECATED — không triển khai (2026-04-25)
+> ## ✅ ĐÃ QUAY LẠI VÀ TRIỂN KHAI (2026-08-18, v1.7.3)
+>
+> Điều kiện "xem lại" ghi bên dưới đã xảy ra: đã có **binary Windows độc lập**
+> — `jim60105/bgutil-ytdlp-pot-provider-rs` viết bằng Rust, 1 file .exe, **không
+> cần Node.js**. Đồng thời mẹo `player_client` cũng đã mục (yt-dlp #17348).
+>
+> **Tài liệu hiện hành: [`PLAN_YOUTUBE_NO_ACCOUNT.md`](PLAN_YOUTUBE_NO_ACCOUNT.md).**
+> Bản triển khai thật khác plan gốc bên dưới ở 3 điểm quan trọng:
+> binary **tải lúc chạy** (không đóng gói — bgutil là GPL-3.0), chạy **chế độ
+> CLI** (không dựng HTTP server nền), và đi kèm một runtime JavaScript
+> (`qjs.exe`) vì từ cuối 2025 yt-dlp bắt buộc phải có.
+>
+> ---
+>
+> ## ⚠️ Ghi chép cũ — DEPRECATED, không triển khai (2026-04-25)
 >
 > **Lý do bỏ:** Upstream `bgutil-ytdlp-pot-provider` chỉ release source code Node.js
 > (`.zip`), KHÔNG có standalone binary chính thức. Để chạy server cần:

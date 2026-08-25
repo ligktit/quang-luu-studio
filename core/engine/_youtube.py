@@ -707,6 +707,9 @@ class _YouTubeMixin:
                     'url':          data.get('url', ''),
                     'title':        data.get('title', ''),
                     'timeline':     timeline,
+                    # UI cần độ dài bài để biết đoạn CUỐI kết thúc lúc nào (đếm
+                    # ngược của đoạn cuối); thiếu nó thì đoạn cuối không có mốc kết.
+                    'total_duration': data.get('total_duration', 0),
                     'key_display':  raw_key,
                     'key':          key_root,
                     'scale':        first_entry.get('scale', 'Major'),
