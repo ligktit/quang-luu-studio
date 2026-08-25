@@ -12,7 +12,7 @@
 ; ============================================================
 
 #define MyAppName "Quang Luu Studio"
-#define MyAppVersion "1.6.2"
+#define MyAppVersion "1.7.4"
 #define MyAppPublisher "Quang Luu"
 #define MyAppExeName "QuangLuuStudio.exe"
 #define MyAppURL "https://github.com/ligktit/quang-luu-studio"
@@ -114,6 +114,20 @@ Source: "sfx\*"; DestDir: "{app}\sfx"; Flags: ignoreversion recursesubdirs
 Source: "models\*"; DestDir: "{app}\models"; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist
 ; Piper TTS binary (Windows)
 Source: "tools\piper\*"; DestDir: "{app}\tools\piper"; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist
+
+; === TAI YOUTUBE KHONG CAN TAI KHOAN ===
+; Tai truoc bang: python tools\fetch_build_binaries.py (build_installer.bat tu chay)
+; skipifsourcedoesntexist: thieu thi app van chay, chi kem hon.
+
+; qjs.exe - runtime JavaScript cho yt-dlp giai "n challenge" cua YouTube.
+; Bat buoc tu cuoi 2025; thieu no thi link tai bi bop bang thong / tra 403.
+; core/utils.py::find_js_runtime tim file nay ngay canh exe.
+Source: "binaries\qjs.exe"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+
+; ffmpeg + ffprobe (LGPL shared). Truoc day chi setup_all.bat tai ve
+; %LOCALAPPDATA%; may nao cai loi mang la mat luon cham diem va do tone.
+; core/utils.py::find_ffmpeg tim thu muc nay o nac 5.
+Source: "binaries\ffmpeg\*"; DestDir: "{app}\ffmpeg"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Dirs]
 ; Tạo thư mục cho dữ liệu user (writable)

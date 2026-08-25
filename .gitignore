@@ -3,7 +3,12 @@ docs/ACTIVATION_CODES.md
 activation_codes.txt
 
 # Build outputs
+# LƯU Ý: installer_output/ chỉ chứa file Setup_*.exe do Inno Setup xuất ra.
+# TUYỆT ĐỐI không copy source code / thư mục project vào đây (đã từng xảy ra
+# 30-04-2026: cả project bị copy thành installer_output/quang-luu-studio/,
+# kèm .git và .venv riêng — 107 MB rác và gây nhầm lẫn cấu trúc thư mục).
 dist/
+dist_heavy/
 build/
 installer_output/
 *.spec
@@ -74,6 +79,8 @@ ui_config.json
 accessibility_overrides.json
 calibration_overrides.json
 crash_queue.json
+support_queue.json
+tone_share_queue.json
 activation_codes.txt
 cdp_profile/
 
@@ -99,3 +106,13 @@ logs/
 models/vosk-vi-large/
 models/piper-vi/
 tools/piper/
+
+# Binary phụ trợ cho YouTube — tải lúc build/lúc chạy, không commit
+# (xem core/pot_provider.py, core/utils.py::find_js_runtime, build_installer*.bat)
+binaries/
+pot/
+pot_provider.json
+ytdlp/
+ytdlp_update.json
+qjs.exe
+ffmpeg/

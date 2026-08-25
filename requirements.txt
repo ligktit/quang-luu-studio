@@ -18,7 +18,10 @@ scipy>=1.10
 pycaw>=20240210
 
 # YouTube
-yt-dlp>=2024.1
+# [default] kéo theo yt-dlp-ejs — bộ script giải "n challenge" của YouTube.
+# Có nó thì script nằm sẵn trong .exe, không phải tải từ npm lúc chạy (máy khách
+# hay bị chặn/không có mạng npm). Cần đi kèm `qjs.exe` — xem build_installer.bat.
+yt-dlp[default]>=2026.7.4
 # CDP WebSocket client (core/cdp_monitor.py)
 websocket-client>=1.6
 # Tự tải ffmpeg cho detect_youtube.py (tuỳ chọn — có fallback nếu thiếu)

@@ -46,6 +46,10 @@ hiddenimports = [
     'librosa', 'scipy', 'scipy.signal', 'numpy',
     # YouTube
     'yt_dlp',
+    # Script giải "n challenge" của YouTube (đi cùng qjs.exe do bộ cài chép vào
+    # {app}). Thiếu nó thì yt-dlp phải tải script từ npm lúc chạy — máy khách
+    # thường không có đường ra npm.
+    'yt_dlp_ejs',
     # Audio recording
     'pyaudiowpatch',
     # UI Automation (YT Watcher)
@@ -76,6 +80,12 @@ hiddenimports = [
     'ui.dialogs.progress_dialog',
     'ui.dialogs.setlist_dialog',
     'ui.dialogs.update_dialog',
+    # Khoá kỹ thuật / chế độ khách — lazy import từ header + settings dialog
+    'ui.dialogs.tech_unlock',
+    'ui.dialogs.shutdown_dialog',
+    'core.kiosk',
+    'core.so_windows',
+    'core.so_template',
     # UI panels — new package extracted from frontend_qt.py (Phase C)
     'ui.panels',
     'ui.panels.header',
@@ -126,6 +136,15 @@ _qt_excludes = [
 # Bản Heavy: GIỮ lại để màn hình karaoke nhúng hoạt động.
 if not INCLUDE_WEBENGINE:
     _qt_excludes += _WEBENGINE_MODULES
+
+# yt_dlp_ejs mang theo file .js (không phải .py) nên phải collect_all, chỉ
+# hiddenimports là thiếu data.
+try:
+    tmp_ret = collect_all('yt_dlp_ejs')
+    datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+except Exception as _exc:
+    print(f"[spec] CANH BAO: khong gom duoc yt_dlp_ejs ({_exc}) - "
+          f"chay: pip install -U \"yt-dlp[default]\"")
 
 tmp_ret = collect_all('PySide6')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
