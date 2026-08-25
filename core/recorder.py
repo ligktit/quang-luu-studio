@@ -24,6 +24,9 @@ class AudioRecorder:
         self._stop_flag_path = None
         self._worker_thread = None
         self.last_error = None
+        # Dòng "STATS: ..." worker in ra khi kết thúc — dùng để cảnh báo người
+        # dùng khi bản thu bị rè do máy đói CPU thay vì để họ tự đoán.
+        self._stats_line = None
         self._loopback_idx = -1
         self._mic_idx = -1
         # Event để thread báo hiệu "đã khởi động xong" hoặc "lỗi"
@@ -53,9 +56,10 @@ class AudioRecorder:
             f.write("recording")
         
         self.recording = True
-        
+
         self.last_error = None
-        
+        self._stats_line = None
+
         # Lưu device indexes để _run_worker_inline truy cập được
         self._loopback_idx = loopback_device_index
         self._mic_idx = mic_device_index
@@ -131,6 +135,10 @@ class AudioRecorder:
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 "recorder_worker.py"
             )
+            # Cha đọc pipe bằng utf-8 nên con cũng phải in ra utf-8, nếu không
+            # nhật ký tiếng Việt của worker vừa sai dấu vừa có thể ném
+            # UnicodeEncodeError làm chết tiến trình thu.
+            worker_env = dict(os.environ, PYTHONIOENCODING="utf-8")
             try:
                 self._process = subprocess.Popen(
                     [
@@ -144,7 +152,8 @@ class AudioRecorder:
                     stderr=subprocess.PIPE,
                     text=True,
                     encoding="utf-8",
-                    errors="replace"
+                    errors="replace",
+                    env=worker_env,
                 )
                 print(f"[RECORDER] Đã khởi động tiến trình ghi âm (PID={self._process.pid})")
             except Exception as e:
@@ -168,6 +177,8 @@ class AudioRecorder:
                         s = raw_line.strip()
                         if s:
                             print(f"[RECORDER] Worker: {s}")
+                            if s.startswith("STATS:"):
+                                self._stats_line = s
                         stdout_queue.put(raw_line)
                 except Exception:
                     pass
@@ -272,7 +283,10 @@ class AudioRecorder:
             except subprocess.TimeoutExpired:
                 self._process.kill()
             self._process = None
-        
+            # Nhường một nhịp cho thread đọc stdout nuốt nốt dòng STATS cuối
+            import time as _time
+            _time.sleep(0.15)
+
         if self._worker_thread:
             self._worker_thread.join(timeout=5)
             self._worker_thread = None
@@ -342,6 +356,8 @@ class AudioRecorder:
                         self._started_event.set()
                     elif clean.startswith('ERROR:') and not self._worker_error:
                         self._worker_error = clean
+                    elif clean.startswith('STATS:'):
+                        self._stats_line = clean
             except Exception:
                 try:
                     _orig_print(*args, **kwargs)
@@ -381,6 +397,44 @@ class AudioRecorder:
             _sys.argv = old_argv
 
     
+    def quality_warning(self):
+        """
+        Cảnh báo dễ hiểu về chất lượng bản thu vừa xong, hoặc None nếu sạch.
+
+        Dựa trên dòng "STATS: … capture=…" worker in ra:
+          - capture thấp → số mẫu ghi được ít hơn hẳn thời gian đã trôi, tức là
+            driver đã vứt mẫu vì luồng audio bị đói CPU. Đây là tín hiệu chắc
+            chắn nhất: khi mất mẫu ở tầng driver thì drop/overrun vẫn bằng 0.
+          - drop/overrun > 0 → nghẽn ở hàng đợi hoặc driver có báo overflow.
+          - gainmin thấp → tổng nhạc + mic vượt đỉnh quá nhiều, limiter phải hạ
+            sâu. Dùng mức hạ sâu nhất chứ không dùng tỉ lệ mẫu bị nén: bài hát
+            to đều vẫn chạm limiter liên tục nhưng chỉ hạ nhẹ, không đáng báo.
+        """
+        line = self._stats_line
+        if not line:
+            return None
+
+        stats = {}
+        for token in line[len("STATS:"):].split():
+            key, _, value = token.partition("=")
+            try:
+                stats[key] = float(value)
+            except ValueError:
+                continue
+
+        if stats.get("capture", 1.0) < 0.95:
+            return ("Máy bị quá tải nên bản thu bị mất tiếng từng đoạn. "
+                    "Hãy đóng bớt ứng dụng đang chạy rồi thu lại.")
+
+        starved = stats.get("drop", 0) + stats.get("overrun", 0)
+        if starved > 0:
+            return ("Máy bị quá tải lúc thu nên bản thu có thể bị rè. "
+                    "Hãy đóng bớt ứng dụng đang chạy rồi thu lại.")
+        if stats.get("gainmin", 1.0) < 0.5:      # phải hạ hơn 6 dB
+            return ("Tiếng vào quá lớn nên bản thu bị nén mạnh. "
+                    "Hãy giảm âm lượng nhạc hoặc mic rồi thu lại.")
+        return None
+
     def cleanup(self):
         """Xóa file recording tạm"""
         if self.output_path and os.path.exists(self.output_path):

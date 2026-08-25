@@ -18,6 +18,21 @@ import queue
 import numpy as np
 
 
+# ── Thông số trộn tiếng ────────────────────────────────────────────────────────
+# Cộng thẳng loopback + mic rồi cắt cứng ở ±32767 là nguồn gốc tiếng "rè rè":
+# nhạc karaoke vốn đã gần 0 dBFS, cộng thêm giọng là méo vuông (hard clipping).
+# Chừa headroom cho mỗi nguồn, phần đỉnh còn lại do PeakLimiter lo.
+MIX_LB_GAIN = 0.80    # nhạc (loopback) — giảm ~1.9 dB
+MIX_MIC_GAIN = 0.80   # giọng (mic)     — giảm ~1.9 dB
+
+# Chunk lớn hơn → ít lần callback/giây hơn → ít cơ hội bị kẹt GIL khi worker
+# chạy inline trong process GUI (bản đóng gói). 2048 frames ≈ 43ms @ 48kHz.
+CHUNK_SIZE = 2048
+
+# Hàng đợi ~20s: hấp thụ được cả lúc ghi đĩa bị antivirus chặn tạm thời.
+QUEUE_MAXSIZE = 512
+
+
 def enumerate_all_devices(pa):
     """
     Trả về dict mô tả tất cả thiết bị âm thanh khả dụng.
@@ -161,6 +176,150 @@ def open_input_stream(pa, dev_info, channels, rate, chunk_size, callback):
     raise RuntimeError(f"Cannot open stream for device [{dev_info['index']}] {dev_info['name']!r}")
 
 
+class PeakLimiter:
+    """
+    Giới hạn đỉnh bằng cách hạ gain theo thời gian, không bẻ méo dạng sóng.
+
+    Cắt cứng (np.clip) biến đỉnh sóng thành mặt phẳng → sinh hài bậc cao →
+    đúng tiếng "rè rè" khách phản ánh. Uốn mềm bằng tanh cũng không cứu được
+    khi tổng vượt ~1.3× full-scale vì phần dải còn lại quá hẹp.
+
+    Ở đây gain được hạ dần trong một cửa sổ TRƯỚC khi đỉnh tới (nhìn trước
+    64 mẫu ≈ 1.3ms) rồi thả về từ từ. Dạng sóng giữ nguyên hình, chỉ nhỏ đi —
+    tai nghe ra là "nhạc khẽ chùng xuống lúc hát to", không phải méo tiếng.
+    """
+
+    WINDOW = 64          # mẫu mỗi bước tính gain (= độ trễ nhìn trước)
+    RELEASE_COEF = 0.02  # tốc độ thả gain về 1.0 (~200ms @ 48kHz)
+
+    def __init__(self, ceiling=0.97 * 32767.0):
+        self.ceiling = ceiling
+        self.gain = 1.0
+        self.pending = np.zeros((0, 2), dtype=np.float32)
+        self.limited_samples = 0
+        self.min_gain = 1.0   # mức hạ sâu nhất — thước đo "tiếng vào quá to"
+
+    def _max_gain_for(self, seg):
+        """Gain lớn nhất mà seg còn nằm dưới trần."""
+        peak = float(np.max(np.abs(seg))) if seg.shape[0] else 0.0
+        return self.ceiling / peak if peak > self.ceiling else 1.0
+
+    def _emit_window(self, seg, target):
+        """Áp gain lên seg theo đường dốc tuyến tính từ gain hiện tại → target.
+
+        Cả hai đầu đường dốc đều đã được chặn dưới `_max_gain_for(seg)` nên
+        đường dốc đơn điệu này không thể đưa mẫu nào vượt trần.
+        """
+        ramp = np.linspace(self.gain, target, seg.shape[0],
+                           dtype=np.float32).reshape(-1, 1)
+        self.gain = target
+        if target < 1.0 or ramp[0, 0] < 1.0:
+            self.limited_samples += seg.shape[0]
+            self.min_gain = min(self.min_gain, float(target), float(ramp[0, 0]))
+        return seg * ramp
+
+    def process(self, x):
+        if x.shape[0]:
+            self.pending = (np.concatenate([self.pending, x], axis=0)
+                            if self.pending.shape[0] else x)
+
+        w = self.WINDOW
+        out = []
+        # Chỉ xuất được cửa sổ k khi đã nhìn thấy cửa sổ k+1
+        while self.pending.shape[0] >= 2 * w:
+            allowed = self._max_gain_for(self.pending[:w])
+            # Cửa sổ đầu tiên không có ai nhìn trước hộ → hạ ngay tại đây.
+            # Về sau gain vào cửa sổ luôn ≤ allowed nên nhánh này không đụng.
+            self.gain = min(self.gain, allowed)
+
+            target = self._max_gain_for(self.pending[w:2 * w])
+            if target >= self.gain:
+                # release: thả lên từ từ, nhưng không được vượt trần cửa sổ này
+                target = min(self.gain + (target - self.gain) * self.RELEASE_COEF,
+                             allowed)
+
+            out.append(self._emit_window(self.pending[:w], target))
+            self.pending = self.pending[w:]
+
+        if not out:
+            return np.zeros((0, 2), dtype=np.float32)
+        return np.concatenate(out, axis=0)
+
+    def flush(self):
+        """Xả nốt phần đuôi khi kết thúc thu."""
+        if self.pending.shape[0] == 0:
+            return np.zeros((0, 2), dtype=np.float32)
+        allowed = self._max_gain_for(self.pending)
+        self.gain = min(self.gain, allowed)
+        tail = self._emit_window(self.pending, self.gain)
+        self.pending = np.zeros((0, 2), dtype=np.float32)
+        return tail
+
+
+class StreamResampler:
+    """
+    Resample tuyến tính giữ liên tục pha qua nhiều lô dữ liệu.
+
+    Bản cũ gọi np.linspace(0, n-1, m) cho từng lô: mỗi lô chỉ trải m mẫu ra
+    n-1 khoảng (thay vì n) nên hụt đúng 1 mẫu nguồn mỗi lô → sai cao độ ~0.1%
+    và tích luỹ lệch giọng/nhạc. Ở đây vị trí đọc (`pos`) và phần đuôi chưa
+    dùng hết (`tail`) được mang sang lô kế → tỉ lệ đúng tuyệt đối, không có
+    điểm gãy ở biên lô.
+    """
+
+    def __init__(self, ratio):
+        # ratio = rate_đích / rate_nguồn; step = số mẫu nguồn cho mỗi mẫu đích
+        self.step = 1.0 / ratio
+        self.pos = 0.0
+        self.tail = np.zeros((0, 2), dtype=np.float32)
+
+    def process(self, src_new):
+        if src_new.shape[0] == 0 and self.tail.shape[0] == 0:
+            return np.zeros((0, 2), dtype=np.float32)
+
+        src = (np.concatenate([self.tail, src_new], axis=0)
+               if self.tail.shape[0] else src_new)
+        n_src = src.shape[0]
+        if n_src < 2:
+            self.tail = src
+            return np.zeros((0, 2), dtype=np.float32)
+
+        # Số mẫu đích nội suy được mà không cần dữ liệu tương lai
+        n_out = int(np.floor((n_src - 1 - self.pos) / self.step)) + 1
+        if n_out <= 0:
+            self.tail = src
+            return np.zeros((0, 2), dtype=np.float32)
+
+        idx = self.pos + self.step * np.arange(n_out, dtype=np.float64)
+        grid = np.arange(n_src, dtype=np.float64)
+        left = np.interp(idx, grid, src[:, 0])
+        right = np.interp(idx, grid, src[:, 1])
+
+        # Giữ lại tối thiểu 1 mẫu làm mốc nội suy cho lô sau
+        next_pos = self.pos + n_out * self.step
+        keep_from = min(int(np.floor(next_pos)), n_src - 1)
+        self.pos = next_pos - keep_from
+        self.tail = src[keep_from:]
+
+        return np.column_stack([left, right]).astype(np.float32)
+
+
+def _boost_realtime_priority():
+    """
+    Nâng độ ưu tiên luồng đang chạy (best-effort, chỉ Windows).
+
+    Vòng lặp drain bị trễ → hàng đợi đầy → mất chunk → tiếng lách tách. Trên máy
+    hát chạy kèm Studio One + trình duyệt, ưu tiên cao hơn giúp giữ nhịp.
+    """
+    try:
+        import ctypes
+        THREAD_PRIORITY_ABOVE_NORMAL = 1
+        k32 = ctypes.windll.kernel32
+        k32.SetThreadPriority(k32.GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL)
+    except Exception:
+        pass
+
+
 def main():
     if len(sys.argv) < 3:
         print("Usage: recorder_worker.py <output.wav> <stop_flag> [loopback_idx] [mic_idx]",
@@ -172,6 +331,27 @@ def main():
     # Arg tùy chọn: device index (-1 = auto)
     req_loopback_idx = int(sys.argv[3]) if len(sys.argv) > 3 else -1
     req_mic_idx = int(sys.argv[4]) if len(sys.argv) > 4 else -1
+
+    # Worker in nhật ký tiếng Việt có dấu. Khi chạy tiến trình riêng, stdout là
+    # pipe nên Python lấy mã của hệ thống (cp1252/cp1258) → print ném
+    # UnicodeEncodeError và giết cả tiến trình thu ngay ở dòng "Mic đã tắt".
+    # (Bản .exe dựng windowed có sys.stdout = None nên print im lặng, không lộ.)
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    # Bản đóng gói chạy worker inline trong process GUI (không tách được
+    # subprocess vì không có python.exe kèm theo). Rút khoảng chuyển GIL từ 5ms
+    # xuống 1ms để callback audio không phải chờ luồng Qt nhả GIL quá lâu —
+    # chờ lâu là WASAPI overrun, nghe ra tiếng lách tách/rè. Cố ý không khôi
+    # phục giá trị cũ: các phiên thu sau cũng cần độ trễ GIL thấp.
+    try:
+        sys.setswitchinterval(0.001)
+    except Exception:
+        pass
+    _boost_realtime_priority()
 
     import pyaudiowpatch as pyaudio
 
@@ -223,9 +403,6 @@ def main():
     out_rate = lb_rate
     out_channels = 2
 
-    # Chunk size loopback: 1024 frames (~21ms @ 48kHz) — ổn định.
-    CHUNK_SIZE = 1024
-
     print(f"LOOPBACK: {loopback_dev['name']}", flush=True)
     print(f"RATE: {out_rate}", flush=True)
     print(f"CHANNELS: {out_channels}", flush=True)
@@ -237,7 +414,7 @@ def main():
     # Tính resample ratio 1 lần duy nhất (cố định).
     mic_resample_ratio = 1.0
     # Mic chunk size tỉ lệ theo rate — đảm bảo callback mic kích hoạt
-    # đúng nhịp tương đương loopback (~21ms), tránh lệch pha → giật.
+    # đúng nhịp tương đương loopback, tránh lệch pha → giật.
     mic_chunk_size = CHUNK_SIZE  # sẽ tính lại sau khi biết mic_rate
 
     if mic_dev:
@@ -260,14 +437,16 @@ def main():
     # FIX 3: queue.Queue thay lock+list.
     # put_nowait() trong ASIO callback KHÔNG bao giờ block → không làm trễ
     # real-time thread của driver → không bị overrun/xif buffer.
-    LB_QUEUE_MAXSIZE = 200   # ~4s buffer @ 1024 frames / 48kHz
-    MC_QUEUE_MAXSIZE = 200
-
-    lb_queue = queue.Queue(maxsize=LB_QUEUE_MAXSIZE)
-    mc_queue = queue.Queue(maxsize=MC_QUEUE_MAXSIZE)
+    lb_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
+    mc_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
     overflow_count = [0]
+    # Driver báo mất mẫu (paInputOverflow) — trước đây tham số `status` bị bỏ
+    # qua hoàn toàn nên không ai biết bản thu đã thủng lỗ chỗ.
+    underrun_count = [0]
 
     def loopback_callback(in_data, frame_count, time_info, status):
+        if status:
+            underrun_count[0] += 1
         try:
             lb_queue.put_nowait(in_data)
         except queue.Full:
@@ -275,6 +454,8 @@ def main():
         return (None, pyaudio.paContinue)
 
     def mic_callback(in_data, frame_count, time_info, status):
+        if status:
+            underrun_count[0] += 1
         try:
             mc_queue.put_nowait(in_data)
         except queue.Full:
@@ -317,6 +498,10 @@ def main():
     print("STARTED", flush=True)
 
     frames_written = 0
+    # Mốc để đối chiếu "thu được bao nhiêu so với đáng lẽ phải thu". Khi luồng
+    # audio bị đói CPU, driver vứt mẫu TRƯỚC khi tới callback nên drop/overrun
+    # vẫn bằng 0 — chỉ tỉ lệ này lộ ra là bản thu đã mất tiếng.
+    capture_started_at = time.time()
 
     # Sleep interval đồng bộ với chunk duration thực tế (~21.3ms @ 1024/48k).
     sleep_interval = CHUNK_SIZE / lb_rate
@@ -336,6 +521,12 @@ def main():
     mic_grace_deadline = time.time() + MIC_GRACE_SEC
     mic_ever_received = False
 
+    # Trần cho phần dư mỗi bên (0.5s). Hai thiết bị chạy hai clock độc lập nên
+    # bên nhanh hơn luôn tích luỹ dần; không cắt thì giọng trễ dần so với nhạc
+    # và bộ nhớ phình theo thời lượng thu.
+    MAX_RESID = int(lb_rate * 0.5)
+    drift_dropped = [0]
+
     def _drain_queue(q):
         chunks = []
         while True:
@@ -345,48 +536,63 @@ def main():
                 break
         return chunks
 
+    def _to_stereo(chunks, channels):
+        """int16 interleaved → (N, 2) float32. Cắt phần đuôi lẻ không đủ 1 frame
+        (driver có thể trả buffer không tròn frame → reshape sẽ ném lỗi và giết
+        cả vòng thu)."""
+        arr = np.frombuffer(b"".join(chunks), dtype=np.int16)
+        if channels <= 1:
+            return np.column_stack([arr, arr]).astype(np.float32)
+        usable = (arr.shape[0] // channels) * channels
+        if usable != arr.shape[0]:
+            arr = arr[:usable]
+        return arr.reshape(-1, channels)[:, :2].astype(np.float32)
+
     def _lb_to_stereo(chunks):
         if not chunks:
             return np.zeros((0, 2), dtype=np.float32)
-        arr = np.frombuffer(b"".join(chunks), dtype=np.int16)
-        if lb_channels == 1:
-            return np.column_stack([arr, arr]).astype(np.float32)
-        if lb_channels == 2:
-            return arr.reshape(-1, 2).astype(np.float32)
-        return arr.reshape(-1, lb_channels)[:, :2].astype(np.float32)
+        return _to_stereo(chunks, lb_channels)
+
+    # Resampler giữ pha liên tục — thay cho np.linspace từng lô (gây trôi cao độ
+    # và gãy sóng ở biên mỗi lô khi mic 44.1kHz còn loa 48kHz).
+    mic_resampler = (StreamResampler(mic_resample_ratio)
+                     if mic_stream and mic_resample_ratio != 1.0 else None)
 
     def _mc_to_stereo(chunks):
         if not chunks or not mic_stream:
             return np.zeros((0, 2), dtype=np.float32)
-        arr = np.frombuffer(b"".join(chunks), dtype=np.int16)
-        if actual_mic_channels == 1:
-            mc = np.column_stack([arr, arr]).astype(np.float32)
-        else:
-            mc = arr.reshape(-1, actual_mic_channels)[:, :2].astype(np.float32)
-
-        if mic_resample_ratio != 1.0 and mc.shape[0] > 0:
-            src_len = mc.shape[0]
-            dst_len = max(1, int(round(src_len * mic_resample_ratio)))
-            src_idx = np.arange(src_len, dtype=np.float32)
-            dst_idx = np.linspace(0.0, src_len - 1, dst_len, dtype=np.float32)
-            left  = np.interp(dst_idx, src_idx, mc[:, 0])
-            right = np.interp(dst_idx, src_idx, mc[:, 1])
-            mc = np.column_stack([left, right]).astype(np.float32)
+        mc = _to_stereo(chunks, actual_mic_channels)
+        if mic_resampler is not None and mc.shape[0] > 0:
+            mc = mic_resampler.process(mc)
         return mc
+
+    # Chỉ hạ gain khi thực sự trộn 2 nguồn. Thu loopback đơn thuần không có nguy
+    # cơ cộng dồn quá đỉnh nên giữ nguyên mức, tránh làm bản thu nhỏ đi vô cớ.
+    lb_gain = MIX_LB_GAIN if mic_stream else 1.0
+    mic_gain = MIX_MIC_GAIN
+    # Chỉ trộn 2 nguồn mới có nguy cơ vượt đỉnh. Thu loopback đơn thuần đi
+    # thẳng, giữ nguyên mức và không thêm độ trễ nhìn trước.
+    limiter = PeakLimiter() if mic_stream else None
+
+    def _emit(samples):
+        nonlocal frames_written
+        if samples.shape[0] == 0:
+            return
+        mixed = np.clip(samples, -32768.0, 32767.0).astype(np.int16)
+        wf.writeframes(mixed.tobytes())
+        frames_written += mixed.shape[0]
 
     def _write_mix(lb_seg, mc_seg):
         """Mix sample-accurate 2 segment cùng độ dài → WAV."""
-        nonlocal frames_written
         if lb_seg.shape[0] == 0 and mc_seg.shape[0] == 0:
             return
         if lb_seg.shape[0] == 0:
-            mixed = np.clip(mc_seg, -32768.0, 32767.0).astype(np.int16)
+            acc = mc_seg * mic_gain
         elif mc_seg.shape[0] == 0:
-            mixed = np.clip(lb_seg, -32768.0, 32767.0).astype(np.int16)
+            acc = lb_seg * lb_gain
         else:
-            mixed = np.clip(lb_seg + mc_seg, -32768.0, 32767.0).astype(np.int16)
-        wf.writeframes(mixed.tobytes())
-        frames_written += mixed.shape[0]
+            acc = lb_seg * lb_gain + mc_seg * mic_gain
+        _emit(limiter.process(acc) if limiter else acc)
 
     try:
         while os.path.exists(stop_flag):
@@ -421,8 +627,6 @@ def main():
             # Emit sample-accurate: min(len_lb, len_mc) frames đã mix chuẩn.
             n = min(lb_resid.shape[0], mc_resid.shape[0])
             if n == 0:
-                # Chống bloat: giới hạn buffer ở một giá trị hợp lý (~2s).
-                MAX_RESID = lb_rate * 2
                 if lb_resid.shape[0] > MAX_RESID:
                     # Mic đã chết giữa chừng → xả lb kèm silence để không drift.
                     pad = np.zeros((lb_resid.shape[0], 2), dtype=np.float32)
@@ -437,6 +641,17 @@ def main():
             _write_mix(lb_resid[:n], mc_resid[:n])
             lb_resid = lb_resid[n:]
             mc_resid = mc_resid[n:]
+
+            # Bên nào vượt trần thì bỏ phần cũ nhất. Bản cũ chỉ chốt trần trong
+            # nhánh n == 0 nên khi cả hai luồng đều có tiếng thì không bao giờ
+            # chạy tới. Với sai lệch clock thường gặp (~50ppm) một lần cắt xảy
+            # ra sau hàng giờ thu, không nghe thấy.
+            if lb_resid.shape[0] > MAX_RESID:
+                drift_dropped[0] += lb_resid.shape[0] - MAX_RESID
+                lb_resid = lb_resid[-MAX_RESID:]
+            if mc_resid.shape[0] > MAX_RESID:
+                drift_dropped[0] += mc_resid.shape[0] - MAX_RESID
+                mc_resid = mc_resid[-MAX_RESID:]
 
     except KeyboardInterrupt:
         pass
@@ -461,6 +676,9 @@ def main():
             _write_mix(lb_resid, np.zeros((lb_resid.shape[0], 2), dtype=np.float32))
         if mc_resid.shape[0] > 0:
             _write_mix(np.zeros((mc_resid.shape[0], 2), dtype=np.float32), mc_resid)
+        # Xả nốt cửa sổ nhìn trước còn kẹt trong limiter
+        if limiter:
+            _emit(limiter.flush())
     except Exception as e:
         print(f"WARNING: Flush cuối lỗi: {e}", flush=True)
 
@@ -471,6 +689,24 @@ def main():
             f"CPU quá tải hoặc write WAV quá chậm)",
             flush=True
         )
+
+    # Dòng máy đọc được cho tiến trình cha: nhờ nó mà lần sau khách báo "thu bị
+    # rè" là biết ngay do máy đói CPU (drop/overrun) hay do trộn quá đỉnh (limit).
+    limited = limiter.limited_samples if limiter else 0
+    limit_ratio = (limited / frames_written) if frames_written else 0.0
+    gain_min = limiter.min_gain if limiter else 1.0
+    elapsed = time.time() - capture_started_at
+    # Phiên quá ngắn thì phần khởi động stream chiếm tỉ trọng lớn, tỉ lệ này
+    # nhiễu và dễ báo oan → chỉ tính khi đã thu đủ lâu.
+    capture_ratio = 1.0
+    if elapsed >= 3.0:
+        capture_ratio = min(1.0, frames_written / (elapsed * out_rate))
+    print(
+        f"STATS: drop={overflow_count[0]} overrun={underrun_count[0]} "
+        f"drift={drift_dropped[0]} limit={limit_ratio:.4f} gainmin={gain_min:.3f} "
+        f"capture={capture_ratio:.3f}",
+        flush=True
+    )
 
     for s in [mic_stream, lb_stream]:
         if s:
