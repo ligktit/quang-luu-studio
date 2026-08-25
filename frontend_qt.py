@@ -198,14 +198,19 @@ class MainDashboard(QMainWindow):
         self._auto_echo_playing = None   # trạng thái nhạc đã CHỐT (None = chưa biết)
         self._auto_echo_streak = 0       # số lần lấy mẫu liên tiếp cho trạng thái mới
 
+        # Tự động bật/tắt Khử ồn theo nhạc (Premium) — xem _apply_auto_noise_setting
+        self._auto_noise_timer = None
+        self._auto_noise_playing = None
+        self._auto_noise_streak = 0
+
         # Expose module-level config to panels (avoids circular imports in ui/panels/*)
         self.MIDI_CC = MIDI_CC
         self.SCALE_VALUES = SCALE_VALUES
 
-        # Window — Performance Stage: 1100×650
+        # Window — cỡ đi theo tỉ lệ màn hình (xem ui/responsive.py), không fix cứng
         self.setWindowTitle("Quang Lưu Studio")
         self.setWindowIcon(QIcon("app_icon.ico"))
-        self.setMinimumWidth(780)
+        rp.set_min_size(self, 780, 200)
         self._autotune_on = False
         self.setStyleSheet(APP_QSS)
 
@@ -292,6 +297,9 @@ class MainDashboard(QMainWindow):
 
         # Tự động bật/tắt Vang theo nhạc (Premium) — chỉ chạy nếu bật trong Cài đặt
         self._apply_auto_echo_setting()
+
+        # Tự động bật/tắt Khử ồn theo nhạc (Premium) — cùng điều kiện như trên
+        self._apply_auto_noise_setting()
 
         # Accessibility — TTS, theme, shortcuts (sau khi UI đã build xong)
         self._init_accessibility()
@@ -1899,13 +1907,25 @@ class MainDashboard(QMainWindow):
         KHÁC mute_mic (tắt hẳn kênh mic): nút này chỉ đóng/mở noise gate bên
         Studio One nên người hát vẫn nghe giọng mình, chỉ bớt tiếng ồn phòng.
         """
-        self.tat_on_state = not getattr(self, 'tat_on_state', False)
+        self._set_tat_on(not getattr(self, 'tat_on_state', False))
+
+    def _set_tat_on(self, on: bool, speak: bool = True):
+        """Đặt trạng thái Khử ồn — đường DUY NHẤT gửi CC "tat_on".
+
+        Cả nút bấm tay lẫn Tắt ồn tự động đều đi qua đây, nên cờ `tat_on_state`,
+        nút trên panel Công cụ và MIDI không bao giờ lệch nhau.
+
+        `speak=False` cho đường tự động: máy tự lật thì đã có toast báo, đọc
+        thêm bằng TTS mỗi lần vào/ra bài sẽ thành ồn ào.
+        """
+        self.tat_on_state = bool(on)
         val = 127 if self.tat_on_state else 0
         self.engine.send_midi(int(MIDI_CC.get("tat_on", 48)), val)
         btn = self._func_buttons.get("Tắt Ồn")
         if btn:
             btn.setActive(self.tat_on_state)
-        self._a11y_speak(f"Tắt ồn {'bật' if self.tat_on_state else 'tắt'}")
+        if speak:
+            self._a11y_speak(f"Tắt ồn {'bật' if self.tat_on_state else 'tắt'}")
         print(f"[TAT ON] -> {'ON' if self.tat_on_state else 'OFF'} (Value {val})")
 
     # ── Tự động bật/tắt Vang theo nhạc (Premium) ────────────────────────────
@@ -1991,7 +2011,7 @@ class MainDashboard(QMainWindow):
         self._auto_echo_streak = 0
         # Có nhạc → mở Vang; hết nhạc → tắt Vang (mute kênh Vang).
         self._set_reverb_muted(not playing)
-        self._show_message("🎚️ Tự động bật Vang" if playing else "🎚️ Tự động tắt Vang")
+        self._show_message("Tự động bật Vang" if playing else "Tự động tắt Vang")
 
     def _set_reverb_muted(self, muted: bool):
         """Đặt trạng thái mute kênh Vang, đi ĐÚNG đường như user tự bấm.
@@ -2007,6 +2027,74 @@ class MainDashboard(QMainWindow):
                 ch.mute_btn.click()
         except Exception as e:
             print(f"[AUTO ECHO] đặt mute Vang lỗi: {e}")
+
+    # ── Tự động bật/tắt Khử ồn theo nhạc (Premium) ──────────────────────────
+    # Cùng khuôn và cùng chiều với Vang tự động: nhạc vào là bật khử ồn để
+    # tiếng ồn phòng (quạt, điều hoà, bàn tán) không lẫn vào bài hát; hết nhạc
+    # thì trả mic về tự nhiên để MC/khách nói chuyện không bị noise gate cắt lời.
+    # Bật nhanh, tắt chậm — y như Vang — để không lật qua lật lại lúc tua bài.
+    _AUTO_NOISE_TICK_MS = 500
+    _AUTO_NOISE_ON_TICKS = 1    # ~0.5s
+    _AUTO_NOISE_OFF_TICKS = 6   # ~3s
+
+    def _auto_noise_enabled(self) -> bool:
+        """Tính năng đang bật trong Cài đặt VÀ license còn quyền Premium."""
+        if not self.settings.get("auto_noise_enabled", False):
+            return False
+        try:
+            from core import entitlements
+            return entitlements.has_feature("auto_noise")
+        except Exception:
+            return False
+
+    def _apply_auto_noise_setting(self):
+        """Bật/tắt vòng lặp theo dõi nhạc theo thiết lập hiện tại.
+
+        Gọi lúc khởi động và mỗi lần user lưu Cài đặt. Khi tắt tính năng thì
+        KHÔNG tự đụng vào Khử ồn — giữ nguyên trạng thái user đang nghe.
+        """
+        want = self._auto_noise_enabled()
+        if want and self._auto_noise_timer is None:
+            self._auto_noise_timer = QTimer(self)
+            self._auto_noise_timer.timeout.connect(self._auto_noise_tick)
+            self._auto_noise_timer.start(self._AUTO_NOISE_TICK_MS)
+            # Chốt theo hiện trạng để không lật Khử ồn ngay khi vừa bật tính năng
+            self._auto_noise_playing = self._music_is_playing()
+            self._auto_noise_streak = 0
+            print("[AUTO NOISE] Bật theo dõi nhạc")
+        elif not want and self._auto_noise_timer is not None:
+            self._auto_noise_timer.stop()
+            self._auto_noise_timer.deleteLater()
+            self._auto_noise_timer = None
+            self._auto_noise_playing = None
+            self._auto_noise_streak = 0
+            print("[AUTO NOISE] Tắt theo dõi nhạc")
+
+    def _auto_noise_tick(self):
+        """Một nhịp lấy mẫu: đủ số mẫu liên tiếp thì mới lật Khử ồn."""
+        # License có thể hết hạn / bị thu hồi giữa phiên → dừng luôn.
+        if not self._auto_noise_enabled():
+            self._apply_auto_noise_setting()
+            return
+
+        playing = self._music_is_playing()
+        if playing == self._auto_noise_playing:
+            self._auto_noise_streak = 0
+            return
+
+        self._auto_noise_streak += 1
+        needed = self._AUTO_NOISE_ON_TICKS if playing else self._AUTO_NOISE_OFF_TICKS
+        if self._auto_noise_streak < needed:
+            return
+
+        self._auto_noise_playing = playing
+        self._auto_noise_streak = 0
+        # Có nhạc → bật khử ồn; hết nhạc → tắt khử ồn.
+        # Đi qua _set_tat_on để nút Tắt Ồn trên panel sáng/tắt theo, không phải
+        # gửi CC thẳng rồi để nút hiển thị một đằng máy chạy một nẻo.
+        if self.tat_on_state != playing:
+            self._set_tat_on(playing, speak=False)
+            self._show_message("Tự động bật khử ồn" if playing else "Tự động tắt khử ồn")
 
     def _on_scale_toggle(self):
         """Toggle Major ↔ Minor"""
@@ -3413,6 +3501,9 @@ class MainDashboard(QMainWindow):
         if self._auto_echo_timer is not None:
             self._auto_echo_timer.stop()
             self._auto_echo_timer = None
+        if self._auto_noise_timer is not None:
+            self._auto_noise_timer.stop()
+            self._auto_noise_timer = None
         if self._marquee_timer is not None:
             self._marquee_timer.stop()
         if self._marquee_widget is not None and hasattr(self._marquee_widget, 'timer'):

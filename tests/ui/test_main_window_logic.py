@@ -487,6 +487,143 @@ def test_auto_echo_reverb_mute_uses_mixer_button(qapp, mock_engine, qtbot):
     assert ch.is_muted() is False
 
 
+# ── Tắt ồn tự động theo nhạc (Premium) ──────────────────────────────────────
+
+def _auto_noise_dashboard(qtbot, premium=True, enabled=True):
+    dashboard = _make_dashboard(qtbot)
+    dashboard.settings["auto_noise_enabled"] = enabled
+    patcher = patch("core.entitlements.has_feature",
+                    side_effect=lambda name: premium or name != "auto_noise")
+    patcher.start()
+    qtbot.addWidget(dashboard)
+    return dashboard, patcher
+
+
+def _stop_auto_noise(dashboard, patcher):
+    """Dừng timer thật + gỡ patch entitlements sau mỗi test."""
+    dashboard.settings["auto_noise_enabled"] = False
+    if dashboard._auto_noise_timer is not None:
+        dashboard._auto_noise_timer.stop()
+        dashboard._auto_noise_timer = None
+    patcher.stop()
+
+
+def test_auto_noise_requires_premium(qapp, mock_engine, qtbot):
+    # Standard bật thiết lập cũng KHÔNG chạy vòng theo dõi nhạc.
+    dashboard, patcher = _auto_noise_dashboard(qtbot, premium=False)
+    try:
+        dashboard._apply_auto_noise_setting()
+        assert dashboard._auto_noise_timer is None
+    finally:
+        patcher.stop()
+
+
+def test_auto_noise_off_when_setting_disabled(qapp, mock_engine, qtbot):
+    # Premium nhưng chưa bật trong Cài đặt → không theo dõi.
+    dashboard, patcher = _auto_noise_dashboard(qtbot, premium=True, enabled=False)
+    try:
+        dashboard._apply_auto_noise_setting()
+        assert dashboard._auto_noise_timer is None
+    finally:
+        patcher.stop()
+
+
+def test_auto_noise_follows_music(qapp, mock_engine, qtbot):
+    # Premium + bật: có nhạc → bật khử ồn; hết nhạc (đủ số nhịp) → tắt.
+    import backend
+    cc = int(backend.AppConfig.get_midi_cc()["tat_on"])
+    dashboard, patcher = _auto_noise_dashboard(qtbot, premium=True)
+    try:
+        dashboard._music_is_playing = MagicMock(return_value=False)
+        dashboard._apply_auto_noise_setting()
+        assert dashboard._auto_noise_timer is not None
+        assert dashboard._auto_noise_playing is False
+
+        # Nhạc chạy → bật khử ồn ngay ở nhịp đầu
+        mock_engine.send_midi.reset_mock()
+        dashboard._music_is_playing.return_value = True
+        dashboard._auto_noise_tick()
+        assert dashboard.tat_on_state is True
+        mock_engine.send_midi.assert_called_once_with(cc, 127)
+
+        # Nhạc dừng: các nhịp đầu chưa lật (chống rung khi tua/chuyển bài)
+        mock_engine.send_midi.reset_mock()
+        dashboard._music_is_playing.return_value = False
+        for _ in range(dashboard._AUTO_NOISE_OFF_TICKS - 1):
+            dashboard._auto_noise_tick()
+        assert dashboard.tat_on_state is True
+        mock_engine.send_midi.assert_not_called()
+
+        # Đủ số nhịp → tắt khử ồn
+        dashboard._auto_noise_tick()
+        assert dashboard.tat_on_state is False
+        mock_engine.send_midi.assert_called_once_with(cc, 0)
+    finally:
+        _stop_auto_noise(dashboard, patcher)
+
+
+def test_auto_noise_ignores_short_gap(qapp, mock_engine, qtbot):
+    # Nhạc khựng 1 nhịp rồi chạy lại → KHÔNG được tắt khử ồn.
+    dashboard, patcher = _auto_noise_dashboard(qtbot, premium=True)
+    try:
+        dashboard._music_is_playing = MagicMock(return_value=True)
+        dashboard._apply_auto_noise_setting()
+        assert dashboard._auto_noise_playing is True
+        dashboard._set_tat_on(True, speak=False)
+
+        mock_engine.send_midi.reset_mock()
+        dashboard._music_is_playing.return_value = False
+        dashboard._auto_noise_tick()
+        dashboard._music_is_playing.return_value = True
+        dashboard._auto_noise_tick()
+
+        mock_engine.send_midi.assert_not_called()
+        assert dashboard.tat_on_state is True
+        assert dashboard._auto_noise_playing is True
+    finally:
+        _stop_auto_noise(dashboard, patcher)
+
+
+def test_auto_noise_keeps_button_in_sync(qapp, mock_engine, qtbot):
+    # Máy tự lật thì nút Tắt Ồn trên panel Công cụ phải sáng/tắt theo, nếu không
+    # người dùng bấm một cái là lật ngược lại điều họ đang thấy.
+    dashboard, patcher = _auto_noise_dashboard(qtbot, premium=True)
+    btn = dashboard._func_buttons["Tắt Ồn"]
+    try:
+        dashboard._music_is_playing = MagicMock(return_value=False)
+        dashboard._apply_auto_noise_setting()
+
+        dashboard._music_is_playing.return_value = True
+        dashboard._auto_noise_tick()
+        assert btn._active is True
+
+        dashboard._music_is_playing.return_value = False
+        for _ in range(dashboard._AUTO_NOISE_OFF_TICKS):
+            dashboard._auto_noise_tick()
+        assert btn._active is False
+    finally:
+        _stop_auto_noise(dashboard, patcher)
+
+
+def test_auto_noise_does_not_touch_manual_state_when_disabled(qapp, mock_engine, qtbot):
+    # Tắt tính năng giữa chừng: KHÔNG được tự đụng vào Khử ồn user đang nghe.
+    dashboard, patcher = _auto_noise_dashboard(qtbot, premium=True)
+    try:
+        dashboard._music_is_playing = MagicMock(return_value=True)
+        dashboard._apply_auto_noise_setting()
+        dashboard._set_tat_on(True, speak=False)
+
+        mock_engine.send_midi.reset_mock()
+        dashboard.settings["auto_noise_enabled"] = False
+        dashboard._apply_auto_noise_setting()
+
+        assert dashboard._auto_noise_timer is None
+        assert dashboard.tat_on_state is True
+        mock_engine.send_midi.assert_not_called()
+    finally:
+        _stop_auto_noise(dashboard, patcher)
+
+
 def test_music_is_playing_prefers_embedded_player(qapp, mock_engine, qtbot):
     # Player nhúng phát bằng QMediaPlayer thì WinRT/CDP không thấy → phải hỏi
     # thẳng cửa sổ player.

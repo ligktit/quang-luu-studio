@@ -26,6 +26,7 @@ PREMIUM_FEATURES = frozenset({
     "progress",      # Bảng tiến bộ luyện hát
     "setlist",       # Live Setlist / Auto-Pilot
     "auto_echo",     # Tự động bật/tắt Vang theo nhạc
+    "auto_noise",    # Tự động bật/tắt Khử ồn theo nhạc
 })
 
 

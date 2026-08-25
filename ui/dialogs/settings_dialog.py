@@ -481,6 +481,11 @@ class SettingsDialog(QDialog):
         self._build_auto_echo_widgets(settings)
         lay.addWidget(self._section_card(self._build_auto_echo))
 
+        # Tắt ồn tự động theo nhạc (Premium)
+        lay.addWidget(self._section_header(SVG_MIC, "Tắt ồn tự động theo nhạc (Premium)"))
+        self._build_auto_noise_widgets(settings)
+        lay.addWidget(self._section_card(self._build_auto_noise))
+
         lay.addWidget(self._section_header(SVG_SETTINGS, "Calibration"))
         cal_btn = QPushButton("Mở Calibration Auto-Tune")
         cal_btn.setIcon(self._svg_icon(SVG_SETTINGS, "white", 17))
@@ -532,17 +537,71 @@ class SettingsDialog(QDialog):
         self._cb_auto_echo.setMinimumHeight(34)
         vl.addWidget(self._cb_auto_echo)
         note = QLabel(
-            "Chỉ tác động lúc nhạc bắt đầu và lúc nhạc dừng — giữa chừng bạn vẫn "
-            "chỉnh Vang bằng tay như thường."
+            "Vang tắt sau khi hết nhạc khoảng 3 giây, để nói chuyện giữa các bài "
+            "không bị vọng. Giữa chừng bạn vẫn chỉnh Vang bằng tay như thường."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(self._field_label_qss(11, C["text_muted"], 600, True))
+        vl.addWidget(note)
+
+    def _build_auto_noise_widgets(self, settings):
+        """Ô bật "tự động bật/tắt Khử ồn theo nhạc" — tính năng Premium.
+
+        Cùng khuôn với Vang tự động: Standard vẫn THẤY ô này, tick vào thì mở
+        dialog nâng cấp rồi ô tự bỏ tick.
+        """
+        self._cb_auto_noise = QCheckBox("Tự bật khử ồn khi có nhạc, tự tắt khi hết nhạc")
+        self._cb_auto_noise.setStyleSheet(self._checkbox_qss)
+        self._cb_auto_noise.setChecked(bool(settings.get("auto_noise_enabled", False)))
+        self._cb_auto_noise.setToolTip("Tự bật khử ồn khi có nhạc, tắt khi hết nhạc")
+        self._cb_auto_noise.toggled.connect(self._on_auto_noise_toggled)
+
+    def _on_auto_noise_toggled(self, checked):
+        if not checked:
+            return
+        try:
+            from core import entitlements
+            if entitlements.has_feature("auto_noise"):
+                return
+            from ui.dialogs.premium_dialog import PremiumUpsellDialog
+            dlg = PremiumUpsellDialog("auto_noise", "Tắt ồn tự động theo nhạc", self)
+            if dlg.exec() == QDialog.Accepted:
+                self._dashboard._open_activation_upgrade()
+                if entitlements.has_feature("auto_noise"):
+                    return  # đã nâng cấp xong → giữ tick
+        except Exception as e:
+            print(f"[AUTO NOISE] kiểm tra quyền lỗi: {e}")
+        # Chưa có quyền → bỏ tick (chặn signal để không gọi lại chính mình)
+        self._cb_auto_noise.blockSignals(True)
+        self._cb_auto_noise.setChecked(False)
+        self._cb_auto_noise.blockSignals(False)
+
+    def _build_auto_noise(self, vl):
+        vl.setSpacing(8)
+        self._cb_auto_noise.setMinimumHeight(34)
+        vl.addWidget(self._cb_auto_noise)
+        note = QLabel(
+            "Khử ồn tắt sau khi hết nhạc khoảng 3 giây, để nói chuyện giữa các bài "
+            "không bị cắt lời. Nút Tắt Ồn ở panel Công cụ vẫn bấm tay được như thường."
         )
         note.setWordWrap(True)
         note.setStyleSheet(self._field_label_qss(11, C["text_muted"], 600, True))
         vl.addWidget(note)
 
     def _build_tools_tab(self):
-        tab = QWidget()
-        tab.setStyleSheet("background: transparent;")
-        lay = QHBoxLayout(tab)
+        # Bọc trong QScrollArea như tab Hệ thống. Không có nó thì mỗi lần thêm
+        # một thẻ mới, Qt bóp các thẻ sẵn có cho vừa chiều cao tab: chữ đè lên ô
+        # tích, nút tràn ra ngoài viền thẻ. Cuộn thì tệ nhất cũng chỉ là phải
+        # lăn chuột, không bao giờ vỡ bố cục.
+        from PySide6.QtWidgets import QScrollArea
+        tab = QScrollArea()
+        tab.setWidgetResizable(True)
+        tab.setFrameShape(QFrame.NoFrame)
+        tab.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        inner = QWidget()
+        inner.setStyleSheet("background: transparent;")
+        tab.setWidget(inner)
+        lay = QHBoxLayout(inner)
         lay.setContentsMargins(22, 18, 22, 18)
         lay.setSpacing(16)
 
@@ -1567,6 +1626,7 @@ class SettingsDialog(QDialog):
             s["display_monitor_index"]  = max(0, self._combo_monitor.currentIndex())
         if hasattr(self, "_cb_auto_echo"):
             s["auto_echo_enabled"]      = self._cb_auto_echo.isChecked()
+            s["auto_noise_enabled"]     = self._cb_auto_noise.isChecked()
 
         acc = backend.AppConfig.get("accessibility") or {}
         if hasattr(self, "_cb_tts"):
@@ -1606,6 +1666,13 @@ class SettingsDialog(QDialog):
                 self._dashboard._apply_auto_echo_setting()
         except Exception as e:
             print(f"[SETTINGS] apply auto echo lỗi: {e}")
+
+        # Áp dụng Tắt ồn tự động ngay (vòng theo dõi riêng, cùng khuôn với Vang)
+        try:
+            if hasattr(self._dashboard, "_apply_auto_noise_setting"):
+                self._dashboard._apply_auto_noise_setting()
+        except Exception as e:
+            print(f"[SETTINGS] apply auto noise lỗi: {e}")
 
         self._dashboard._show_message("Đã lưu thiết lập")
         self.close()
