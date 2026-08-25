@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 # ⚠️ Bump cùng lúc với `yt-dlp>=...` trong requirements.txt mỗi lần build phát hành:
 # bản nạp ngoài chỉ được dùng khi MỚI HƠN hằng số này, nếu không một bản ngoài cũ
 # còn sót lại sẽ kéo tụt app sau khi build mới.
-BUNDLED_YTDLP_VERSION = "2026.07.04"
+BUNDLED_YTDLP_VERSION = "2026.08.19"
 
 # Nơi chứa bản yt-dlp nạp ngoài (giải nén thẳng, bên trong là thư mục `yt_dlp/`)
 OVERRIDE_DIR = os.path.join(DATA_DIR, "ytdlp")
