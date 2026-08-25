@@ -27,8 +27,10 @@ if updated != content:
 BAT_PATH = Path(__file__).parent / "build_installer.bat"
 if BAT_PATH.exists():
     content = BAT_PATH.read_text(encoding="utf-8")
+    # \d+(\.\d+)* chứ KHÔNG phải [\d\.]+ — lớp ký tự tham lam nuốt luôn dấu
+    # chấm của ".exe" nên câu thông báo cuối build thành "..._v1.7.4exe".
     updated = re.sub(
-        r'(Setup_QuangLuuStudio_v)[\d\.]+',
+        r'(Setup_QuangLuuStudio_v)\d+(?:\.\d+)*',
         rf'\g<1>{__version__}',
         content,
     )
