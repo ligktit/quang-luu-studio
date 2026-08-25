@@ -105,100 +105,207 @@ class _LifecycleMixin:
                 if not running:
                     threading.Thread(target=lambda: subprocess.Popen(path), daemon=True).start()
 
-    def kill_studio_one_gracefully(self, timeout_sec: int = 15):
-        try:
-            import win32gui
-            import win32con
-        except ImportError:
-            self._force_kill_studio_one()
-            return
+    def close_studio_one_safely(self, timeout_sec: float = 30.0, save: bool = True,
+                                force_kill: bool = False, on_progress=None,
+                                should_abort=None) -> dict:
+        """Lưu bài rồi đóng Studio One **sạch**, không dùng taskkill.
 
-        hwnd_list = []
+        Vì sao phải làm khác cách cũ: taskkill để lại cờ "thoát bất thường" trong
+        Studio One → lần mở sau nó đòi phục hồi phiên và không vào thẳng file đã
+        lưu được. Muốn hết cảnh báo đó thì Studio One phải tự thoát.
 
-        def _enum_main(hwnd, _):
-            if win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
-                if "Studio One" in win32gui.GetWindowText(hwnd):
-                    hwnd_list.append(hwnd)
-            return True
+        Trình tự:
+          1. Ctrl+S trước — bài đã lưu thì lúc đóng Studio One không hỏi gì cả,
+             tức là không còn hộp thoại nào để đoán mò.
+          2. WM_CLOSE tới cửa sổ chính.
+          3. Còn hộp thoại nào bật lên thì giành foreground thật (AttachThreadInput)
+             rồi Enter — nút mặc định của Studio One là "Save".
+          4. Chờ process biến mất.
 
-        try:
-            win32gui.EnumWindows(_enum_main, None)
-        except Exception:
-            pass
+        Hết giờ thì **không** giết process (trừ khi force_kill=True): để Studio One
+        chạy tiếp còn an toàn hơn là giết nó giữa lúc đang ghi file.
 
-        if not hwnd_list:
-            self._force_kill_studio_one()
-            return
+        Trả dict {"status": ..., "saved": bool} với status là một trong
+        "closed" | "not_running" | "timeout" | "force_killed" | "aborted".
+        """
+        from core import so_windows
 
-        for hwnd in hwnd_list:
+        def _p(msg):
+            print(f"[STUDIO ONE] {msg}")
+            if on_progress:
+                try:
+                    on_progress(msg)
+                except Exception:
+                    pass
+
+        def _aborted():
+            try:
+                return bool(should_abort and should_abort())
+            except Exception:
+                return False
+
+        if not so_windows.studio_one_pids():
+            return {"status": "not_running", "saved": False}
+
+        mods = so_windows.win32_modules()
+        if not mods:
+            _p("Thiếu pywin32 — không đóng an toàn được")
+            if force_kill:
+                self._force_kill_studio_one()
+                return {"status": "force_killed", "saved": False}
+            return {"status": "timeout", "saved": False}
+        win32gui, win32con, _ = mods
+
+        mains = so_windows.main_windows()
+        saved = False
+
+        if save and mains:
+            saved = self._studio_one_save(mains[0], on_progress=_p)
+        elif save:
+            _p("Không thấy cửa sổ chính — bỏ qua bước lưu")
+
+        if _aborted():
+            return {"status": "aborted", "saved": saved}
+
+        _p("Đang đóng Studio One...")
+        # Chụp lại toàn bộ cửa sổ TRƯỚC khi xin đóng: cái nào mọc lên sau mới là
+        # hộp thoại hỏi lưu. Lọc theo cách này thì cửa sổ plugin đang mở sẵn không
+        # bị nhận nhầm rồi ăn Enter oan.
+        known = set(so_windows.all_windows())
+        for hwnd in (mains or known):
             try:
                 win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
             except Exception:
                 pass
-        print("[STUDIO ONE] Đã gửi WM_CLOSE, chờ dialog Save...")
-
-        SAVE_DIALOG_KEYWORDS = ["save", "lưu", "unsaved", "changes", "studio one"]
-
-        def _is_save_dialog(title):
-            t = title.lower()
-            return any(kw in t for kw in SAVE_DIALOG_KEYWORDS)
-
-        enter_sent   = False
-        poll_deadline = time.time() + 6
-
-        while time.time() < poll_deadline and not enter_sent:
-            time.sleep(0.25)
-            dialog_hwnds = []
-
-            def _enum_dialogs(hwnd, _):
-                if win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
-                    title = win32gui.GetWindowText(hwnd)
-                    if title and _is_save_dialog(title) and hwnd not in hwnd_list:
-                        dialog_hwnds.append((hwnd, title))
-                return True
-
-            try:
-                win32gui.EnumWindows(_enum_dialogs, None)
-            except Exception:
-                pass
-
-            if dialog_hwnds:
-                dlg_hwnd, dlg_title = dialog_hwnds[0]
-                print(f"[STUDIO ONE] Phát hiện dialog: '{dlg_title}' -> nhấn Enter để lưu")
-                try:
-                    win32gui.ShowWindow(dlg_hwnd, win32con.SW_RESTORE)
-                    win32gui.SetForegroundWindow(dlg_hwnd)
-                    time.sleep(0.15)
-                    pyautogui.press('enter')
-                    enter_sent = True
-                    print("[STUDIO ONE] Đã nhấn Enter xác nhận lưu")
-                except Exception as e:
-                    print(f"[STUDIO ONE] Không thể nhấn Enter: {e}")
-                    try:
-                        VK_RETURN = 0x0D
-                        win32gui.PostMessage(dlg_hwnd, win32con.WM_KEYDOWN, VK_RETURN, 0)
-                        win32gui.PostMessage(dlg_hwnd, win32con.WM_KEYUP,   VK_RETURN, 0)
-                        enter_sent = True
-                        print("[STUDIO ONE] Đã gửi WM_KEYDOWN Enter")
-                    except Exception as e2:
-                        print(f"[STUDIO ONE] WM_KEYDOWN cũng thất bại: {e2}")
-
-        if not enter_sent:
-            print("[STUDIO ONE] Không thấy dialog Save")
 
         deadline = time.time() + timeout_sec
+        last_enter = 0.0
+        enter_count = 0
+
         while time.time() < deadline:
-            still_running = any(
-                "Studio One" in (p.info.get('name') or '')
-                for p in psutil.process_iter(['name'])
-            )
-            if not still_running:
-                print("[STUDIO ONE] Đã thoát hoàn toàn")
-                return
+            if _aborted():
+                return {"status": "aborted", "saved": saved}
+            if not so_windows.studio_one_pids():
+                _p("Studio One đã thoát sạch")
+                return {"status": "closed", "saved": saved}
+
+            # Hộp thoại = cửa sổ của Studio One đang hiện và mới mọc lên sau WM_CLOSE.
+            if time.time() - last_enter > 1.2 and enter_count < 5:
+                for hwnd in so_windows.all_windows():
+                    if hwnd in known:
+                        continue
+                    try:
+                        if not win32gui.IsWindowVisible(hwnd):
+                            continue
+                        title = win32gui.GetWindowText(hwnd) or "(không tên)"
+                    except Exception:
+                        continue
+                    _p(f"Xác nhận hộp thoại: {title}")
+                    if so_windows.force_foreground(hwnd):
+                        time.sleep(0.2)
+                        try:
+                            pyautogui.press("enter")
+                        except Exception as e:
+                            print(f"[STUDIO ONE] Không gửi được Enter: {e}")
+                    else:
+                        # Không giành được foreground — bắn phím thẳng vào cửa sổ.
+                        VK_RETURN = 0x0D
+                        try:
+                            win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, VK_RETURN, 0)
+                            win32gui.PostMessage(hwnd, win32con.WM_KEYUP, VK_RETURN, 0)
+                        except Exception:
+                            pass
+                    last_enter = time.time()
+                    enter_count += 1
+                    break
+
             time.sleep(0.4)
 
-        print("[STUDIO ONE] Timeout, chuyển sang force kill...")
-        self._force_kill_studio_one()
+        if force_kill:
+            _p("Quá hạn chờ — buộc phải tắt cứng (lần sau Studio One sẽ đòi phục hồi)")
+            self._force_kill_studio_one()
+            return {"status": "force_killed", "saved": saved}
+
+        _p("Studio One chưa đóng xong — để nguyên cho an toàn, vui lòng đóng tay")
+        return {"status": "timeout", "saved": saved}
+
+    def _studio_one_save(self, hwnd, on_progress=None) -> bool:
+        """Giành foreground rồi gửi Ctrl+S. Trả True nếu đã gửi được phím lưu."""
+        from core import so_windows
+
+        def _p(msg):
+            if on_progress:
+                on_progress(msg)
+            else:
+                print(f"[STUDIO ONE] {msg}")
+
+        mods = so_windows.win32_modules()
+        if not mods:
+            return False
+        win32gui, _, _ = mods
+
+        # Cửa sổ đang bị ẩn (chế độ khách) thì phải hiện lại — phím chỉ tới được
+        # cửa sổ đang hiển thị và giữ focus.
+        try:
+            if not win32gui.IsWindowVisible(hwnd):
+                win32gui.ShowWindow(hwnd, so_windows.SW_SHOW)
+        except Exception:
+            pass
+
+        _p("Đang lưu bài trong Studio One...")
+        if not so_windows.force_foreground(hwnd):
+            _p("Không giành được focus — bỏ qua bước lưu")
+            return False
+
+        before = set(so_windows.all_windows())
+        time.sleep(0.25)
+        try:
+            pyautogui.hotkey("ctrl", "s")
+        except Exception as e:
+            _p(f"Không gửi được Ctrl+S: {e}")
+            return False
+
+        # Chờ Studio One ghi xong. Nếu bài chưa từng lưu, nó bật hộp thoại đặt tên
+        # — Enter để nhận mặc định, còn hơn kẹt lại rồi rơi vào tắt cứng.
+        # Im lặng 1.5s liên tục = coi như đã ghi xong; tối đa 2 hộp thoại.
+        quiet_until = time.time() + 1.5
+        handled = 0
+        while time.time() < quiet_until and handled < 2:
+            time.sleep(0.3)
+            visible_extra = []
+            for h in so_windows.all_windows():
+                if h in before:
+                    continue
+                try:
+                    if win32gui.IsWindowVisible(h):
+                        visible_extra.append(h)
+                except Exception:
+                    pass
+            if not visible_extra:
+                continue
+            dlg = visible_extra[0]
+            try:
+                title = win32gui.GetWindowText(dlg) or "(không tên)"
+            except Exception:
+                title = "(không tên)"
+            _p(f"Xác nhận khi lưu: {title}")
+            if so_windows.force_foreground(dlg):
+                time.sleep(0.2)
+                try:
+                    pyautogui.press("enter")
+                except Exception:
+                    pass
+            before.add(dlg)
+            handled += 1
+            quiet_until = time.time() + 2.0
+
+        _p("Đã lưu bài")
+        return True
+
+    def kill_studio_one_gracefully(self, timeout_sec: int = 15):
+        """Tên gọi cũ — giữ cho code/bản build cũ. Không còn tắt cứng mặc định."""
+        return self.close_studio_one_safely(timeout_sec=timeout_sec, save=True,
+                                            force_kill=False)
 
     def _force_kill_studio_one(self):
         NAMES = [
