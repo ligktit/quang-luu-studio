@@ -3631,7 +3631,8 @@ class MainDashboard(QMainWindow):
 #  ACTIVATION DIALOG (simplified for now)
 # ══════════════════════════════════════════════════════
 class ActivationDialog(QDialog):
-    def __init__(self, callback=None, is_expired=False, parent=None):
+    def __init__(self, callback=None, is_expired=False, needs_renewal=False,
+                 parent=None):
         # We need QApplication to exist before creating any QWidget
         self._ensure_app()
         # parent chỉ dùng khi mở giữa phiên (nâng cấp Premium) — để dialog nằm
@@ -3639,10 +3640,13 @@ class ActivationDialog(QDialog):
         super().__init__(parent)
         self.callback = callback
         self.is_expired = is_expired
+        self.needs_renewal = needs_renewal
         self.activated = False
         self.setWindowTitle("Kích hoạt Quang Lưu Studio")
         self.setWindowIcon(QIcon("app_icon.ico"))
-        rp.apply_dialog_size(self, 520, 510, fixed=True, max_scale=1.25)
+        # Khối gia hạn thêm một đoạn chữ + nút Thử lại nên cần cao hơn.
+        rp.apply_dialog_size(self, 520, 640 if needs_renewal else 510,
+                             fixed=True, max_scale=1.25)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 
         outer = QVBoxLayout(self)
@@ -3669,13 +3673,19 @@ class ActivationDialog(QDialog):
         title.setAlignment(Qt.AlignCenter)
         hdr_lay.addWidget(title)
 
-        if is_expired:
+        if needs_renewal:
+            # Giấy phép còn hạn, chỉ là lâu chưa gọi được máy chủ. Nói đúng như
+            # vậy — đừng bắt khách đi mua mã mới khi họ chỉ mất mạng.
+            msg = QLabel("Cần kết nối internet để gia hạn giấy phép")
+            msg.setStyleSheet(f"color: {C['orange']}; font-size: 14px; font-family: {FONT}; background: transparent; border: none;")
+        elif is_expired:
             msg = QLabel("Bản quyền đã hết hạn! Vui lòng nhập mã kích hoạt mới.")
             msg.setStyleSheet(f"color: {C['accent']}; font-size: 14px; font-family: {FONT}; background: transparent; border: none;")
         else:
             msg = QLabel("Vui lòng nhập Activation Code để tiếp tục.")
             msg.setStyleSheet(f"color: {C['text_muted']}; font-size: 14px; font-family: {FONT}; background: transparent; border: none;")
         msg.setAlignment(Qt.AlignCenter)
+        msg.setWordWrap(True)
         hdr_lay.addWidget(msg)
         outer.addWidget(header)
 
@@ -3686,8 +3696,43 @@ class ActivationDialog(QDialog):
         layout.setSpacing(14)
         layout.setContentsMargins(30, 24, 30, 24)
 
+        # ── Khối gia hạn (chỉ khi giấy phép còn hạn mà app chưa check-in được) ──
+        if needs_renewal:
+            days_off = backend.ActivationManager.days_since_verify()
+            days_left = backend.ActivationManager.get_days_remaining()
+            detail = QLabel(
+                f"Giấy phép của bạn vẫn còn {int(days_left)} ngày, nhưng app đã "
+                f"{int(days_off)} ngày chưa kết nối được máy chủ.\n"
+                "Bật mạng rồi bấm Thử lại — không cần nhập lại mã."
+            )
+            detail.setWordWrap(True)
+            detail.setAlignment(Qt.AlignCenter)
+            detail.setStyleSheet(
+                f"color: {C['text_muted']}; font-size: 13px; font-family: {FONT}; "
+                f"background: transparent; border: none;")
+            layout.addWidget(detail)
+
+            self.retry_btn = QPushButton("🔄 Thử lại")
+            self.retry_btn.setFixedHeight(48)
+            self.retry_btn.setCursor(Qt.PointingHandCursor)
+            self.retry_btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 17, 22))
+            self.retry_btn.clicked.connect(self._retry_renew)
+            add_shadow(self.retry_btn, C["green"], 10, (0, 3))
+            layout.addWidget(self.retry_btn)
+
+            sep_or = QLabel("hoặc nhập mã kích hoạt khác")
+            sep_or.setAlignment(Qt.AlignCenter)
+            sep_or.setStyleSheet(
+                f"color: {C['text_muted']}; font-size: 12px; background: transparent; border: none;")
+            layout.addWidget(sep_or)
+
         self.code_input = QLineEdit()
         self.code_input.setPlaceholderText("Nhập activation code...")
+        # Điền sẵn mã cũ nếu còn: khách bị đá ra thường không nhớ mã để đâu.
+        try:
+            self.code_input.setText(backend.ActivationManager.cached_code())
+        except Exception:
+            pass
         self.code_input.setFixedHeight(50)
         self.code_input.setStyleSheet(f"""
             QLineEdit {{
@@ -3785,6 +3830,27 @@ class ActivationDialog(QDialog):
             self.status_label.setText(f"{result.get('error', 'Mã không hợp lệ')}")
             self.status_label.setStyleSheet(f"color: {C['accent']}; font-size:13px;")
     
+    def _retry_renew(self):
+        """Nút 'Thử lại': xin gia hạn bằng giấy phép đang có, không cần nhập mã."""
+        self.retry_btn.setEnabled(False)
+        self.status_label.setText("Đang kết nối máy chủ...")
+        self.status_label.setStyleSheet(f"color: {C['text_muted']}; font-size:13px;")
+        # Cho Qt vẽ xong dòng trạng thái rồi mới gọi mạng (gọi thẳng sẽ đơ 10 giây
+        # mà người dùng không thấy gì).
+        QTimer.singleShot(50, self._do_renew)
+
+    def _do_renew(self):
+        result = backend.ActivationManager.try_renew_online()
+        if result.get("success"):
+            self.activated = True
+            self.status_label.setText("✅ Đã gia hạn! Đang mở app...")
+            self.status_label.setStyleSheet(f"color: {C['green']}; font-size:13px;")
+            QTimer.singleShot(900, self._close_and_continue)
+            return
+        self.retry_btn.setEnabled(True)
+        self.status_label.setText(f"❌ {result.get('error', 'Chưa gia hạn được.')}")
+        self.status_label.setStyleSheet(f"color: {C['accent']}; font-size:13px;")
+
     def _start_trial(self):
         """Bắt đầu dùng thử 3 ngày (server neo theo máy nên không xin lại được)"""
         result = backend.ActivationManager.start_trial()

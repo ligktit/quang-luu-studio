@@ -75,6 +75,40 @@ class ActivationManager:
         return not _lic.is_grace_valid()
 
     @staticmethod
+    def needs_renewal():
+        """
+        Máy CÓ giấy phép còn hạn thật, nhưng lâu không check-in được nên hết
+        grace. Không phải hết hạn — chỉ cần có mạng một lát là xong.
+
+        Tách riêng khỏi is_expired() để màn hình kích hoạt nói đúng chuyện: bắt
+        khách đi mua mã mới trong khi họ chỉ mất mạng là cách nhanh nhất để mất
+        khách.
+        """
+        return _lic.has_online_license() and _lic.in_license_term() and not _lic.is_grace_valid()
+
+    @staticmethod
+    def try_renew_online():
+        """Thử gia hạn ngay (nút "Thử lại" ở màn hình kích hoạt).
+        Returns dict: {success: bool, error: str}"""
+        result = _lic.verify_online()
+        if result.get("success"):
+            return {"success": True, "error": ""}
+        if result.get("http") == 0:
+            return {"success": False, "error":
+                    "Vẫn chưa kết nối được máy chủ. Kiểm tra mạng rồi thử lại."}
+        return {"success": False, "error": result.get("error") or "Máy chủ từ chối gia hạn."}
+
+    @staticmethod
+    def cached_code():
+        """Mã đã kích hoạt còn lưu dưới máy (để điền sẵn ô nhập)."""
+        return _lic.cached_code()
+
+    @staticmethod
+    def days_since_verify():
+        """Số ngày kể từ lần check-in online gần nhất."""
+        return _lic.days_since_verify()
+
+    @staticmethod
     def get_days_remaining():
         """Số ngày còn lại của license."""
         if not _lic.has_online_license():

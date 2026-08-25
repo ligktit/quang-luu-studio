@@ -239,7 +239,14 @@ def _show_license_lost_dialog(message):
 # liên tục nhiều ngày; nếu chỉ check-in lúc khởi động thì lệnh thu hồi phải chờ
 # tới lần khởi động sau mới tới nơi.
 _LICENSE_RECHECK_SECONDS = 6 * 3600
-_LICENSE_LOST_STATUSES = frozenset({"revoked", "expired", "not_activated", "invalid"})
+# Check-in hỏng (mất mạng, server bận) thì thử lại dày hơn nhiều: máy quán dùng
+# 4G chập chờn cần bắt được cửa sổ có mạng trước khi hết grace.
+_LICENSE_RETRY_SECONDS = 30 * 60
+# Phải khớp _TERMINAL_STATUSES của core.licensing.client: chỉ những trạng thái
+# server nói rõ "máy này hết quyền". KHÔNG có "invalid" — lỗi tạm thời nay trả
+# về status "offline", nếu để "invalid" ở đây thì mỗi lần mạng lỗi lại nhảy
+# cảnh báo "giấy phép không còn hiệu lực" giữa lúc khách đang hát.
+_LICENSE_LOST_STATUSES = frozenset({"revoked", "expired", "not_activated"})
 
 
 def _background_maintenance(notifier=None):
@@ -266,20 +273,28 @@ def _background_maintenance(notifier=None):
     # mới, để mỗi 6 giờ không bật lại một thông báo họ đã xem rồi.
     seen_unread = 0
 
+    next_wait = _LICENSE_RECHECK_SECONDS
     while True:
         try:
             from core.licensing import client as _lic
-            if _lic.has_online_license():
+            # Còn mã cũng phải thử: máy vừa mất token (server bận, token quá hạn)
+            # vẫn check-in lại được bằng mã và tự khôi phục trong phiên này —
+            # thay vì im lặng tới lần mở app sau.
+            if _lic.has_online_license() or _lic.cached_code():
                 result = _lic.verify_online()
                 status = result.get("status")
                 if status in _LICENSE_LOST_STATUSES:
-                    # verify_online đã xoá cache → Premium tắt ngay lập tức.
+                    # verify_online đã xoá token → Premium tắt ngay lập tức.
                     log.warning("License không còn hiệu lực (%s)", status)
                     if notifier is not None:
                         notifier.license_lost.emit(
                             result.get("error")
                             or "Giấy phép của máy này đã bị thu hồi hoặc hết hạn."
                         )
+                    next_wait = _LICENSE_RECHECK_SECONDS
+                else:
+                    next_wait = (_LICENSE_RECHECK_SECONDS if result.get("success")
+                                 else _LICENSE_RETRY_SECONDS)
         except Exception as e:
             log.debug("license re-verify skipped: %s", e)
 
@@ -311,7 +326,7 @@ def _background_maintenance(notifier=None):
             log.debug("cloud sync skipped: %s", e)
 
         slept = 0
-        while slept < _LICENSE_RECHECK_SECONDS:
+        while slept < next_wait:
             _t.sleep(30)
             slept += 30
 
@@ -332,7 +347,12 @@ def main():
     while True:
         # 1. Activation / trial gate
         if backend.ActivationManager.needs_activation():
-            dialog = frontend_qt.ActivationDialog(is_expired=_license_or_trial_expired())
+            # Phân biệt "hết hạn thật" với "chỉ là lâu chưa gọi được máy chủ" —
+            # cái sau chỉ cần bấm Thử lại, không phải đi mua mã mới.
+            dialog = frontend_qt.ActivationDialog(
+                is_expired=_license_or_trial_expired(),
+                needs_renewal=backend.ActivationManager.needs_renewal(),
+            )
             dialog.mainloop()
             if not dialog.activated:
                 log.info("User exited without activating")
