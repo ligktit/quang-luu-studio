@@ -38,6 +38,19 @@ if BAT_PATH.exists():
         BAT_PATH.write_text(updated, encoding="utf-8")
         print(f"[sync_version] Updated build_installer.bat -> v{__version__}")
 
+    # Bản Heavy dùng script riêng, cũng in tên file cài ở cuối.
+    HEAVY_PATH = Path(__file__).parent / "build_installer_heavy.bat"
+    if HEAVY_PATH.exists():
+        content = HEAVY_PATH.read_text(encoding="utf-8")
+        updated = re.sub(
+            r'(Setup_QuangLuuStudio_Heavy_v)\d+(?:\.\d+)*',
+            rf'\g<1>{__version__}',
+            content,
+        )
+        if updated != content:
+            HEAVY_PATH.write_text(updated, encoding="utf-8")
+            print(f"[sync_version] Updated build_installer_heavy.bat -> v{__version__}")
+
 # 3. Update BUNDLED_YTDLP_VERSION in core/ytdlp_update.py
 #    Phải khớp với bản yt-dlp thực sự bị PyInstaller gói vào .exe, nếu không bản
 #    yt-dlp nạp ngoài (cũ hơn) sẽ được ưu tiên nhầm sau khi build mới.
