@@ -38,8 +38,8 @@ def build_panel_mode(dashboard) -> GlassPanel:
     mode_row.setSpacing(3)
     for mlabel, mcolor, m_cfg in mode_config:
         mbtn = PainterButton(mlabel, color=mcolor, height=26, radius=8, font_size=9)
+        mbtn.setToolTip(f"Chuyển sang chế độ {mlabel}")
         mbtn.setAccessibleName(f"Chế độ {mlabel}")
-        mbtn.setAccessibleDescription(f"Chuyển sang chế độ {mlabel}")
         
         # Determine callback: built-in mode or custom?
         action_name = m_cfg.get("action", "")

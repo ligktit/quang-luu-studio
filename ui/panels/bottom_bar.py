@@ -35,9 +35,8 @@ def build_bottom_bar(dashboard) -> QWidget:
         "", color=C["teal"], height=34, radius=8,
         font_size=10, svg_content=SVG_SAVE, svg_size=18, fixed_width=38,
     )
-    btn_save.setToolTip("Lưu")
+    btn_save.setToolTip("Lưu bài đang phát · Ctrl+S")
     btn_save.setAccessibleName("Lưu bài hát")
-    btn_save.setAccessibleDescription("Lưu bài hát đang phát vào danh sách. Phím tắt Ctrl+S")
     btn_save.clicked.connect(dashboard._on_save)
     bar_layout.addWidget(btn_save)
     dashboard._func_buttons["💾 Lưu"] = btn_save
@@ -46,9 +45,8 @@ def build_bottom_bar(dashboard) -> QWidget:
         "", color=C["orange"], height=34, radius=8,
         font_size=10, svg_content=SVG_LIST, svg_size=18, fixed_width=38,
     )
-    btn_list.setToolTip("Danh sách")
+    btn_list.setToolTip("Danh sách bài hát · Ctrl+O")
     btn_list.setAccessibleName("Danh sách bài hát")
-    btn_list.setAccessibleDescription("Mở danh sách bài hát đã lưu. Phím tắt Ctrl+O")
     btn_list.clicked.connect(dashboard._show_songs_list)
     bar_layout.addWidget(btn_list)
     dashboard._func_buttons["Danh sách"] = btn_list
@@ -56,10 +54,8 @@ def build_bottom_bar(dashboard) -> QWidget:
     bar_layout.addStretch()
 
     dashboard.record_button = PainterRecordButton()
+    dashboard.record_button.setToolTip("Ghi âm · Ctrl+R")
     dashboard.record_button.setAccessibleName("Ghi âm")
-    dashboard.record_button.setAccessibleDescription(
-        "Bắt đầu hoặc dừng ghi âm. Phím tắt Ctrl+R"
-    )
     dashboard.record_button.clicked.connect(dashboard._on_record)
     bar_layout.addWidget(dashboard.record_button)
 
@@ -76,9 +72,8 @@ def build_bottom_bar(dashboard) -> QWidget:
     except Exception:
         _score_premium = True
     if _score_premium:
-        btn_score.setToolTip("Chấm điểm")
+        btn_score.setToolTip("Chấm điểm · Ctrl+P")
         btn_score.setAccessibleName("Chấm điểm")
-        btn_score.setAccessibleDescription("Bắt đầu hoặc huỷ chấm điểm bài hát. Phím tắt Ctrl+P")
     else:
         btn_score.setToolTip("👑 Chấm điểm — Tính năng Premium")
         btn_score.setAccessibleName("Chấm điểm (Premium)")
@@ -91,9 +86,8 @@ def build_bottom_bar(dashboard) -> QWidget:
         "", color=C["light_purple"], height=34, radius=8,
         font_size=10, svg_content=SVG_FOLDER, svg_size=18, fixed_width=38,
     )
-    btn_folder.setToolTip("Thư mục")
+    btn_folder.setToolTip("Mở thư mục bản thu")
     btn_folder.setAccessibleName("Thư mục bản ghi")
-    btn_folder.setAccessibleDescription("Mở thư mục chứa các file ghi âm")
     btn_folder.clicked.connect(dashboard._on_open_recordings_folder)
     bar_layout.addWidget(btn_folder)
     dashboard._func_buttons["Thư Mục"] = btn_folder

@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from ui.design_tokens import C, FONT
+from ui import responsive as rp
 
 class WidgetBuilderDialog(QDialog):
     def __init__(self, parent=None, panel_name="mixer", widget_type="slider", existing_data=None):
@@ -16,7 +17,7 @@ class WidgetBuilderDialog(QDialog):
         
         title = "Sửa Widget" if existing_data else "Thêm Widget Mới"
         self.setWindowTitle(f"{title} - {panel_name.capitalize()}")
-        self.setMinimumWidth(350)
+        rp.set_min_width(self, 350)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']}; font-family: {FONT};")
         
         self.vl = QVBoxLayout(self)

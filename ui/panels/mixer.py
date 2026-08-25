@@ -149,7 +149,7 @@ def build_panel_mixer(dashboard) -> GlassPanel:
         try:
             ch_view.slider.setAccessibleName(f"Âm lượng {ch['label']}")
             ch_view.slider.setAccessibleDescription(
-                f"Thanh trượt điều chỉnh âm lượng kênh {ch['label']}. Mũi tên trái phải để tăng giảm."
+                "Mũi tên trái phải để tăng giảm"
             )
             if ch["has_mute"]:
                 ch_view.mute_btn.setAccessibleName(f"Tắt âm {ch['label']}")

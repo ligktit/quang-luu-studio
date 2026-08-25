@@ -131,6 +131,21 @@ def main():
     }
     show_dialog(lambda: ScoringReportDialog(dash, sample_result), "16_scoring_report")
 
+    # Hỗ trợ — chụp tab "Gửi yêu cầu". Tab Hộp thư cần server nên để trống ở đây;
+    # dialog vẫn gọi inbox() nền một lần (đọc, vô hại) rồi báo không tải được.
+    from ui.dialogs.support_dialog import SupportDialog
+    try:
+        sup = SupportDialog(dash)
+        sup.resize(640, 640)
+        sup.setModal(False)
+        sup.show()
+        sup._tabs.setCurrentIndex(0)
+        grab(sup, "17_support")
+        sup.close()
+    except Exception:
+        print("[ERR] dialog 17_support")
+        traceback.print_exc()
+
     print("DONE")
 
 

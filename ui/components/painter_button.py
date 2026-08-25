@@ -79,6 +79,10 @@ class PainterButton(QWidget):
         self.update()
     def isEnabled(self): return self._enabled
     def setActive(self, a): self._active = a; self.update()
+    def setColor(self, color):
+        """Đổi màu nền nút lúc chạy (vd nút Hỗ trợ đỏ lên khi có trả lời mới)."""
+        self._color = QColor(color)
+        self.update()
 
     # ── Lấp lánh theo nhạc (Premium) ─────────────────────────
     def set_music_reactive(self, on: bool):

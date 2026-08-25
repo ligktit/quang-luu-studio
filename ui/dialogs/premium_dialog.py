@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.design_tokens import C, FONT, lighten
+from ui import responsive as rp
 
 # Mô tả ngắn gọn từng tính năng Premium (hiển thị trong dialog).
 _FEATURE_BLURB = {
@@ -30,7 +31,7 @@ class PremiumUpsellDialog(QDialog):
         self._feature = feature
         self.setWindowTitle("Tính năng Premium")
         self.setWindowIcon(QIcon("app_icon.ico"))
-        self.setFixedWidth(460)
+        rp.set_fixed_width(self, 460)
         self.setModal(True)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
         self._build_ui(label)

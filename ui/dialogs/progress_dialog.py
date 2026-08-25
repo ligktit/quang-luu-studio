@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QPainter, QColor, QPen, QPainterPath, QLinearGradient
 
 from ui.design_tokens import C, FONT, lighten, scrollarea_qss
+from ui import responsive as rp
 
 from core.score_history import ScoreHistory
 
@@ -145,8 +146,7 @@ class ProgressDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Bảng tiến bộ luyện hát")
-        self.setMinimumSize(560, 640)
-        self.resize(620, 720)
+        rp.apply_dialog_size(self, 620, 720, min_w=560, min_h=640)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
         self._build_ui()
 

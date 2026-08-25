@@ -26,6 +26,7 @@ from ui.design_tokens import (
     C, FONT, card_qss, scrollarea_qss, header_card_qss, footer_card_qss, combo_qss,
 )
 from ui.components.painter_button import PainterButton
+from ui import responsive as rp
 
 from core.songs import PlaylistManager, SongManager
 from core.engine._setlist import tone_already_cached, _song_url
@@ -50,8 +51,7 @@ class SetlistDialog(QDialog):
         self._controller = None
 
         self.setWindowTitle("Live Setlist / Auto-Pilot")
-        self.setMinimumHeight(560)
-        self.setMinimumWidth(720)
+        rp.apply_dialog_size(self, 780, 640, min_w=720, min_h=560)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 
         self._playlists = PlaylistManager.load_playlists()

@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, QTimer
 
 from ui.design_tokens import C, FONT, card_qss, scrollarea_qss, combo_qss, header_card_qss, footer_card_qss, input_field_qss
 from ui.components.painter_button import PainterButton
+from ui import responsive as rp
 from ui.components.svg_icons import SVG_CLOSE
 from frontend_qt import add_shadow
 
@@ -35,8 +36,7 @@ class EditSongDialog(QDialog):
         self._initial_entries = existing
 
         self.setWindowTitle(f"Chỉnh sửa: {self._song_title[:40]}")
-        self.setMinimumSize(640, 580)
-        self.resize(660, 680)
+        rp.apply_dialog_size(self, 660, 680, min_w=640, min_h=580)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
         self._entry_widgets = []   # list of (time_input, key_combo, row_frame)
         self._build_ui()
@@ -166,7 +166,7 @@ class EditSongDialog(QDialog):
         lay.setSpacing(8)
 
         tag = QLabel("Sửa nhanh")
-        tag.setToolTip("Chỉ muốn đổi 1 tone cho cả bài? Chọn ở đây — không cần nhập mốc thời gian.")
+        tag.setToolTip("Đặt một tone duy nhất cho cả bài")
         tag.setStyleSheet(
             f"font-size: 11px; font-weight: bold; color: {C['teal']};"
             f" font-family: {FONT}; background: transparent; border: none;"
@@ -184,10 +184,8 @@ class EditSongDialog(QDialog):
         self._quick_scale_combo = QComboBox()
         self._quick_scale_combo.addItems(["Major", "Minor"])
         self._quick_scale_combo.setStyleSheet(combo_qss(color=C["green"], font_size=14))
-        self._quick_scale_combo.setToolTip("Major = Trưởng (tươi sáng) · Minor = Thứ (trầm buồn)")
+        self._quick_scale_combo.setToolTip("Major: tươi sáng · Minor: trầm buồn")
         self._quick_scale_combo.setAccessibleName("Thể cho cả bài")
-        self._quick_scale_combo.setAccessibleDescription(
-            "Chọn thể: Major là Trưởng, Minor là Thứ — áp cho toàn bộ bài hát")
         lay.addWidget(self._quick_scale_combo)
 
         # Điền sẵn theo mốc đầu tiên đang có
@@ -226,7 +224,7 @@ class EditSongDialog(QDialog):
             key_index = 0
 
         if not self._song_url:
-            self._dashboard._show_message("⚠️ Bài hát không có URL!", is_error=True)
+            self._dashboard._show_message("Bài hát không có URL!", is_error=True)
             return
 
         entries = [{
@@ -237,14 +235,43 @@ class EditSongDialog(QDialog):
         }]
         if backend.ManualToneTimeline.save_timeline(
                 self._song_url, self._song_title, entries, source="human"):
+            self._share_human_timeline(entries)
             if self._song_id:
                 backend.SongManager.update_song(self._song_id, tone=key_display)
-            self._dashboard._show_message(f"✅ Đã đặt 1 tone {key_display} cho cả bài!")
+            self._dashboard._show_message(f"Đã đặt 1 tone {key_display} cho cả bài!")
             self.close()
             from ui.dialogs.songs_list import SongsListDialog
             SongsListDialog(self._dashboard).exec()
         else:
-            self._dashboard._show_message("❌ Lỗi khi lưu timeline!", is_error=True)
+            self._dashboard._show_message("Lỗi khi lưu timeline!", is_error=True)
+
+    def _share_human_timeline(self, entries):
+        """Đẩy bản người sửa tay lên thư viện cộng đồng (và báo sai bản cũ).
+
+        Người dùng sửa tay là tín hiệu mạnh nhất ta có: nếu tone hiện tại đến từ
+        cộng đồng thì chính nó vừa bị chứng minh là sai, nên vừa báo sai bản cũ
+        vừa đóng góp bản mới. Toàn bộ chạy nền, lỗi gì cũng không cản việc lưu.
+        """
+        try:
+            from core import tone_share
+            from core.tone_cache import ToneCacheManager
+
+            current = ToneCacheManager.get_cached_tone(self._song_url) or {}
+            if current.get("origin") == "community":
+                tone_share.report_wrong(self._song_url, current.get("payload_hash", ""))
+
+            tone_share.contribute(
+                self._song_url,
+                self._song_title,
+                {
+                    "primary_key": entries[0].get("key_display", ""),
+                    "title": self._song_title,
+                    "key_timeline": entries,
+                },
+                source="human",
+            )
+        except Exception as e:
+            print(f"[SHARE] Không chia sẻ được timeline sửa tay: {e}")
 
     def _build_col_headers(self):
         frame = QFrame()
@@ -270,7 +297,7 @@ class EditSongDialog(QDialog):
                 f" font-family: {FONT}; background: transparent; border: none;"
             )
             if text.startswith("Tone"):
-                lbl.setToolTip("Nốt gốc và thể (Trưởng = Major / Thứ = Minor) áp dụng từ mốc thời gian này.")
+                lbl.setToolTip("Tone áp dụng từ mốc thời gian này")
                 lay.addWidget(lbl, 1)
             else:
                 if width:
@@ -347,10 +374,8 @@ class EditSongDialog(QDialog):
         if key_display in _ALL_KEYS:
             key_combo.setCurrentText(key_display)
         key_combo.setStyleSheet(self._key_combo_qss)
-        key_combo.setToolTip("Nốt gốc + thể. Có chữ 'm' = thể Thứ (Minor), không có = thể Trưởng (Major).")
+        key_combo.setToolTip("Có chữ m là Minor, không có là Major")
         key_combo.setAccessibleName("Chọn tone cho mốc này")
-        key_combo.setAccessibleDescription(
-            "Chọn nốt gốc và thể cho mốc thời gian này. Hậu tố m là thể Thứ (Minor), không có m là Trưởng (Major).")
         key_combo.currentTextChanged.connect(self._update_preview)
         lay.addWidget(key_combo, 1)
 
@@ -366,7 +391,7 @@ class EditSongDialog(QDialog):
 
     def _remove_row(self, row):
         if len(self._entry_widgets) <= 1:
-            QMessageBox.warning(self, "Cảnh báo", "Phải có ít nhất 1 entry!")
+            QMessageBox.warning(self, "Cảnh báo", "Cần ít nhất 1 mốc thời gian")
             return
         for i, (_, _, rf) in enumerate(self._entry_widgets):
             if rf is row:
@@ -438,15 +463,15 @@ class EditSongDialog(QDialog):
             })
 
         if has_error:
-            self._dashboard._show_message("⚠️ Vui lòng sửa thời gian không hợp lệ (MM:SS)", is_error=True)
+            self._dashboard._show_message("Thời gian phải dạng phút:giây", is_error=True)
             return
         if dup_inputs:
             for inp in dup_inputs:
                 inp.setStyleSheet(self._time_error_qss)
-            self._dashboard._show_message("⚠️ Có 2 mốc trùng thời gian — mỗi mốc cần thời gian khác nhau", is_error=True)
+            self._dashboard._show_message("Có 2 mốc trùng thời gian", is_error=True)
             return
         if not entries:
-            self._dashboard._show_message("⚠️ Cần ít nhất 1 entry!", is_error=True)
+            self._dashboard._show_message("Cần ít nhất 1 mốc thời gian", is_error=True)
             return
 
         entries.sort(key=lambda x: x["time"])
@@ -463,16 +488,17 @@ class EditSongDialog(QDialog):
                 return
 
         if not self._song_url:
-            self._dashboard._show_message("⚠️ Bài hát không có URL!", is_error=True)
+            self._dashboard._show_message("Bài hát không có URL!", is_error=True)
             return
 
         if backend.ManualToneTimeline.save_timeline(self._song_url, self._song_title, entries):
+            self._share_human_timeline(entries)
             first_key = entries[0]["key_display"]
             if self._song_id:
                 backend.SongManager.update_song(self._song_id, tone=first_key)
-            self._dashboard._show_message(f"✅ Đã lưu {len(entries)} mốc thời gian!")
+            self._dashboard._show_message(f"Đã lưu {len(entries)} mốc thời gian!")
             self.close()
             from ui.dialogs.songs_list import SongsListDialog
             SongsListDialog(self._dashboard).exec()
         else:
-            self._dashboard._show_message("❌ Lỗi khi lưu timeline!", is_error=True)
+            self._dashboard._show_message("Lỗi khi lưu timeline!", is_error=True)

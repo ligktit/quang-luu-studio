@@ -79,6 +79,47 @@ threading.excepthook = _thread_excepthook
 from core.version import __version__
 log.info("Quang Lưu Studio v%s starting", __version__)
 
+# ── yt-dlp ────────────────────────────────────────────────────────────────────
+# Bản yt-dlp nằm trong .exe đứng yên từ lúc build, còn YouTube đổi cơ chế phát
+# video gần như hàng tháng → vài tháng sau là không tải/dò tone được nữa. Ưu tiên
+# bản mới hơn đã nạp vào thư mục dữ liệu (nếu có) và âm thầm kiểm tra bản mới
+# 24 giờ một lần. Tắt bằng "ytdlp_auto_update": false trong app_config.json.
+try:
+    from core import ytdlp_update
+
+    ytdlp_update.activate_override()   # phải chạy TRƯỚC lần import yt_dlp đầu tiên
+
+    def _ytdlp_boot():
+        # Import trong luồng nền: vừa lấy được số hiệu THẬT để ghi nhật ký (bộ
+        # chẩn đoán đọc dòng này), vừa nạp sẵn yt-dlp cho lần tải đầu tiên mà
+        # không làm chậm lúc mở app.
+        try:
+            import yt_dlp  # noqa: F401
+        except Exception as exc:
+            log.warning("Không nạp được yt-dlp: %s", exc)
+        log.info("yt-dlp đang dùng: %s", ytdlp_update.active_version())
+        ytdlp_update.maybe_auto_update()
+
+        # PO Token provider: thứ cho phép tải YouTube mà KHÔNG cần tài khoản hay
+        # cookie nào. Tải một lần (~44MB) rồi dùng mãi; thất bại thì bỏ qua, app
+        # vẫn chạy bằng đường client android như trước.
+        try:
+            from core import pot_provider
+            pot_provider.maybe_auto_install()
+            log.info("%s", pot_provider.describe())
+        except Exception as exc:
+            log.debug("Bỏ qua PO Token provider: %s", exc)
+
+        try:
+            from core.ytdlp_support import describe_stack
+            log.info("Ngăn xếp YouTube: %s", describe_stack())
+        except Exception as exc:
+            log.debug("Không mô tả được ngăn xếp YouTube: %s", exc)
+
+    threading.Thread(target=_ytdlp_boot, daemon=True).start()
+except Exception as e:
+    log.debug("yt-dlp update skipped: %s", e)
+
 # Theme VIP: ghi đè palette sang Gold & Kim cương TRƯỚC khi import frontend_qt
 # (APP_QSS = load_qss() đóng băng lúc import) để toàn app mang tông vàng.
 try:
@@ -168,6 +209,8 @@ def _license_or_trial_expired():
 class _LicenseNotifier(QObject):
     """Cầu nối thread cho cảnh báo license (worker → dialog ở main thread)."""
     license_lost = Signal(str)
+    # Dev vừa trả lời một yêu cầu hỗ trợ — tham số là số thư chưa đọc.
+    support_reply = Signal(int)
 
 
 def _show_license_lost_dialog(message):
@@ -213,6 +256,16 @@ def _background_maintenance(notifier=None):
     except Exception as e:
         log.debug("crash flush skipped: %s", e)
 
+    try:
+        from core import support
+        support.flush_queue()
+    except Exception as e:
+        log.debug("support flush skipped: %s", e)
+
+    # Số thư chưa đọc của vòng trước — chỉ báo cho người dùng khi CÓ THÊM thư
+    # mới, để mỗi 6 giờ không bật lại một thông báo họ đã xem rồi.
+    seen_unread = 0
+
     while True:
         try:
             from core.licensing import client as _lic
@@ -229,6 +282,23 @@ def _background_maintenance(notifier=None):
                         )
         except Exception as e:
             log.debug("license re-verify skipped: %s", e)
+
+        # Hộp thư hỗ trợ: dev trả lời trên admin web, máy khách biết qua vòng này.
+        try:
+            from core import support
+            unread = support.poll_inbox()
+            if unread > seen_unread and notifier is not None:
+                notifier.support_reply.emit(unread)
+            seen_unread = unread
+        except Exception as e:
+            log.debug("support poll skipped: %s", e)
+
+        # Thư viện tone cộng đồng: đẩy nốt các đóng góp còn kẹt vì mất mạng.
+        try:
+            from core import tone_share
+            tone_share.flush_queue()
+        except Exception as e:
+            log.debug("tone share flush skipped: %s", e)
 
         # Cloud Sync nền (Premium). Fail-soft: lỗi mạng/không cấu hình → bỏ qua.
         try:
@@ -289,6 +359,7 @@ def main():
             # Nền: gửi lại crash report tồn đọng + check-in license định kỳ.
             lic_notifier = _LicenseNotifier()
             lic_notifier.license_lost.connect(_show_license_lost_dialog)
+            lic_notifier.support_reply.connect(dashboard._on_support_reply)
             threading.Thread(
                 target=_background_maintenance, args=(lic_notifier,), daemon=True
             ).start()

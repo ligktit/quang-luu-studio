@@ -47,6 +47,7 @@
   section:first-of-type{border-top:none}
   h2{font-size:24px; font-weight:800; margin:0 0 14px; display:flex; align-items:center; gap:10px}
   h3{font-size:18px; font-weight:700; margin:22px 0 8px; color:var(--blue)}
+  h4{font-size:15px; font-weight:700; margin:18px 0 6px; color:var(--text)}
   .badge{display:inline-block; font-size:12px; font-weight:700; color:#031018; background:var(--teal); border-radius:999px; padding:2px 10px}
 
   /* Figures */
@@ -88,7 +89,7 @@
 <div class="layout">
 <nav class="toc">
   <div class="brand"><span class="dot"></span> Quang Lưu Studio</div>
-  <div class="ver">Hướng dẫn sử dụng · v1.5.1</div>
+  <div class="ver">Hướng dẫn sử dụng · v1.7.4</div>
   <h2>Bắt đầu</h2>
   <a href="#gioi-thieu">1. Giới thiệu</a>
   <a href="#cai-dat">2. Cài đặt & kích hoạt</a>
@@ -111,11 +112,12 @@
   <h2>Tham khảo</h2>
   <a href="#phim-tat">17. Phím tắt</a>
   <a href="#su-co">18. Xử lý sự cố</a>
+  <a href="#ho-tro">19. Hỗ trợ &amp; Tone cộng đồng</a>
 </nav>
 
 <main>
   <h1>Quang Lưu Studio</h1>
-  <div class="subtitle">Hướng dẫn sử dụng đầy đủ — dành cho ca sĩ &amp; kỹ thuật viên phòng thu · Phiên bản 1.5.1</div>
+  <div class="subtitle">Hướng dẫn sử dụng đầy đủ — dành cho ca sĩ &amp; kỹ thuật viên phòng thu · Phiên bản 1.7.4</div>
 
   <!-- 1 -->
   <section id="gioi-thieu">
@@ -184,6 +186,7 @@
       <tr><td><b>Đèn dò tone</b></td><td><b>Xanh lá</b> = đã phát hiện tone, <b>xám</b> = đang chờ.</td></tr>
       <tr><td><b>Ô chọn Tone</b> (C…B)</td><td>Chọn/đổi thủ công nốt gốc của bài hát.</td></tr>
       <tr><td><b>Ô chọn thể</b> (Major/Minor)</td><td>Chọn trưởng (Major) hoặc thứ (Minor).</td></tr>
+      <tr><td><b>❓ Hỗ trợ</b></td><td>Gửi yêu cầu cho đội kỹ thuật và đọc trả lời ngay trong app. Nút <b>chuyển đỏ</b> khi có trả lời mới chưa đọc. Xem mục 19.</td></tr>
       <tr><td><b>⚙️ Thiết lập</b></td><td>Mở hộp thoại Thiết lập hệ thống (<kbd>Ctrl</kbd>+<kbd>,</kbd>).</td></tr>
       <tr><td><b>👁️ Con mắt</b></td><td>Ẩn/hiện cửa sổ Studio One và các plugin.</td></tr>
     </table>
@@ -214,6 +217,8 @@
       <tr><td><b>Dò Lại</b></td><td>Buộc dò lại tone của bài đang phát (<kbd>Ctrl</kbd>+<kbd>D</kbd>).</td></tr>
       <tr><td><b>Auto-Tune</b></td><td>Bật/tắt hiệu ứng Auto-Tune trên Studio One.</td></tr>
       <tr><td><b>Fix Méo</b></td><td>Bật/tắt chế độ chống méo giọng.</td></tr>
+      <tr><td><b>Bè</b></td><td>Bật/tắt bè giọng.</td></tr>
+      <tr><td><b>Tắt Ồn</b></td><td>Bật/tắt khử tiếng ồn nền cho mic (quạt, điều hoà, tiếng bàn tán). Khác với tắt tiếng mic: người hát vẫn nghe giọng mình. Có thể để app tự lật — xem <a href="#settings">13. Thiết lập hệ thống</a>.</td></tr>
     </table>
     <h3>Tone Nhạc &amp; Tone Giọng</h3>
     <p>Hai bộ nút <b>−&nbsp;/&nbsp;0&nbsp;/&nbsp;+</b> để dịch cao độ theo từng <b>bán cung</b> (dải −12…+12):</p>
@@ -263,6 +268,7 @@
       <li><b>Tất cả bài hát / + Playlist</b> — chuyển giữa toàn bộ và từng playlist.</li>
       <li>Nút <b>▶ xanh</b> — phát lại bài; nút <b>···</b> — sửa chuỗi tone, đổi tên hoặc xoá.</li>
       <li>Ngôi sao ⭐ trước mỗi bài — đánh dấu yêu thích.</li>
+      <li><b>☁ Đồng bộ tone</b> — lấy tone của những bài chưa có từ thư viện chung của mạng lưới khách hàng, khỏi phải ngồi dò lại. Xem mục 19.</li>
     </ul>
   </section>
 
@@ -398,6 +404,43 @@
       <tr><td>Không dò được tone</td><td>Bấm <b>Dò Lại</b> (<kbd>Ctrl</kbd>+<kbd>D</kbd>); thử chuyển <b>Chế độ: Full</b> để dò chính xác hơn.</td></tr>
       <tr><td>Hết hạn bản quyền</td><td>Nhập mã kích hoạt mới khi khởi động; liên hệ nơi cung cấp để gia hạn.</td></tr>
     </table>
+  </section>
+
+  <!-- 19 -->
+  <section id="ho-tro">
+    <h2>19. Hỗ trợ &amp; Thư viện tone cộng đồng</h2>
+
+    <h3>Gửi yêu cầu hỗ trợ</h3>
+    <p>Bấm nút <b>❓</b> trên thanh trên để mở cửa sổ <b>Hỗ trợ</b>.</p>
+    <figure>
+      <img src="img/17_support.png" alt="Hộp thoại Hỗ trợ">
+      <figcaption>Tab <b>Gửi yêu cầu</b> — mô tả càng cụ thể, đội kỹ thuật xử lý càng nhanh.</figcaption>
+    </figure>
+    <ul>
+      <li>Tab <b>Gửi yêu cầu</b> — chọn loại (báo lỗi / cần hướng dẫn / góp ý), nhập tiêu đề và mô tả.
+          Nên để nguyên ô <b>Gửi kèm nhật ký lỗi</b>: đội kỹ thuật nhìn được nhật ký thì xử lý nhanh hơn hẳn.
+          Gửi xong bạn nhận một mã dạng <code>HT-000123</code>.</li>
+      <li>Tab <b>Hộp thư</b> — xem lại các yêu cầu đã gửi, đọc trả lời của đội kỹ thuật và nhắn tiếp.</li>
+      <li><b>Mất mạng vẫn gửi được:</b> yêu cầu được cất lại và tự gửi đi khi máy có mạng trở lại.</li>
+      <li>Khi có trả lời mới, nút <b>❓</b> chuyển sang <b>màu đỏ</b> cho tới khi bạn mở hộp thư đọc.</li>
+    </ul>
+    <p><b>Ở chế độ khách</b> (kiosk), nút Hỗ trợ được ẩn cùng với nút con mắt — chỉ kỹ thuật viên
+       mở khoá mới gửi được yêu cầu.</p>
+
+    <h3>Thư viện tone cộng đồng</h3>
+    <p>Máy nào đã dò tone một bài thì các máy khác trong mạng lưới dùng lại được ngay, khỏi phải dò lại
+       từ đầu. Bài càng phổ biến thì tone càng nhanh và càng chính xác.</p>
+    <ul>
+      <li><b>Tự động:</b> mở một bài chưa có tone, phần mềm hỏi thư viện chung trước khi bắt đầu dò.
+          Có sẵn thì tone hiện gần như tức thì.</li>
+      <li><b>Cả danh sách một lần:</b> mở <b>Danh sách bài hát</b> → bấm <b>☁ Đồng bộ tone</b>.</li>
+      <li><b>Bạn sửa tay thì cả mạng lưới được nhờ:</b> chuỗi tone do người sửa tay luôn được ưu tiên
+          hơn kết quả máy dò, nên mỗi lần bạn sửa là dữ liệu chung tốt lên một bậc.</li>
+      <li><b>Gửi đi những gì:</b> chỉ mã video YouTube, tên bài và chuỗi tone. Bài mở từ file trong máy
+          <b>không bao giờ</b> được gửi lên — đường dẫn file là dữ liệu riêng của bạn.</li>
+      <li><b>Tắt được:</b> <b>Thiết lập → Công cụ → Thư viện tone cộng đồng</b>, bỏ chọn ô chia sẻ.
+          Tắt rồi thì máy không gửi lên và cũng không lấy tone từ cộng đồng nữa.</li>
+    </ul>
   </section>
 
   <footer>

@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, QSize, QByteArray
 from PySide6.QtGui import QIcon, QPixmap, QPainter
 
 from ui.design_tokens import C, FONT
+from ui import responsive as rp
 from ui.components.svg_icons import (
     SVG_CANCEL,
     SVG_FOLDER,
@@ -20,6 +21,7 @@ from ui.components.svg_icons import (
     SVG_UPLOAD,
     SVG_WRENCH,
     SVG_EYE_OPEN,
+    SVG_LOCK,
 )
 from frontend_qt import pill_btn_qss, add_shadow, _lighten
 
@@ -31,8 +33,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self._dashboard = parent
         self.setWindowTitle("Thiết lập")
-        self.setMinimumSize(820, 700)
-        self.resize(860, 720)
+        rp.apply_dialog_size(self, 860, 720, min_w=820, min_h=700)
         self.setModal(True)
         self.setStyleSheet(self._dialog_qss())
         self._build_ui()
@@ -374,6 +375,10 @@ class SettingsDialog(QDialog):
         self._cb_close_br.setChecked(settings.get("auto_close_browser", False))
         lay.addWidget(self._section_card(self._build_autolaunch))
 
+        # Chế độ khách — khoá Studio One khỏi tay khách hàng
+        lay.addWidget(self._section_header(SVG_LOCK, "Chế độ khách — khoá Studio One"))
+        lay.addWidget(self._section_card(self._build_kiosk))
+
         # Màn hình karaoke nhúng (chỉ bản Heavy có QtWebEngine)
         lay.addWidget(self._section_header(SVG_EYE_OPEN, "Màn hình karaoke nhúng"))
         self._build_karaoke_widgets(settings)
@@ -398,7 +403,7 @@ class SettingsDialog(QDialog):
         self._cb_embedded_player.setChecked(bool(settings.get("use_embedded_player", False)) and available)
         self._cb_embedded_player.setEnabled(available)
         if not available:
-            self._cb_embedded_player.setToolTip("Cần bản cài đặt đầy đủ (Heavy) có QtWebEngine.")
+            self._cb_embedded_player.setToolTip("Cần bản cài đặt đầy đủ")
 
         self._combo_monitor = QComboBox()
         self._combo_monitor.setStyleSheet(self._combo_qss)
@@ -499,10 +504,7 @@ class SettingsDialog(QDialog):
         self._cb_auto_echo = QCheckBox("Tự bật Vang khi có nhạc, tự tắt Vang khi hết nhạc")
         self._cb_auto_echo.setStyleSheet(self._checkbox_qss)
         self._cb_auto_echo.setChecked(bool(settings.get("auto_echo_enabled", False)))
-        self._cb_auto_echo.setToolTip(
-            "Nhạc chạy → mở kênh Vang. Hết nhạc (dừng/chuyển bài) → tắt Vang "
-            "sau khoảng 3 giây, để nói chuyện giữa các bài không bị vọng."
-        )
+        self._cb_auto_echo.setToolTip("Tự mở Vang khi có nhạc, tắt khi hết nhạc")
         self._cb_auto_echo.toggled.connect(self._on_auto_echo_toggled)
 
     def _on_auto_echo_toggled(self, checked):
@@ -555,6 +557,8 @@ class SettingsDialog(QDialog):
         left.setSpacing(12)
         left.addWidget(self._section_header(SVG_GLOBE, "YouTube Cookie"))
         left.addWidget(self._section_card(self._build_cookie_tools))
+        left.addWidget(self._section_header(SVG_GLOBE, "Thư viện tone cộng đồng"))
+        left.addWidget(self._section_card(self._build_tone_share))
         left.addStretch()
 
         right_col = QWidget()
@@ -573,17 +577,78 @@ class SettingsDialog(QDialog):
         lay.addWidget(right_col, 1)
         return tab
 
-        lay.addWidget(self._section_header(SVG_GLOBE, "YouTube Cookie"))
-        lay.addWidget(self._section_card(self._build_cookie_tools))
+    def _build_tone_share(self, vl):
+        """Công tắc chia sẻ tone với mạng lưới khách hàng.
 
-        lay.addWidget(self._section_header(SVG_WRENCH, "Sửa lỗi đồng bộ (CDP)"))
-        lay.addWidget(self._section_card(self._build_cdp_tools))
+        Áp dụng NGAY khi bấm (như mục Chế độ khách): đây là lựa chọn về dữ liệu
+        cá nhân — người dùng tắt xong đóng dialog bằng dấu ✕ vẫn phải có hiệu lực,
+        không được phụ thuộc vào việc họ có bấm "Lưu thiết lập" hay không.
+        """
+        vl.setSpacing(8)
 
-        lay.addWidget(self._section_header(SVG_UPLOAD, "Cập nhật phần mềm"))
-        lay.addWidget(self._section_card(self._build_update_tools))
+        cfg = (self._dashboard.settings.get("tone_share") or {})
+        self._cb_tone_share = QCheckBox("Chia sẻ kết quả dò tone với cộng đồng")
+        self._cb_tone_share.setStyleSheet(self._checkbox_qss)
+        self._cb_tone_share.setMinimumHeight(34)
+        self._cb_tone_share.setChecked(bool(cfg.get("enabled", True)))
+        self._cb_tone_share.clicked.connect(self._on_tone_share_toggled)
+        vl.addWidget(self._cb_tone_share)
 
-        lay.addStretch()
-        return tab
+        note = QLabel(
+            "Bài nào bạn đã dò, máy khác khỏi phải dò lại — và ngược lại. "
+            "Chỉ gửi đi: mã video YouTube, tên bài và chuỗi tone. "
+            "Bài từ file trong máy không bao giờ được gửi lên."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(self._field_label_qss(size=11))
+        vl.addWidget(note)
+
+        self._tone_share_status = QLabel("")
+        self._tone_share_status.setWordWrap(True)
+        self._tone_share_status.setStyleSheet(self._field_label_qss(size=11))
+        vl.addWidget(self._tone_share_status)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self._btn_tone_share_sync = QPushButton("Đồng bộ ngay")
+        self._btn_tone_share_sync.setCursor(Qt.PointingHandCursor)
+        self._btn_tone_share_sync.setFixedHeight(38)
+        self._btn_tone_share_sync.setStyleSheet(
+            pill_btn_qss(C["blue"], _lighten(C["blue"], 0.12), 12, 13))
+        self._btn_tone_share_sync.clicked.connect(self._on_tone_share_sync)
+        row.addWidget(self._btn_tone_share_sync)
+        row.addStretch()
+        vl.addLayout(row)
+
+    def _on_tone_share_toggled(self):
+        enabled = self._cb_tone_share.isChecked()
+        settings = self._dashboard.settings
+        cfg = settings.get("tone_share") or {}
+        cfg["enabled"] = enabled
+        settings["tone_share"] = cfg
+        backend.ConfigManager.save_settings(settings)
+        self._tone_share_status.setText(
+            "Đã bật — kết quả dò tone sẽ tự chia sẻ." if enabled
+            else "Đã tắt — máy này không gửi lên và cũng không lấy tone từ cộng đồng."
+        )
+
+    def _on_tone_share_sync(self):
+        """Đẩy nốt phần còn kẹt trong hàng đợi và quên các lần tra hụt trước đó."""
+        try:
+            from core import tone_share
+            if not tone_share.enabled():
+                self._tone_share_status.setText(
+                    "Đang tắt hoặc máy chưa kích hoạt — chưa đồng bộ được."
+                )
+                return
+            tone_share.clear_session_cache()
+            tone_share.flush_queue()
+            self._tone_share_status.setText(
+                "Đang gửi phần đóng góp còn tồn. Mở Danh sách bài hát rồi bấm "
+                "“☁ Đồng bộ tone” để lấy tone cho cả danh sách."
+            )
+        except Exception as e:
+            self._tone_share_status.setText(f"Không đồng bộ được: {e}")
 
     def _build_paths(self, vl):
         so_lbl = QLabel("Studio One (.song hoặc .exe):")
@@ -620,6 +685,215 @@ class SettingsDialog(QDialog):
         vl.addWidget(self._cb_launch_br)
         vl.addWidget(self._cb_close_so)
         vl.addWidget(self._cb_close_br)
+
+    # ── Chế độ khách (khoá kỹ thuật) ──────────────────────────
+
+    def _build_kiosk(self, vl):
+        """Mục cấu hình khoá kỹ thuật.
+
+        Khác các mục còn lại: áp dụng NGAY khi bấm, không chờ nút "Lưu thiết lập".
+        Trạng thái khoá không được phép nằm lửng lơ giữa RAM và đĩa — bấm bật là
+        khoá, đóng app đột ngột cũng vẫn khoá.
+        """
+        from core import kiosk
+
+        vl.setSpacing(8)
+
+        self._kiosk_status = QLabel("")
+        self._kiosk_status.setWordWrap(True)
+        vl.addWidget(self._kiosk_status)
+
+        self._cb_kiosk = QCheckBox("Bật chế độ khách (ẩn hẳn Studio One khỏi giao diện)")
+        self._cb_kiosk.setStyleSheet(self._checkbox_qss)
+        self._cb_kiosk.setMinimumHeight(34)
+        self._cb_kiosk.clicked.connect(self._on_kiosk_toggled)
+        vl.addWidget(self._cb_kiosk)
+
+        self._cb_keep_hidden = QCheckBox("Ẩn lại cả khi khách tự mở Studio One (quét nền)")
+        self._cb_keep_hidden.setStyleSheet(self._checkbox_qss)
+        self._cb_keep_hidden.setMinimumHeight(34)
+        self._cb_keep_hidden.clicked.connect(
+            lambda: self._kiosk_apply(kiosk.set_keep_hidden, self._cb_keep_hidden.isChecked()))
+        vl.addWidget(self._cb_keep_hidden)
+
+        self._cb_restore_tpl = QCheckBox("Phục hồi bản mẫu .song mỗi lần khởi động")
+        self._cb_restore_tpl.setStyleSheet(self._checkbox_qss)
+        self._cb_restore_tpl.setMinimumHeight(34)
+        self._cb_restore_tpl.clicked.connect(
+            lambda: self._kiosk_apply(kiosk.set_restore_template, self._cb_restore_tpl.isChecked()))
+        vl.addWidget(self._cb_restore_tpl)
+
+        row_session = QHBoxLayout()
+        row_session.setSpacing(8)
+        lbl_session = QLabel("Phiên kỹ thuật tự khoá lại sau:")
+        lbl_session.setStyleSheet(self._field_label_qss())
+        row_session.addWidget(lbl_session)
+        self._combo_session = QComboBox()
+        self._combo_session.setStyleSheet(self._combo_qss)
+        for mins in (10, 20, 30, 60, 120):
+            self._combo_session.addItem(f"{mins} phút", mins)
+        self._combo_session.activated.connect(
+            lambda: self._kiosk_apply(kiosk.set_session_minutes,
+                                      self._combo_session.currentData()))
+        row_session.addWidget(self._combo_session)
+        row_session.addStretch()
+        vl.addLayout(row_session)
+
+        self._kiosk_tpl_lbl = QLabel("")
+        self._kiosk_tpl_lbl.setWordWrap(True)
+        self._kiosk_tpl_lbl.setStyleSheet(self._field_label_qss(size=11))
+        vl.addWidget(self._kiosk_tpl_lbl)
+
+        row_btn = QHBoxLayout()
+        row_btn.setSpacing(8)
+        self._btn_kiosk_unlock = QPushButton("Mở khoá kỹ thuật")
+        self._btn_kiosk_unlock.setCursor(Qt.PointingHandCursor)
+        self._btn_kiosk_unlock.setFixedHeight(38)
+        self._btn_kiosk_unlock.setStyleSheet(
+            pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 12, 14))
+        self._btn_kiosk_unlock.clicked.connect(self._on_kiosk_unlock)
+        row_btn.addWidget(self._btn_kiosk_unlock)
+
+        self._btn_kiosk_pin = QPushButton("Đặt mã PIN")
+        self._btn_kiosk_pin.setCursor(Qt.PointingHandCursor)
+        self._btn_kiosk_pin.setFixedHeight(38)
+        self._btn_kiosk_pin.setStyleSheet(
+            pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 12, 14))
+        self._btn_kiosk_pin.clicked.connect(self._on_kiosk_set_pin)
+        row_btn.addWidget(self._btn_kiosk_pin)
+
+        self._btn_kiosk_snapshot = QPushButton("Chốt bản mẫu .song")
+        self._btn_kiosk_snapshot.setCursor(Qt.PointingHandCursor)
+        self._btn_kiosk_snapshot.setFixedHeight(38)
+        self._btn_kiosk_snapshot.setStyleSheet(
+            pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 12, 14))
+        self._btn_kiosk_snapshot.setToolTip("Chốt file .song hiện tại làm bản gốc")
+        self._btn_kiosk_snapshot.clicked.connect(self._on_kiosk_snapshot)
+        row_btn.addWidget(self._btn_kiosk_snapshot)
+        row_btn.addStretch()
+        vl.addLayout(row_btn)
+
+        note_tpl = QLabel(
+            "Mỗi lần mở app sẽ khôi phục bản mẫu đã chốt, xoá mọi chỉnh sửa của khách."
+        )
+        note_tpl.setWordWrap(True)
+        note_tpl.setStyleSheet(self._field_label_qss(11, C["text_muted"], 600, True))
+        vl.addWidget(note_tpl)
+
+        self._refresh_kiosk_ui()
+
+    def _refresh_kiosk_ui(self):
+        from core import kiosk, so_template
+
+        locked = kiosk.is_locked()
+        enabled = kiosk.is_enabled()
+
+        if not enabled:
+            text, color = "Đang TẮT — khách vẫn thấy và mở được Studio One.", C["text_muted"]
+        elif locked:
+            text, color = ("Đang KHOÁ — Studio One bị ẩn khỏi khách. Mở khoá để"
+                           " chỉnh mục này.", C["orange"])
+        else:
+            mins_left = (kiosk.session_remaining() + 59) // 60
+            text, color = (f"Đang MỞ KHOÁ — còn {mins_left} phút rồi tự khoá lại.",
+                           C["green"])
+        self._kiosk_status.setText(text)
+        self._kiosk_status.setStyleSheet(self._field_label_qss(size=12, color=color))
+
+        for w in (self._cb_kiosk, self._cb_keep_hidden, self._cb_restore_tpl,
+                  self._combo_session, self._btn_kiosk_snapshot):
+            w.setEnabled(not locked)
+        self._btn_kiosk_pin.setText("Đổi mã PIN" if kiosk.has_pin() else "Đặt mã PIN")
+        self._btn_kiosk_pin.setEnabled(not locked)
+        self._btn_kiosk_unlock.setVisible(locked)
+
+        self._cb_kiosk.setChecked(enabled)
+        self._cb_keep_hidden.setChecked(kiosk.keep_hidden())
+        self._cb_restore_tpl.setChecked(kiosk.restore_template_enabled())
+        idx = self._combo_session.findData(kiosk.session_minutes())
+        self._combo_session.setCurrentIndex(idx if idx >= 0 else 1)
+
+        info = so_template.info()
+        if info:
+            self._kiosk_tpl_lbl.setText(
+                f"Bản mẫu đã chốt lúc {info.get('saved_at', '?')}"
+                f" ({info.get('size', 0) // 1024} KB) — nguồn: {info.get('source', '?')}")
+        else:
+            self._kiosk_tpl_lbl.setText(
+                "Chưa chốt bản mẫu. Tinh chỉnh xong trong Studio One, lưu bài, đóng"
+                " Studio One rồi bấm \"Chốt bản mẫu .song\".")
+
+    def _kiosk_apply(self, fn, value):
+        try:
+            fn(value)
+        except Exception as e:
+            self._dashboard._show_message(f"Lỗi lưu chế độ khách: {e}", is_error=True)
+            return
+        self._sync_dashboard_kiosk()
+        self._refresh_kiosk_ui()
+
+    def _sync_dashboard_kiosk(self):
+        try:
+            self._dashboard._apply_kiosk_visibility()
+        except Exception as e:
+            print(f"[SETTINGS] áp dụng chế độ khách lỗi: {e}")
+
+    def _on_kiosk_toggled(self):
+        from core import kiosk
+        want = self._cb_kiosk.isChecked()
+        if want and not kiosk.has_pin():
+            from ui.dialogs.tech_unlock import SetPinDialog
+            if SetPinDialog(self).exec() != QDialog.Accepted:
+                self._cb_kiosk.setChecked(False)
+                return
+        try:
+            if want:
+                kiosk.enable()
+            else:
+                kiosk.disable()
+        except ValueError as e:
+            self._cb_kiosk.setChecked(False)
+            self._dashboard._show_message(str(e), is_error=True)
+            return
+
+        # Bật khoá = giấu Studio One ngay, không đợi lần khởi động sau.
+        from core import so_windows
+        try:
+            if want:
+                so_windows.hide_all()
+            else:
+                so_windows.show_all(focus_main=False)
+        except Exception as e:
+            print(f"[SETTINGS] ẩn/hiện Studio One lỗi: {e}")
+        self._sync_dashboard_kiosk()
+        self._refresh_kiosk_ui()
+
+    def _on_kiosk_unlock(self):
+        from ui.dialogs.tech_unlock import TechUnlockDialog
+        if TechUnlockDialog(self).exec() != QDialog.Accepted:
+            return
+        self._sync_dashboard_kiosk()
+        self._refresh_kiosk_ui()
+
+    def _on_kiosk_set_pin(self):
+        from ui.dialogs.tech_unlock import SetPinDialog
+        if SetPinDialog(self).exec() == QDialog.Accepted:
+            self._dashboard._show_message("Đã lưu mã PIN kỹ thuật")
+            self._refresh_kiosk_ui()
+
+    def _on_kiosk_snapshot(self):
+        from core import so_template, so_windows
+        path = self._inp_so.text().strip() or self._dashboard.settings.get("studio_one_path", "")
+        if so_windows.is_running():
+            self._dashboard._show_message(
+                "Hãy đóng Studio One trước khi chốt bản mẫu", is_error=True)
+            return
+        result = so_template.snapshot(path)
+        if result["ok"]:
+            self._dashboard._show_message("Đã chốt bản mẫu Studio One")
+        else:
+            self._dashboard._show_message(f"Chốt bản mẫu lỗi: {result['error']}", is_error=True)
+        self._refresh_kiosk_ui()
 
     def _create_audio_combos(self, settings):
         from PySide6.QtWidgets import QComboBox
@@ -1370,9 +1644,8 @@ class SettingsDialog(QDialog):
                         " background:transparent; border:none;"
                     )
                     self._dashboard._show_message(
-                        f"Không xuất được cookie từ {browser}.\n\n"
-                        "Chrome/Edge/Brave phải đóng hoàn toàn.\n"
-                        "Hãy thử Firefox (không cần đóng).",
+                        f"Không xuất được cookie từ {browser}.\n"
+                        "Hãy đóng hẳn trình duyệt rồi thử lại, hoặc dùng Firefox.",
                         is_error=True
                     )
             QTimer.singleShot(0, _update)
@@ -1389,7 +1662,7 @@ class SettingsDialog(QDialog):
         import os, ctypes
         script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools", "_apply_cdp.ps1"))
         if not os.path.exists(script_path):
-            self._dashboard._show_message("Không tìm thấy công cụ _apply_cdp.ps1", is_error=True)
+            self._dashboard._show_message("Thiếu công cụ sửa shortcut — báo kỹ thuật", is_error=True)
             return
             
         cmd = f'-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{script_path}"'
@@ -1399,24 +1672,27 @@ class SettingsDialog(QDialog):
             if result > 32:
                 self._dashboard._show_message("Đã sửa shortcut")
             else:
-                self._dashboard._show_message("Bạn đã từ chối cấp quyền Admin.", is_error=True)
+                self._dashboard._show_message("Bạn đã từ chối cấp quyền Admin", is_error=True)
         except Exception as e:
             self._dashboard._show_message(f"Lỗi: {e}", is_error=True)
 
     def _action_check_cdp(self):
+        # Tên thuộc tính phải khớp SystemEngine: cdp_monitor / media_monitor
+        # (core/engine/__init__.py). Trước đây gọi engine.monitor → AttributeError
+        # làm sập app ngay khi bấm nút kiểm tra.
         engine = self._dashboard.engine
-        is_cdp = getattr(engine.monitor, 'is_connected', False)
-        
+        cdp = getattr(engine, 'cdp_monitor', None)
+        is_cdp = bool(getattr(cdp, 'is_connected', False))
+
         # Fallback check
-        win_media = getattr(engine, 'win_media', None)
+        win_media = getattr(engine, 'media_monitor', None)
         is_winrt = False
         if win_media:
-            is_winrt = (win_media.current_title != "") or win_media.is_playing
-            
+            is_winrt = (getattr(win_media, 'current_title', "") != "") or bool(getattr(win_media, 'is_playing', False))
+
         if is_cdp:
-            title = getattr(engine.monitor, 'target_url', 'YouTube')
-            self._dashboard._show_message("CDP: Đã kết nối")
+            self._dashboard._show_message("Đã kết nối trình duyệt")
         elif is_winrt:
-            self._dashboard._show_message("Đang dùng WinRT Fallback.\n(Không nhảy lời chính xác, hãy sửa bước 1 & 2)")
+            self._dashboard._show_message("Đang chạy chế độ dự phòng")
         else:
-            self._dashboard._show_message("Chưa kết nối trình duyệt.\nHãy mở YouTube trên Edge/Chrome/Brave.", is_error=True)
+            self._dashboard._show_message("Chưa kết nối — hãy mở YouTube trên Chrome/Edge", is_error=True)

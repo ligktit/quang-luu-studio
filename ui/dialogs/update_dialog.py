@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.version import __version__
+from ui import responsive as rp
 
 
 class _UpdateSignals(QObject):
@@ -31,7 +32,7 @@ class UpdateDialog(QDialog):
         self._signals.done.connect(self._on_done)
 
         self.setWindowTitle(f"Có phiên bản mới: v{release.version}")
-        self.setMinimumWidth(520)
+        rp.set_min_width(self, 520)
         self.setModal(True)
         self._build_ui()
 

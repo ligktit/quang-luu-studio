@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, QTimer, QSize, QByteArray
 from PySide6.QtGui import QIcon, QPixmap, QPainter
 
 from ui.design_tokens import C, FONT
+from ui import responsive as rp
 from ui.components.svg_icons import SVG_SAVE, SVG_SETTINGS, SVG_MUSIC, SVG_WRENCH
 from frontend_qt import pill_btn_qss, add_shadow, _lighten, MIDI_CC
 
@@ -40,8 +41,7 @@ class CalibrationWizardDialog(QDialog):
         super().__init__(parent)
         self._dashboard = parent
         self.setWindowTitle("Cân chỉnh Auto-Tune")
-        self.setMinimumSize(800, 660)
-        self.resize(820, 700)
+        rp.apply_dialog_size(self, 820, 700, min_w=800, min_h=660)
         self.setStyleSheet(self._dialog_qss())
 
         self._state = {

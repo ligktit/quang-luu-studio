@@ -152,6 +152,10 @@ class Announcer(QObject):
         try:
             name = w.accessibleName() if hasattr(w, "accessibleName") else ""
             desc = w.accessibleDescription() if hasattr(w, "accessibleDescription") else ""
+            # Không có description riêng → đọc tooltip. Nhờ vậy bỏ được các
+            # description chỉ chép lại tooltip mà người mù vẫn nghe đủ.
+            if not desc and hasattr(w, "toolTip"):
+                desc = w.toolTip() or ""
         except Exception:
             return
         text = ""

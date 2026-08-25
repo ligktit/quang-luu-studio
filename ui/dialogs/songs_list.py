@@ -9,6 +9,7 @@ from PySide6.QtGui import QAction
 
 from ui.design_tokens import C, FONT, card_qss, scrollarea_qss, header_card_qss, footer_card_qss, combo_qss, input_field_qss
 from ui.components.painter_button import PainterButton
+from ui import responsive as rp
 from ui.components.svg_icons import SVG_PLAY, SVG_EDIT, SVG_TRASH
 
 _SAVE_KEYS = [
@@ -26,8 +27,7 @@ class SongsListDialog(QDialog):
         self._search_text = ""
         self._filter = ("all", None)   # ("all"|"fav"|"playlist", playlist_id)
         self.setWindowTitle("Danh sách bài hát")
-        self.setMinimumHeight(560)
-        self.setMinimumWidth(820)
+        rp.apply_dialog_size(self, 880, 640, min_w=820, min_h=560)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
         self._refresh_data()
         self._build_ui()
@@ -81,10 +81,109 @@ class SongsListDialog(QDialog):
         setlist_btn.clicked.connect(self._dashboard._show_setlist)
         lay.addWidget(setlist_btn)
 
+        # Lấy tone của cả danh sách từ thư viện cộng đồng trong MỘT vòng mạng,
+        # thay vì ngồi dò lại từng bài mất hàng chục giây mỗi bài.
+        self._sync_btn = PainterButton(
+            "☁ Đồng bộ tone", color=C["blue"], height=34, radius=12, font_size=12, fixed_width=126
+        )
+        self._sync_btn.setToolTip(
+            "Lấy tone bài chưa có từ thư viện chung"
+        )
+        self._sync_btn.setAccessibleName("Đồng bộ tone từ cộng đồng")
+        self._sync_btn.clicked.connect(self._on_sync_tones)
+        lay.addWidget(self._sync_btn)
+
         self._count_lbl = QLabel("")
         self._count_lbl.setStyleSheet(f"font-size: 13px; color: {C['text_muted']}; font-family: {FONT}; background: transparent; border: none;")
         lay.addWidget(self._count_lbl)
         return hdr
+
+    def _on_sync_tones(self):
+        """Tra thư viện cộng đồng cho các bài CHƯA có tone trong máy.
+
+        Bài đã có tone (dò rồi hoặc sửa tay) thì không đụng tới: dữ liệu của
+        chính khách luôn thắng dữ liệu của người lạ.
+        """
+        from core import tone_share
+        from core.tone_cache import ManualToneTimeline, ToneCacheManager
+
+        if not tone_share.enabled():
+            self._dashboard._show_message(
+                "Đồng bộ tone cộng đồng đang tắt. Bật lại trong Thiết lập › Công cụ.",
+                is_error=True,
+            )
+            return
+
+        pending = []
+        for song in self._songs:
+            url = song.get("url", "")
+            if not url or not tone_share.song_key(url):
+                continue  # bài local: không có mã video để đối chiếu
+            if ManualToneTimeline.load_timeline(url):
+                continue
+            cached = ToneCacheManager.get_cached_tone(url)
+            if cached and cached.get("key_timeline"):
+                continue
+            pending.append(song)
+
+        if not pending:
+            self._dashboard._show_message("Mọi bài trong danh sách đều đã có tone.")
+            return
+
+        self._sync_btn.setEnabled(False)
+        self._sync_btn.setText("Đang lấy…")
+        self._start_sync_worker(pending)
+
+    def _start_sync_worker(self, pending):
+        """Chạy tra cứu ở luồng nền — mất mạng thì timeout 10s, không treo UI."""
+        from PySide6.QtCore import QThread, Signal
+
+        urls = [song.get("url", "") for song in pending]
+
+        class _SyncWorker(QThread):
+            done = Signal(object)
+
+            def run(self):
+                try:
+                    from core import tone_share
+                    self.done.emit(tone_share.lookup_many(urls))
+                except Exception as e:
+                    print(f"[SYNC-TONE] lỗi: {e}")
+                    self.done.emit({})
+
+        worker = _SyncWorker(self)
+        self._sync_worker = worker  # giữ tham chiếu: QThread bị GC giữa chừng là crash
+        worker.done.connect(lambda found: self._on_sync_done(found, pending))
+        worker.start()
+
+    def _on_sync_done(self, found, pending):
+        import backend
+
+        self._sync_btn.setEnabled(True)
+        self._sync_btn.setText("☁ Đồng bộ tone")
+
+        applied = 0
+        for song in pending:
+            entry = found.get(song.get("url", ""))
+            if not entry or not entry.get("key_timeline"):
+                continue
+            # tone_share đã ghi vào tone_cache; ở đây chỉ cập nhật cột tone hiển
+            # thị trong danh sách bài hát.
+            primary = entry.get("primary_key") or entry["key_timeline"][0].get("key_display", "")
+            if song.get("id") and primary:
+                backend.SongManager.update_song(song["id"], tone=primary)
+                applied += 1
+
+        if applied:
+            self._refresh_data()
+            self._rebuild_list()
+            self._dashboard._show_message(
+                f"Đã lấy tone cho {applied}/{len(pending)} bài"
+            )
+        else:
+            self._dashboard._show_message(
+                f"Chưa ai trong mạng lưới dò {len(pending)} bài này"
+            )
 
     def _build_filter_bar(self):
         bar = QFrame()
@@ -328,7 +427,7 @@ class SongsListDialog(QDialog):
             return
         pl = backend.PlaylistManager.create_playlist(name)
         if pl is None:
-            self._dashboard._show_message("⚠️ Tên playlist rỗng hoặc đã tồn tại", is_error=True)
+            self._dashboard._show_message("Tên playlist rỗng hoặc đã tồn tại", is_error=True)
             return
         self._refresh_data()
         self._populate_playlist_combo(select=("playlist", pl["id"]))
@@ -347,7 +446,7 @@ class SongsListDialog(QDialog):
         if not ok:
             return
         if not backend.PlaylistManager.rename_playlist(pid, name):
-            self._dashboard._show_message("⚠️ Tên rỗng hoặc trùng playlist khác", is_error=True)
+            self._dashboard._show_message("Tên rỗng hoặc trùng playlist khác", is_error=True)
             return
         self._refresh_data()
         self._populate_playlist_combo(select=("playlist", pid))
@@ -393,6 +492,8 @@ class SongsListDialog(QDialog):
             tl_data   = backend.ManualToneTimeline.load_timeline(url)
             manual_tl = tl_data["timeline"] if tl_data and tl_data.get("timeline") else None
             dash = self._dashboard
+            # Nạp timeline cho phần hiển thị (ô "kế tiếp" + đếm ngược ở header).
+            dash._set_tone_timeline(manual_tl or [], song.get("duration", 0) or 0)
             play_cb = dash._load_embedded_video if dash._embedded_player_active() else None
             if play_cb is not None:
                 dash._embedded_current_url = url
@@ -469,11 +570,11 @@ class SongsListDialog(QDialog):
             return
         preset = dash._capture_current_preset()
         if backend.SongManager.save_preset(song.get("id"), preset):
-            dash._show_message("✅ Đã lưu preset cho bài hát")
+            dash._show_message("Đã lưu thiết lập cho bài hát")
             self._refresh_data()
             self._rebuild_list()
         else:
-            dash._show_message("⚠️ Không lưu được preset", is_error=True)
+            dash._show_message("Không lưu được thiết lập", is_error=True)
 
     def _make_toggle_playlist(self, playlist_id, song_id):
         def _toggle(checked=False):
@@ -492,7 +593,7 @@ class SongsListDialog(QDialog):
             return
         pl = backend.PlaylistManager.create_playlist(name)
         if pl is None:
-            self._dashboard._show_message("⚠️ Tên playlist rỗng hoặc đã tồn tại", is_error=True)
+            self._dashboard._show_message("Tên playlist rỗng hoặc đã tồn tại", is_error=True)
             return
         backend.PlaylistManager.add_song_to_playlist(pl["id"], song_id)
         self._refresh_data()
@@ -519,7 +620,7 @@ class SongsListDialog(QDialog):
     def _edit_info(self, song):
         dlg = QDialog(self)
         dlg.setWindowTitle("✏️ Sửa thông tin bài hát")
-        dlg.setFixedSize(520, 320)
+        rp.apply_dialog_size(dlg, 520, 320, fixed=True, max_scale=1.25)
         dlg.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 
         outer = QVBoxLayout(dlg)
@@ -561,7 +662,7 @@ class SongsListDialog(QDialog):
             new_title = title_input.text().strip()
             new_url = url_input.text().strip()
             if not new_title:
-                self._dashboard._show_message("⚠️ Tên bài hát không được để trống", is_error=True)
+                self._dashboard._show_message("Tên bài hát không được để trống", is_error=True)
                 return
             backend.SongManager.update_song(
                 song.get("id"),
@@ -570,7 +671,7 @@ class SongsListDialog(QDialog):
                 tone=tone_combo.currentText(),
             )
             dlg.accept()
-            self._dashboard._show_message("✅ Đã cập nhật thông tin bài hát")
+            self._dashboard._show_message("Đã cập nhật thông tin bài hát")
             self._refresh_data()
             self._rebuild_list()
 

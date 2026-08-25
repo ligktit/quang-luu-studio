@@ -232,8 +232,8 @@ def build_panel_tools(dashboard) -> GlassPanel:
         
     for i, (text, color, cb, desc, t_cfg) in enumerate(func_btns):
         btn = PainterButton(text, color=color, height=26, radius=8, font_size=9)
+        btn.setToolTip(desc)
         btn.setAccessibleName(text)
-        btn.setAccessibleDescription(desc)
         btn.clicked.connect(cb)
         grid.addWidget(btn, i // 2, i % 2)
         dashboard._func_buttons[text] = btn

@@ -23,7 +23,7 @@ import os
 import sys
 import threading
 
-from PySide6.QtCore import Qt, QObject, QUrl, Signal, Slot
+from PySide6.QtCore import Qt, QObject, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QMainWindow, QStackedWidget, QVBoxLayout, QWidget
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -111,9 +111,19 @@ class KaraokePlayerWindow(QMainWindow):
     video_meta    = Signal(str, str)       # (title, video_id)
     embed_blocked = Signal()               # video không cho nhúng -> fallback browser
     stream_failed = Signal(str)            # luồng native lỗi -> fallback IFrame (video_id)
+    playback_stalled = Signal(str)         # nạp xong mà không lên hình (video_id)
 
     # Mã lỗi IFrame nghĩa là "không cho nhúng"
     _EMBED_ERROR_CODES = {101, 150}
+    # Chờ tối đa bấy nhiêu ms để một backend thật sự lên hình rồi mới bỏ cuộc.
+    #
+    # Vì sao cần: YouTube có một lớp lỗi KHÔNG bắn event onError — nó tự vẽ
+    # "Đã xảy ra lỗi. Vui lòng thử lại sau. (Mã lượt phát: …)" ngay bên trong
+    # iframe. Iframe đó khác origin nên JS của ta không đọc được DOM để biết.
+    # Dấu hiệu duy nhất quan sát được là: nạp bài rồi mà mãi không vào trạng
+    # thái PLAYING. Trước khi có watchdog này, màn hình khách đứng ở trang lỗi
+    # còn app vẫn tưởng đang phát nên hàng đợi không bao giờ sang bài kế.
+    _STALL_TIMEOUT_MS = 12000
 
     def __init__(self, monitor_index: int = 0, parent=None):
         super().__init__(parent)
@@ -134,6 +144,13 @@ class KaraokePlayerWindow(QMainWindow):
         self._active_backend = "web"     # "web" | "native"
         self._current_video_id = None
         self._web_playing = False        # theo YT.PlayerState (1 = PLAYING)
+        self._native_playing = False     # theo QMediaPlayer.PlaybackState
+        self._last_native_pos = 0        # ms — dùng để nhận ra "đứt ở cuối bài"
+        self._last_web_pos = 0.0         # giây — vị trí mới nhất do IFrame báo
+
+        self._stall_timer = QTimer(self)
+        self._stall_timer.setSingleShot(True)
+        self._stall_timer.timeout.connect(self._on_stall_timeout)
 
         # ── Backend 1: WebEngine IFrame ──────────────────────────────────────
         self._view = QWebEngineView()
@@ -148,6 +165,7 @@ class KaraokePlayerWindow(QMainWindow):
 
         self._bridge.state_changed.connect(self._on_state_changed)
         self._bridge.error_occurred.connect(self._on_error)
+        self._bridge.time_updated.connect(self._on_web_time)
         self._bridge.time_updated.connect(self.time_updated)
         self._bridge.meta_updated.connect(self.video_meta)
 
@@ -194,8 +212,47 @@ class KaraokePlayerWindow(QMainWindow):
         self._media.mediaStatusChanged.connect(self._on_native_status)
         self._media.errorOccurred.connect(self._on_native_error)
         self._media.positionChanged.connect(self._on_native_position)
+        self._media.playbackStateChanged.connect(self._on_native_playback_state)
         self._stack.addWidget(self._video_widget)   # index 1
         return True
+
+    # ── Watchdog "nạp xong nhưng không lên hình" ─────────────────────────────
+    def _arm_stall_watchdog(self):
+        self._stall_timer.start(self._STALL_TIMEOUT_MS)
+
+    def _disarm_stall_watchdog(self):
+        self._stall_timer.stop()
+
+    def _on_stall_timeout(self):
+        secs = self._STALL_TIMEOUT_MS / 1000.0
+        print(f"[PLAYER] Backend '{self._active_backend}' không lên hình sau {secs:.0f}s")
+        if self._active_backend == "native":
+            self.stream_failed.emit(self._current_video_id or "")
+        else:
+            self.playback_stalled.emit(self._current_video_id or "")
+
+    def _on_native_playback_state(self, state):
+        from PySide6.QtMultimedia import QMediaPlayer
+        self._native_playing = (state == QMediaPlayer.PlaybackState.PlayingState)
+
+    def _on_web_time(self, pos, dur):
+        self._last_web_pos = float(pos or 0.0)
+
+    def playback_state(self):
+        """(vị trí giây, có đang phát không) — nguồn đồng bộ cho engine gửi MIDI.
+
+        Vì sao phải có: cả 2 backend đều VÔ HÌNH với các nguồn cũ. QMediaPlayer
+        không đăng ký Windows Media Transport Controls nên WinRT mù hẳn; còn
+        QtWebEngine tuy có đăng ký (WinRT thấy tên bài + PLAYING) nhưng mốc thời
+        gian luôn là 0. CDP thì không có vì app đâu có mở trình duyệt. Thiếu hàm
+        này thì timeline tone đứng im ở giây 0.
+
+        An toàn gọi từ thread nền: chỉ đọc thuộc tính Python thuần, không chạm
+        API Qt (vốn chỉ dùng được trên GUI thread).
+        """
+        if self._active_backend == "native":
+            return self._last_native_pos / 1000.0, self._native_playing
+        return self._last_web_pos, self._web_playing
 
     def _on_native_status(self, status):
         from PySide6.QtMultimedia import QMediaPlayer
@@ -205,10 +262,22 @@ class KaraokePlayerWindow(QMainWindow):
     def _on_native_position(self, pos_ms):
         if self._media is None:
             return
+        if pos_ms > 0:
+            self._disarm_stall_watchdog()   # đã thật sự chạy
+            self._last_native_pos = pos_ms
         dur = self._media.duration()
         self.time_updated.emit(pos_ms / 1000.0, (dur or 0) / 1000.0)
 
     def _on_native_error(self, error, msg=""):
+        self._disarm_stall_watchdog()
+        # Luồng googlevideo hay bị cắt ở vài giây cuối. Lùi sang IFrame lúc đó
+        # nghĩa là phát LẠI bài từ đầu trên màn hình khách — tệ hơn hẳn so với
+        # coi như bài đã hát xong và sang bài kế.
+        dur = self._media.duration() if self._media is not None else 0
+        if dur and self._last_native_pos >= dur * 0.97:
+            print("[PLAYER] Luồng đứt ở cuối bài — coi như đã hát xong")
+            self.video_ended.emit()
+            return
         # Luồng trực tiếp hỏng (URL hết hạn, codec lạ…) → báo dashboard fallback IFrame.
         print(f"[PLAYER] Native media lỗi: {error} {msg}")
         self.stream_failed.emit(self._current_video_id or "")
@@ -261,7 +330,10 @@ class KaraokePlayerWindow(QMainWindow):
 
     def _on_state_changed(self, state):
         self._web_playing = (state == 1)  # PLAYING
+        if state == 1:
+            self._disarm_stall_watchdog()  # đã thật sự lên hình
         if state == 0:  # ENDED
+            self._disarm_stall_watchdog()
             self.video_ended.emit()
 
     def is_playing(self) -> bool:
@@ -282,8 +354,15 @@ class KaraokePlayerWindow(QMainWindow):
         return self._web_playing
 
     def _on_error(self, code):
+        self._disarm_stall_watchdog()
         if code in self._EMBED_ERROR_CODES:
             self.embed_blocked.emit()
+            return
+        # 2 (id sai), 5 (lỗi player HTML5), 100 (video bị gỡ/riêng tư), 153
+        # (origin sai) và mọi mã lạ: trước đây bị nuốt im lặng nên màn hình khách
+        # nằm ở trang lỗi mà app không hề hay biết.
+        print(f"[PLAYER] IFrame báo lỗi mã {code}")
+        self.playback_stalled.emit(self._current_video_id or "")
 
     # ── Điều khiển từ app chính ──────────────────────────────────────────────
     def play_stream(self, stream_url: str, title: str = "", video_id: str = ""):
@@ -295,8 +374,10 @@ class KaraokePlayerWindow(QMainWindow):
                 self.load_video(video_id)
             return
         self._activate_native()
+        self._last_native_pos = 0
         self._media.setSource(QUrl(stream_url))
         self._media.play()
+        self._arm_stall_watchdog()
         if title:
             self.video_meta.emit(title, video_id or "")
 
@@ -305,7 +386,9 @@ class KaraokePlayerWindow(QMainWindow):
         if not video_id:
             return
         self._current_video_id = video_id
+        self._last_web_pos = 0.0
         self._activate_web()
+        self._arm_stall_watchdog()
         if not self._player_ready:
             self._pending_video_id = video_id
             return
@@ -318,6 +401,7 @@ class KaraokePlayerWindow(QMainWindow):
             self._run_js("qlsPlay()")
 
     def pause(self):
+        self._disarm_stall_watchdog()   # dừng chủ động, không phải kẹt
         if self._active_backend == "native" and self._media is not None:
             self._media.pause()
         else:
@@ -343,6 +427,7 @@ class KaraokePlayerWindow(QMainWindow):
             pass
 
     def closeEvent(self, event):
+        self._disarm_stall_watchdog()
         # Dừng cả 2 backend để không còn audio chạy nền sau khi đóng.
         if self._media is not None:
             try:

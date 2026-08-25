@@ -895,3 +895,73 @@ class TestResolveCacheThreadSafety:
             t.join(timeout=10)
         assert not errors
         assert len(engine._tone_resolve_cache) <= 8
+
+
+class TestSharedToneLibrary:
+    """Thư viện tone cộng đồng nối vào _resolve_tone."""
+
+    def test_local_trot_thi_hoi_cong_dong(self, engine, mocker):
+        mocker.patch("core.engine._tone.ManualToneTimeline.load_timeline", return_value=None)
+        mocker.patch("core.engine._tone.ToneCacheManager.get_cached_tone", return_value=None)
+        shared = {
+            "primary_key": "C Major",
+            "title": "Bài cộng đồng",
+            "key_timeline": [{"time": 0, "key_display": "C Major", "key_index": 0, "scale": "Major"}],
+            "origin": "community",
+        }
+        lookup = mocker.patch("core.tone_share.lookup", return_value=shared)
+
+        source, data = engine._resolve_tone("https://youtu.be/dQw4w9WgXcQ")
+
+        lookup.assert_called_once()
+        # Trả về dưới nhãn 'cache' để 3 nhánh gọi sẵn có xử lý được ngay.
+        assert source == "cache"
+        assert data["primary_key"] == "C Major"
+
+    def test_cache_local_trung_thi_khong_goi_mang(self, engine, mocker):
+        mocker.patch("core.engine._tone.ManualToneTimeline.load_timeline", return_value=None)
+        mocker.patch(
+            "core.engine._tone.ToneCacheManager.get_cached_tone",
+            return_value={"primary_key": "G Major", "key_timeline": [{"time": 0, "key_display": "G Major"}]},
+        )
+        lookup = mocker.patch("core.tone_share.lookup")
+
+        source, _data = engine._resolve_tone("https://youtu.be/dQw4w9WgXcQ")
+
+        assert source == "cache"
+        lookup.assert_not_called()
+
+    def test_timeline_sua_tay_van_thang_cong_dong(self, engine, mocker):
+        mocker.patch(
+            "core.engine._tone.ManualToneTimeline.load_timeline",
+            return_value={"timeline": [{"time": 0, "key_display": "F Major"}]},
+        )
+        lookup = mocker.patch("core.tone_share.lookup")
+
+        source, _data = engine._resolve_tone("https://youtu.be/dQw4w9WgXcQ")
+
+        assert source == "manual"
+        lookup.assert_not_called()
+
+    def test_thu_vien_loi_thi_luong_do_tone_chay_tiep(self, engine, mocker):
+        mocker.patch("core.engine._tone.ManualToneTimeline.load_timeline", return_value=None)
+        mocker.patch("core.engine._tone.ToneCacheManager.get_cached_tone", return_value=None)
+        mocker.patch("core.tone_share.lookup", side_effect=RuntimeError("mạng chết"))
+
+        assert engine._resolve_tone("https://youtu.be/dQw4w9WgXcQ") == (None, None)
+
+    def test_do_xong_thi_dong_gop_cho_mang_luoi(self, engine, mocker):
+        mocker.patch("core.engine._tone.ToneCacheManager.save_tone")
+        mocker.patch("core.engine._tone._ToneMixin._send_tone_midi")
+        contribute = mocker.patch("core.tone_share.contribute")
+
+        engine._save_tone_to_cache(
+            "https://youtu.be/dQw4w9WgXcQ",
+            {"key_display": "C Major", "key_index": 0, "scale": "Major", "confidence": 0.9},
+            title="Bài vừa dò",
+        )
+
+        contribute.assert_called_once()
+        args, kwargs = contribute.call_args
+        assert args[0] == "https://youtu.be/dQw4w9WgXcQ"
+        assert kwargs.get("source") == "auto"

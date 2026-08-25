@@ -14,6 +14,7 @@ import backend
 
 # ─── Design System (Single Source of Truth) ───
 from ui.design_tokens import C, SP, FONT, FONT_MONO, load_qss, lighten, darken
+from ui import responsive as rp
 import ui.panels as panels
 from ui.components.button import _make_pill_qss, _make_circle_qss
 from ui.components.waveform_hero import WaveformHeroPanel
@@ -33,12 +34,25 @@ except Exception as e:
     MIDI_CC = {}
     SCALE_VALUES = {}
 
+# Câu nói về nguồn tone — dùng CHUNG cho tooltip lẫn thông báo, để một ý không
+# có hai cách nói khác nhau (xem docs/UI_TEXT_AUDIT.md §3).
+TONE_MSG_LOW_CONF = "Tone gợi ý — sai thì bấm Dò Lại"
+TONE_MSG_CACHED = "Tone đã lưu — sai thì bấm Dò Lại"
+TONE_MSG_FRESH = "Tone vừa dò xong"
+TONE_MSG_LOOPBACK = "Đã dò tone qua loa máy"
+
 # ─── GLOBAL QSS (loaded from ui/styles/main.qss) ───
 APP_QSS = load_qss()
 
 # ─── Backward-compat aliases (used heavily in dialogs/callbacks below) ───
 _lighten = lighten
 _darken = darken
+
+# True khi vòng lặp sự kiện của dashboard đang chạy. Các dialog dùng mainloop()
+# (show + app.exec) chỉ hợp lệ TRƯỚC khi dashboard mở; gọi lúc vòng lặp đã chạy
+# thì Qt từ chối exec lồng nhau và trả về ngay → dialog biến mất trước khi kịp
+# vẽ. Cờ này để mainloop() tự chuyển sang exec() modal khi ở giữa phiên.
+_APP_LOOP_RUNNING = False
 
 def pill_btn_qss(color, hover=None, size=13, radius=12):
     return _make_pill_qss(color, hover, size, radius)
@@ -98,7 +112,7 @@ class MainDashboard(QMainWindow):
     _voice_intent_signal = Signal(object)
     _embedded_volume_signal = Signal(int)   # set âm lượng player nhúng (thread-safe)
     _search_results_signal = Signal(list)   # kết quả tìm kiếm YouTube (thread-safe)
-    _stream_resolved_signal = Signal(str, str, str)  # (video_id, stream_url, title)
+    _stream_resolved_signal = Signal(str, str, str, str)  # (video_id, url, title, loi)
 
     @property
     def _marquee_text(self):
@@ -116,6 +130,17 @@ class MainDashboard(QMainWindow):
         # Backend
         self.engine = backend.SystemEngine(settings)
         self.settings = settings or {}
+
+        # Khoá kỹ thuật đọc/ghi trên chính dict settings này — phải gắn TRƯỚC khi
+        # dựng header, vì header hỏi kiosk.is_locked() để quyết định hiện nút mắt.
+        try:
+            from core import kiosk
+            kiosk.bind(self.settings)
+        except Exception as e:
+            print(f"[KIOSK] bind lỗi: {e}")
+        self._so_hide_guard = None
+        self._so_shutdown_done = False
+        self._kiosk_timer = None
 
         # State
         self.tone_music_value = 0
@@ -139,6 +164,19 @@ class MainDashboard(QMainWindow):
         self.is_dev_mode = False
         # Cờ khoá replay khi user chỉnh tone/scale tay (xem _lock_replay_for_manual_override)
         self._manual_tone_override = False
+
+        # ── Trạng thái timeline tone (nguồn sự thật của phần HIỂN THỊ) ──────
+        # UI tự giữ timeline + vị trí phát, thay vì chỉ ngồi chờ engine bắn sự
+        # kiện lên. Nhờ vậy UI biết được "đoạn kế tiếp còn bao lâu" (engine không
+        # gửi thông tin đó) và vẫn bám đúng bài kể cả khi vòng replay im tiếng.
+        # Ở đây CHỈ hiển thị — MIDI vẫn do engine gửi, tránh hai nguồn bắn trùng.
+        self._tone_timeline = []
+        self._tone_index = -1
+        self._tone_position = 0.0
+        self._tone_duration = 0.0
+        self._tone_tick_timer = None
+        self._embedded_pos = None   # (position, duration) mới nhất từ player nhúng
+        self.current_title = ""
 
         self._mixer_channels = {}
 
@@ -194,16 +232,20 @@ class MainDashboard(QMainWindow):
         root.addWidget(self._build_bottom_bar())
 
         compact_min_h = max(200, self.minimumSizeHint().height())
-        self.setMinimumHeight(compact_min_h)
-        self.setMinimumWidth(780)
-        
-        # Restore window geometry or use default
-        geom = self.settings.get("window_geometry")
-        if geom:
-            self.resize(geom.get("width", 850), geom.get("height", max(compact_min_h + 20, 280)))
-            self.move(geom.get("x", 100), geom.get("y", 100))
-        else:
-            self.resize(850, max(compact_min_h + 20, 280))
+        # Cỡ tối thiểu vẫn phải vừa vùng làm việc của màn hình đang dùng: trên máy
+        # 1280x720 mà ép min theo nội dung thì cửa sổ tràn ra ngoài, thu lại không được.
+        rp.set_min_size(self, 780, compact_min_h)
+
+        # Khôi phục vị trí cũ — restore_geometry tự loại bỏ toạ độ đã "lạc" khi user
+        # rút màn phụ / đổi độ phân giải. Không dùng được thì dựng cỡ theo TỈ LỆ màn
+        # hình, nhờ vậy 1366x768, 1920x1080, 2560x1440 hay 4K đều ra bố cục cân đối.
+        if not rp.restore_geometry(self, self.settings.get("window_geometry")):
+            rp.apply_window_size(
+                self,
+                ratio=(0.58, 0.42),
+                min_size=(820, rp.px(compact_min_h + 20)),
+                max_size=(1500, max(compact_min_h + 20, 900)),
+            )
 
         # MIDI
         self.engine.register_midi_callback(self.on_midi_status_changed)
@@ -231,6 +273,13 @@ class MainDashboard(QMainWindow):
         self._status_timer.timeout.connect(self._update_browser_status)
         self._status_timer.start(2500)
 
+        # Nhịp bám timeline tone — 250ms, CHỈ chạy khi đang phát và bài có
+        # timeline nhiều đoạn (xem _tone_ticker_sync). Nhàn rỗi thì dừng hẳn.
+        self._tone_tick_timer = QTimer(self)
+        self._tone_tick_timer.timeout.connect(self._on_tone_tick)
+        # Timer 2.5s sẵn có làm nhiệm vụ bật/tắt nhịp trên theo trạng thái phát.
+        self._status_timer.timeout.connect(self._tone_ticker_sync)
+
         # Auto launch (Studio One + Browser theo settings)
         self._auto_launch_apps()
 
@@ -255,6 +304,11 @@ class MainDashboard(QMainWindow):
         self._dev_mode_shortcut = QShortcut(QKeySequence("Ctrl+Shift+D"), self)
         self._dev_mode_shortcut.activated.connect(self._toggle_dev_mode)
 
+        # Khoá kỹ thuật — phím tắt không ghi ở đâu trong giao diện khách.
+        self._tech_shortcut = QShortcut(QKeySequence("Ctrl+Alt+Shift+T"), self)
+        self._tech_shortcut.activated.connect(self._toggle_tech_session)
+        self._apply_kiosk_visibility()
+
         # Premium: nút lấp lánh theo nhạc (sau khi toàn bộ UI đã dựng).
         self._enable_premium_button_fx()
 
@@ -274,6 +328,100 @@ class MainDashboard(QMainWindow):
         self.is_dev_mode = not self.is_dev_mode
         self._show_message(f"Dev Mode: {'ON' if self.is_dev_mode else 'OFF'}")
         self.refresh_ui()
+
+    # ── Khoá kỹ thuật (chế độ khách) ─────────────────────────────────────────
+
+    def _apply_kiosk_visibility(self):
+        """Đồng bộ giao diện + watchdog với trạng thái khoá hiện tại.
+
+        Gọi mỗi khi trạng thái khoá đổi (mở/đóng phiên kỹ thuật, bật/tắt chế độ
+        khách trong Thiết lập) và một lần lúc khởi động.
+        """
+        from core import kiosk, so_windows
+
+        locked = kiosk.is_locked()
+        if self._eye_btn is not None:
+            self._eye_btn.setVisible(not locked)
+        support_btn = getattr(self, "_support_btn", None)
+        if support_btn is not None:
+            support_btn.setVisible(not locked)
+        if getattr(self, "_tech_badge", None) is not None:
+            self._tech_badge.setVisible(kiosk.is_enabled() and kiosk.session_active())
+
+        # Watchdog giữ ẩn (tuỳ chọn) — chỉ chạy khi đang khoá.
+        want_guard = locked and kiosk.keep_hidden()
+        if want_guard:
+            if self._so_hide_guard is None:
+                self._so_hide_guard = so_windows.HideGuard(
+                    should_hide=lambda: kiosk.is_locked() and kiosk.keep_hidden()
+                )
+            self._so_hide_guard.start()
+        elif self._so_hide_guard is not None:
+            self._so_hide_guard.stop()
+
+        # Đồng hồ tự khoá lại khi hết phiên — KTV hay quên bấm khoá.
+        timer = getattr(self, "_kiosk_timer", None)
+        if kiosk.is_enabled() and kiosk.session_active():
+            if timer is None:
+                self._kiosk_timer = QTimer(self)
+                self._kiosk_timer.timeout.connect(self._kiosk_session_tick)
+                self._kiosk_timer.start(5000)
+        elif timer is not None:
+            timer.stop()
+            self._kiosk_timer = None
+
+    def _kiosk_session_tick(self):
+        from core import kiosk
+        if kiosk.session_active():
+            return
+        self._lock_studio_one("Hết phiên kỹ thuật — đã khoá lại Studio One")
+
+    def _lock_studio_one(self, message):
+        from core import kiosk, so_windows
+        kiosk.end_session()
+        try:
+            so_windows.hide_all()
+        except Exception as e:
+            print(f"[KIOSK] ẩn Studio One lỗi: {e}")
+        self._studio_one_visible = False
+        self._apply_kiosk_visibility()
+        self._show_message(message)
+
+    def _toggle_tech_session(self):
+        """Ctrl+Alt+Shift+T — mở/đóng phiên kỹ thuật."""
+        from core import kiosk, so_windows
+
+        if not kiosk.is_enabled():
+            self._show_message("Chế độ khách chưa bật (Thiết lập → Hệ thống)")
+            return
+
+        if kiosk.session_active():
+            self._lock_studio_one("Đã khoá lại — Studio One ẩn khỏi khách")
+            return
+
+        if not kiosk.has_pin():
+            self._show_message("Chưa đặt mã PIN kỹ thuật", is_error=True)
+            return
+
+        from ui.dialogs.tech_unlock import TechUnlockDialog
+        if TechUnlockDialog(self).exec() != QDialog.Accepted:
+            return
+
+        self._apply_kiosk_visibility()
+        try:
+            shown = so_windows.show_all()
+        except Exception as e:
+            shown = 0
+            print(f"[KIOSK] hiện Studio One lỗi: {e}")
+        self._studio_one_visible = True
+        if self._eye_btn is not None:
+            from ui.components.svg_icons import SVG_EYE_OPEN
+            self._eye_btn.setSvg(SVG_EYE_OPEN)
+        if shown or so_windows.is_running():
+            self._show_message(f"Mở khoá kỹ thuật {kiosk.session_minutes()} phút")
+        else:
+            self._show_message(
+                f"Mở khoá kỹ thuật {kiosk.session_minutes()} phút — Studio One chưa chạy")
 
     def refresh_ui(self):
         # Clear body layout
@@ -414,11 +562,11 @@ class MainDashboard(QMainWindow):
         if is_major:
             scale_btn.setText("Major")
             scale_btn.setStyleSheet(pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 11, 14))
-            scale_btn.setToolTip("Đang ở thể Trưởng (Major). Bấm để đổi sang Thứ (Minor).")
+            scale_btn.setToolTip("Đang ở thể Major. Bấm để đổi sang Minor.")
         else:
             scale_btn.setText("Minor")
             scale_btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
-            scale_btn.setToolTip("Đang ở thể Thứ (Minor). Bấm để đổi sang Trưởng (Major).")
+            scale_btn.setToolTip("Đang ở thể Minor. Bấm để đổi sang Major.")
 
     # Tên 12 nốt — dùng cho relative + reverse-lookup
     _CHROMATIC_KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
@@ -469,6 +617,9 @@ class MainDashboard(QMainWindow):
         except Exception as e:
             print(f"[TONE] Không dừng được replay khi override tay: {e}")
         self._manual_tone_override = True
+        # Dừng nhịp bám timeline ngay lập tức, nếu không mốc kế tiếp sẽ ghi đè
+        # lựa chọn vừa chỉnh tay của user trong vòng 250ms.
+        self._tone_ticker_sync()
 
     def _on_tone_selected(self, value):
         self.current_tone = value
@@ -515,7 +666,7 @@ class MainDashboard(QMainWindow):
         # Phát MIDI thủ công (đã chặn signal ở trên để tránh gọi 2 lần)
         self._on_tone_selected(new_key)
         self._on_scale_selected(new_scale)
-        self._show_message(f"↔ Đổi sang tone tương đối: {new_key} {new_scale}")
+        self._show_message(f"Đổi sang tone tương đối: {new_key} {new_scale}")
 
     def _update_midi_status(self):
         try:
@@ -667,14 +818,41 @@ class MainDashboard(QMainWindow):
 
     def _auto_launch_apps(self):
         """Tự động mở Studio One và/hoặc YouTube browser khi khởi động (theo settings)."""
+        from core import kiosk, so_windows
+
+        studio_one_path = self.settings.get("studio_one_path", "")
+
+        # Phục hồi bản mẫu .song TRƯỚC khi mở Studio One — mọi thứ khách chỉnh
+        # buổi trước biến mất, kỹ thuật viên không phải sửa lại tay.
+        if kiosk.is_enabled() and kiosk.restore_template_enabled():
+            try:
+                from core import so_template
+                result = so_template.restore(studio_one_path)
+                if result["restored"]:
+                    print("[KIOSK] Đã phục hồi bản mẫu Studio One")
+            except Exception as e:
+                print(f"[KIOSK] phục hồi bản mẫu lỗi: {e}")
+
         # Studio One
+        launched = False
         if self.settings.get("auto_launch_studio_one", False):
-            studio_one_path = self.settings.get("studio_one_path", "")
             if studio_one_path and os.path.exists(studio_one_path):
                 try:
                     self.engine.launch_app(studio_one_path)
+                    launched = True
                 except Exception:
                     pass
+
+        # Chế độ khách: giấu Studio One đi. Vừa khởi chạy thì phải chờ nó dựng
+        # xong cửa sổ (nạp bài + quét plugin mất hàng chục giây) rồi mới ẩn được.
+        if kiosk.is_locked():
+            try:
+                if launched:
+                    so_windows.hide_when_ready()
+                elif so_windows.is_running():
+                    so_windows.hide_all()
+            except Exception as e:
+                print(f"[KIOSK] ẩn Studio One lúc khởi động lỗi: {e}")
         # Browser YouTube
         if self.settings.get("auto_launch_browser", False):
             browser_path = self.settings.get("browser_path", "")
@@ -690,6 +868,42 @@ class MainDashboard(QMainWindow):
     def _show_settings_dialog(self):
         from ui.dialogs.settings_dialog import SettingsDialog
         SettingsDialog(self).exec()
+
+    def _show_support_dialog(self):
+        from ui.dialogs.support_dialog import SupportDialog
+        dlg = SupportDialog(self)
+        dlg.unread_changed.connect(self._refresh_support_badge)
+        dlg.exec()
+        self._refresh_support_badge()
+
+    def _on_support_reply(self, unread):
+        """Slot main-thread: đội kỹ thuật vừa trả lời (từ luồng check-in nền).
+
+        Toast chỉ là cú hích 2 giây; thứ thật sự giữ thông tin là chấm đỏ trên
+        nút Hỗ trợ — nó ở lại tới khi khách mở hộp thư đọc.
+        """
+        self._refresh_support_badge(unread)
+        self._show_message("Đội kỹ thuật đã trả lời — mở nút Hỗ trợ để xem.")
+
+    def _refresh_support_badge(self, count=None):
+        """Nút Hỗ trợ đỏ lên khi dev đã trả lời mà khách chưa đọc.
+
+        KHÔNG gọi mạng ở đây — số liệu do core.support cập nhật từ luồng nền
+        (main._background_maintenance) hoặc từ chính dialog.
+        """
+        btn = getattr(self, "_support_btn", None)
+        if btn is None:
+            return
+        try:
+            from core import support
+            unread = support.unread_count() if count is None else int(count)
+        except Exception:
+            unread = 0
+        btn.setColor(C["accent"] if unread else C["card_hover"])
+        btn.setToolTip(
+            f"Hỗ trợ kỹ thuật — {unread} trả lời chưa đọc" if unread
+            else "Hỗ trợ kỹ thuật"
+        )
 
     def _show_calibration_wizard(self):
         from ui.dialogs.calibration import CalibrationWizardDialog
@@ -708,7 +922,7 @@ class MainDashboard(QMainWindow):
             self._tone_result_signal.emit({'error': msg, 'auto_detected': True})
 
         def _auto_on_progress(text):
-            self._marquee_signal.emit(self._spinner_progress_text(text))
+            self._marquee_signal.emit(self._scan_marquee_text(text))
 
         self.engine.on_auto_tone_complete = _auto_on_complete
         self.engine.on_tone_detected_callback = _auto_on_complete
@@ -768,14 +982,38 @@ class MainDashboard(QMainWindow):
         self._player_window.embed_blocked.connect(self._on_embedded_embed_blocked)
         self._player_window.video_meta.connect(self._on_embedded_meta)
         self._player_window.stream_failed.connect(self._on_stream_failed)
+        self._player_window.playback_stalled.connect(self._on_playback_stalled)
+        # Bài nào đã thử lại luồng trực tiếp rồi thì lần kẹt sau mở trình duyệt
+        # luôn, khỏi quay vòng native <-> IFrame.
+        self._embedded_stall_retried = set()
+        # Player nhúng phát bằng QMediaPlayer/IFrame nên Windows (WinRT) và CDP đều
+        # không thấy vị trí phát. Signal này đã có sẵn từ đầu nhưng chưa ai nghe —
+        # đây là nguồn vị trí DUY NHẤT ở chế độ nhúng.
+        self._player_window.time_updated.connect(self._on_embedded_time)
         # Định tuyến điều khiển âm lượng sang player nhúng (thread-safe qua signal).
         self.engine.embedded_volume_callback = lambda v: self._embedded_volume_signal.emit(int(v))
+        # Nguồn vị trí phát cho engine gửi MIDI theo timeline tone. Vòng lặp replay
+        # chạy ở thread nền nên callback chỉ được đọc thuộc tính thuần của cửa sổ
+        # player (playback_state), tuyệt đối không gọi API Qt.
+        self.engine.embedded_position_callback = self._embedded_playback_state
+
+    def _embedded_playback_state(self):
+        """(vị trí giây, có đang phát không) cho engine. Cửa sổ đã đóng → (0, False)
+        để vòng lặp replay đứng chờ thay vì bám một con số chết."""
+        win = self._player_window
+        if win is None:
+            return 0.0, False
+        return win.playback_state()
 
     def _destroy_player_window(self):
         try:
             self.engine.embedded_volume_callback = None
+            self.engine.embedded_position_callback = None
         except Exception:
             pass
+        # Vị trí cũ của player nhúng không còn giá trị — bỏ đi để _tone_current_position
+        # rơi về CDP/WinRT thay vì bám một con số chết.
+        self._embedded_pos = None
         if self._player_window is not None:
             try:
                 self._player_window.close()
@@ -812,6 +1050,9 @@ class MainDashboard(QMainWindow):
         ngược lại mở trình duyệt ngoài như cũ."""
         if not url:
             return
+        # Bài mới từ ô tìm kiếm / dán link: chưa biết timeline. Xoá timeline bài cũ
+        # kẻo ô "kế tiếp" đếm ngược theo mốc của bài trước đó.
+        self._clear_tone_timeline()
         if not self._embedded_player_active():
             self.engine.open_youtube_url(
                 url,
@@ -835,20 +1076,28 @@ class MainDashboard(QMainWindow):
     def _resolve_and_play_stream(self, url: str, video_id: str):
         """Nền: yt-dlp trích luồng progressive (video+audio 1 file, không cần ffmpeg
         để phát trực tiếp). Chọn itag 22 (720p) → 18 (360p) → progressive tốt nhất."""
-        stream_url, title = "", ""
+        stream_url, title, err_msg = "", "", ""
         try:
-            from core.ytdlp_support import extract_info_with_auth, make_ydl_opts
-            # Chỉ client tv_embedded/android/ios còn cấp luồng PROGRESSIVE (itag 22/18
-            # — 1 file video+audio, phát thẳng không cần ffmpeg) VÀ URL mở được trong
-            # QMediaPlayer. Client web đã bỏ progressive → chỉ còn DASH (không phát
-            # trực tiếp được). tv_embedded cũng né chặn bot tốt nhất.
+            from core.ytdlp_support import (
+                PURPOSE_VIDEO, extract_info_with_auth, make_ydl_opts,
+            )
+            # Cần luồng PROGRESSIVE (itag 22/18 — 1 file video+audio, phát thẳng
+            # không cần ffmpeg) và URL mở được trong QMediaPlayer; luồng DASH
+            # không phát trực tiếp được.
+            #
+            # KHÔNG ép player_client ở đây nữa: danh sách cũ
+            # ["tv_embedded","android","ios"] vừa đã bị yt-dlp 2026.07 bỏ
+            # (tv_embedded) vừa chưa bao giờ có hiệu lực (bị _apply_player_clients
+            # xoá). Thang client giờ do `purpose=PURPOSE_VIDEO` quyết định — nó
+            # ưu tiên bộ client cho nhiều luồng progressive chất lượng cao nhất
+            # khi máy đã có PO Token, và tự lùi về android khi chưa có.
             opts = make_ydl_opts(
                 skip_download=True,
                 format=("22/18/best[vcodec!=none][acodec!=none][ext=mp4]"
                         "/best[vcodec!=none][acodec!=none]"),
-                extractor_args={"youtube": {"player_client": ["tv_embedded", "android", "ios"]}},
             )
-            info = extract_info_with_auth(url, opts, download=False, log_prefix="[STREAM]")
+            info = extract_info_with_auth(url, opts, download=False, log_prefix="[STREAM]",
+                                          purpose=PURPOSE_VIDEO)
             if info:
                 title = info.get("title") or ""
                 stream_url = info.get("url") or ""
@@ -859,25 +1108,67 @@ class MainDashboard(QMainWindow):
                                 and f.get("vcodec") not in (None, "none")):
                             stream_url = f["url"]
         except Exception as e:
+            # yt-dlp dựng sẵn thông báo chẩn đoán tiếng Việt cho từng lớp lỗi
+            # (thiếu PO Token, 403, trình duyệt khoá file cookie…). Trước đây nó
+            # chỉ ra console rồi app lặng lẽ lùi sang IFrame — người dùng nhận
+            # đúng một màn hình lỗi khó hiểu của YouTube ("Mã lượt phát: VX-…")
+            # thay vì lý do thật kèm cách sửa.
+            err_msg = str(e)
             print(f"[STREAM] resolve lỗi: {e}")
-        self._stream_resolved_signal.emit(video_id, stream_url, title)
+        self._stream_resolved_signal.emit(video_id, stream_url, title, err_msg)
 
-    def _on_stream_resolved(self, video_id: str, stream_url: str, title: str):
+    def _on_stream_resolved(self, video_id: str, stream_url: str, title: str,
+                            error: str = ""):
         """GUI thread: có luồng → phát native (không QC); không có → fallback IFrame."""
         if self._player_window is None:
             return
         if stream_url:
             # play_stream tự emit video_meta (đã nối tới _on_embedded_meta) nếu có title.
             self._player_window.play_stream(stream_url, title, video_id)
+            return
+        # Vẫn thử IFrame (nhiều bài phát được), nhưng phải nói rõ vì sao mất
+        # luồng trực tiếp — nếu IFrame cũng hỏng thì đây là manh mối duy nhất.
+        if error:
+            self._show_message(error, is_error=True)
         else:
-            self._show_message("Không lấy được luồng trực tiếp — dùng player YouTube")
-            if video_id:
-                self._player_window.load_video(video_id)
+            self._show_message("Không lấy được luồng trực tiếp")
+        if video_id:
+            self._player_window.load_video(video_id)
 
     def _on_stream_failed(self, video_id: str):
         """Luồng native lỗi giữa chừng → lùi sang IFrame YouTube."""
         if self._player_window is not None and video_id:
             self._player_window.load_video(video_id)
+
+    def _on_playback_stalled(self, video_id: str):
+        """IFrame YouTube cũng không lên hình — gồm cả lỗi "Mã lượt phát: VX-…"
+        mà YouTube tự vẽ trong iframe (không bắn onError, app chỉ biết qua
+        watchdog quá hạn chờ).
+
+        Thử lại luồng trực tiếp MỘT lần trước đã: URL googlevideo có hạn dùng và
+        rất hay hết hạn giữa chừng, resolve lại thường là phát được ngay. Hết
+        cách mới chịu mở trình duyệt ngoài."""
+        if self._player_window is None:
+            return
+        url = getattr(self, "_embedded_current_url", None) or self.engine.current_youtube_url
+        retried = getattr(self, "_embedded_stall_retried", None)
+        if retried is None:
+            retried = self._embedded_stall_retried = set()
+        key = video_id or url
+        if url and key and key not in retried:
+            retried.add(key)
+            self._show_message("Đang thử lại luồng trực tiếp…")
+            import threading
+            threading.Thread(target=self._resolve_and_play_stream,
+                             args=(url, video_id or ""), daemon=True).start()
+            return
+        self._show_message("Mở bằng trình duyệt ngoài")
+        if url:
+            self.engine.open_youtube_url(
+                url,
+                on_video_end_callback=lambda res: None,
+                on_tone_detected=lambda result: self._tone_result_signal.emit(result),
+            )
 
     def _on_embedded_video_ended(self):
         try:
@@ -888,7 +1179,7 @@ class MainDashboard(QMainWindow):
     def _on_embedded_embed_blocked(self):
         """Video chặn nhúng → fallback mở trình duyệt ngoài + báo người dùng."""
         url = getattr(self, "_embedded_current_url", None) or self.engine.current_youtube_url
-        self._show_message("Video không cho nhúng — mở bằng trình duyệt ngoài")
+        self._show_message("Video không cho nhúng — mở trình duyệt")
         if url:
             self.engine.open_youtube_url(
                 url,
@@ -995,6 +1286,16 @@ class MainDashboard(QMainWindow):
         msg = (text or "").strip() or "Đang dò tone..."
         return f"{frame}  {msg}  {frame}"
 
+    # Marquee lúc dò tone chỉ nói MỘT câu. Các bước bên trong (kiểm tra cache,
+    # tải audio, phân tích, lưu kết quả…) là chuyện của máy — người hát chỉ cần
+    # biết app đang chạy. Text tiến trình thật vẫn in ra log cho kỹ thuật viên.
+    SCAN_MARQUEE_TEXT = "Đang dò..."
+
+    def _scan_marquee_text(self, backend_text=""):
+        if backend_text:
+            print(f"[TONE] {backend_text}")
+        return self._spinner_progress_text(self.SCAN_MARQUEE_TEXT)
+
     def _brand_marquee_text(self, default: str) -> str:
         """Text thương hiệu/nhàn rỗi cho marquee. Khách VIP (Premium) được chào
         đón riêng; còn lại giữ text mặc định."""
@@ -1022,7 +1323,7 @@ class MainDashboard(QMainWindow):
                 btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 11, 14))
                 if old_key in self._func_buttons:
                     self._func_buttons["Chế độ: Full"] = self._func_buttons.pop(old_key)
-            self._show_message("Chế độ Full: quét cả bài, phát hiện đổi tone theo thời gian (chậm hơn)")
+            self._show_message("Dò Full: quét cả bài, bám đổi tone")
         else:
             self.engine.tone_scan_mode = 'fast'
             if btn:
@@ -1031,14 +1332,14 @@ class MainDashboard(QMainWindow):
                 btn.setStyleSheet(pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 11, 14))
                 if old_key in self._func_buttons:
                     self._func_buttons["Chế độ: Nhanh"] = self._func_buttons.pop(old_key)
-            self._show_message("Chế độ Nhanh: chỉ nghe ~45s đầu, lấy 1 tone (nhanh)")
+            self._show_message("Dò Nhanh: nghe 45 giây đầu")
 
     def _set_rescan_button_state(self, state: str):
         """Centralized button state: 'idle' | 'running' | 'cancel'.
         Avoids duplicating button-style logic across 3 code paths."""
         btn = (self._func_buttons.get("Dò Lại")
                or self._func_buttons.get("⏳ Đang dò...")
-               or self._func_buttons.get("❌ Huỷ"))
+               or self._func_buttons.get("Huỷ"))
         if not btn:
             return
         old_key = btn.text()
@@ -1048,7 +1349,7 @@ class MainDashboard(QMainWindow):
             btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 11, 14))
         elif state == "running":
             btn.setEnabled(True)
-            btn.setText("❌ Huỷ")
+            btn.setText("Huỷ")
             btn.setStyleSheet(pill_btn_qss(C["accent"], _lighten(C["accent"], 0.12), 11, 14))
         # Update _func_buttons key to match the new text
         if old_key != btn.text() and old_key in self._func_buttons:
@@ -1074,13 +1375,14 @@ class MainDashboard(QMainWindow):
 
         self._set_rescan_button_state("running")
         self.autokey_dot.setStyleSheet(f"color: {C['orange']}; font-size: 16px;")
-        self._marquee_text = self._spinner_progress_text("Đang dò lại...")
+        self._marquee_text = self._scan_marquee_text()
 
         import weakref
         url = getattr(self.engine, 'current_youtube_url', None)
-        # Relay tiến trình thật từ backend ra marquee (thay vì vứt bỏ on_progress).
+        # Backend vẫn bắn tiến trình từng bước; marquee chỉ nhận một câu,
+        # bước thật đi vào log (xem _scan_marquee_text).
         def _on_progress(text):
-            self._marquee_signal.emit(self._spinner_progress_text(text))
+            self._marquee_signal.emit(self._scan_marquee_text(text))
         # Single stop() — Tier 1.3: pulled before if/else to avoid double call
         self.engine._tone_session.stop()
         if url:
@@ -1130,8 +1432,8 @@ class MainDashboard(QMainWindow):
                 os.startfile("mmsys.cpl")
             except Exception:
                 self._show_message(
-                    "Không mở được Cài đặt âm thanh. Hãy chuột phải biểu tượng loa "
-                    "ở khay hệ thống → 'Open Sound settings'.", is_error=True)
+                    "Không mở được Cài đặt âm thanh. Hãy chuột phải biểu tượng "
+                    "loa ở khay hệ thống.", is_error=True)
 
     def _show_speaker_help(self, msg):
         """Thông báo lỗi nghe loa kèm hướng dẫn từng bước + nút mở Cài đặt âm thanh.
@@ -1140,7 +1442,7 @@ class MainDashboard(QMainWindow):
         mặc định → app nghe nhầm thiết bị im lặng. Hướng dẫn họ đặt đúng thiết bị
         đang nghe làm Output mặc định."""
         guide = (
-            f"❌ {msg}\n\n"
+            f"{msg}\n\n"
             "👉 Cách sửa: app chỉ nghe được THIẾT BỊ ÂM THANH MẶC ĐỊNH của Windows.\n"
             "1. Chuột phải biểu tượng loa 🔈 ở khay hệ thống (góc dưới phải).\n"
             "2. Chọn 'Open Sound settings' (Mở cài đặt âm thanh).\n"
@@ -1151,6 +1453,213 @@ class MainDashboard(QMainWindow):
         # Dùng panel lỗi (ở lâu, không cắt cụt) nhưng gắn thêm nút mở Cài đặt.
         self._show_message(guide, is_error=True, action_text="Mở Cài đặt âm thanh",
                            action_cb=self._open_sound_settings)
+
+    # ── Timeline tone: nguồn sự thật cho phần HIỂN THỊ ───────────────────────
+    # Engine vẫn là bên gửi MIDI và vẫn bắn callback mỗi lần đổi tone. Phần dưới
+    # đây chỉ lo hiển thị, và tự tính lấy vị trí phát vì engine không hề gửi
+    # thông tin "đoạn kế tiếp còn bao lâu" — thứ người chỉnh cần nhất.
+
+    def _set_tone_timeline(self, timeline, duration=0.0):
+        """Nạp timeline cho phần hiển thị (3 chỗ gọi: phát bài đã lưu ở dashboard,
+        phát từ Danh sách bài hát, và khi dò xong toàn bài)."""
+        entries = []
+        for e in (timeline or []):
+            if not isinstance(e, dict):
+                continue
+            try:
+                entries.append({**e, "time": float(e.get("time", 0) or 0)})
+            except (TypeError, ValueError):
+                continue
+        entries.sort(key=lambda x: x["time"])
+        self._tone_timeline = entries
+        self._tone_index = -1
+        self._tone_position = 0.0
+        self._tone_duration = float(duration or 0.0)
+        self._embedded_pos = None
+        self._tone_ticker_sync()
+
+    def _clear_tone_timeline(self):
+        """Đổi bài / bài không có timeline → xoá sạch, tránh timeline bài cũ rò
+        sang bài mới."""
+        self._set_tone_timeline([], 0.0)
+
+    def _on_embedded_time(self, position: float, duration: float):
+        """Player nhúng báo vị trí phát (signal có sẵn từ trước, chưa ai nghe)."""
+        self._embedded_pos = (float(position), float(duration))
+        if duration and not self._tone_duration:
+            self._tone_duration = float(duration)
+
+    def _tone_current_position(self):
+        """Vị trí đang phát (giây). Thứ tự ưu tiên giống hệt _music_is_playing:
+        player nhúng → CDP → WinRT. None = không nguồn nào biết."""
+        try:
+            if self._player_window is not None and self._embedded_pos is not None:
+                return self._embedded_pos[0]
+            cdp = getattr(self.engine, "cdp_monitor", None)
+            if cdp is not None and getattr(cdp, "is_connected", False):
+                return float(cdp.current_position)
+            win_media = getattr(self.engine, "media_monitor", None)
+            if win_media is not None:
+                return float(win_media.current_position)
+        except Exception as e:
+            print(f"[TONE UI] Đọc vị trí phát lỗi: {e}")
+        return None
+
+    def _tone_ticker_sync(self):
+        """Bật/tắt nhịp 250ms theo trạng thái thật. Gọi từ timer 2.5s sẵn có nên
+        không tốn thêm timer nào để canh."""
+        if self._tone_tick_timer is None:
+            return
+        pill = getattr(self, "_next_tone_pill", None)
+        has_timeline = len(self._tone_timeline) > 1
+
+        if not has_timeline:
+            self._tone_tick_timer.stop()
+            if pill is not None:
+                pill.setVisible(False)
+            return
+
+        if self._manual_tone_override:
+            # User đã chỉnh tay → engine đã dừng replay, timeline không còn là
+            # thẩm quyền. Không ghi đè lựa chọn của user, chỉ nói rõ đang ở chế độ nào.
+            self._tone_tick_timer.stop()
+            if pill is not None:
+                pill.setVisible(True)
+                pill.set_message("chỉnh tay")
+            return
+
+        if pill is not None:
+            pill.setVisible(True)
+        if self._music_is_playing():
+            if not self._tone_tick_timer.isActive():
+                self._tone_tick_timer.start(250)
+        else:
+            self._tone_tick_timer.stop()
+
+    def _tone_segment_at(self, position):
+        """Trả (chỉ số đoạn, giây còn lại, phần còn lại 1→0, entry kế tiếp).
+
+        Đoạn cuối kết thúc ở _tone_duration; không biết độ dài bài thì không có
+        đếm ngược cho đoạn cuối (trả None) chứ không bịa số.
+        """
+        tl = self._tone_timeline
+        if not tl:
+            return -1, None, None, None
+        idx = 0
+        for i, entry in enumerate(tl):
+            if position >= entry["time"] - 0.05:
+                idx = i
+            else:
+                break
+        start = tl[idx]["time"]
+        nxt = tl[idx + 1] if idx + 1 < len(tl) else None
+        end = nxt["time"] if nxt else (self._tone_duration or None)
+        if not end or end <= start:
+            return idx, None, None, nxt
+        remaining = max(0.0, end - position)
+        return idx, remaining, remaining / (end - start), nxt
+
+    def _on_tone_tick(self):
+        """Nhịp 250ms: bám vị trí phát → cập nhật ô tone + ô 'kế tiếp'."""
+        # Chốt lại ngay đầu vòng: _tone_ticker_sync() đã stop() timer khi user
+        # chỉnh tay, nhưng một timeout ĐÃ nằm sẵn trong hàng đợi Qt vẫn nổ thêm
+        # một nhịp nữa — đủ để ghi đè lựa chọn vừa chỉnh tay.
+        if self._manual_tone_override or len(self._tone_timeline) < 2:
+            return
+        position = self._tone_current_position()
+        if position is None:
+            return
+        self._tone_position = position
+        idx, remaining, fraction, nxt = self._tone_segment_at(position)
+        if idx < 0:
+            return
+
+        if idx != self._tone_index:
+            self._tone_index = idx
+            entry = self._tone_timeline[idx]
+            key_root = self._key_root_of(entry)
+            changed = self._sync_tone_widgets(
+                key_root, entry.get("scale", "Major"), flash=True,
+            )
+            if changed:
+                # Chỉ dựng lại marquee khi tone THỰC SỰ đổi — đặt text mới sẽ
+                # reset vòng chạy chữ, làm mỗi 250ms thì chữ đứng im tại chỗ.
+                self._refresh_tone_marquee()
+
+        pill = getattr(self, "_next_tone_pill", None)
+        if pill is None:
+            return
+        if nxt is not None and remaining is not None:
+            pill.set_next(nxt.get("key_display", "?"), remaining, fraction)
+        elif nxt is not None:
+            pill.set_next(nxt.get("key_display", "?"), 0.0, None)
+        else:
+            pill.set_message("đoạn cuối")
+
+    @staticmethod
+    def _key_root_of(entry):
+        """Nốt gốc từ 1 entry timeline: ưu tiên 'key', không có thì bỏ hậu tố 'm'."""
+        key = entry.get("key")
+        if key:
+            return key
+        return (entry.get("key_display", "C") or "C").rstrip("m") or "C"
+
+    def _sync_tone_widgets(self, key_root, scale, accent=None, flash=False):
+        """Đặt tone/thể lên header. Trả True nếu giá trị THỰC SỰ đổi.
+
+        Dùng chung cho cả hai đường vào (callback của engine và nhịp 250ms) để
+        hai bên không đá nhau — bên đến sau thấy 'không đổi' thì không chớp lần hai.
+        """
+        changed = (key_root != self.tone_combo.currentText()
+                   or scale != self.scale_combo.currentText())
+        self.current_tone = key_root
+        self.current_scale = scale
+        with QSignalBlocker(self.tone_combo):
+            self.tone_combo.setCurrentText(key_root)
+        with QSignalBlocker(self.scale_combo):
+            self.scale_combo.setCurrentText(scale)
+        # Các API riêng của widget mới — dùng getattr để test/bản cũ dựng UI bằng
+        # QComboBox thuần vẫn chạy được.
+        set_scale_text = getattr(self.tone_combo, "set_scale_text", None)
+        if set_scale_text is not None:
+            set_scale_text(scale)
+        if accent is not None:
+            set_accent = getattr(self.tone_combo, "set_accent", None)
+            if set_accent is not None:
+                set_accent(accent)
+        if flash and changed:
+            do_flash = getattr(self.tone_combo, "flash", None)
+            if do_flash is not None:
+                do_flash()
+        return changed
+
+    def _compose_tone_marquee(self, badge=""):
+        """Chữ chạy: tên bài ★ tone hiện tại ▸ kế tiếp.
+
+        Cố ý KHÔNG in cả chuỗi 20 đoạn — người hát chỉ cần biết đang ở đâu và
+        sắp tới đâu. Cũng không kèm số giây vì marquee chỉ dựng lại khi đổi tone,
+        số giây nằm ở ô 'kế tiếp' (cập nhật 4 lần/giây).
+        """
+        title = getattr(self, "current_title", "") or ""
+        key = self.current_tone or "C"
+        scale = self.current_scale or "Major"
+        display = key + ("m" if scale == "Minor" else "")
+
+        core = display
+        idx = self._tone_index
+        # idx < 0 = chưa bám được đoạn nào (vừa dò xong, chưa phát). Lúc đó chưa
+        # biết "kế tiếp" là gì — timeline[0] là đoạn ĐẦU chứ không phải đoạn sau.
+        if idx >= 0 and idx + 1 < len(self._tone_timeline):
+            core += f"  ▸ kế: {self._tone_timeline[idx + 1].get('key_display', '?')}"
+        if len(self._tone_timeline) > 1 and idx >= 0:
+            core += f"  ({idx + 1}/{len(self._tone_timeline)})"
+
+        if title:
+            return f"🎵 {title}   ★   {core}{badge}"
+        return f"🎵 {core}{badge}"
+
+    def _refresh_tone_marquee(self, badge=""):
+        self._marquee_text = self._compose_tone_marquee(badge)
 
     def _handle_tone_result(self, result):
         """Slot xử lý kết quả dò tone trên main thread (thread-safe via Signal)"""
@@ -1189,7 +1698,7 @@ class MainDashboard(QMainWindow):
             if self._is_speaker_loopback_error(msg):
                 self._show_speaker_help(msg)
             else:
-                self._show_message(f"❌ {msg}", is_error=True)
+                self._show_message(f"{msg}", is_error=True)
             return
         
         # === Trường hợp THÀNH CÔNG ===
@@ -1212,18 +1721,30 @@ class MainDashboard(QMainWindow):
         # Engine luôn trả 'key' = root note (đã strip 'm' suffix)
         key_root = result.get('key', 'C')
         scale = result.get('scale', 'Major')
-        title = result.get('title', '')
-        
-        # Tránh gửi MIDI trùng lặp khi set combo (backend đã gửi rồi)
-        self.current_tone = key_root
-        self.current_scale = scale
+        # Sự kiện CHUYỂN TONE lúc đang phát không kèm title. Lấy title cũ thay vì
+        # chuỗi rỗng — nếu không, mỗi lần đổi tone là một lần xoá trắng tên bài
+        # trên waveform hero và trên chữ chạy.
+        title = result.get('title') or getattr(self, 'current_title', '') or ''
         if title:
             self.current_title = title
-        with QSignalBlocker(self.tone_combo):
-            self.tone_combo.setCurrentText(key_root)
-        with QSignalBlocker(self.scale_combo):
-            self.scale_combo.setCurrentText(scale)
-        
+
+        # Kết quả dò toàn bài mang theo cả timeline → nạp cho phần hiển thị bám
+        # theo. Sự kiện chuyển tone lẻ (có 'time') thì không đụng tới timeline
+        # đang có.
+        if result.get('timeline'):
+            self._set_tone_timeline(result['timeline'], result.get('total_duration', 0))
+        elif 'time' not in result and not result.get('from_cache') and not result.get('from_manual'):
+            # Dò ra đúng MỘT tone cho cả bài → không còn timeline nào hợp lệ.
+            self._clear_tone_timeline()
+
+        # Tránh gửi MIDI trùng lặp khi set combo (backend đã gửi rồi)
+        is_low_conf_pre = bool(uncertain) or (confidence_level == 'low')
+        self._sync_tone_widgets(
+            key_root, scale,
+            accent=C['orange'] if is_low_conf_pre else C['green'],
+            flash=True,
+        )
+
         # Đổi style combobox theo độ tin cậy:
         #  - chắc chắn  → text xanh lá (green)
         #  - chưa chắc (uncertain / confidence thấp) → text cam cảnh báo
@@ -1250,16 +1771,20 @@ class MainDashboard(QMainWindow):
                 font-family: {FONT};
             }}
         """
-        self.tone_combo.setStyleSheet(detected_combo_qss)
-        self.scale_combo.setStyleSheet(detected_combo_qss)
+        # Widget tự tạo dáng (SELF_STYLED) thì bỏ qua: ô tone đã đổi màu qua
+        # set_accent() ở _sync_tone_widgets, còn nút Major/Minor là PainterButton
+        # tự vẽ. Áp QSS này vào sẽ ghi đè cỡ chữ 18px của ô tone.
+        for _w in (self.tone_combo, self.scale_combo):
+            if not getattr(_w, 'SELF_STYLED', False):
+                _w.setStyleSheet(detected_combo_qss)
 
         # Tooltip giải thích nguồn/độ tin cậy của tone đang hiển thị
         if is_low_conf:
-            _tip = "⚠️ Tone gợi ý — chưa chắc chắn. Nghe thử, sai thì bấm Dò Lại hoặc chọn tay."
+            _tip = TONE_MSG_LOW_CONF
         elif from_cache or from_manual:
-            _tip = "Tone đã lưu từ lần trước. Sai? Bấm Dò Lại."
+            _tip = TONE_MSG_CACHED
         else:
-            _tip = "Tone vừa dò xong."
+            _tip = TONE_MSG_FRESH
         self.tone_combo.setToolTip(_tip)
         self.scale_combo.setToolTip(_tip)
         
@@ -1291,35 +1816,30 @@ class MainDashboard(QMainWindow):
         
         # Nhãn (badge) phụ cho marquee: nguồn lưu sẵn / mức tin cậy
         if is_low_conf:
-            badge = "  ⚠️ tone gợi ý — chưa chắc"
+            badge = "  tone gợi ý — chưa chắc"
         elif from_cache or from_manual:
             badge = "  (đã lưu — sai? bấm Dò Lại)"
         else:
             badge = ""
 
         # === 5. Hiển thị tên bài hát + kết quả lên Marquee (giữ nguyên Window Title) ===
-        # Chỉ cập nhật nội dung marquee nếu đây là kết quả dò toàn bài (không phải sự kiện chuyển timeline)
-        if 'time' not in result:
-            timeline = result.get('timeline', [])
-            if timeline and len(timeline) > 1:
-                # Có nhiều đoạn chuyển tone → hiển thị chuỗi tone
-                tone_chain = " → ".join(e.get('key_display', '?') for e in timeline)
-                if title:
-                    self._marquee_text = f"🎵 {title}   ★   {tone_chain}{badge}"
-                else:
-                    self._marquee_text = f"🎵 {tone_chain}{badge}"
-            elif title:
-                self._marquee_text = f"🎵 {title}   ★   {key_display} {scale}{badge}"
-            else:
-                self._marquee_text = f"🎵 {key_display} {scale}{badge}"
+        # TRƯỚC ĐÂY: chặn `if 'time' not in result` khiến marquee đứng im suốt bài,
+        # vì MỌI sự kiện chuyển tone lúc đang phát đều có 'time'. Nay cập nhật cả
+        # hai loại: dò xong bài, và mỗi lần đổi tone.
+        #
+        # Marquee chỉ dựng lại khi tone ĐỔI (không phải mỗi nhịp 250ms) — đặt text
+        # mới sẽ reset vòng chạy chữ, làm liên tục thì chữ đứng im tại chỗ. Số giây
+        # đếm ngược nằm ở ô "kế tiếp" bên phải, nơi vẽ lại được 4 lần/giây mà không
+        # ảnh hưởng gì.
+        self._refresh_tone_marquee(badge)
 
         # Báo cho người dùng biết tone được dò từ loa (yt-dlp tải thất bại)
         if result.get('from_loopback'):
-            self._show_message("🎤 Đã dò tone bằng cách nghe từ loa (không tải được YouTube)")
+            self._show_message(TONE_MSG_LOOPBACK)
         elif is_low_conf:
-            self._show_message("⚠️ Tone gợi ý — chưa chắc. Sai thì bấm Dò Lại hoặc chọn tay.")
+            self._show_message(TONE_MSG_LOW_CONF)
         elif from_cache or from_manual:
-            self._show_message("📁 Tone đã lưu. Sai? Bấm Dò Lại.")
+            self._show_message(TONE_MSG_CACHED)
 
         # === 6. Auto-save vào Danh sách bài hát ===
         # Bảo thủ: KHÔNG tự lưu khi tone chưa chắc (uncertain/low) để tránh lưu tone
@@ -1627,7 +2147,7 @@ class MainDashboard(QMainWindow):
             if mode:
                 self._on_mode_selected(mode, toggle=False)
 
-            self._show_message(f"🎚️ Đã khôi phục preset: {song.get('title','')}")
+            self._show_message(f"Đã khôi phục thiết lập: {song.get('title','')}")
         except Exception as e:
             print(f"[SMART_RECALL] apply preset error: {e}")
 
@@ -1670,6 +2190,9 @@ class MainDashboard(QMainWindow):
         try:
             tl_data   = backend.ManualToneTimeline.load_timeline(url)
             manual_tl = tl_data["timeline"] if tl_data and tl_data.get("timeline") else None
+            # Timeline đã lưu chính là thứ engine sắp replay — nạp luôn cho phần
+            # hiển thị để ô "kế tiếp" đếm ngược được ngay từ giây đầu.
+            self._set_tone_timeline(manual_tl or [], song.get("duration", 0) or 0)
             play_cb   = self._load_embedded_video if self._embedded_player_active() else None
             if play_cb is not None:
                 self._embedded_current_url = url
@@ -1700,46 +2223,75 @@ class MainDashboard(QMainWindow):
             if dlg.exec() == QDialog.Accepted:
                 self._open_activation_upgrade()
                 # Sau khi nhập mã thành công, kiểm tra lại quyền ngay.
-                return entitlements.has_feature(feature)
+                allowed = entitlements.has_feature(feature)
+                if allowed:
+                    # Header, nền Premium và visualizer dựng một lần lúc khởi
+                    # động → phải mở lại app mới thấy giao diện Premium.
+                    self._show_message("Đã bật Premium — khởi động lại app")
+                return allowed
         except Exception as e:
             print(f"[PREMIUM] upsell dialog error: {e}")
         return False
 
     def _open_activation_upgrade(self):
-        """Mở ActivationDialog để người dùng nhập mã Premium giữa phiên."""
+        """Mở ActivationDialog để người dùng nhập mã Premium giữa phiên.
+
+        KHÔNG dùng mainloop(): hàm đó gọi app.exec(), mà vòng lặp sự kiện của
+        dashboard đang chạy sẵn — Qt từ chối exec lồng nhau và trả về NGAY, nên
+        dialog bị thu hồi trước khi kịp vẽ (người dùng bấm "Nâng cấp" xong không
+        thấy gì hiện lên). Giữa phiên phải dùng exec() của chính dialog: đó là
+        vòng lặp modal lồng hợp lệ của Qt.
+        """
         try:
-            dlg = ActivationDialog()
-            dlg.mainloop()
+            dlg = ActivationDialog(parent=self)
+            dlg.setWindowModality(Qt.ApplicationModal)
+            dlg.exec()
         except Exception as e:
             print(f"[PREMIUM] activation dialog error: {e}")
 
     def _show_message(self, text, is_error=False, action_text=None, action_cb=None):
-        """Show temporary message box in center of dashboard.
+        """Hiện thông báo tạm ở giữa cửa sổ đang đứng trước mặt người dùng.
 
         Thông báo lỗi: ở lâu hơn (8s), không cắt cụt câu dài (word-wrap, rộng
         tối đa theo cửa sổ) và có nút ✕ để user tự đóng ngay khi đã đọc xong.
-        Thông báo info ngắn: giữ nguyên hành vi cũ (tự biến mất sau 2s).
+        Thông báo info: xuống dòng khi câu dài, sống 2s và cộng thêm theo độ
+        dài câu (tối đa 5s) để người đọc kịp.
 
         action_text/action_cb: nếu có, hiện thêm một nút hành động (vd "Mở Cài
         đặt âm thanh") dưới nội dung lỗi — chỉ áp dụng cho panel lỗi."""
         color = C["accent"] if is_error else C["green"]
         font_size = 14 if is_error else 11
 
+        # Toast là widget CON của cửa sổ nhận nó. Các hộp thoại (Danh sách bài,
+        # Sửa bài, Thiết lập…) mở bằng exec() nên là cửa sổ modal ĐÈ LÊN
+        # dashboard — vẽ toast lên dashboard thì nó nằm khuất phía sau, người
+        # dùng bấm Lưu mà tưởng không có gì xảy ra. Có modal thì vẽ lên modal.
+        host = QApplication.activeModalWidget() or self
+
         if not is_error:
-            lbl = QLabel(text, self)
+            lbl = QLabel(text, host)
+            lbl.setWordWrap(True)
+            lbl.setAlignment(Qt.AlignCenter)
             lbl.setStyleSheet(
                 f"background-color: {C['card']}; color: {color}; border: 1px solid {color};"
                 f" border-radius: 8px; padding: 6px 12px; font-size: {font_size}px;"
                 f" font-weight: bold; font-family: {FONT};"
             )
+            lbl.setMaximumWidth(max(280, int(host.width() * 0.8)))
             lbl.adjustSize()
-            lbl.move(self.width() // 2 - lbl.width() // 2, self.height() // 2 - lbl.height() // 2)
+            lbl.move(host.width() // 2 - lbl.width() // 2, host.height() // 2 - lbl.height() // 2)
             lbl.show()
-            QTimer.singleShot(2000, lbl.deleteLater)
+            lbl.raise_()
+            # Timer làm CON của nhãn: hộp thoại đóng trước hạn thì timer chết
+            # theo, không còn callback gọi vào widget đã bị xoá.
+            timer = QTimer(lbl)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lbl.deleteLater)
+            timer.start(min(5000, 2000 + 40 * len(text)))
             return
 
         # ── Thông báo LỖI: panel có nút đóng, ở lâu, không cắt cụt ──
-        panel = QFrame(self)
+        panel = QFrame(host)
         panel.setStyleSheet(
             f"background-color: {C['card']}; color: {color}; border: 1px solid {color};"
             f" border-radius: 8px;"
@@ -1791,7 +2343,7 @@ class MainDashboard(QMainWindow):
             act_btn.setCursor(Qt.PointingHandCursor)
             act_btn.setAccessibleName(action_text)
             act_btn.setAccessibleDescription(
-                "Mở trang Cài đặt âm thanh của Windows để chọn đúng thiết bị đang nghe làm mặc định")
+                "Chọn thiết bị đang nghe làm mặc định của Windows")
             act_btn.setStyleSheet(
                 f"QPushButton {{ background: {color}; color: {C['bg']}; border: none;"
                 f" border-radius: 8px; padding: 6px 14px; font-size: 13px;"
@@ -1808,11 +2360,11 @@ class MainDashboard(QMainWindow):
             outer_v.addWidget(act_row)
 
         # Rộng tối đa ~80% cửa sổ để câu dài xuống dòng thay vì bị cắt
-        max_w = max(320, int(self.width() * 0.8))
+        max_w = max(320, int(host.width() * 0.8))
         panel.setMaximumWidth(max_w)
         panel.adjustSize()
-        panel.move(self.width() // 2 - panel.width() // 2,
-                   self.height() // 2 - panel.height() // 2)
+        panel.move(host.width() // 2 - panel.width() // 2,
+                   host.height() // 2 - panel.height() // 2)
         panel.show()
         panel.raise_()
 
@@ -1834,7 +2386,7 @@ class MainDashboard(QMainWindow):
         from PySide6.QtWidgets import QDialog, QLineEdit, QVBoxLayout, QHBoxLayout, QFrame as _QF
         dlg = QDialog(self)
         dlg.setWindowTitle("💾 Lưu bài hát")
-        dlg.setFixedSize(520, 330)
+        rp.apply_dialog_size(dlg, 520, 330, fixed=True, max_scale=1.25)
         dlg.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 
         outer = QVBoxLayout(dlg)
@@ -1916,7 +2468,7 @@ class MainDashboard(QMainWindow):
         def save_from_form():
             url = url_input.text().strip()
             if not url or ("youtube.com" not in url and "youtu.be" not in url):
-                self._show_message("⚠️ Vui lòng nhập URL YouTube hợp lệ", is_error=True)
+                self._show_message("Cần link YouTube hợp lệ", is_error=True)
                 return
             dlg.accept()
             self._process_quick_save(url, tone_combo.currentText(), title_input.text().strip())
@@ -1965,7 +2517,7 @@ class MainDashboard(QMainWindow):
             if backend.SongManager.add_song(save_title, url, save_tone):
                 self._message_signal.emit(f"✅ Đã lưu: {save_title[:40]}", False)
             else:
-                self._message_signal.emit("❌ Lỗi khi lưu bài hát", True)
+                self._message_signal.emit("Lỗi khi lưu bài hát", True)
 
         threading.Thread(target=_task, daemon=True).start()
 
@@ -1974,87 +2526,41 @@ class MainDashboard(QMainWindow):
         from ui.components.svg_icons import SVG_EYE_OPEN, SVG_EYE_CLOSED
         # Gọi logic ẩn/hiện PID-based
         self._on_toggle_studio_one()
-        # Đảo trạng thái và cập nhật icon qua setSvg()
-        self._studio_one_visible = not getattr(self, '_studio_one_visible', True)
-        if hasattr(self, '_eye_btn'):
+        # Đọc lại trạng thái thật thay vì đảo cờ: lệnh trên có thể đã bỏ qua
+        # (đang khoá, Studio One chưa chạy) — đảo mù sẽ làm icon lệch thực tế.
+        from core import so_windows
+        self._studio_one_visible = so_windows.any_visible()
+        if self._eye_btn is not None:
             new_svg = SVG_EYE_OPEN if self._studio_one_visible else SVG_EYE_CLOSED
             self._eye_btn.setSvg(new_svg)
 
     def _on_toggle_studio_one(self):
         """Ẩn/Hiện Studio One + tất cả plugin windows (theo PID, không theo title)."""
-        try:
-            import win32gui
-            import win32con
-            import win32process
-            import psutil
-        except ImportError:
-            self._show_message("⚠️ pywin32 / psutil chưa được cài đặt", is_error=True)
+        from core import kiosk, so_windows
+
+        # Chốt chặn cuối: nút mắt đã bị ẩn khi khoá, nhưng lệnh này còn tới được
+        # từ MIDI/giọng nói/nút custom nên phải chặn ngay tại đây.
+        if kiosk.is_locked():
+            self._show_message("Studio One đang khoá — cần mở khoá kỹ thuật", is_error=True)
             return
 
-        # Bước 1: Thu thập PID của tất cả process Studio One
-        STUDIO_ONE_EXE_KEYWORDS = ["studio one"]
-        studio_pids = set()
-        for proc in psutil.process_iter(['pid', 'name']):
-            try:
-                name = (proc.info['name'] or '').lower()
-                if any(kw in name for kw in STUDIO_ONE_EXE_KEYWORDS):
-                    studio_pids.add(proc.info['pid'])
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-
-        if not studio_pids:
-            self._show_message("⚠️ Không tìm thấy Studio One đang chạy", is_error=True)
+        if so_windows.win32_modules() is None:
+            self._show_message("Thiếu thành phần hệ thống — báo kỹ thuật", is_error=True)
             return
 
-        # Bước 2: Tìm TẤT CẢ top-level windows thuộc các PID đó
-        # (bao gồm plugin, mixer, instrument, effect windows)
-        hwnd_list = []
-
-        def _enum_cb(hwnd, _):
-            if not win32gui.IsWindow(hwnd):
-                return True
-            try:
-                _, pid = win32process.GetWindowThreadProcessId(hwnd)
-                if pid in studio_pids:
-                    hwnd_list.append(hwnd)
-            except Exception:
-                pass
-            return True
-
-        win32gui.EnumWindows(_enum_cb, None)
-
-        if not hwnd_list:
-            self._show_message("⚠️ Studio One đang chạy nhưng không có cửa sổ nào", is_error=True)
+        if not so_windows.studio_one_pids():
+            self._show_message("Không tìm thấy Studio One đang chạy", is_error=True)
             return
 
-        # Bước 3: Xác định trạng thái hiện tại (visible nếu có ÍT NHẤT 1 cửa sổ đang hiện)
-        any_visible = any(win32gui.IsWindowVisible(h) for h in hwnd_list)
+        if not so_windows.all_windows():
+            self._show_message("Studio One đang chạy nhưng không có cửa sổ nào", is_error=True)
+            return
 
-        main_hwnd = None
-        if any_visible:
-            # Ẩn tất cả
-            for h in hwnd_list:
-                try:
-                    win32gui.ShowWindow(h, win32con.SW_HIDE)
-                except Exception:
-                    pass
+        if so_windows.any_visible():
+            so_windows.hide_all()
             self._show_message("Đã ẩn Studio One")
         else:
-            # Hiện tất cả
-            for h in hwnd_list:
-                try:
-                    win32gui.ShowWindow(h, win32con.SW_SHOW)
-                    # Ghi nhớ cửa sổ chính (có "Studio One" trong title) để focus sau
-                    title = win32gui.GetWindowText(h)
-                    if "Studio One" in title and main_hwnd is None:
-                        main_hwnd = h
-                except Exception:
-                    pass
-            if main_hwnd:
-                try:
-                    win32gui.SetForegroundWindow(main_hwnd)
-                except Exception:
-                    pass
+            so_windows.show_all()
             self._show_message("Đã hiện Studio One")
 
     def _on_toggle_asiolink(self):
@@ -2064,7 +2570,7 @@ class MainDashboard(QMainWindow):
             import win32con
             import win32process
         except ImportError:
-            self._show_message("⚠️ pywin32 chưa được cài đặt", is_error=True)
+            self._show_message("Thiếu thành phần hệ thống — báo kỹ thuật", is_error=True)
             return
 
         # Danh sách process name phổ biến của ASIO link/driver tools
@@ -2102,11 +2608,11 @@ class MainDashboard(QMainWindow):
         try:
             win32gui.EnumWindows(_enum_cb, None)
         except Exception as e:
-            self._show_message(f"⚠️ Lỗi tìm ASIOLINK: {e}", is_error=True)
+            self._show_message(f"Lỗi tìm bảng điều khiển âm thanh: {e}", is_error=True)
             return
 
         if not found_hwnds:
-            self._show_message("⚠️ Không tìm thấy ASIOLINK đang chạy", is_error=True)
+            self._show_message("Không tìm thấy bảng điều khiển âm thanh", is_error=True)
             # Reset state để lần sau tìm lại từ đầu
             self._asiolink_hidden = False
             return
@@ -2126,7 +2632,7 @@ class MainDashboard(QMainWindow):
             btn = self._func_buttons.get("🔊 ASIOLINK")
             if btn:
                 btn.setText("🔊 ASIO [ẩn]")
-            self._show_message("🙈 Đã ẩn ASIOLINK")
+            self._show_message("Đã ẩn bảng điều khiển âm thanh")
         else:
             for h in found_hwnds:
                 try:
@@ -2143,7 +2649,7 @@ class MainDashboard(QMainWindow):
             if btn:
                 btn.setText("🔊 ASIOLINK")
                 self._func_buttons["🔊 ASIOLINK"] = self._func_buttons.pop("🔊 ASIO [ẩn]", btn)
-            self._show_message("👁️ Đã hiện ASIOLINK")
+            self._show_message("Đã hiện bảng điều khiển âm thanh")
 
     def _on_open_recordings_folder(self):
         """Mở thư mục lưu trữ file ghi âm"""
@@ -2173,13 +2679,23 @@ class MainDashboard(QMainWindow):
                 # stop_recording sẽ tự xử lý: dừng subprocess → lưu file
                 if save_path:
                     if self.engine.recorder.stop_recording(save_path=save_path):
-                        self._show_message(f"💾 Đã lưu bản thu: {os.path.basename(save_path)}")
+                        self._show_message(f"Đã lưu bản thu: {os.path.basename(save_path)}")
+                        # Bản thu bị rè thì nói thẳng nguyên nhân, đừng để khách
+                        # tự đoán. Chờ 3s cho thông báo lưu hiện xong đã.
+                        try:
+                            warn = self.engine.recorder.quality_warning()
+                        except Exception:
+                            warn = None
+                        if warn:
+                            QTimer.singleShot(
+                                3000, lambda: self._show_message(f"{warn}", is_error=True)
+                            )
                     else:
                         err = getattr(self.engine.recorder, 'last_error', None) or "File ghi âm rỗng hoặc không hợp lệ"
-                        self._show_message(f"⚠️ Lưu thất bại: {err[:80]}", is_error=True)
+                        self._show_message(f"Lưu thất bại: {err[:80]}", is_error=True)
                 else:
                     self.engine.recorder.stop_recording(save_path=None)
-                    self._show_message("⚠️ Đã hủy lưu bản thu.")
+                    self._show_message("Đã huỷ lưu bản thu")
             
             QTimer.singleShot(100, handle_save)
         else:
@@ -2202,7 +2718,7 @@ class MainDashboard(QMainWindow):
                 self.record_button.set_recording(False)
                 self.engine.send_midi(MIDI_CC.get("score_trigger", 32), 0)
                 err = getattr(self.engine.recorder, 'last_error', None) or "Không tìm thấy thiết bị WASAPI Loopback"
-                self._show_message(f"❌ Không thể ghi âm: {err[:80]}", is_error=True)
+                self._show_message(f"Không thể ghi âm: {err[:80]}", is_error=True)
 
     def _on_mode_selected(self, mode, toggle=False):
         old_mode = self.current_mode
@@ -2426,7 +2942,7 @@ class MainDashboard(QMainWindow):
         """Thiết lập Tab order rõ ràng cho điều hướng bằng bàn phím."""
         # Header → Tools → Mixer → Mode → Bottom
         chain = []
-        for attr in ("tone_combo", "scale_combo", "_settings_btn", "_eye_btn"):
+        for attr in ("tone_combo", "scale_combo", "_support_btn", "_settings_btn", "_eye_btn"):
             w = getattr(self, attr, None)
             if w is not None:
                 chain.append(w)
@@ -2746,7 +3262,7 @@ class MainDashboard(QMainWindow):
 
         if name == "empty":
             self._a11y_speak("Không nghe rõ. Hãy nói to và rõ hơn.", priority="high")
-            self._show_message("🎤 Không nghe được lệnh", is_error=True)
+            self._show_message("Không nghe được lệnh", is_error=True)
             return
 
         actions = {
@@ -2777,7 +3293,7 @@ class MainDashboard(QMainWindow):
         if action is None:
             print(f"[VOICE INTENT]   -> Không hiểu lệnh: {text!r}")
             self._a11y_speak(f"Không hiểu lệnh: {text}", priority="high")
-            self._show_message(f"🎤 Nghe được: \"{text}\" — không hiểu", is_error=True)
+            self._show_message(f"Nghe được: \"{text}\" — không hiểu", is_error=True)
             return
         try:
             print(f"[VOICE INTENT]   -> Thực hiện: {name}")
@@ -2785,7 +3301,7 @@ class MainDashboard(QMainWindow):
             if name != "stop_tts":
                 # "im lặng" mà còn đọc "Đã thực hiện" thì phản tác dụng
                 self._a11y_speak("Đã thực hiện", priority="high")
-            self._show_message(f"🎤 \"{text}\" → {name}")
+            self._show_message(f"Đã thực hiện: \"{text}\"")
         except Exception as e:
             print(f"[VOICE INTENT]   -> Lỗi: {e}")
             self._a11y_speak(f"Lỗi: {e}", priority="high")
@@ -2808,13 +3324,63 @@ class MainDashboard(QMainWindow):
 
     # mainloop compatibility (CTk → Qt)
     def mainloop(self):
+        global _APP_LOOP_RUNNING
         self.show()
         app = QApplication.instance()
         if app:
-            app.exec()
+            _APP_LOOP_RUNNING = True
+            try:
+                app.exec()
+            finally:
+                _APP_LOOP_RUNNING = False
+
+    def _needs_studio_one_shutdown(self) -> bool:
+        if not self.settings.get("auto_close_studio_one", False):
+            return False
+        try:
+            from core import so_windows
+            return so_windows.is_running()
+        except Exception:
+            return False
+
+    def _run_studio_one_shutdown(self):
+        """Chờ Studio One lưu bài và thoát, có hộp thoại tiến trình trước mặt."""
+        from ui.dialogs.shutdown_dialog import StudioOneShutdownDialog
+        try:
+            dlg = StudioOneShutdownDialog(
+                self.engine,
+                timeout_sec=float(self.settings.get("studio_one_close_timeout", 45)),
+                force_kill=bool(self.settings.get("force_kill_studio_one", False)),
+                parent=self,
+            )
+            dlg.exec()
+            status = (dlg.result_data or {}).get("status")
+            if status not in ("closed", "not_running"):
+                print(f"[STUDIO ONE] Thoát app khi chưa đóng xong ({status})")
+                # Bước lưu đã phải hiện cửa sổ Studio One lên để gõ Ctrl+S. Nếu
+                # nó không đóng được thì phải giấu lại, kẻo app thoát xong khách
+                # ngồi trước một cửa sổ Studio One đang mở.
+                from core import kiosk, so_windows
+                if kiosk.is_locked():
+                    so_windows.hide_all()
+        except Exception as e:
+            print(f"[STUDIO ONE] Đóng an toàn lỗi: {e}")
+        # Đóng lại sau khi closeEvent hiện tại đã trả về — gọi self.close() ngay
+        # trong handler là đệ quy closeEvent.
+        QTimer.singleShot(0, self.close)
 
     def closeEvent(self, event):
         """Đóng cửa sổ không block — set flags ngay, cleanup nặng chạy nền."""
+        # ── BƯỚC 0: đóng Studio One an toàn ───────────────────────────────────
+        # Phải xong TRƯỚC khi app tắt: chuỗi lưu-rồi-đóng mất vài chục giây, mà
+        # main.py chỉ chờ thread nền 4 giây rồi os._exit(0) — chạy nền là chắc
+        # chắn bị cắt ngang, đúng cái đã khiến Studio One đòi phục hồi phiên.
+        if not self._so_shutdown_done and self._needs_studio_one_shutdown():
+            self._so_shutdown_done = True
+            event.ignore()
+            self._run_studio_one_shutdown()
+            return
+
         self.hide()
 
         # ── BƯỚC 1: Set stop flags (instant, thread-safe) ──────────────────────
@@ -2927,10 +3493,9 @@ class MainDashboard(QMainWindow):
         super().closeEvent(event)
 
         # ── BƯỚC 6: Cleanup nặng trong daemon thread ──────────────────────────
-        # Bao gồm cả đóng browser/Studio One (kill_studio_one_gracefully chờ
-        # tới 5s — chạy sync trong closeEvent sẽ đóng băng cửa sổ lúc thoát).
-        # main.py join thread này (timeout ngắn) trước khi os._exit(0) để
-        # ffmpeg/yt-dlp con không bị orphan giữa chừng.
+        # Bao gồm cả đóng browser. main.py join thread này (timeout ngắn) trước
+        # khi os._exit(0) để ffmpeg/yt-dlp con không bị orphan giữa chừng.
+        # (Studio One không nằm ở đây — xem BƯỚC 0.)
         settings_snap = dict(self.settings)
         engine = self.engine
 
@@ -2961,11 +3526,8 @@ class MainDashboard(QMainWindow):
                     engine.close_youtube_windows()
                 except Exception:
                     pass
-            if settings_snap.get("auto_close_studio_one", False):
-                try:
-                    engine.kill_studio_one_gracefully(timeout_sec=5)
-                except Exception:
-                    pass
+            # Studio One đã được đóng ở BƯỚC 0 (có hộp thoại tiến trình) — không
+            # đụng vào nữa, tránh giết nhầm process đang lưu dở.
             import gc
             gc.collect()
 
@@ -2978,16 +3540,18 @@ class MainDashboard(QMainWindow):
 #  ACTIVATION DIALOG (simplified for now)
 # ══════════════════════════════════════════════════════
 class ActivationDialog(QDialog):
-    def __init__(self, callback=None, is_expired=False):
+    def __init__(self, callback=None, is_expired=False, parent=None):
         # We need QApplication to exist before creating any QWidget
         self._ensure_app()
-        super().__init__()
+        # parent chỉ dùng khi mở giữa phiên (nâng cấp Premium) — để dialog nằm
+        # trên dashboard và canh giữa theo nó. Lúc khởi động vẫn là None.
+        super().__init__(parent)
         self.callback = callback
         self.is_expired = is_expired
         self.activated = False
         self.setWindowTitle("Kích hoạt Quang Lưu Studio")
         self.setWindowIcon(QIcon("app_icon.ico"))
-        self.setFixedSize(520, 510)
+        rp.apply_dialog_size(self, 520, 510, fixed=True, max_scale=1.25)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 
         outer = QVBoxLayout(self)
@@ -3015,7 +3579,7 @@ class ActivationDialog(QDialog):
         hdr_lay.addWidget(title)
 
         if is_expired:
-            msg = QLabel("⚠️ Bản quyền đã hết hạn! Vui lòng nhập mã kích hoạt mới.")
+            msg = QLabel("Bản quyền đã hết hạn! Vui lòng nhập mã kích hoạt mới.")
             msg.setStyleSheet(f"color: {C['accent']}; font-size: 14px; font-family: {FONT}; background: transparent; border: none;")
         else:
             msg = QLabel("Vui lòng nhập Activation Code để tiếp tục.")
@@ -3127,7 +3691,7 @@ class ActivationDialog(QDialog):
             self.status_label.setStyleSheet(f"color: {C['green']}; font-size:13px;")
             QTimer.singleShot(1000, self._close_and_continue)
         else:
-            self.status_label.setText(f"❌ {result.get('error', 'Mã không hợp lệ')}")
+            self.status_label.setText(f"{result.get('error', 'Mã không hợp lệ')}")
             self.status_label.setStyleSheet(f"color: {C['accent']}; font-size:13px;")
     
     def _start_trial(self):
@@ -3141,7 +3705,7 @@ class ActivationDialog(QDialog):
             QTimer.singleShot(1200, self._close_and_continue)
         else:
             self.status_label.setText(
-                f"⚠️ {result.get('error') or 'Thời gian dùng thử đã hết.'}"
+                f"{result.get('error') or 'Thời gian dùng thử đã hết.'}"
             )
             self.status_label.setStyleSheet(f"color: {C['accent']}; font-size:13px;")
 
@@ -3151,10 +3715,15 @@ class ActivationDialog(QDialog):
         # trong mainloop() để tránh nested event loop
 
     def mainloop(self):
-        self.show()
-        app = QApplication.instance()
-        if app:
-            app.exec()
+        if _APP_LOOP_RUNNING:
+            # Giữa phiên: vòng lặp của dashboard đang chạy → app.exec() sẽ bị Qt
+            # từ chối và trả về ngay, dialog chưa kịp hiện đã bị thu hồi.
+            self.exec()
+        else:
+            self.show()
+            app = QApplication.instance()
+            if app:
+                app.exec()
         # Sau khi dialog đóng và event loop kết thúc, gọi callback nếu đã kích hoạt
         if self.activated and self.callback:
             self.callback()
@@ -3173,7 +3742,7 @@ class SetupView(QDialog):
 
         self.setWindowTitle("Cài đặt Quang Lưu Studio")
         self.setWindowIcon(QIcon("app_icon.ico"))
-        self.setFixedSize(580, 460)
+        rp.apply_dialog_size(self, 580, 460, fixed=True, max_scale=1.25)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 
         from PySide6.QtWidgets import QFrame as _QF3
@@ -3307,10 +3876,13 @@ class SetupView(QDialog):
         self.close()
 
     def mainloop(self):
-        self.show()
-        app = QApplication.instance()
-        if app:
-            app.exec()
+        if _APP_LOOP_RUNNING:
+            self.exec()
+        else:
+            self.show()
+            app = QApplication.instance()
+            if app:
+                app.exec()
         # Sau khi dialog đóng, gọi callback nếu đã lưu settings
         if self._saved and self.callback:
             self.callback()

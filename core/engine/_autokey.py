@@ -481,7 +481,8 @@ class _AutokeyMixin:
         if not timeline:
             return
 
-        if not _WIN_MEDIA_AVAILABLE and not self.cdp_monitor.is_connected:
+        if (not _WIN_MEDIA_AVAILABLE and not self.cdp_monitor.is_connected
+                and getattr(self, "embedded_position_callback", None) is None):
             print("[CACHE REPLAY] Không có winrt và CDP chưa kết nối.")
 
         if cancel_event is None:
@@ -498,14 +499,10 @@ class _AutokeyMixin:
             _gc_counter   = 0
 
             while not cancel_event.is_set():
-                is_playing = (self.cdp_monitor.is_playing if self.cdp_monitor.is_connected
-                              else self.media_monitor.is_playing)
+                is_playing, elapsed, sync_src = self._playback_sync_source()
                 if not is_playing:
                     cancel_event.wait(0.1)
                     continue
-
-                elapsed = (self.cdp_monitor.current_position if self.cdp_monitor.is_connected
-                           else self.media_monitor.current_position)
 
                 if elapsed < last_position - 2.0:
                     last_idx = -1
@@ -520,7 +517,6 @@ class _AutokeyMixin:
                     if new_key != current_key or last_idx == -1:
                         current_key = new_key
                         self._send_tone_midi(entry)
-                        sync_src = "CDP" if self.cdp_monitor.is_connected else "WinRT"
                         print(f"[CACHE REPLAY] t={elapsed:.1f}s [{sync_src}]: {new_key}")
                         if self.on_tone_detected_callback:
                             try:
@@ -543,11 +539,39 @@ class _AutokeyMixin:
 
         threading.Thread(target=_replay, daemon=True).start()
 
+    def _playback_sync_source(self):
+        """(dang_phat, vi_tri_giay, ten_nguon) — thứ tự ưu tiên player nhúng → CDP → WinRT.
+
+        Vì sao player nhúng phải đứng đầu và không thể dựa vào 2 nguồn cũ:
+        QMediaPlayer không đăng ký Windows Media Transport Controls nên WinRT mù
+        hoàn toàn (is_playing luôn False → timeline không chạy lần nào); còn
+        QtWebEngine tuy có đăng ký (WinRT đọc được tên bài + PLAYING) nhưng mốc
+        thời gian luôn đứng ở 0 → chỉ bắn đúng tone đầu rồi kẹt. CDP thì không
+        có, vì ở chế độ nhúng app không mở trình duyệt nào cả.
+
+        Tệ hơn nữa: nếu khách vẫn để Chrome mở cạnh app, WinRT bám vào session
+        của Chrome và trả về vị trí của MỘT VIDEO KHÁC — timeline sẽ gửi MIDI
+        sai chứ không chỉ im lặng.
+        """
+        cb = getattr(self, "embedded_position_callback", None)
+        if cb is not None:
+            try:
+                position, playing = cb()
+                return bool(playing), float(position), "NHUNG"
+            except Exception as e:
+                print(f"[SYNC] embedded_position_callback loi: {e}")
+        if self.cdp_monitor.is_connected:
+            return (self.cdp_monitor.is_playing,
+                    float(self.cdp_monitor.current_position), "CDP")
+        return (self.media_monitor.is_playing,
+                float(self.media_monitor.current_position), "WinRT")
+
     def _replay_manual_timeline(self, timeline, cancel_event=None):
         if not timeline:
             return
 
-        if not _WIN_MEDIA_AVAILABLE and not self.cdp_monitor.is_connected:
+        if (not _WIN_MEDIA_AVAILABLE and not self.cdp_monitor.is_connected
+                and getattr(self, "embedded_position_callback", None) is None):
             print("[MANUAL REPLAY] Không có winrt và CDP chưa kết nối.")
 
         if cancel_event is None:
@@ -563,14 +587,10 @@ class _AutokeyMixin:
             _gc_counter   = 0
 
             while not cancel_event.is_set():
-                is_playing = (self.cdp_monitor.is_playing if self.cdp_monitor.is_connected
-                              else self.media_monitor.is_playing)
+                is_playing, elapsed, sync_src = self._playback_sync_source()
                 if not is_playing:
                     cancel_event.wait(0.1)
                     continue
-
-                elapsed = (self.cdp_monitor.current_position if self.cdp_monitor.is_connected
-                           else self.media_monitor.current_position)
 
                 if elapsed < last_position - 2.0:
                     last_idx = -1
@@ -586,7 +606,6 @@ class _AutokeyMixin:
                         current_key = new_key
                         self._send_tone_midi(entry)
                         time_str = ManualToneTimeline.seconds_to_time_str(entry['time'])
-                        sync_src = "CDP" if self.cdp_monitor.is_connected else "WinRT"
                         print(f"[MANUAL REPLAY] t={elapsed:.1f}s (trigger={time_str}) [{sync_src}]: {new_key}")
                         if self.on_tone_detected_callback:
                             try:

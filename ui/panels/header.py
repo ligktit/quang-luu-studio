@@ -1,12 +1,13 @@
 """Header panel builder for MainDashboard."""
-from PySide6.QtWidgets import QComboBox, QSizePolicy
+from PySide6.QtWidgets import QComboBox, QLabel, QSizePolicy
 from PySide6.QtCore import Qt
 
 from ui.design_tokens import C, SP, FONT
 from ui.components.painter_button import PainterButton
 from ui.components.painter_header import PaintedHeaderBar, PaintedMidiDot
 from ui.components.marquee import SmoothMarqueeLabel
-from ui.components.svg_icons import SVG_EYE_OPEN, SVG_SETTINGS
+from ui.components.svg_icons import SVG_EYE_OPEN, SVG_HELP, SVG_SETTINGS
+from ui.components.tone_display import ToneDisplay, ScaleToggle, NextTonePill
 
 
 def build_header(dashboard) -> PaintedHeaderBar:
@@ -29,19 +30,17 @@ def build_header(dashboard) -> PaintedHeaderBar:
         print(f"[PREMIUM-TAG] init lỗi: {e}")
 
     dashboard._midi_dot = PaintedMidiDot()
-    dashboard._midi_dot.setToolTip("Trạng thái kết nối MIDI (Studio One/Loopback)")
+    dashboard._midi_dot.setToolTip("Kết nối MIDI với Studio One")
     dashboard._midi_dot.setAccessibleName("Đèn báo MIDI")
-    dashboard._midi_dot.setAccessibleDescription(
-        "Hiển thị trạng thái kết nối MIDI với Studio One. Xanh là đã kết nối, đỏ là mất kết nối."
-    )
+    dashboard._midi_dot.setAccessibleDescription("Xanh: đã kết nối. Đỏ: mất kết nối.")
     layout.addWidget(dashboard._midi_dot)
     layout.addSpacing(4)
 
     dashboard._browser_dot = PaintedMidiDot()
-    dashboard._browser_dot.setToolTip("Trạng thái đồng bộ trình duyệt (CDP/WinRT)")
+    dashboard._browser_dot.setToolTip("Đồng bộ với trình duyệt")
     dashboard._browser_dot.setAccessibleName("Đèn báo trình duyệt")
     dashboard._browser_dot.setAccessibleDescription(
-        "Hiển thị trạng thái đồng bộ với trình duyệt. Xanh lá là CDP đã kết nối, vàng là WinRT, đỏ là chưa kết nối."
+        "Xanh: tốt. Vàng: chế độ dự phòng. Đỏ: chưa kết nối."
     )
     layout.addWidget(dashboard._browser_dot)
     layout.addSpacing(SP.XS)
@@ -65,33 +64,29 @@ def build_header(dashboard) -> PaintedHeaderBar:
 
     dashboard.autokey_dot = PaintedMidiDot()
     dashboard.autokey_dot.setAccessibleName("Đèn báo dò tone")
-    dashboard.autokey_dot.setAccessibleDescription("Xanh lá là đã phát hiện tone, xám là đang chờ")
+    dashboard.autokey_dot.setAccessibleDescription("Xanh: đã dò ra tone. Xám: đang chờ.")
     layout.addWidget(dashboard.autokey_dot)
     layout.addSpacing(SP.XS)
 
-    dashboard.tone_combo = QComboBox()
+    # Ô tone — vẫn là QComboBox tạo dáng bằng QSS như trước, chỉ tăng cỡ chữ
+    # (13 → 18px) để nhìn được từ xa. Mọi chỗ gọi cũ giữ nguyên.
+    dashboard.tone_combo = ToneDisplay()
     _NOTE_VI = ["Đô", "Đô thăng", "Rê", "Rê thăng", "Mi", "Fa",
                 "Fa thăng", "Sol", "Sol thăng", "La", "La thăng", "Si"]
     _NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
     dashboard.tone_combo.addItems(_NOTES)
     for _i, _vi in enumerate(_NOTE_VI):
         dashboard.tone_combo.setItemData(_i, f"{_NOTES[_i]} — {_vi}", Qt.ToolTipRole)
-    dashboard.tone_combo.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-    dashboard.tone_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
     dashboard.tone_combo.setAccessibleName("Chọn tone")
     dashboard.tone_combo.setAccessibleDescription("Chọn nốt gốc của bài hát, từ Đô (C) đến Si (B)")
     dashboard.tone_combo.currentTextChanged.connect(dashboard._on_tone_selected)
     layout.addWidget(dashboard.tone_combo)
     layout.addSpacing(SP.XS)
 
-    dashboard.scale_combo = QComboBox()
-    dashboard.scale_combo.addItems(["Major", "Minor"])
-    dashboard.scale_combo.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-    dashboard.scale_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-    dashboard.scale_combo.setAccessibleName("Chọn thể")
-    dashboard.scale_combo.setAccessibleDescription("Chọn trưởng (Major) hoặc thứ (Minor)")
-    dashboard.scale_combo.setItemData(0, "Trưởng (Major)", Qt.ToolTipRole)
-    dashboard.scale_combo.setItemData(1, "Thứ (Minor)", Qt.ToolTipRole)
+    # Major/Minor: NÚT một chạm (PainterButton, cùng khuôn với các nút khác trên
+    # header) thay cho danh sách xổ xuống.
+    dashboard.scale_combo = ScaleToggle()
+    dashboard.scale_combo.setAccessibleName("Đổi thể Major Minor")
     dashboard.scale_combo.currentTextChanged.connect(dashboard._on_scale_selected)
     layout.addWidget(dashboard.scale_combo)
 
@@ -102,29 +97,50 @@ def build_header(dashboard) -> PaintedHeaderBar:
         font_size=14, fixed_width=30,
     )
     dashboard._relative_btn.setToolTip(
-        "Đổi sang tone tương đối (vd C Trưởng ↔ La Thứ).\n"
-        "Dùng khi bài là La Thứ nhưng app hiện Đô Trưởng."
+        "Đổi tone tương đối (C Major ↔ A Minor)"
     )
     dashboard._relative_btn.setAccessibleName("Đổi tone tương đối")
-    dashboard._relative_btn.setAccessibleDescription(
-        "Chuyển nhanh giữa tone trưởng và tone thứ tương đối, ví dụ Đô Trưởng đổi thành La Thứ"
-    )
     dashboard._relative_btn.setCursor(Qt.PointingHandCursor)
     dashboard._relative_btn.clicked.connect(dashboard._on_toggle_relative)
     layout.addWidget(dashboard._relative_btn)
 
+    # Ô "kế tiếp" — chỉ hiện khi bài có timeline nhiều đoạn (xem
+    # MainDashboard._tone_ticker_sync). Ẩn mặc định để header không bị rối.
+    layout.addSpacing(SP.XS)
+    dashboard._next_tone_pill = NextTonePill()
+    dashboard._next_tone_pill.setVisible(False)
+    layout.addWidget(dashboard._next_tone_pill)
+
     layout.addSpacing(SP.SM)
+    # Hỗ trợ — kênh hai chiều với đội kỹ thuật. Nút đỏ lên khi có trả lời chưa
+    # đọc (MainDashboard._refresh_support_badge). Ẩn khi khoá kiosk: khách hát
+    # không phải người gửi ticket.
+    dashboard._support_btn = PainterButton(
+        "", color=C["card_hover"], height=28, radius=6,
+        font_size=10, svg_content=SVG_HELP, svg_size=16, fixed_width=30,
+    )
+    dashboard._support_btn.setToolTip("Hỗ trợ kỹ thuật")
+    dashboard._support_btn.setAccessibleName("Mở hộp thoại hỗ trợ")
+    dashboard._support_btn.setAccessibleDescription("Gửi yêu cầu và xem trả lời ngay trong app")
+    dashboard._support_btn.setCursor(Qt.PointingHandCursor)
+    dashboard._support_btn.clicked.connect(dashboard._show_support_dialog)
+    layout.addWidget(dashboard._support_btn)
+
+    layout.addSpacing(SP.XS)
     dashboard._settings_btn = PainterButton(
         "", color=C["card_hover"], height=28, radius=6,
         font_size=10, svg_content=SVG_SETTINGS, svg_size=16, fixed_width=30,
     )
-    dashboard._settings_btn.setToolTip("Cài đặt")
+    dashboard._settings_btn.setToolTip("Cài đặt · Ctrl+,")
     dashboard._settings_btn.setAccessibleName("Mở thiết lập")
-    dashboard._settings_btn.setAccessibleDescription("Mở hộp thoại thiết lập hệ thống. Phím tắt Ctrl+Phẩy")
     dashboard._settings_btn.setCursor(Qt.PointingHandCursor)
     dashboard._settings_btn.clicked.connect(dashboard._show_settings_dialog)
     layout.addWidget(dashboard._settings_btn)
 
+    # Nút mắt ẩn/hiện Studio One. Ở chế độ khách nút bị setVisible(False) — widget
+    # ẩn thì không vẽ, không bấm được, không nằm trong thứ tự Tab và trình đọc màn
+    # hình cũng bỏ qua, tức là khách không còn lối nào chạm tới Studio One.
+    # Bật/tắt qua MainDashboard._apply_kiosk_visibility().
     dashboard._studio_one_visible = True
     dashboard._eye_btn = PainterButton(
         "", color=C["card_hover"], height=28, radius=6,
@@ -132,9 +148,21 @@ def build_header(dashboard) -> PaintedHeaderBar:
     )
     dashboard._eye_btn.setToolTip("Ẩn/Hiện Studio One + Plugin")
     dashboard._eye_btn.setAccessibleName("Ẩn hiện Studio One")
-    dashboard._eye_btn.setAccessibleDescription("Ẩn hoặc hiện cửa sổ Studio One và các plugin đi kèm")
     dashboard._eye_btn.setCursor(Qt.PointingHandCursor)
     dashboard._eye_btn.clicked.connect(dashboard._on_eye_toggle_studio_one)
     layout.addWidget(dashboard._eye_btn)
+
+    # Huy hiệu nhắc kỹ thuật viên rằng máy đang mở khoá (kẻo quên khoá lại).
+    dashboard._tech_badge = QLabel("KỸ THUẬT")
+    dashboard._tech_badge.setStyleSheet(
+        f"color: {C['bg']}; background-color: {C['orange']};"
+        f" border-radius: 6px; padding: 3px 8px; font-size: 10px;"
+        f" font-weight: 900; font-family: {FONT};"
+    )
+    dashboard._tech_badge.setToolTip("Đang mở khoá · Ctrl+Alt+Shift+T để khoá")
+    dashboard._tech_badge.setAccessibleName("Đang mở khoá kỹ thuật")
+    dashboard._tech_badge.setVisible(False)
+    layout.addSpacing(SP.XS)
+    layout.addWidget(dashboard._tech_badge)
 
     return header

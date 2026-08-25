@@ -113,6 +113,18 @@ _DEFAULT_APP_CONFIG = {
     "youtube_cookie_browser": "auto",
     "youtube_cookie_profile": "",
     "youtube_cookie_file": "",
+    # ── Tải YouTube không cần tài khoản ──────────────────────
+    # Mặc định PHẢI nằm ở đây chứ không chỉ trong app_config.json: bộ cài đánh
+    # dấu file đó `onlyifdoesntexist`, nên máy nâng cấp từ bản cũ sẽ không bao
+    # giờ nhận khoá mới.
+    "ytdlp_auto_update": True,
+    "youtube_player_clients": [],
+    # Tự tải PO Token provider (~44MB, một lần) — thứ giúp tải được mà không cần
+    # cookie/tài khoản. Đặt False nếu máy khách bị giới hạn băng thông.
+    "youtube_pot_enabled": True,
+    "youtube_pot_auto_download": True,
+    # Đường dẫn runtime JavaScript (qjs.exe/deno.exe). Bỏ trống → tự dò.
+    "js_runtime_path": "",
     # ── MIDI CC mapping ──────────────────────────────────────
     # QUAN TRỌNG: mỗi chức năng có nút vật lý riêng phải có CC DUY NHẤT.
     # Caller tra theo TÊN key (vd MIDI_CC.get("fix_meo")), KHÔNG theo số —
@@ -517,12 +529,12 @@ class UiConfigManager:
             }
         ],
         "tools": [
-            {"id": "btn_fast_mode", "type": "button", "label": "Chế độ: Nhanh", "color": "#f97316", "action": "toggle_scan_mode", "desc": "Chuyển chế độ dò tone giữa Nhanh và Full", "hidden": False},
-            {"id": "btn_rescan", "type": "button", "label": "Dò Lại", "color": "#14b8a6", "action": "force_rescan", "desc": "Buộc dò lại tone bài hát đang phát", "hidden": False},
-            {"id": "btn_autotune", "type": "button", "label": "Auto-Tune", "color": "#ec4899", "action": "tone_auto", "desc": "Bật tắt Auto-Tune trên Studio One", "hidden": False},
-            {"id": "btn_fixmeo", "type": "button", "label": "Fix Méo", "color": "#8b5cf6", "action": "fix_meo", "desc": "Bật tắt chế độ chống méo giọng", "hidden": False},
-            {"id": "btn_be", "type": "button", "label": "Bè", "color": "#eab308", "action": "be", "desc": "Bật tắt hiệu ứng bè giọng", "hidden": False},
-            {"id": "btn_tat_on", "type": "button", "label": "Tắt Ồn", "color": "#3b82f6", "action": "tat_on", "desc": "Bật tắt bộ khử tiếng ồn nền cho mic", "hidden": False}
+            {"id": "btn_fast_mode", "type": "button", "label": "Chế độ: Nhanh", "color": "#f97316", "action": "toggle_scan_mode", "desc": "Đổi kiểu dò tone: Nhanh ↔ Full", "hidden": False},
+            {"id": "btn_rescan", "type": "button", "label": "Dò Lại", "color": "#14b8a6", "action": "force_rescan", "desc": "Dò lại tone bài đang phát", "hidden": False},
+            {"id": "btn_autotune", "type": "button", "label": "Auto-Tune", "color": "#ec4899", "action": "tone_auto", "desc": "Bật/tắt Auto-Tune", "hidden": False},
+            {"id": "btn_fixmeo", "type": "button", "label": "Fix Méo", "color": "#8b5cf6", "action": "fix_meo", "desc": "Bật/tắt chống méo giọng", "hidden": False},
+            {"id": "btn_be", "type": "button", "label": "Bè", "color": "#eab308", "action": "be", "desc": "Bật/tắt bè giọng", "hidden": False},
+            {"id": "btn_tat_on", "type": "button", "label": "Tắt Ồn", "color": "#3b82f6", "action": "tat_on", "desc": "Bật/tắt khử ồn cho mic", "hidden": False}
         ],
         "mode": [
             {"id": "mode_danca", "type": "button", "label": "Dân Ca", "color": "#ec4899", "action": "set_mode_danca", "hidden": False},

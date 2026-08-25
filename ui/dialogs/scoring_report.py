@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QLinearGradient, QColor
 
 from ui.design_tokens import C, FONT
+from ui import responsive as rp
 from frontend_qt import pill_btn_qss, add_shadow, _lighten
 
 
@@ -40,8 +41,7 @@ class ScoringReportDialog(QDialog):
     def __init__(self, parent, result: dict):
         super().__init__(parent)
         self.setWindowTitle("Ket qua Star Score")
-        self.setMinimumSize(520, 640)
-        self.resize(540, 720)
+        rp.apply_dialog_size(self, 540, 720, min_w=520, min_h=640)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
         self._build_ui(result)
 

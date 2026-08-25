@@ -164,7 +164,40 @@ class _ToneMixin:
             self._tone_resolve_cache_put(url, ('cache', cached))
             return ('cache', cached)
 
+        # Local trượt → hỏi thư viện tone cộng đồng. Trả về dưới nhãn 'cache'
+        # (chứ không phải một nguồn thứ ba) vì tone_share đã ghi kết quả xuống
+        # tone_cache local rồi — với engine thì đây ĐÚNG là một cú trúng cache,
+        # và _build_cache_result xử lý sẵn đúng hình dạng dữ liệu này.
+        #
+        # An toàn về thread: cả ba nơi gọi _resolve_tone đều nằm trong worker
+        # dò tone, không phải UI thread. Mất mạng thì tone_share trả None sau
+        # tối đa 10s và luồng dò cũ chạy tiếp như chưa có gì.
+        shared = self._lookup_shared_tone(url)
+        if shared and shared.get('key_timeline'):
+            print(f"[RESOLVE] Lấy từ thư viện cộng đồng: {shared.get('primary_key', '?')}")
+            self._tone_resolve_cache_put(url, ('cache', shared))
+            return ('cache', shared)
+
         return (None, None)
+
+    @staticmethod
+    def _lookup_shared_tone(url):
+        """Tra thư viện tone cộng đồng. Không bao giờ ném lỗi ra luồng dò tone."""
+        try:
+            from core import tone_share
+            return tone_share.lookup(url)
+        except Exception as e:
+            print(f"[RESOLVE] Bỏ qua thư viện cộng đồng: {e}")
+            return None
+
+    @staticmethod
+    def _share_tone(url, title, cache_data, source='auto'):
+        """Đóng góp kết quả vừa dò cho mạng lưới. Xếp hàng + gửi nền, không chặn."""
+        try:
+            from core import tone_share
+            tone_share.contribute(url, title, cache_data, source=source)
+        except Exception as e:
+            print(f"[SHARE] Không đóng góp được tone: {e}")
 
     def _tone_resolve_cache_put(self, url, entry):
         """Insert into in-session cache, evicting oldest if over max size."""
@@ -224,6 +257,7 @@ class _ToneMixin:
             }]
         }
         ToneCacheManager.save_tone(url, cache_data)
+        self._share_tone(url, title, cache_data)
         # Invalidate in-session cache so next resolve re-reads fresh data
         self._tone_resolve_cache_invalidate(url)
 
@@ -827,11 +861,13 @@ class _ToneMixin:
                 # tay). Nhờ vậy tone không bị khóa cứng và có thể dò lại khi cần.
                 primary_key = self._representative_primary_key(timeline_entries)
                 cache_timeline = [{**e, **{'confidence': e.get('confidence', 0.8)}} for e in timeline_entries]
-                ToneCacheManager.save_tone(url, {
+                auto_entry = {
                     'primary_key':  primary_key,
                     'key_timeline': cache_timeline,
                     'title':        video_title,
-                })
+                }
+                ToneCacheManager.save_tone(url, auto_entry)
+                self._share_tone(url, video_title, auto_entry)
                 print(f"[AUTO TIMELINE] Đã lưu cache: {video_title} "
                       f"({len(timeline_entries)} đoạn, tone tiêu biểu {primary_key})")
                 # Invalidate in-session cache after disk writes

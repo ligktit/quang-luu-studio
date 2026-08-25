@@ -148,7 +148,7 @@ Sau khi chạy thử, đã bổ sung/khắc phục (đã kiểm chứng end-to-e
 **2. Backend NATIVE chống quảng cáo (mặc định)** — quán karaoke không dính QC dù không có Premium vì KHÔNG phát qua trang YouTube:
 - `KaraokePlayerWindow` giờ có `QStackedWidget` gồm `QWebEngineView` (IFrame) + `QVideoWidget`/`QMediaPlayer` (native).
 - `_play_in_embedded`/`play_youtube_in_app` → `_resolve_and_play_stream` (nền): yt-dlp trích **luồng progressive** (itag 22/18 = 1 file video+audio, phát thẳng không cần ffmpeg) rồi `play_stream()` phát bằng QMediaPlayer → **không quảng cáo**.
-- **Bắt buộc ép `player_client=[tv_embedded, android, ios]`** khi trích luồng: chỉ các client này còn cấp progressive VÀ cho URL mở được trong QMediaPlayer (client web đã bỏ progressive, chỉ còn DASH; URL client `default` không mở được).
+- ~~**Bắt buộc ép `player_client=[tv_embedded, android, ios]`** khi trích luồng~~ — **lỗi thời từ v1.7.3 (18/08/2026)**: `tv_embedded` đã bị yt-dlp 2026.07 bỏ, và danh sách này thực tế **chưa bao giờ có hiệu lực** vì `_apply_player_clients` xoá sạch nó ở mọi lượt. Nay `_resolve_and_play_stream` truyền `purpose=PURPOSE_VIDEO` và để `core/ytdlp_support.py` chọn thang client — đo 18/08/2026 bộ client mặc định (có PO Token) cho **7 luồng progressive tới 2160p**, hơn hẳn android (1 luồng, 360p). Xem [`PLAN_YOUTUBE_NO_ACCOUNT.md`](PLAN_YOUTUBE_NO_ACCOUNT.md).
 - Fallback tự động: native lỗi (URL hết hạn/không mở được) → signal `stream_failed` → `load_video()` IFrame; IFrame bị chặn nhúng (101/150) → `embed_blocked` → trình duyệt ngoài. 3 tầng: native → IFrame → browser.
 - Bài đã lưu / Setlist (`_load_embedded_video`) cũng đi qua luồng native no-ads này.
 
