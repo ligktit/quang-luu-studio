@@ -20,18 +20,19 @@ class _CloseWorker(QThread):
     progress = Signal(str)
     finished_result = Signal(dict)
 
-    def __init__(self, engine, timeout_sec, force_kill, should_abort, parent=None):
+    def __init__(self, engine, timeout_sec, force_kill, should_abort, save=True, parent=None):
         super().__init__(parent)
         self._engine = engine
         self._timeout = timeout_sec
         self._force_kill = force_kill
         self._should_abort = should_abort
+        self._save = save
 
     def run(self):
         try:
             result = self._engine.close_studio_one_safely(
                 timeout_sec=self._timeout,
-                save=True,
+                save=self._save,
                 force_kill=self._force_kill,
                 on_progress=self.progress.emit,
                 should_abort=self._should_abort,
@@ -42,11 +43,16 @@ class _CloseWorker(QThread):
 
 
 class StudioOneShutdownDialog(QDialog):
-    """Chờ Studio One lưu bài và thoát. exec() trả về khi xong hoặc bị bỏ qua."""
+    """Chờ Studio One lưu bài và thoát. exec() trả về khi xong hoặc bị bỏ qua.
 
-    def __init__(self, engine, timeout_sec=45.0, force_kill=False, parent=None):
+    `save=False` để đóng mà không chủ động Ctrl+S — dùng lúc khởi động, khi phải
+    dẹp Studio One còn sót lại của phiên trước để chép bản mẫu .song lên.
+    """
+
+    def __init__(self, engine, timeout_sec=45.0, force_kill=False, parent=None,
+                 save=True, title=None, hint=None):
         super().__init__(parent)
-        self.setWindowTitle("Đang đóng Studio One")
+        self.setWindowTitle(title or "Đang đóng Studio One")
         self.setModal(True)
         self.setFixedWidth(430)
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
@@ -59,23 +65,23 @@ class StudioOneShutdownDialog(QDialog):
         lay.setContentsMargins(24, 20, 24, 18)
         lay.setSpacing(12)
 
-        title = QLabel("Đang đóng Studio One an toàn")
-        title.setStyleSheet(
+        heading = QLabel(title or "Đang đóng Studio One an toàn")
+        heading.setStyleSheet(
             f"font-size: 17px; font-weight: 900; color: {C['text']};"
             f" font-family: {FONT}; background: transparent;"
         )
-        lay.addWidget(title)
+        lay.addWidget(heading)
 
-        hint = QLabel(
+        hint_lbl = QLabel(hint or (
             "Đang lưu bài và chờ Studio One tự thoát. Đừng tắt máy lúc này — "
             "tắt ngang sẽ khiến lần mở sau Studio One đòi phục hồi phiên."
-        )
-        hint.setWordWrap(True)
-        hint.setStyleSheet(
+        ))
+        hint_lbl.setWordWrap(True)
+        hint_lbl.setStyleSheet(
             f"font-size: 12px; font-weight: 600; color: {C['text_muted']};"
             f" font-family: {FONT}; background: transparent;"
         )
-        lay.addWidget(hint)
+        lay.addWidget(hint_lbl)
 
         bar = QProgressBar()
         bar.setRange(0, 0)          # chạy vô định — không đoán được còn bao lâu
@@ -97,7 +103,7 @@ class StudioOneShutdownDialog(QDialog):
 
         row = QHBoxLayout()
         row.addStretch()
-        skip = QPushButton("Bỏ qua, thoát ngay")
+        skip = QPushButton("Bỏ qua, thoát ngay" if save else "Bỏ qua, dùng bản hiện tại")
         skip.setCursor(Qt.PointingHandCursor)
         skip.setStyleSheet(f"""
             QPushButton {{
@@ -107,13 +113,14 @@ class StudioOneShutdownDialog(QDialog):
             }}
             QPushButton:hover {{ background-color: {lighten(C['card_hover'], 0.12)}; }}
         """)
-        skip.setToolTip("Để Studio One chạy tiếp và thoát app ngay")
+        skip.setToolTip("Để Studio One chạy tiếp và thoát app ngay" if save
+                        else "Giữ nguyên bài đang mở, không phục hồi bản mẫu phiên này")
         skip.clicked.connect(self._on_skip)
         row.addWidget(skip)
         lay.addLayout(row)
 
         self._worker = _CloseWorker(engine, timeout_sec, force_kill,
-                                    lambda: self._aborted, self)
+                                    lambda: self._aborted, save=save, parent=self)
         self._worker.progress.connect(self._status.setText)
         self._worker.finished_result.connect(self._on_done)
         self._worker.start()

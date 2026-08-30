@@ -10,6 +10,7 @@ mixer, cửa sổ nhạc cụ của Studio One có tiêu đề tuỳ ý, chỉ P
 """
 import ctypes
 import logging
+import re
 import threading
 import time
 
@@ -208,6 +209,173 @@ def force_foreground(hwnd) -> bool:
     try:
         return int(user32.GetForegroundWindow()) == int(hwnd)
     except Exception:
+        return False
+
+
+# ── Hộp thoại hỏi lưu: luôn chọn "Không lưu" ─────────────────────────────────
+#
+# Đóng Studio One lúc khởi động (để chép bản mẫu .song lên) thì tuyệt đối không
+# được lưu: bài đang mở là bản khách đã táy máy. Nhấn Enter là **sai** — nút mặc
+# định của hộp thoại là "Save". Phải tìm đúng nút "Don't Save" rồi bấm nó.
+#
+# Studio One hỏi bằng MessageBox chuẩn Windows: tiêu đề "Studio One", ba nút
+# Yes - No - Cancel. "No" = không lưu, và nó luôn mang control ID = IDNO (7) dù
+# Windows đang chạy ngôn ngữ nào. Bắt theo ID là chắc nhất; so nhãn chỉ là dự bị.
+#
+# Ba lớp, theo thứ tự:
+#   1. Nút IDNO của hộp thoại chuẩn (#32770) — không phụ thuộc ngôn ngữ.
+#   2. Nút Win32 có nhãn khớp (EnumChildWindows + BM_CLICK).
+#   3. UI Automation (uiautomation) — cho nút do Studio One tự vẽ, không có HWND.
+# Không có lớp "đoán phím tắt": đoán trượt là bấm trúng Save, đúng cái phải tránh.
+
+BM_CLICK = 0x00F5
+IDNO = 7                      # nút "No" của MessageBox chuẩn
+DIALOG_CLASS = "#32770"       # class của hộp thoại chuẩn Windows
+
+_NO_SAVE_EXACT = {
+    "don't save", "dont save", "do not save", "discard", "no",
+    "không lưu", "khong luu", "không", "khong",
+}
+# Khớp cụm đầy đủ, không khớp mỗi chữ "save" — "Save As..." cũng chứa chữ đó.
+_NO_SAVE_PARTIAL = ("don't save", "dont save", "do not save", "discard", "không lưu")
+
+
+def _norm_label(text) -> str:
+    """Chuẩn hoá nhãn nút: bỏ dấu &, gộp khoảng trắng, bỏ dấu ba chấm."""
+    s = (text or "").replace("&", "").strip().lower()
+    s = s.rstrip(".…").strip()
+    return re.sub(r"\s+", " ", s)
+
+
+def is_no_save_label(text) -> bool:
+    """Nhãn này có phải nút "không lưu" hay không (khắt khe, thà trượt còn hơn nhầm)."""
+    n = _norm_label(text)
+    if not n:
+        return False
+    if n in _NO_SAVE_EXACT:
+        return True
+    if any(p in n for p in _NO_SAVE_PARTIAL):
+        return True
+    return False
+
+
+def _child_buttons(hwnd):
+    """[(hwnd_con, nhãn)] của mọi control con — kể cả không phải class Button."""
+    mods = win32_modules()
+    if not mods or not hwnd:
+        return []
+    win32gui = mods[0]
+    out = []
+
+    def _cb(child, _):
+        try:
+            out.append((child, win32gui.GetWindowText(child) or ""))
+        except Exception:
+            pass
+        return True
+
+    try:
+        win32gui.EnumChildWindows(hwnd, _cb, None)
+    except Exception as e:
+        log.debug("EnumChildWindows lỗi: %s", e)
+    return out
+
+
+def _class_of(win32gui, hwnd) -> str:
+    try:
+        return win32gui.GetClassName(hwnd) or ""
+    except Exception:
+        return ""
+
+
+def _click_no_save_win32(hwnd) -> bool:
+    mods = win32_modules()
+    if not mods:
+        return False
+    win32gui = mods[0]
+    is_std_dialog = _class_of(win32gui, hwnd) == DIALOG_CLASS
+
+    by_id = None        # nút IDNO của hộp thoại chuẩn — ưu tiên tuyệt đối
+    by_label = None
+    for child, label in _child_buttons(hwnd):
+        if is_std_dialog and _class_of(win32gui, child).lower() == "button":
+            try:
+                if win32gui.GetDlgCtrlID(child) == IDNO:
+                    by_id = (child, label, "IDNO")
+                    break
+            except Exception:
+                pass
+        if by_label is None and is_no_save_label(label):
+            by_label = (child, label, "nhãn")
+
+    target = by_id or by_label
+    if not target:
+        return False
+    child, label, how = target
+    try:
+        win32gui.PostMessage(child, BM_CLICK, 0, 0)
+        log.info("Đã bấm nút '%s' (win32, theo %s)", (label or "No").strip(), how)
+        return True
+    except Exception as e:
+        log.debug("Bấm nút win32 lỗi: %s", e)
+        return False
+
+
+def _click_no_save_uia(hwnd) -> bool:
+    try:
+        import uiautomation as auto
+    except ImportError:
+        log.debug("Thiếu uiautomation — bỏ lớp UIA")
+        return False
+    try:
+        with auto.UIAutomationInitializerInThread(debug=False):
+            root = auto.ControlFromHandle(hwnd)
+            if not root:
+                return False
+            btn = root.ButtonControl(
+                searchDepth=6,
+                Compare=lambda c, d: is_no_save_label(c.Name),
+            )
+            if not btn.Exists(1.0, 0.2):
+                return False
+            name = btn.Name
+            try:
+                btn.GetInvokePattern().Invoke()
+            except Exception:
+                btn.Click(simulateMove=False, waitTime=0)
+            log.info("Đã bấm nút '%s' (UIA)", name)
+            return True
+    except Exception as e:
+        log.debug("UIA tìm nút không-lưu lỗi: %s", e)
+        return False
+
+
+def click_no_save(hwnd) -> bool:
+    """Tìm và bấm nút "Không lưu" trong hộp thoại. False = không tìm thấy.
+
+    False thì phía gọi PHẢI dừng lại (xem cancel_dialog) chứ không được nhấn
+    Enter cho xong — Enter là Save.
+    """
+    if _click_no_save_win32(hwnd):
+        return True
+    return _click_no_save_uia(hwnd)
+
+
+def cancel_dialog(hwnd) -> bool:
+    """Đóng hộp thoại bằng Escape (= Cancel) — huỷ luôn việc đóng Studio One.
+
+    Dùng khi không tìm được nút "Không lưu": thà để Studio One chạy tiếp còn hơn
+    bấm bừa vào nút Save.
+    """
+    mods = win32_modules()
+    if not mods or not hwnd:
+        return False
+    win32gui, win32con, _ = mods
+    try:
+        win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+        return True
+    except Exception as e:
+        log.debug("Huỷ hộp thoại lỗi: %s", e)
         return False
 
 

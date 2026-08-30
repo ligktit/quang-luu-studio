@@ -125,8 +125,16 @@ class _LifecycleMixin:
         Hết giờ thì **không** giết process (trừ khi force_kill=True): để Studio One
         chạy tiếp còn an toàn hơn là giết nó giữa lúc đang ghi file.
 
+        `save=False` (đóng để phục hồi bản mẫu .song lúc khởi động) đổi bước 1 và
+        3: không Ctrl+S, và hộp thoại hỏi lưu được trả lời bằng cách **bấm đúng
+        nút "Don't Save"** (`so_windows.click_no_save`) chứ không phải Enter —
+        Enter chính là Save. Không tìm ra nút đó thì huỷ đóng luôn và trả
+        "no_save_button": thà để Studio One chạy tiếp còn hơn lưu đè bản khách
+        đã chỉnh.
+
         Trả dict {"status": ..., "saved": bool} với status là một trong
-        "closed" | "not_running" | "timeout" | "force_killed" | "aborted".
+        "closed" | "not_running" | "timeout" | "force_killed" | "aborted" |
+        "no_save_button".
         """
         from core import so_windows
 
@@ -201,6 +209,25 @@ class _LifecycleMixin:
                     except Exception:
                         continue
                     _p(f"Xác nhận hộp thoại: {title}")
+
+                    if not save:
+                        # Chế độ không-lưu: Enter là SAI (nút mặc định = Save).
+                        # Phải bấm đúng nút "Don't Save"; không thấy thì huỷ luôn
+                        # việc đóng, thà để Studio One chạy tiếp còn hơn lưu nhầm.
+                        if so_windows.click_no_save(hwnd):
+                            _p("Đã chọn Không lưu")
+                            last_enter = time.time()
+                            enter_count += 1
+                            break
+                        _p("Không tìm thấy nút 'Không lưu' trong hộp thoại")
+                        if force_kill:
+                            _p("Tắt cứng Studio One (không lưu gì cả)")
+                            self._force_kill_studio_one()
+                            return {"status": "force_killed", "saved": False}
+                        so_windows.cancel_dialog(hwnd)
+                        _p("Đã huỷ đóng Studio One để không lưu nhầm")
+                        return {"status": "no_save_button", "saved": False}
+
                     if so_windows.force_foreground(hwnd):
                         time.sleep(0.2)
                         try:

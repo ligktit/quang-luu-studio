@@ -832,18 +832,32 @@ class MainDashboard(QMainWindow):
 
         # Phục hồi bản mẫu .song TRƯỚC khi mở Studio One — mọi thứ khách chỉnh
         # buổi trước biến mất, kỹ thuật viên không phải sửa lại tay.
+        closed_for_restore = False
         if kiosk.is_enabled() and kiosk.restore_template_enabled():
             try:
                 from core import so_template
+                # Studio One còn sống từ phiên trước (lần thoát bị timeout hoặc
+                # bấm "Bỏ qua, thoát ngay") thì restore() sẽ tự bỏ qua để không
+                # ghi đè file đang mở — nghĩa là bản mẫu mất tác dụng cả buổi mà
+                # không ai hay. Đóng nó lại trước, KHÔNG lưu: cái đang mở là bản
+                # khách đã chỉnh, đằng nào cũng bị bản mẫu chép đè ngay sau đây.
+                if (so_template.has_template()
+                        and so_template.is_song_file(studio_one_path)
+                        and so_windows.is_running()):
+                    closed_for_restore = self._close_studio_one_for_restore()
+
                 result = so_template.restore(studio_one_path)
                 if result["restored"]:
                     print("[KIOSK] Đã phục hồi bản mẫu Studio One")
+                elif so_template.has_template() and so_template.is_song_file(studio_one_path):
+                    print(f"[KIOSK] CHƯA phục hồi bản mẫu: {result['reason']}")
             except Exception as e:
                 print(f"[KIOSK] phục hồi bản mẫu lỗi: {e}")
 
-        # Studio One
+        # Studio One — mở lại cả khi tắt auto-launch, nếu vừa đóng nó để phục hồi
+        # bản mẫu (nó đang chạy sẵn trước khi app khởi động).
         launched = False
-        if self.settings.get("auto_launch_studio_one", False):
+        if self.settings.get("auto_launch_studio_one", False) or closed_for_restore:
             if studio_one_path and os.path.exists(studio_one_path):
                 try:
                     self.engine.launch_app(studio_one_path)
@@ -3492,6 +3506,39 @@ class MainDashboard(QMainWindow):
             return so_windows.is_running()
         except Exception:
             return False
+
+    def _close_studio_one_for_restore(self) -> bool:
+        """Đóng Studio One (KHÔNG lưu) để phục hồi được bản mẫu lúc khởi động.
+
+        Chỉ gọi khi đã chắc: có bản mẫu, đường dẫn là file .song, và Studio One
+        đang chạy. Trả True nếu nó đã thoát — lúc đó phía gọi phải mở lại.
+
+        `save=False` không bao giờ lưu: không Ctrl+S, và hộp thoại hỏi lưu được
+        trả lời bằng nút "Don't Save". Không bấm được nút đó thì bỏ đóng luôn
+        (status "no_save_button") — phiên này không phục hồi bản mẫu, còn hơn
+        ghi đè bản khách đã chỉnh lên bài gốc.
+        """
+        from ui.dialogs.shutdown_dialog import StudioOneShutdownDialog
+        print("[KIOSK] Studio One còn chạy từ phiên trước — đóng lại để phục hồi bản mẫu")
+        try:
+            dlg = StudioOneShutdownDialog(
+                self.engine,
+                timeout_sec=float(self.settings.get("studio_one_close_timeout", 45)),
+                force_kill=bool(self.settings.get("force_kill_studio_one", False)),
+                save=False,
+                title="Đang chuẩn bị bản mẫu",
+                hint=("Studio One còn mở từ phiên trước. Đang đóng lại (không lưu) "
+                      "để chép bản mẫu đã chốt, rồi mở lên lại."),
+                parent=self,
+            )
+            dlg.exec()
+            status = (dlg.result_data or {}).get("status")
+            if status in ("closed", "not_running"):
+                return True
+            print(f"[KIOSK] Không đóng được Studio One ({status}) — bỏ qua phục hồi bản mẫu")
+        except Exception as e:
+            print(f"[KIOSK] đóng Studio One để phục hồi lỗi: {e}")
+        return False
 
     def _run_studio_one_shutdown(self):
         """Chờ Studio One lưu bài và thoát, có hộp thoại tiến trình trước mặt."""

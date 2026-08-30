@@ -73,8 +73,28 @@ Vị trí lưu: `%APPDATA%\QuangLuuStudio\so_template\`
 | `replaced.song` | Bản vừa bị chép đè — phao cứu sinh nếu KTV chỉnh xong mà **quên** chốt |
 
 Bỏ qua việc phục hồi (không báo lỗi) khi: chưa chốt bản mẫu, đường dẫn Studio One
-trỏ tới `.exe` chứ không phải `.song`, nội dung đã trùng bản mẫu, hoặc Studio One
-đang chạy.
+trỏ tới `.exe` chứ không phải `.song`, hoặc nội dung đã trùng bản mẫu.
+
+**Studio One còn chạy lúc app khởi động** (phiên trước thoát bị quá hạn chờ, hoặc
+KTV bấm *"Bỏ qua, thoát ngay"*): không ghi đè lên file đang mở được, mà bỏ qua
+luôn thì bản mẫu mất tác dụng cả buổi trong khi bài đã bị Ctrl+S lúc thoát. Nên
+app hiện hộp thoại *"Đang chuẩn bị bản mẫu"*, **đóng Studio One mà không lưu**,
+chép bản mẫu, rồi mở Studio One lên lại — kể cả khi tắt "Tự mở Studio One". Bấm
+*"Bỏ qua, dùng bản hiện tại"* thì giữ nguyên bài đang mở, phiên đó không phục hồi.
+
+Ở luồng này app **không bao giờ nhấn Enter** vào hộp thoại hỏi lưu — nút mặc định
+là *Yes* (lưu). Studio One hỏi bằng MessageBox chuẩn Windows: tiêu đề *"Studio
+One"*, ba nút **Yes – No – Cancel**; **No** chính là "không lưu". App tìm và bấm
+đúng nút đó qua ba lớp:
+
+1. **Control ID `IDNO` (7)** của hộp thoại chuẩn (`#32770`) — nút No luôn mang ID
+   này bất kể Windows đang chạy ngôn ngữ gì. Đây là lớp ăn trong thực tế.
+2. Nút Win32 có **nhãn** khớp (`No`, `Don't Save`, `Discard`, `Không lưu`…).
+3. **UI Automation** — dự phòng cho hộp thoại do Studio One tự vẽ.
+
+Không bấm được nút đó thì app **huỷ luôn việc đóng** (Escape), để Studio One chạy
+tiếp và bỏ qua phục hồi phiên đó — thà mất một phiên còn hơn lưu đè bản khách đã
+chỉnh lên bài gốc. Log ghi `[KIOSK] Không đóng được Studio One (no_save_button)`.
 
 > Chỉ chép **file `.song`**. Nếu bài có media rời nằm trong thư mục bài hát
 > (bản thu, sample import) thì phần đó không nằm trong bản mẫu.
