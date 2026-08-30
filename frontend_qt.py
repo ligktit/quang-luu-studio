@@ -2089,13 +2089,14 @@ class MainDashboard(QMainWindow):
             print(f"[AUTO ECHO] đặt mute Vang lỗi: {e}")
 
     # ── Tự động bật/tắt Khử ồn theo nhạc (Premium) ──────────────────────────
-    # Cùng khuôn và cùng chiều với Vang tự động: nhạc vào là bật khử ồn để
-    # tiếng ồn phòng (quạt, điều hoà, bàn tán) không lẫn vào bài hát; hết nhạc
-    # thì trả mic về tự nhiên để MC/khách nói chuyện không bị noise gate cắt lời.
-    # Bật nhanh, tắt chậm — y như Vang — để không lật qua lật lại lúc tua bài.
+    # Nhạc vào là TẮT khử ồn: lúc hát, noise gate hay ngoạm mất đầu/đuôi câu và
+    # cắt cả đuôi ngân, nên để mic thông suốt cho tiếng hát tự nhiên. Hết nhạc
+    # mới BẬT khử ồn, để tiếng ồn phòng (quạt, điều hoà, bàn tán) không lọt lên
+    # loa lúc không ai hát. Nhạc chạy thì lật ngay (~0.5s) để không kịp cắt lời;
+    # nhạc dừng thì đợi ~3s mới lật, để tua/chuyển bài không làm nó rung liên tục.
     _AUTO_NOISE_TICK_MS = 500
-    _AUTO_NOISE_ON_TICKS = 1    # ~0.5s
-    _AUTO_NOISE_OFF_TICKS = 6   # ~3s
+    _AUTO_NOISE_PLAY_TICKS = 1   # ~0.5s — xác nhận "đang có nhạc"
+    _AUTO_NOISE_STOP_TICKS = 6   # ~3s — xác nhận "đã hết nhạc"
 
     def _auto_noise_enabled(self) -> bool:
         """Tính năng đang bật trong Cài đặt VÀ license còn quyền Premium."""
@@ -2143,18 +2144,19 @@ class MainDashboard(QMainWindow):
             return
 
         self._auto_noise_streak += 1
-        needed = self._AUTO_NOISE_ON_TICKS if playing else self._AUTO_NOISE_OFF_TICKS
+        needed = self._AUTO_NOISE_PLAY_TICKS if playing else self._AUTO_NOISE_STOP_TICKS
         if self._auto_noise_streak < needed:
             return
 
         self._auto_noise_playing = playing
         self._auto_noise_streak = 0
-        # Có nhạc → bật khử ồn; hết nhạc → tắt khử ồn.
+        # Có nhạc → TẮT khử ồn (hát không bị cắt); hết nhạc → BẬT khử ồn.
         # Đi qua _set_tat_on để nút Tắt Ồn trên panel sáng/tắt theo, không phải
         # gửi CC thẳng rồi để nút hiển thị một đằng máy chạy một nẻo.
-        if self.tat_on_state != playing:
-            self._set_tat_on(playing, speak=False)
-            self._show_message("Tự động bật khử ồn" if playing else "Tự động tắt khử ồn")
+        want_noise = not playing
+        if self.tat_on_state != want_noise:
+            self._set_tat_on(want_noise, speak=False)
+            self._show_message("Tự động bật khử ồn" if want_noise else "Tự động tắt khử ồn")
 
     def _on_scale_toggle(self):
         """Toggle Major ↔ Minor"""

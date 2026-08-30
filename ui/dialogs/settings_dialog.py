@@ -596,12 +596,12 @@ class SettingsDialog(QDialog):
         """Ô bật "tự động bật/tắt Khử ồn theo nhạc" — tính năng Premium.
 
         Cùng khuôn với Vang tự động: Standard vẫn THẤY ô này, tick vào thì mở
-        dialog nâng cấp rồi ô tự bỏ tick.
+        dialog nâng cấp rồi ô tự bỏ tick. Chiều lật: có nhạc thì TẮT khử ồn.
         """
-        self._cb_auto_noise = QCheckBox("Tự bật khử ồn khi có nhạc, tự tắt khi hết nhạc")
+        self._cb_auto_noise = QCheckBox("Tự tắt khử ồn khi có nhạc, tự bật lại khi hết nhạc")
         self._cb_auto_noise.setStyleSheet(self._checkbox_qss)
         self._cb_auto_noise.setChecked(bool(settings.get("auto_noise_enabled", False)))
-        self._cb_auto_noise.setToolTip("Tự bật khử ồn khi có nhạc, tắt khi hết nhạc")
+        self._cb_auto_noise.setToolTip("Tự tắt khử ồn khi có nhạc, bật lại khi hết nhạc")
         self._cb_auto_noise.toggled.connect(self._on_auto_noise_toggled)
 
     def _on_auto_noise_toggled(self, checked):
@@ -629,8 +629,9 @@ class SettingsDialog(QDialog):
         self._cb_auto_noise.setMinimumHeight(34)
         vl.addWidget(self._cb_auto_noise)
         note = QLabel(
-            "Khử ồn tắt sau khi hết nhạc khoảng 3 giây, để nói chuyện giữa các bài "
-            "không bị cắt lời. Nút Tắt Ồn ở panel Công cụ vẫn bấm tay được như thường."
+            "Nhạc vào là tắt khử ồn ngay để hát không bị cắt lời; hết nhạc khoảng 3 "
+            "giây mới bật lại để phòng đỡ ồn. Nút Tắt Ồn ở panel Công cụ vẫn bấm tay "
+            "được như thường."
         )
         note.setWordWrap(True)
         note.setStyleSheet(self._field_label_qss(11, C["text_muted"], 600, True))
