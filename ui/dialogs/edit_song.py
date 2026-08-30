@@ -10,6 +10,7 @@ from ui.components.painter_button import PainterButton
 from ui import responsive as rp
 from ui.components.svg_icons import SVG_CLOSE
 from frontend_qt import add_shadow
+from core.tone_cache import make_timeline_entry
 
 _ALL_KEYS = [
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
@@ -32,7 +33,8 @@ class EditSongDialog(QDialog):
         tl_data = backend.ManualToneTimeline.load_timeline(self._song_url) if self._song_url else None
         existing = tl_data["timeline"] if (tl_data and tl_data.get("timeline")) else []
         if not existing:
-            existing = [{"time": 0.0, "key_display": song.get("tone", "C"), "key_index": 0, "scale": "Major"}]
+            # Chưa có chuỗi tone → mở sẵn 1 mốc theo tone đang lưu của bài.
+            existing = [make_timeline_entry(song.get("tone", "C"))]
         self._initial_entries = existing
 
         self.setWindowTitle(f"Chỉnh sửa: {self._song_title[:40]}")
@@ -218,21 +220,12 @@ class EditSongDialog(QDialog):
         root = self._quick_key_combo.currentText()
         is_minor = (self._quick_scale_combo.currentText() == "Minor")
         key_display = (root + "m") if is_minor else root
-        try:
-            key_index = _CHROMATIC.index(root)
-        except ValueError:
-            key_index = 0
 
         if not self._song_url:
             self._dashboard._show_message("Bài hát không có URL!", is_error=True)
             return
 
-        entries = [{
-            "time":        0.0,
-            "key_display": key_display,
-            "key_index":   key_index,
-            "scale":       "Minor" if is_minor else "Major",
-        }]
+        entries = [make_timeline_entry(key_display)]
         if backend.ManualToneTimeline.save_timeline(
                 self._song_url, self._song_title, entries, source="human"):
             self._share_human_timeline(entries)
@@ -447,20 +440,7 @@ class EditSongDialog(QDialog):
                 seen_times[time_seconds] = time_input
                 time_input.setStyleSheet(self._time_input_qss)
 
-            key_display = key_combo.currentText()
-            is_minor    = key_display.endswith("m")
-            key_root    = key_display[:-1] if is_minor else key_display
-            try:
-                key_index = _CHROMATIC.index(key_root)
-            except ValueError:
-                key_index = 0
-
-            entries.append({
-                "time":        float(time_seconds),
-                "key_display": key_display,
-                "key_index":   key_index,
-                "scale":       "Minor" if is_minor else "Major",
-            })
+            entries.append(make_timeline_entry(key_combo.currentText(), at=time_seconds))
 
         if has_error:
             self._dashboard._show_message("Thời gian phải dạng phút:giây", is_error=True)

@@ -17,6 +17,31 @@ Nguồn: `core/engine/_tone.py`, `_youtube.py`, `_autokey.py`, `_session.py`, `f
 > chỉ bị chặn khi có timeline thủ công thật (`get_timeline_source(url)=="human"`),
 > không chặn vì cache.
 
+> **⚠ Cập nhật 1.7.5 — "tone đã lưu không bị dò đè":** vá 4 chỗ khiến tone khách
+> lưu vẫn bị dò lại:
+> 1. **Tone của bài vào được chuỗi resolve.** `saved_songs.json → tone` (ô Tone lúc
+>    "Lưu bài hát" / "Sửa thông tin") trước chỉ để HIỂN THỊ; nay là một mắt xích
+>    thật (`core/tone_cache.py::song_tone_entry`), đứng **sau** `ToneCache` và
+>    **trước** thư viện cộng đồng. Khách đổi tone ở 2 form đó còn được ghi luôn
+>    thành chuỗi tone thủ công 1 mốc (`MainDashboard._save_single_tone_timeline`).
+> 2. **Đệm resolve trong phiên tự hết hạn.** `core.tone_cache.data_version()` tăng
+>    mỗi lần dữ liệu tone trên đĩa đổi; `_resolve_tone` so số này rồi bỏ đệm —
+>    trước đây sửa chuỗi tone tay giữa phiên xong mở lại bài vẫn ra tone TỰ ĐỘNG
+>    cũ còn nằm trong RAM. Đệm cũng khóa theo `song_match_key` (video_id) thay vì
+>    chuỗi URL thô.
+> 3. **Mọi đường mở bài dùng chung một nguồn.** Dán link / ô tìm kiếm
+>    (`play_youtube_in_app`) trước đây xoá timeline rồi để engine dò lại; nay tra
+>    `saved_tone_timeline(url)` và truyền `manual_timeline` như đường "Bài đã lưu".
+> 4. **Chế độ FULL dùng chung chuỗi resolve** (trước chỉ xét timeline thủ công nên
+>    có cache vẫn tải + phân tích lại cả bài), và **watcher so URL theo bài**
+>    (`_same_song`, theo video_id) thay vì so chuỗi — link chia sẻ `youtu.be/…?si=`
+>    không còn bị coi là "bài mới" để hủy replay.
+> 5. **Đường mở bài tự chịu trách nhiệm gọi dò** (`_ensure_tone_for_url`). Trước
+>    đây bài CHƯA có tone được dò *nhờ may*: app mở link chia sẻ, trình duyệt hiện
+>    link chuẩn, watcher so chuỗi thấy khác nên tưởng "URL mới" rồi dò. Sửa (4)
+>    làm cú dò tình cờ đó biến mất, nên `open_youtube_url` gọi thẳng — và bỏ qua
+>    nếu phiên dò/replay của CHÍNH bài đó đang chạy.
+
 ---
 
 ## 1. State machine của `ToneSession`
@@ -73,8 +98,12 @@ flowchart TD
     A1["YouTube Watcher<br/>(_youtube_watcher_loop)"] -->|URL mới| H{_handle_new_url}
     A2["Nút 'Dò Lại'<br/>(_on_force_rescan)"] --> R[_tone_session.stop<br/>skip_resolve=True]
     A3["open_youtube_url<br/>(có manual_timeline)"] -->|replay trực tiếp| RP[[_replay_manual_timeline]]
+    A4["Mở bài: Danh sách bài hát /<br/>dán link / tìm kiếm / Setlist"] --> TL["_saved_manual_timeline(url)<br/>= saved_tone_timeline()"]
+    TL -->|"có chuỗi tone đã lưu"| A3
+    TL -->|không có| EN["_ensure_tone_for_url<br/>(bỏ qua nếu đang dò/replay chính bài đó)"]
+    EN --> D
 
-    H -->|url == _last_watched_url| X[Bỏ qua]
+    H -->|"_same_song(url, _last_watched_url)"| X[Bỏ qua]
     H -->|IDLE| D[_dispatch_auto_detect]
     H -->|SCANNING| Q[Đưa vào _pending_url_queue]
     H -->|REPLAYING| S2[stop → _dispatch_auto_detect]
@@ -98,13 +127,19 @@ flowchart TD
     SK -->|true<br/>Dò Lại / force| YT
     SK -->|false| RES["_resolve_tone(url)"]
 
-    RES --> C1{RAM cache phiên?}
+    RES --> C0{"Đệm phiên còn hạn?<br/>(data_version chưa đổi)"}
+    C0 -->|"dữ liệu đã đổi"| CLR[Bỏ sạch đệm phiên] --> C2
+    C0 -->|còn hạn| C1{RAM cache phiên?<br/>khóa = video_id}
     C1 -->|có| OUT_C[Trả cache → replay]
     C1 -->|không| C2{Manual timeline<br/>đã lưu?}
     C2 -->|có| OUT_M[Replay timeline thủ công]
     C2 -->|không| C3{Tone cache<br/>trên đĩa?}
     C3 -->|có| OUT_D[Replay cache]
-    C3 -->|không| YT
+    C3 -->|không| C4{"Tone của bài trong<br/>Danh sách bài hát?"}
+    C4 -->|có| OUT_S[Replay tone đã lưu<br/>timeline 1 mốc]
+    C4 -->|không| C5{Thư viện tone<br/>cộng đồng?}
+    C5 -->|có| OUT_D
+    C5 -->|không| YT
 
     YT["Tải audio qua yt-dlp"] --> YTOK{Tải được?}
     YTOK -->|có| ANALYZE[Phân tích key bằng librosa]
@@ -152,9 +187,10 @@ flowchart TD
 ```mermaid
 flowchart TD
     G0([auto_detect_youtube_timeline]) --> GWD[Lắp watchdog 300s]
-    GWD --> GM{Manual timeline<br/>đã lưu? (nếu !skip_resolve)}
-    GM -->|có| GREPLAY[Replay timeline thủ công] --> GDONE
-    GM -->|không| GSS[start_scanning → SCANNING]
+    GWD --> GM{"_resolve_tone(url)<br/>(nếu !skip_resolve)"}
+    GM -->|manual| GREPLAY[Replay timeline thủ công] --> GDONE
+    GM -->|cache| GREPLAY2["_build_cache_result + replay cache"] --> GDONE
+    GM -->|không có gì| GSS[start_scanning → SCANNING]
 
     GSS --> GINFO[Lấy title video] --> GDL["download_youtube_audio (toàn bài)"]
     GDL --> GDLOK{audio_path?}

@@ -4,9 +4,11 @@ import time
 import threading
 import numpy as np
 
+from core import tone_cache as tone_cache_module
 from core.memory import MemoryGuard
 from core.tone_cache import ToneCacheManager, ManualToneTimeline
 from core.tone_detector import ToneDetector
+from core.utils import song_match_key
 from core.scoring import ScoringEngine
 from core.ytdlp_support import extract_info_with_auth, make_ydl_opts
 from core.engine._youtube import _extract_key_root
@@ -145,10 +147,12 @@ class _ToneMixin:
 
     def _resolve_tone(self, url):
         # In-session memoization: check RAM cache first (dưới khóa).
+        cache_key = song_match_key(url)
         with self._tone_resolve_cache_lock_obj():
-            if url in self._tone_resolve_cache:
-                self._tone_resolve_cache.move_to_end(url)
-                source, data = self._tone_resolve_cache[url]
+            self._tone_resolve_cache_sync_gen()
+            if cache_key in self._tone_resolve_cache:
+                self._tone_resolve_cache.move_to_end(cache_key)
+                source, data = self._tone_resolve_cache[cache_key]
                 print(f"[RESOLVE] Cache phiên: {source}")
                 return (source, data)
 
@@ -163,6 +167,16 @@ class _ToneMixin:
             print(f"[RESOLVE] Khớp bộ nhớ đệm: {cached.get('primary_key', '?')}")
             self._tone_resolve_cache_put(url, ('cache', cached))
             return ('cache', cached)
+
+        # Tone người dùng đã lưu ở Danh sách bài hát (saved_songs.json → "tone").
+        # Đứng SAU tone_cache (cache mới hơn và có cả timeline nhiều đoạn) nhưng
+        # TRƯỚC thư viện cộng đồng (dữ liệu của chính khách thắng dữ liệu người
+        # lạ) và tất nhiên trước việc dò lại từ đầu.
+        saved_song = self._saved_song_tone(url)
+        if saved_song:
+            print(f"[RESOLVE] Khớp tone bài đã lưu: {saved_song['timeline'][0]['key_display']}")
+            self._tone_resolve_cache_put(url, ('manual', saved_song))
+            return ('manual', saved_song)
 
         # Local trượt → hỏi thư viện tone cộng đồng. Trả về dưới nhãn 'cache'
         # (chứ không phải một nguồn thứ ba) vì tone_share đã ghi kết quả xuống
@@ -179,6 +193,11 @@ class _ToneMixin:
             return ('cache', shared)
 
         return (None, None)
+
+    @staticmethod
+    def _saved_song_tone(url):
+        """Tone bài đã lưu (Danh sách bài hát) dạng timeline 1 mốc, hoặc None."""
+        return tone_cache_module.song_tone_entry(url)
 
     @staticmethod
     def _lookup_shared_tone(url):
@@ -199,18 +218,40 @@ class _ToneMixin:
         except Exception as e:
             print(f"[SHARE] Không đóng góp được tone: {e}")
 
+    def _tone_resolve_cache_sync_gen(self):
+        """Bỏ sạch đệm phiên nếu dữ liệu tone trên đĩa đã đổi từ lần đọc trước.
+
+        Gọi khi ĐANG GIỮ _tone_resolve_cache_lock. Đây là chốt chặn cho mọi
+        đường ghi dữ liệu (dialog sửa chuỗi tone, sửa thông tin bài, tools chạy
+        song song…) — không phụ thuộc việc từng call site có nhớ gọi
+        _tone_resolve_cache_invalidate hay không.
+        """
+        gen = tone_cache_module.data_version()
+        if getattr(self, "_tone_resolve_cache_gen", None) != gen:
+            if self._tone_resolve_cache:
+                print("[RESOLVE] Dữ liệu tone đã đổi → bỏ đệm phiên")
+            self._tone_resolve_cache.clear()
+            self._tone_resolve_cache_gen = gen
+
     def _tone_resolve_cache_put(self, url, entry):
-        """Insert into in-session cache, evicting oldest if over max size."""
+        """Insert into in-session cache, evicting oldest if over max size.
+
+        Khóa theo song_match_key (video_id) chứ không phải chuỗi URL thô: cùng
+        một bài mở bằng link chia sẻ (youtu.be/…?si=), link có &list=… hay link
+        chuẩn đều phải trúng CÙNG một entry, đúng như tầng đĩa.
+        """
+        key = song_match_key(url)
         with self._tone_resolve_cache_lock_obj():
-            self._tone_resolve_cache[url] = entry
-            self._tone_resolve_cache.move_to_end(url)
+            self._tone_resolve_cache_sync_gen()
+            self._tone_resolve_cache[key] = entry
+            self._tone_resolve_cache.move_to_end(key)
             while len(self._tone_resolve_cache) > self._TONE_RESOLVE_CACHE_MAX:
                 self._tone_resolve_cache.popitem(last=False)
 
     def _tone_resolve_cache_invalidate(self, url):
         """Remove a URL from the in-session cache (called after save)."""
         with self._tone_resolve_cache_lock_obj():
-            self._tone_resolve_cache.pop(url, None)
+            self._tone_resolve_cache.pop(song_match_key(url), None)
 
     def _build_cache_result(self, cached):
         """Build a flat result dict from already-loaded cache data + send MIDI.
@@ -734,28 +775,47 @@ class _ToneMixin:
         )
 
         if not skip_resolve:
-            # CHỈ chặn dò lại khi có timeline THỦ CÔNG do người dùng sửa tay
-            # (source='human'). Kết quả TỰ ĐỘNG nay chỉ nằm ở tone_cache (TTL)
-            # nên không còn khóa cứng tone — bấm Dò Lại / cache hết hạn đều dò mới.
-            saved_manual = ManualToneTimeline.load_timeline(url)
-            is_human = ManualToneTimeline.get_timeline_source(url) == 'human'
-            if saved_manual and saved_manual.get('timeline') and is_human:
-                print(f"[AUTO TIMELINE] Đã có timeline thủ công ({len(saved_manual['timeline'])} đoạn), đang phát lại")
-                timeline    = saved_manual['timeline']
-                first_entry = timeline[0]
-                self._send_tone_midi(first_entry)
+            # DÙNG CHUNG chuỗi resolve với chế độ nhanh (đệm phiên → timeline thủ
+            # công → tone_cache → tone bài đã lưu → thư viện cộng đồng). Trước
+            # đây chỗ này chỉ xét timeline thủ công nên chế độ "dò toàn bài" tải
+            # + phân tích lại cả bài dù tone đã nằm sẵn trong cache — vừa chậm
+            # vừa có thể ra tone khác lần trước.
+            #
+            # Kết quả TỰ ĐỘNG chỉ nằm ở tone_cache (có TTL) nên không khóa cứng
+            # tone: bấm Dò Lại (skip_resolve=True) hay cache hết hạn đều dò mới.
+            source, resolved_data = self._resolve_tone(url)
+            if source is not None:
+                is_manual = (source == 'manual')
+                timeline  = (resolved_data.get('timeline') if is_manual
+                             else resolved_data.get('key_timeline')) or []
+                title     = resolved_data.get('title', '')
+                label     = "timeline thủ công" if is_manual else "bộ nhớ đệm"
+                if timeline:
+                    print(f"[AUTO TIMELINE] Đã có {label} ({len(timeline)} đoạn), đang phát lại")
+                    # Gửi MIDI NGAY một lần: bản cache đi qua _build_cache_result
+                    # để key hiển thị / MIDI / cache là cùng một entry (bất biến
+                    # nhất quán ở TONE_FLOWS §7b).
+                    if is_manual:
+                        self._send_tone_midi(timeline[0])
+                    else:
+                        self._build_cache_result(resolved_data)
 
-                cancel = self._tone_session.start_scanning(url)
-                replay_cancel = self._tone_session.transition_to_replaying(expected_token=cancel)
-                if replay_cancel is not None:
-                    self._replay_manual_timeline(timeline, cancel_event=replay_cancel)
+                    cancel = self._tone_session.start_scanning(url)
+                    replay_cancel = self._tone_session.transition_to_replaying(expected_token=cancel)
+                    if replay_cancel is not None:
+                        if is_manual:
+                            self._replay_manual_timeline(timeline, cancel_event=replay_cancel)
+                        else:
+                            self._replay_cached_timeline(resolved_data, cancel_event=replay_cancel)
 
-                if on_complete:
-                    on_complete({
-                        'url': url, 'title': saved_manual.get('title', ''),
-                        'timeline': timeline, 'total_duration': 0,
-                    })
-                return
+                    if on_complete:
+                        on_complete({
+                            'url': url, 'title': title,
+                            'timeline': timeline, 'total_duration': 0,
+                            'from_manual': is_manual,
+                            'from_cache':  not is_manual,
+                        })
+                    return
 
         cancel = self._tone_session.start_scanning(url)
 

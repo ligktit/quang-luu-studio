@@ -1058,21 +1058,29 @@ class MainDashboard(QMainWindow):
         ngược lại mở trình duyệt ngoài như cũ."""
         if not url:
             return
-        # Bài mới từ ô tìm kiếm / dán link: chưa biết timeline. Xoá timeline bài cũ
-        # kẻo ô "kế tiếp" đếm ngược theo mốc của bài trước đó.
-        self._clear_tone_timeline()
+        # Bài mở bằng link/ô tìm kiếm VẪN có thể là bài đã lưu chuỗi tone thủ
+        # công — tra trước khi coi là bài lạ. Không tra thì đường này xoá sạch
+        # timeline rồi để engine dò lại từ đầu, đè mất tone khách chỉnh tay.
+        manual_tl = self._saved_manual_timeline(url)
+        if manual_tl:
+            self._set_tone_timeline(manual_tl, 0.0)
+        else:
+            # Bài lạ: xoá timeline bài cũ kẻo ô "kế tiếp" đếm ngược theo mốc của
+            # bài trước đó.
+            self._clear_tone_timeline()
         if not self._embedded_player_active():
             self.engine.open_youtube_url(
                 url,
                 on_video_end_callback=lambda res: None,
                 on_tone_detected=lambda result: self._tone_result_signal.emit(result),
+                manual_timeline=manual_tl,
             )
             return
         self._embedded_current_url = url
-        # Dò tone chạy độc lập (đường yt-dlp riêng) — kích ngay.
+        # Dò tone chạy độc lập (đường yt-dlp riêng) — kích ngay. Có tone đã lưu
+        # thì bước resolve trong đó trả về ngay, không tải audio.
         if autodetect:
-            import weakref
-            self.engine._dispatch_auto_detect(url, weakref.ref(self.engine))
+            self.engine._ensure_tone_for_url(url)
         # Lấy luồng trực tiếp (không quảng cáo) ở nền; xong marshal về GUI để phát.
         vid = self._embedded_video_id(url)
         self._marquee_signal.emit(self._spinner_progress_text("Đang tải video…"))
@@ -1467,6 +1475,41 @@ class MainDashboard(QMainWindow):
     # đây chỉ lo hiển thị, và tự tính lấy vị trí phát vì engine không hề gửi
     # thông tin "đoạn kế tiếp còn bao lâu" — thứ người chỉnh cần nhất.
 
+    @staticmethod
+    def _save_single_tone_timeline(url, title, key_display):
+        """Ghi chuỗi tone thủ công 1 mốc (0:00) cho bài — tone khách tự chọn.
+
+        Bỏ qua khi bài đã có chuỗi NHIỀU mốc: chuỗi đó chi tiết hơn và cũng do
+        khách tạo, ghi đè bằng một tone duy nhất là làm mất công sức của khách.
+        Trả True nếu có ghi.
+        """
+        if not url or not key_display:
+            return False
+        try:
+            from core.tone_cache import ManualToneTimeline, make_timeline_entry
+            existing = ManualToneTimeline.load_timeline(url)
+            if existing and len(existing.get("timeline") or []) > 1:
+                return False
+            return bool(ManualToneTimeline.save_timeline(
+                url, title or "", [make_timeline_entry(key_display)], source="human"))
+        except Exception as e:
+            print(f"[TONE UI] Không lưu được tone thủ công: {e}")
+            return False
+
+    @staticmethod
+    def _saved_manual_timeline(url):
+        """Chuỗi tone khách đã lưu cho URL này (thủ công → tone đơn của bài), hoặc None.
+
+        Mọi đường mở bài (Danh sách bài hát, dán link / tìm kiếm, Setlist) đều đi
+        qua đây để không đường nào bỏ sót tone đã lưu rồi để engine dò lại.
+        """
+        try:
+            from core.tone_cache import saved_tone_timeline
+            return saved_tone_timeline(url)
+        except Exception as e:
+            print(f"[TONE UI] Không đọc được chuỗi tone đã lưu: {e}")
+            return None
+
     def _set_tone_timeline(self, timeline, duration=0.0):
         """Nạp timeline cho phần hiển thị (3 chỗ gọi: phát bài đã lưu ở dashboard,
         phát từ Danh sách bài hát, và khi dò xong toàn bài)."""
@@ -1855,7 +1898,10 @@ class MainDashboard(QMainWindow):
         url = result.get('url', '')
         if url and title and key_root and not is_low_conf and not from_cache and not from_manual:
             def _auto_save():
-                backend.SongManager.add_song(title, url, key_root)
+                # Lưu key_display ('Am') chứ không phải nốt gốc ('A'): mất chữ
+                # 'm' là mất luôn thể thứ, mở lại bài sẽ gửi sang Studio One một
+                # tone TRƯỞNG dù bài là thứ.
+                backend.SongManager.add_song(title, url, key_display)
             threading.Thread(target=_auto_save, daemon=True).start()
 
     def _on_tone_auto(self):
@@ -2276,8 +2322,7 @@ class MainDashboard(QMainWindow):
         if not url:
             return
         try:
-            tl_data   = backend.ManualToneTimeline.load_timeline(url)
-            manual_tl = tl_data["timeline"] if tl_data and tl_data.get("timeline") else None
+            manual_tl = self._saved_manual_timeline(url)
             # Timeline đã lưu chính là thứ engine sắp replay — nạp luôn cho phần
             # hiển thị để ô "kế tiếp" đếm ngược được ngay từ giây đầu.
             self._set_tone_timeline(manual_tl or [], song.get("duration", 0) or 0)
@@ -2291,9 +2336,12 @@ class MainDashboard(QMainWindow):
                 manual_timeline=manual_tl,
                 play_callback=play_cb,
             )
+            from core.tone_cache import make_timeline_entry
             from PySide6.QtCore import QSignalBlocker
             with QSignalBlocker(self.tone_combo):
-                self.tone_combo.setCurrentText(tone)
+                # Ô tone chỉ có 12 nốt gốc — "Am" phải tách thành "A" mới hiện được.
+                self.tone_combo.setCurrentText(
+                    make_timeline_entry(tone)["key_display"].rstrip("m"))
             self._apply_song_preset(song)
         except Exception as e:
             print(f"[SETLIST] play song error: {e}")
@@ -2559,7 +2607,14 @@ class MainDashboard(QMainWindow):
                 self._show_message("Cần link YouTube hợp lệ", is_error=True)
                 return
             dlg.accept()
-            self._process_quick_save(url, tone_combo.currentText(), title_input.text().strip())
+            # Tone khách TỰ CHỌN (đổi khác tone điền sẵn, hoặc vừa chỉnh tay ở
+            # màn hình chính) là ý muốn rõ ràng → lưu thành chuỗi tone thủ công
+            # để lần sau mở bài là chạy đúng tone đó, không dò lại.
+            chosen_tone = tone_combo.currentText()
+            tone_is_human = (chosen_tone != auto_tone
+                             or bool(getattr(self, "_manual_tone_override", False)))
+            self._process_quick_save(url, chosen_tone, title_input.text().strip(),
+                                     tone_is_human=tone_is_human)
 
         save_btn.clicked.connect(save_from_form)
         cancel_btn.clicked.connect(dlg.reject)
@@ -2575,8 +2630,13 @@ class MainDashboard(QMainWindow):
         dlg.exec()
 
 
-    def _process_quick_save(self, url, tone, title=None):
-        """Lưu bài. Nếu title rỗng → tự lấy từ timeline manual / yt-dlp (chạy nền)."""
+    def _process_quick_save(self, url, tone, title=None, tone_is_human=False):
+        """Lưu bài. Nếu title rỗng → tự lấy từ timeline manual / yt-dlp (chạy nền).
+
+        tone_is_human=True (khách tự chọn tone ở ô Tone) → ghi thêm chuỗi tone
+        thủ công 1 mốc để chuỗi resolve dùng được. KHÔNG bao giờ đè lên chuỗi
+        nhiều mốc đã có: chuỗi đó chi tiết hơn và cũng do khách tạo.
+        """
         def _task():
             save_title = (title or '').strip()
             save_tone = tone
@@ -2603,6 +2663,8 @@ class MainDashboard(QMainWindow):
                 save_title = 'Bài hát không tên'
 
             if backend.SongManager.add_song(save_title, url, save_tone):
+                if tone_is_human and save_tone:
+                    self._save_single_tone_timeline(url, save_title, save_tone)
                 self._message_signal.emit(f"✅ Đã lưu: {save_title[:40]}", False)
             else:
                 self._message_signal.emit("Lỗi khi lưu bài hát", True)

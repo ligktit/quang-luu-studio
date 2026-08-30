@@ -25,6 +25,58 @@ _LOCK_TIMEOUT = 5.0       # giây — tối đa chờ lấy lock trước khi fa
 _LOCK_POLL = 0.05         # giây — khoảng giữa các lần thử
 _LOCK_STALE_AGE = 30.0    # giây — lockfile cũ hơn mức này coi là mồ côi → cướp
 
+# ── Thế hệ dữ liệu tone (data version) ──────────────────────────────────────
+# Tăng 1 mỗi khi dữ liệu tone TRÊN ĐĨA đổi (lưu/xóa timeline thủ công, lưu/xóa
+# tone cache). Engine giữ một bộ nhớ đệm resolve TRONG PHIÊN (RAM) để khỏi đọc
+# JSON liên tục; nó so số này để biết đệm đã cũ và tự bỏ.
+#
+# Vì sao cần: trước đây chỉ engine mới gọi _tone_resolve_cache_invalidate() khi
+# CHÍNH NÓ lưu cache. Người dùng sửa tone tay ở dialog "Sửa chuỗi tone" ghi
+# thẳng xuống đĩa mà không báo engine → trong cùng phiên, bài đó vẫn replay tone
+# TỰ ĐỘNG cũ còn nằm trong RAM, tone vừa sửa tay bị bỏ qua cho tới khi mở lại
+# app. Đếm thế hệ ở tầng dữ liệu thì không call site nào quên được.
+_data_version = 0
+_version_lock = threading.Lock()
+
+
+def data_version():
+    """Số thế hệ hiện tại của dữ liệu tone trên đĩa."""
+    with _version_lock:
+        return _data_version
+
+
+def _bump_data_version():
+    global _data_version
+    with _version_lock:
+        _data_version += 1
+
+
+# Thứ tự 12 nốt — dùng để suy ra key_index từ tên tone hiển thị.
+CHROMATIC_NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+
+def make_timeline_entry(key_display, at=0.0):
+    """Dựng 1 mốc timeline từ tên tone hiển thị ('Am', 'C#', ...).
+
+    Dùng chung cho mọi chỗ cần biến MỘT tone thành timeline 1 mốc: ô chọn tone
+    khi lưu bài, "Đặt 1 tone cho cả bài", và bước resolve tone của bài đã lưu.
+    Tên tone lạ (rỗng/sai) → về C Major thay vì ném lỗi, để không bao giờ chặn
+    việc lưu dữ liệu người dùng.
+    """
+    kd = (key_display or "C").strip() or "C"
+    scale = "Minor" if kd.endswith("m") else "Major"
+    root = kd[:-1] if kd.endswith("m") else kd
+    try:
+        key_index = CHROMATIC_NOTES.index(root)
+    except ValueError:
+        kd, key_index, scale = "C", 0, "Major"
+    return {
+        "time":        float(at),
+        "key_display": kd,
+        "key_index":   key_index,
+        "scale":       scale,
+    }
+
 
 @contextlib.contextmanager
 def _interprocess_lock(data_path):
@@ -130,6 +182,60 @@ def _backup_corrupt_file(path, err):
         )
 
 
+def song_tone_entry(url):
+    """Tone người dùng đã lưu cho bài này ở Danh sách bài hát, dạng timeline 1 mốc.
+
+    Trước đây trường "tone" của bài chỉ để HIỂN THỊ: mở bài lên, app không tra
+    tới nó nên coi như bài chưa có tone và dò lại từ đầu (đè luôn tone khách
+    chỉnh tay). Nay nó là một mắt xích thật trong chuỗi resolve tone.
+
+    Trả None khi: URL không khớp bài nào, bài không có tone, hoặc đọc lỗi
+    (fail-soft — luồng dò cũ chạy tiếp như chưa có gì).
+    """
+    try:
+        from core.songs import SongManager
+        key = song_match_key(url)
+        if not key:
+            return None
+        for song in SongManager.load_songs():
+            if not isinstance(song, dict):
+                continue
+            if song_match_key(song.get("url", "")) != key:
+                continue
+            tone = (song.get("tone") or "").strip()
+            if not tone:
+                return None
+            return {
+                "title":    song.get("title", ""),
+                "url":      song.get("url", "") or url,
+                "timeline": [make_timeline_entry(tone)],
+                "source":   ManualToneTimeline.DEFAULT_SOURCE,
+                "origin":   "song",   # để log / kiểm thử phân biệt được nguồn
+            }
+    except Exception as e:
+        print(f"[TONE] Bỏ qua tone bài đã lưu: {e}")
+    return None
+
+
+def saved_tone_timeline(url):
+    """Chuỗi tone NGƯỜI DÙNG đã lưu cho bài, hoặc None.
+
+    Thứ tự giống hệt engine._resolve_tone (chuỗi tone thủ công → tone đơn của
+    bài đã lưu) để mở bài từ đâu — Danh sách bài hát, dán link, Setlist — cũng
+    ra cùng một kết quả.
+    """
+    if not url:
+        return None
+    try:
+        data = ManualToneTimeline.load_timeline(url)
+        if data and data.get("timeline"):
+            return data["timeline"]
+    except Exception as e:
+        print(f"[TONE] Không đọc được chuỗi tone thủ công: {e}")
+    entry = song_tone_entry(url)
+    return entry["timeline"] if entry else None
+
+
 class ToneCacheManager:
     """Quản lý cache kết quả dò tone (auto) — tránh dò lại bài đã biết.
 
@@ -223,6 +329,7 @@ class ToneCacheManager:
             entry["cached_at"] = time.time()
             cache[key] = entry
             ToneCacheManager._save_cache(cache)
+        _bump_data_version()
         print(f"[CACHE] Đã lưu tone cho {key}")
 
     @staticmethod
@@ -230,6 +337,7 @@ class ToneCacheManager:
         """Xóa toàn bộ cache"""
         with _interprocess_lock(ToneCacheManager.CACHE_FILE), _cache_lock:
             ToneCacheManager._save_cache({})
+        _bump_data_version()
 
 
 class ManualToneTimeline:
@@ -351,7 +459,12 @@ class ManualToneTimeline:
                 "updated_at": time.time()
             }
             ManualToneTimeline._maybe_warn_size(all_data)
-            return ManualToneTimeline._save_all(all_data)
+            saved = ManualToneTimeline._save_all(all_data)
+        if saved:
+            # Báo cho mọi bộ nhớ đệm trong phiên biết dữ liệu đã đổi — nếu không,
+            # tone vừa sửa tay sẽ bị tone cũ trong RAM đè cho tới khi mở lại app.
+            _bump_data_version()
+        return saved
 
     @staticmethod
     def delete_timeline(youtube_url):
@@ -368,9 +481,12 @@ class ManualToneTimeline:
                 if k and k in all_data:
                     del all_data[k]
                     removed = True
-            if removed:
-                return ManualToneTimeline._save_all(all_data)
-            return False
+            if not removed:
+                return False
+            saved = ManualToneTimeline._save_all(all_data)
+        if saved:
+            _bump_data_version()
+        return saved
 
     @staticmethod
     def list_all_timelines():

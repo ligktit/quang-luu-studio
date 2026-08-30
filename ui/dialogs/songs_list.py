@@ -489,9 +489,8 @@ class SongsListDialog(QDialog):
             title = song.get("title", "")
             if not url:
                 return
-            tl_data   = backend.ManualToneTimeline.load_timeline(url)
-            manual_tl = tl_data["timeline"] if tl_data and tl_data.get("timeline") else None
             dash = self._dashboard
+            manual_tl = dash._saved_manual_timeline(url)
             # Nạp timeline cho phần hiển thị (ô "kế tiếp" + đếm ngược ở header).
             dash._set_tone_timeline(manual_tl or [], song.get("duration", 0) or 0)
             play_cb = dash._load_embedded_video if dash._embedded_player_active() else None
@@ -504,14 +503,21 @@ class SongsListDialog(QDialog):
                 manual_timeline=manual_tl,
                 play_callback=play_cb,
             )
+            # Ô tone chỉ chứa 12 nốt gốc: bài lưu tone thể thứ ("Am") mà set
+            # thẳng thì combo lặng lẽ giữ nguyên tone bài TRƯỚC. Tách nốt gốc +
+            # thể ra rồi mới hiển thị.
+            from core.tone_cache import make_timeline_entry
+            tone_entry = make_timeline_entry(tone)
+            tone_root  = tone_entry["key_display"].rstrip("m")
+            tone_scale = tone_entry["scale"]
             from PySide6.QtCore import QSignalBlocker
             with QSignalBlocker(self._dashboard.tone_combo):
-                self._dashboard.tone_combo.setCurrentText(tone)
+                self._dashboard.tone_combo.setCurrentText(tone_root)
             # Smart Recall (Premium): khôi phục preset đã lưu (tự gate, im lặng nếu Standard).
             if hasattr(self._dashboard, "_apply_song_preset"):
                 self._dashboard._apply_song_preset(song)
             if self._dashboard._waveform is not None and title:
-                self._dashboard._waveform.set_song_info(title, tone, "Major", 0)
+                self._dashboard._waveform.set_song_info(title, tone_root, tone_scale, 0)
             if title:
                 self._dashboard._marquee_text = f"🎵 {title}   ★   {tone}"
             self.close()
@@ -664,12 +670,17 @@ class SongsListDialog(QDialog):
             if not new_title:
                 self._dashboard._show_message("Tên bài hát không được để trống", is_error=True)
                 return
+            new_tone = tone_combo.currentText()
             backend.SongManager.update_song(
                 song.get("id"),
                 title=new_title,
                 url=new_url,
-                tone=tone_combo.currentText(),
+                tone=new_tone,
             )
+            # Khách ĐỔI tone ở đây là chỉnh tay → ghi luôn thành chuỗi tone thủ
+            # công để mở bài lần sau chạy đúng tone này thay vì dò lại.
+            if new_tone != cur_tone and new_url:
+                self._dashboard._save_single_tone_timeline(new_url, new_title, new_tone)
             dlg.accept()
             self._dashboard._show_message("Đã cập nhật thông tin bài hát")
             self._refresh_data()
