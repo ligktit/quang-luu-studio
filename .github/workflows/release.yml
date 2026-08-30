@@ -210,14 +210,24 @@ jobs:
           Write-Host "OK: Light build khong kem QtWebEngine"
 
       # ── 7. Install Inno Setup ──────────────────────────────────────────────────
+      # Tải thẳng https://jrsoftware.org/download.php/is.exe ra file KHÔNG chạy
+      # được — đó là trang chuyển hướng chứ không phải bộ cài, nên Start-Process
+      # báo "The file or directory is corrupted and unreadable". Chocolatey có
+      # sẵn trên runner windows-latest và lo luôn phần URL theo phiên bản.
       - name: Install Inno Setup
         shell: pwsh
         run: |
-          $url  = "https://jrsoftware.org/download.php/is.exe"
-          $dest = "$env:TEMP\innosetup.exe"
-          Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
-          Start-Process $dest -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES" -Wait
-          Write-Host "Inno Setup installed"
+          choco install innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $iscc = @(
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "C:\Program Files\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            Write-Host "ERROR: Cai xong nhung khong thay ISCC.exe"
+            exit 1
+          }
+          Write-Host "Inno Setup: $iscc"
 
       # ── 8. Build installer (cả hai biến thể) ───────────────────────────────────
       - name: Build installers
