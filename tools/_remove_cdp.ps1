@@ -1,4 +1,4 @@
-# Quang Luu Studio — Remove CDP flags from browser shortcuts
+﻿# Quang Luu Studio — Remove CDP flags from browser shortcuts
 $browsers = @(
     @{ Name='Microsoft Edge';   Exe='msedge.exe' },
     @{ Name='Google Chrome';    Exe='chrome.exe' },

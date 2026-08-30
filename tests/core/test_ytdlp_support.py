@@ -17,7 +17,8 @@ from core.ytdlp_support import (
     NO_COOKIE_PLAYER_CLIENTS,
     POT_PLAYER_CLIENTS,
     PURPOSE_VIDEO,
-    YouTubeAuthenticationRequiredError
+    YouTubeAuthenticationRequiredError,
+    _build_cookie_db_error_message,
 )
 
 import sys
@@ -548,3 +549,88 @@ def test_cookie_lock_van_duoc_bao_khi_no_dung_la_nguyen_nhan(mock_build_auth, mo
         run_with_auth_fallback("http://yt.com", operation=operation)
     # Bot-challenge vẫn là thông điệp ưu tiên (cookie chính là cách chữa nó)
     assert "xac thuc" in str(err.value).lower() or "cookie" in str(err.value).lower()
+
+
+# ── Cứu hộ cookie qua CDP ─────────────────────────────────────────────────────
+# Chrome/Edge/Brave ≥ 127 mã hoá cookie bằng khoá cột vào chính trình duyệt
+# (App-Bound Encryption). yt-dlp đọc thẳng file thì luôn tịt, ĐÓNG TRÌNH DUYỆT
+# CŨNG KHÔNG CỨU ĐƯỢC. Nấc cuối là nhờ trình duyệt đang chạy đưa cookie ra qua
+# CDP — xem core/cdp_cookies.py.
+
+def _ydl_factory(mock_yt_dlp):
+    def _fake_ydl(opts):
+        holder = MagicMock()
+        holder.params = opts
+        ctx = MagicMock()
+        ctx.__enter__.return_value = holder
+        return ctx
+    mock_yt_dlp.YoutubeDL.side_effect = _fake_ydl
+
+
+@patch("core.ytdlp_support._harvest_cookies_via_cdp")
+@patch("core.ytdlp_support._build_auth_attempts")
+def test_cookie_abe_thi_xin_cookie_qua_cdp_va_chay_duoc(mock_build_auth, mock_cdp,
+                                                        mock_yt_dlp):
+    mock_build_auth.return_value = [{"kind": "none"},
+                                    {"kind": "browser", "browser": "chrome"}]
+    mock_cdp.return_value = r"C:\data\youtube_cookies.txt"
+    import yt_dlp
+
+    def operation(ydl):
+        if ydl.params.get("cookiefile"):
+            return "OK"                       # file lấy qua CDP dùng được
+        if ydl.params.get("cookiesfrombrowser"):
+            raise yt_dlp.utils.DownloadError(
+                "ERROR: Failed to decrypt with DPAPI")
+        raise yt_dlp.utils.DownloadError(
+            "ERROR: Sign in to confirm you're not a bot.")
+
+    _ydl_factory(mock_yt_dlp)
+    assert run_with_auth_fallback("http://yt.com", operation=operation) == "OK"
+    assert mock_cdp.called
+
+
+@patch("core.ytdlp_support._harvest_cookies_via_cdp")
+@patch("core.ytdlp_support._build_auth_attempts")
+def test_khong_xin_duoc_cookie_cdp_thi_bao_loi_khong_bao_dong_trinh_duyet(
+        mock_build_auth, mock_cdp, mock_yt_dlp):
+    """Thông điệp cũ bảo "đóng hẳn Chrome rồi thử lại" — sai với App-Bound
+    Encryption, và chính là lý do khách làm hoài vẫn báo lỗi cookie."""
+    mock_build_auth.return_value = [{"kind": "none"},
+                                    {"kind": "browser", "browser": "chrome"}]
+    mock_cdp.return_value = None
+    import yt_dlp
+
+    def operation(ydl):
+        if ydl.params.get("cookiesfrombrowser"):
+            raise yt_dlp.utils.DownloadError(
+                "ERROR: Could not copy Chrome cookie database. Permission denied")
+        raise yt_dlp.utils.DownloadError(
+            "ERROR: Sign in to confirm you're not a bot.")
+
+    _ydl_factory(mock_yt_dlp)
+    with pytest.raises(Exception):
+        run_with_auth_fallback("http://yt.com", operation=operation)
+    assert mock_cdp.called
+
+    msg = _build_cookie_db_error_message().lower()
+    assert "dong trinh duyet cung khong giup gi" in msg
+    assert "firefox" in msg
+
+
+@patch("core.ytdlp_support._harvest_cookies_via_cdp")
+@patch("core.ytdlp_support._build_auth_attempts")
+def test_khong_dong_toi_cdp_khi_van_de_khong_phai_cookie(mock_build_auth, mock_cdp,
+                                                         mock_yt_dlp):
+    """Video riêng tư/đã xoá thì cookie nào cũng vô ích — không được
+    đi quấy trình duyệt đòi cookie cho một lỗi chẳng dính dáng gì tới cookie."""
+    mock_build_auth.return_value = [{"kind": "none"}]
+    import yt_dlp
+
+    def operation(ydl):
+        raise yt_dlp.utils.DownloadError("ERROR: Private video. Sign in if you've been granted access")
+
+    _ydl_factory(mock_yt_dlp)
+    with pytest.raises(Exception):
+        run_with_auth_fallback("http://yt.com", operation=operation)
+    assert not mock_cdp.called

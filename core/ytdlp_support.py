@@ -188,9 +188,12 @@ def export_cookies_to_file(browser="chrome", profile=None, output_path=None, log
     """
     Export browser cookies to a Netscape-format .txt file.
 
-    The target browser MUST be fully closed before calling this — Chromium-based
-    browsers lock their cookie DB while running.  Firefox is the exception and
-    can be exported while open.
+    Chỉ còn dùng được với Firefox trên thực tế. Chrome/Edge/Brave từ bản 127 mã
+    hoá cookie bằng khoá cột vào chính trình duyệt (App-Bound Encryption) nên
+    hàm này luôn thất bại với chúng — ĐÓNG TRÌNH DUYỆT CŨNG KHÔNG CỨU ĐƯỢC, vì
+    vấn đề không phải file bị khoá mà là không có khoá giải mã. Với Chromium hãy
+    dùng `core.cdp_cookies.harvest_to_file()`: nhờ chính trình duyệt đang chạy
+    đưa cookie ra qua CDP.
 
     Returns the output path on success, None on failure.
     """
@@ -400,11 +403,28 @@ def run_with_auth_fallback(url, ydl_opts=None, log_prefix="[YTDLP]", operation=N
                                 base_opts=base_opts)
     state = {"last_error": None, "auth_blocked": False,
              "cookie_db_blocked": False, "format_blocked": False,
-             "stream_forbidden": False, "no_cookie_error": None}
+             "stream_forbidden": False, "no_cookie_error": None,
+             "cdp_cookie_tried": False}
 
     found, result = _run_attempts(yt_dlp, base_opts, attempts, operation, log_prefix, state)
     if found:
         return result
+
+    # Cứu hộ: không đọc được cookie từ ĐĨA thì nhờ chính trình duyệt đang chạy
+    # đưa cookie ra qua CDP. Chrome/Edge/Brave ≥ 127 mã hoá cookie bằng khoá cột
+    # vào chính trình duyệt (App-Bound Encryption) nên yt-dlp không bao giờ tự
+    # giải được — và đóng trình duyệt cũng vô ích, vì đây không phải chuyện file
+    # bị khoá. Đây là đường duy nhất lấy được cookie trên máy không cài Firefox.
+    if (state["auth_blocked"] or state["cookie_db_blocked"]) and not state["cdp_cookie_tried"]:
+        state["cdp_cookie_tried"] = True
+        harvested = _harvest_cookies_via_cdp(log_prefix)
+        if harvested:
+            found, result = _run_attempts(
+                yt_dlp, base_opts, [{"kind": "cookie_file", "path": harvested}],
+                operation, log_prefix, state,
+            )
+            if found:
+                return result
 
     # Mọi client đều bị YouTube giấu định dạng vì thiếu PO Token. Lượt cuối: bảo
     # yt-dlp ĐỪNG loại các định dạng thiếu PO Token (`formats=missing_pot`). Tải
@@ -436,6 +456,21 @@ def run_with_auth_fallback(url, ydl_opts=None, log_prefix="[YTDLP]", operation=N
     if last_error:
         raise last_error
     raise RuntimeError("yt-dlp khong tra ve ket qua")
+
+
+def _harvest_cookies_via_cdp(log_prefix):
+    """Xin cookie từ trình duyệt đang chạy qua CDP. Trả đường dẫn file, hoặc None."""
+    try:
+        from core import cdp_cookies
+    except Exception as exc:
+        print(f"{log_prefix} Khong nap duoc core.cdp_cookies: {exc}")
+        return None
+    print(f"{log_prefix} Thu xin cookie tu trinh duyet dang chay qua CDP...")
+    try:
+        return cdp_cookies.harvest_to_file(log_prefix=log_prefix)
+    except Exception as exc:
+        print(f"{log_prefix} CDP khong cho cookie: {exc}")
+        return None
 
 
 def _run_attempts(yt_dlp, base_opts, attempts, operation, log_prefix, state):
@@ -830,14 +865,28 @@ def _build_forbidden_error_message():
 
 
 def _build_cookie_db_error_message():
+    """Thông điệp khi mọi nguồn cookie đều tịt.
+
+    KHÔNG được khuyên "đóng trình duyệt rồi thử lại" một cách chung chung nữa.
+    Từ Chrome/Edge/Brave 127 trở lên, cookie được mã hoá bằng khoá cột vào chính
+    trình duyệt (App-Bound Encryption) — yt-dlp đọc file thẳng thì luôn dừng ở
+    "Failed to decrypt with DPAPI", **đóng trình duyệt không thay đổi gì**. Bản
+    trước khuyên đóng rồi thử lại nên khách làm hoài vẫn lỗi.
+    """
     return (
-        "yt-dlp khong doc duoc cookie database cua trinh duyet.\n\n"
-        "Nguyen nhan: Chrome/Edge/Brave khoa file cookie khi dang chay.\n\n"
-        "Cach khac phuc (chon 1):\n"
-        f"  A. Chay tools\\export_youtube_cookies.bat de xuat cookie ra file mot lan,\n"
-        "     hoac vao Settings -> YouTube Cookie -> nut xuat cookie.\n"
-        f"     Cookie se duoc luu tu dong vao: {_AUTO_COOKIE_FILE}\n"
-        "  B. Dung Firefox: khong bi khoa cookie khi dang mo.\n"
-        "     Vao Settings → YouTube Cookie → chon Firefox.\n"
-        "  C. Dong hoan toan Chrome/Edge/Brave roi thu lai.\n"
+        "Khong lay duoc cookie YouTube tu trinh duyet.\n\n"
+        "Nguyen nhan: Chrome/Edge/Brave tu ban 127 ma hoa cookie bang khoa cot vao\n"
+        "chinh trinh duyet (App-Bound Encryption). Chuong trinh ngoai khong giai ma\n"
+        "duoc — DONG TRINH DUYET CUNG KHONG GIUP GI, vi day khong phai chuyen file\n"
+        "bi khoa.\n\n"
+        "Cach khac phuc (theo thu tu de nhat truoc):\n"
+        "  A. MO trinh duyet len (dung shortcut cua Quang Luu Studio, hoac chay\n"
+        "     tools\\_apply_cdp.ps1 mot lan de gan co go loi), roi thu lai. App se tu\n"
+        "     xin cookie tu trinh duyet dang chay qua CDP.\n"
+        f"     Cookie lay duoc se luu tai: {_AUTO_COOKIE_FILE}\n"
+        "  B. Cai Firefox va dang nhap YouTube tren do: Firefox khong dung App-Bound\n"
+        "     Encryption nen doc duoc binh thuong, ke ca khi dang mo.\n"
+        "     Vao Settings -> YouTube Cookie -> chon Firefox.\n"
+        "  C. Dung tien ich xuat cookie cua trinh duyet (dinh dang Netscape .txt) roi\n"
+        "     tro toi no o Settings -> YouTube Cookie -> chon file.\n"
     )

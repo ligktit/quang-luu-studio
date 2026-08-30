@@ -18,6 +18,12 @@ except ImportError:
 
 from core.config import CDP_DEBUG_PORT, CDP_CONNECT_TIMEOUT, CDP_POLL_INTERVAL
 
+# Vì sao mọi create_connection đều phải có `suppress_origin=True`:
+# websocket-client tự gắn header `Origin: http://127.0.0.1:9222`, còn Chrome/Edge
+# từ bản 111 CHẶN mọi WebSocket DevTools có Origin lạ — trả thẳng "403 Forbidden,
+# use --remote-allow-origins". Thiếu cờ này thì CDP không bao giờ kết nối được
+# trên trình duyệt đời mới, app âm thầm rơi về WinRT (vốn mù vị trí phát).
+
 class CDPYouTubeMonitor:
     def __init__(self, port=None):
         self.port = port or CDP_DEBUG_PORT
@@ -91,7 +97,8 @@ class CDPYouTubeMonitor:
                 if not ws_url:
                     continue
                 try:
-                    ws = websocket.create_connection(ws_url, timeout=1.0)
+                    ws = websocket.create_connection(ws_url, timeout=1.0,
+                                                    suppress_origin=True)
                     ws.settimeout(1.0)
                     ws.send(json.dumps({"id": 1, "method": "Page.close"}))
                     try:
@@ -173,7 +180,8 @@ class CDPYouTubeMonitor:
                 if not self.is_connected or not self._ws:
                     ws_url, page_url = self._get_youtube_ws_url()
                     if ws_url:
-                        self._ws = websocket.create_connection(ws_url, timeout=CDP_CONNECT_TIMEOUT)
+                        self._ws = websocket.create_connection(
+                            ws_url, timeout=CDP_CONNECT_TIMEOUT, suppress_origin=True)
                         # Đặt recv timeout sau khi connect: tránh block vô hạn khi tab hang
                         self._ws.settimeout(5.0)
                         self.is_connected = True

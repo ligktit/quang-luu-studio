@@ -21,6 +21,7 @@ except ImportError:
 from core.config import CDP_DEBUG_PORT
 from core.memory import MemoryProfiler, MemoryGuard
 from core.scoring import ScoringEngine
+from core.utils import song_match_key
 from core.ytdlp_support import extract_info_with_auth, make_ydl_opts
 
 # Module-level ctypes callback type (cached once — prevents ctypes ref leaks on poll)
@@ -39,6 +40,19 @@ def _normalize_url(url: str) -> str:
     if not url.startswith("http://") and not url.startswith("https://"):
         url = "https://" + url
     return url
+
+
+def _same_song(url_a, url_b) -> bool:
+    """Hai URL có trỏ về CÙNG một bài không (so theo video_id, không so chuỗi).
+
+    Watcher trước đây so chuỗi thô: app mở link chia sẻ
+    ``youtu.be/ID?si=…`` rồi trình duyệt hiển thị ``youtube.com/watch?v=ID``
+    → coi là "URL mới" → hủy replay tone đã lưu để dò lại từ đầu. Cùng bài thì
+    phải là cùng bài, bất kể dạng link.
+    """
+    if not url_a or not url_b:
+        return False
+    return song_match_key(url_a) == song_match_key(url_b)
 
 
 def _clean_youtube_url(url: str):
@@ -341,6 +355,8 @@ class _YouTubeMixin:
                     if cancel_ev2 is not None:
                         self._replay_manual_timeline(manual_timeline, cancel_event=cancel_ev2)
                 threading.Thread(target=replay_manual_embedded, daemon=True).start()
+            else:
+                self._ensure_tone_for_url(url)
             return
 
         def open_browser():
@@ -418,11 +434,29 @@ class _YouTubeMixin:
                     self._replay_manual_timeline(manual_timeline, cancel_event=cancel_ev2)
             threading.Thread(target=replay_manual, daemon=True).start()
         else:
-            # Chờ browser mở rồi bắt đầu monitoring
+            # Chờ browser mở rồi bắt đầu monitoring + dò tone cho bài chưa có tone.
             def delayed_monitoring():
                 time.sleep(2)
                 self._start_youtube_monitoring(url)
+                self._ensure_tone_for_url(url)
             threading.Thread(target=delayed_monitoring, daemon=True).start()
+
+    def _ensure_tone_for_url(self, url):
+        """Bài không có tone đã lưu → dò tự động. Bài đang có phiên dò/replay của
+        CHÍNH nó thì để yên.
+
+        Trước đây cú dò này xảy ra NHỜ MAY: app mở link chia sẻ (youtu.be/…?si=),
+        trình duyệt hiện link chuẩn, watcher so chuỗi thấy khác nên tưởng "URL
+        mới" rồi dò. Từ khi watcher so theo BÀI (đúng đắn), cú dò tình cờ đó mất
+        — nên đường mở bài phải tự chịu trách nhiệm gọi dò.
+        """
+        try:
+            session = self._tone_session
+            if session.is_active and _same_song(session.url, url):
+                return
+            self._dispatch_auto_detect(url, weakref.ref(self))
+        except Exception as e:
+            print(f"[TONE] Không kích được dò tone cho {str(url)[:60]}: {e}")
 
     # ── notify_video_ended ───────────────────────────────────────────────────────
 
@@ -536,7 +570,7 @@ class _YouTubeMixin:
 
                 def _handle_new_url(url):
                     self._no_browser_count = 0
-                    if url != self._last_watched_url:
+                    if not _same_song(url, self._last_watched_url):
                         if not self._tone_session.is_active:
                             self._dispatch_auto_detect(url, engine_ref)
                             self._last_watched_url = url
@@ -591,7 +625,7 @@ class _YouTubeMixin:
                     if self._pending_url_queue:
                         pending_url = self._pending_url_queue.pop(0)
                         self._pending_url_queue.clear()
-                if pending_url and pending_url != self._last_watched_url:
+                if pending_url and not _same_song(pending_url, self._last_watched_url):
                     print(f"[YT WATCHER] Đang xử lý URL đang chờ: {pending_url[:60]}...")
                     self._dispatch_auto_detect(pending_url, engine_ref)
                     self._last_watched_url = pending_url
@@ -659,7 +693,7 @@ class _YouTubeMixin:
                     # URL CŨ và gửi MIDI sai tone đè lên bài user đang xem. Vì vậy chỉ thử
                     # lại khi URL đang retry VẪN là URL người dùng đang xem.
                     current_url = eng2._last_watched_url or eng2.current_youtube_url
-                    if current_url is not None and current_url != url:
+                    if current_url is not None and not _same_song(current_url, url):
                         print(
                             f"[YT WATCHER] URL đã đổi (đang xem {str(current_url)[:60]}...) "
                             f"→ hủy thử lại URL cũ {url[:60]}..."
@@ -715,6 +749,10 @@ class _YouTubeMixin:
                     'scale':        first_entry.get('scale', 'Major'),
                     'confidence':   first_entry.get('confidence', 0),
                     'from_loopback': data.get('from_loopback', False),
+                    # Nguồn "đã lưu" phải đi tiếp lên UI: nhãn marquee ghi
+                    # "(đã lưu — sai? bấm Dò Lại)" và không tự lưu đè lại bài.
+                    'from_manual':  data.get('from_manual', False),
+                    'from_cache':   data.get('from_cache', False),
                 }
                 _on_complete(flat_result)
 

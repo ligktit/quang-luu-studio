@@ -1691,10 +1691,21 @@ class SettingsDialog(QDialog):
         def _run():
             from core.ytdlp_support import export_cookies_to_file, _AUTO_COOKIE_FILE
             result = export_cookies_to_file(browser=browser, log_prefix="[SETTINGS]")
+            via_cdp = False
+            if not result:
+                # Đọc thẳng file cookie tịt (gần như chắc chắn do App-Bound
+                # Encryption của Chrome ≥127 — đóng trình duyệt cũng không cứu).
+                # Đường còn lại: nhờ chính trình duyệt đang mở đưa cookie ra qua
+                # CDP. Xem core/cdp_cookies.py.
+                from core import cdp_cookies
+                result = cdp_cookies.harvest_to_file(log_prefix="[SETTINGS]")
+                via_cdp = bool(result)
             from PySide6.QtCore import QTimer
             def _update():
                 if result:
-                    self._cookie_status_lbl.setText("Xuất cookie thành công!")
+                    self._cookie_status_lbl.setText(
+                        "Đã lấy cookie qua trình duyệt đang mở!" if via_cdp
+                        else "Xuất cookie thành công!")
                     self._cookie_status_lbl.setStyleSheet(
                         f"color: {C['green']}; font-size: 11px; font-family: {FONT};"
                         " background:transparent; border:none;"
@@ -1705,14 +1716,21 @@ class SettingsDialog(QDialog):
                     backend.AppConfig.update("youtube_cookie_file", result)
                     backend.AppConfig.save()
                 else:
-                    self._cookie_status_lbl.setText("Xuất thất bại (đóng browser trước?)")
+                    self._cookie_status_lbl.setText("Chưa lấy được cookie")
                     self._cookie_status_lbl.setStyleSheet(
                         f"color: {C['accent']}; font-size: 11px; font-family: {FONT};"
                         " background:transparent; border:none;"
                     )
+                    # KHÔNG khuyên "đóng trình duyệt rồi thử lại" nữa: Chrome/Edge/
+                    # Brave ≥127 mã hoá cookie bằng khoá cột vào chính trình duyệt,
+                    # đóng hay mở đều không giải mã được. Ngược lại — phải MỞ trình
+                    # duyệt (có cờ gỡ lỗi) thì đường CDP mới chạy.
                     self._dashboard._show_message(
-                        f"Không xuất được cookie từ {browser}.\n"
-                        "Hãy đóng hẳn trình duyệt rồi thử lại, hoặc dùng Firefox.",
+                        f"Không lấy được cookie từ {browser}.\n"
+                        "Chrome/Edge/Brave đời mới khoá cookie bằng khoá riêng, đóng "
+                        "trình duyệt cũng không giúp được.\n"
+                        "Hãy MỞ trình duyệt bằng shortcut của Quang Lưu Studio rồi bấm "
+                        "lại, hoặc dùng Firefox.",
                         is_error=True
                     )
             QTimer.singleShot(0, _update)

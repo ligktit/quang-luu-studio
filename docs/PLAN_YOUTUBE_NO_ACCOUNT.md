@@ -8,7 +8,9 @@
 
 Máy khách hát karaoke phần lớn **không đăng nhập YouTube**, nên mọi đường dựa vào
 cookie đều là ngõ cụt: không có cookie để lấy, hoặc Chrome ≥127 khoá cookie DB
-bằng App-Bound Encryption. Trước 1.7.3 app chống đỡ bằng cách ép
+bằng App-Bound Encryption (chi tiết + số liệu đo:
+`docs/COOKIE_TRINH_DUYET_VA_CDP.md` — **đóng trình duyệt KHÔNG cứu được**).
+Trước 1.7.3 app chống đỡ bằng cách ép
 `player_client = android/android_vr/tv_simply` cho lượt không cookie — đo
 17/08/2026 được 9/9 lần thành công, nhưng đó là mẹo đang mục:
 
