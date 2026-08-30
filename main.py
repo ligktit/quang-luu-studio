@@ -116,6 +116,16 @@ try:
         except Exception as exc:
             log.debug("Không mô tả được ngăn xếp YouTube: %s", exc)
 
+        # Biến thể build. Ghi ra log vì nhìn màn hình không phân biệt được "bản
+        # Light đúng thiết kế" với "bản Heavy nạp QtWebEngine hỏng" — mà hai ca
+        # đó chữa khác hẳn nhau, lại còn quyết định app tự tải file cài nào khi
+        # cập nhật (core/updater/_version_check.py).
+        try:
+            from core import capabilities
+            log.info("Biến thể build: %s", capabilities.describe())
+        except Exception as exc:
+            log.debug("Không xác định được biến thể build: %s", exc)
+
     threading.Thread(target=_ytdlp_boot, daemon=True).start()
 except Exception as e:
     log.debug("yt-dlp update skipped: %s", e)

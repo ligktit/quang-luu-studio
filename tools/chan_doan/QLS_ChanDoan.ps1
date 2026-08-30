@@ -328,10 +328,89 @@ if ($script:AppRoot) {
         W ("        Kích thước    : " + (Fmt-Size $fi.Length))
         W ("        Sửa lần cuối  : " + $fi.LastWriteTime.ToString("dd/MM/yyyy HH:mm"))
 
-        # Bản Nặng (Heavy, có màn hình karaoke nhúng) lớn hơn bản Nhẹ rất nhiều
-        if ($fi.Length -gt 300MB) { $variant = "NẶNG (Heavy — có màn hình karaoke nhúng)" }
+        # Phân biệt bản NẶNG / NHẸ.
+        #
+        # TUYỆT ĐỐI KHÔNG đoán theo kích thước exe, và cũng không tìm file DLL
+        # nằm cạnh exe. Lý do:
+        #   - App đóng gói kiểu PyInstaller ONEFILE: mọi DLL nằm BÊN TRONG exe,
+        #     lúc chạy mới giải nén ra %TEMP%\_MEIxxxxxx. Cạnh exe chỉ có đúng
+        #     mỗi file exe, nên tìm "Qt6WebEngineCore.dll cạnh exe" thì bản Nặng
+        #     lành lặn cũng báo THIẾU.
+        #   - Ngưỡng 300MB cũng sai: đo 26/08/2026 bản NHẸ đã 310MB, bản NẶNG
+        #     390MB — bản Nhẹ bị gọi nhầm thành Nặng.
+        #
+        # Cách đúng: dò tên file trong bảng mục lục của gói PyInstaller — phần
+        # này nằm dạng chữ thường trong exe. "Qt6WebEngineCore.dll" chỉ có ở bản
+        # Nặng. (Đừng dùng "QtWebEngineProcess.exe" làm dấu hiệu: chuỗi đó có mặt
+        # trong CẢ HAI bản.)
+        $coWebEngine = $false
+        try {
+            $fs = [System.IO.File]::OpenRead($fi.FullName)
+            try {
+                $can = [Text.Encoding]::ASCII.GetBytes("Qt6WebEngineCore.dll")
+                $buf = New-Object byte[] (4MB)
+                $duoi = ""
+                while (($n = $fs.Read($buf, 0, $buf.Length)) -gt 0) {
+                    $doan = $duoi + [Text.Encoding]::ASCII.GetString($buf, 0, $n)
+                    if ($doan.Contains("Qt6WebEngineCore.dll")) { $coWebEngine = $true; break }
+                    # Giữ lại đuôi để chuỗi cần tìm không bị cắt đôi giữa hai lần đọc
+                    $duoi = $doan.Substring([Math]::Max(0, $doan.Length - $can.Length))
+                }
+            } finally { $fs.Dispose() }
+        } catch {
+            Chk "Biến thể bản cài" "WARN" "không đọc được exe để xác định" "Chạy lại công cụ này khi app đang đóng."
+        }
+
+        if ($coWebEngine) { $variant = "NẶNG (Heavy — có màn hình karaoke nhúng)" }
         else { $variant = "NHẸ (Light — dùng trình duyệt ngoài)" }
-        Chk "Biến thể bản cài" "INFO" $variant
+        Chk "Biến thể bản cài" "INFO" ($variant + "  [" + (Fmt-Size $fi.Length) + "]")
+
+        if (-not $coWebEngine) {
+            Chk "Màn hình karaoke nhúng" "INFO" "không có ở bản NHẸ" "Ô 'Màn hình karaoke nhúng' trong Thiết lập sẽ mờ đi — đúng thiết kế. Muốn dùng thì cài bộ cài có chữ 'heavy' trong tên."
+        } else {
+            # Gói CÓ QtWebEngine, nhưng lúc chạy có nạp được không lại là chuyện
+            # khác (diệt virus cách ly file đã giải nén, thiếu VC++ runtime...).
+            # App từ 1.7.5 ghi phán quyết của chính nó vào nhật ký.
+            $veLog = ""
+            $appLogVe = Join-Path $LOG_DIR "app.log"
+            if (Test-Path -LiteralPath $appLogVe) {
+                try {
+                    $h = Select-String -LiteralPath $appLogVe -Pattern "Biến thể build: (.+)$" -ErrorAction SilentlyContinue |
+                         Select-Object -Last 1
+                    if ($h) { $veLog = $h.Matches[0].Groups[1].Value.Trim() }
+                } catch { }
+            }
+            if ($veLog -and $veLog -notmatch "Heavy - co QtWebEngine") {
+                Chk "Màn hình karaoke nhúng" "FAIL" $veLog "Bộ cài CÓ bộ hiển thị web nhưng app nạp không được. Cho thư mục cài đặt và %TEMP% vào danh sách loại trừ của phần mềm diệt virus, rồi cài lại bản NẶNG."
+            } elseif ($veLog) {
+                Chk "Màn hình karaoke nhúng" "PASS" "app nạp được bộ hiển thị web"
+            } else {
+                # Bản app cũ chưa ghi dòng đó vào nhật ký — KHÔNG được coi
+                # "không thấy báo lỗi" là "không có lỗi". Kiểm bằng đường khác:
+                # app đóng gói onefile nên lúc chạy nó bung toàn bộ ra
+                # %TEMP%\_MEIxxxxxx. Gói CÓ Qt6WebEngineCore.dll mà thư mục bung
+                # ra lại THIẾU nó thì gần như chắc chắn bị diệt virus cách ly —
+                # đúng ca mà cài lại cũng không cứu được.
+                $meiDirs = @(Get-ChildItem -Path $env:TEMP -Directory -Filter "_MEI*" -ErrorAction SilentlyContinue)
+                $meiCoFile = $false
+                $meiCoBung = $false
+                foreach ($d in $meiDirs) {
+                    $hasPySide = Test-Path -LiteralPath (Join-Path $d.FullName "PySide6")
+                    if (-not $hasPySide) { continue }
+                    $meiCoBung = $true
+                    if (Get-ChildItem -Path $d.FullName -Filter "Qt6WebEngineCore.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1) {
+                        $meiCoFile = $true; break
+                    }
+                }
+                if ($meiCoFile) {
+                    Chk "Màn hình karaoke nhúng" "PASS" "bộ hiển thị web bung ra đủ ở %TEMP%"
+                } elseif ($meiCoBung) {
+                    Chk "Màn hình karaoke nhúng" "FAIL" "gói có Qt6WebEngineCore.dll nhưng thư mục bung ra ở %TEMP% lại thiếu" "Gần như chắc chắn bị phần mềm diệt virus cách ly. Cho CẢ thư mục cài đặt LẪN %TEMP% vào danh sách loại trừ, rồi cài lại bản NẶNG."
+                } else {
+                    Chk "Màn hình karaoke nhúng" "INFO" "có trong bộ cài; chưa đủ dữ kiện để biết app nạp được không" "MỞ app lên rồi để nguyên đó, chạy lại công cụ này. (Bản app cũ không ghi kết quả này vào nhật ký, nên không thấy báo lỗi KHÔNG có nghĩa là không có lỗi.)"
+                }
+            }
+        }
 
         if ($script:RegVersion -and $vi.FileVersion -and ($vi.FileVersion -notlike ($script:RegVersion + "*"))) {
             Chk "Khớp phiên bản" "WARN" ("registry ghi " + $script:RegVersion + " nhưng exe là " + $vi.FileVersion) "Bản cài bị chép đè thủ công. Gỡ rồi cài lại bằng bộ cài chuẩn."

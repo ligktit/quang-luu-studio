@@ -223,13 +223,29 @@ class SettingsDialog(QDialog):
             border: 2px solid rgba(148, 163, 184, 82);
             background-color: rgba(15, 23, 42, 230);
         }}
-        QCheckBox::indicator:hover {{
+        QCheckBox::indicator:enabled:hover {{
             border-color: {C['teal']};
         }}
         QCheckBox::indicator:checked {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                 stop:0 {C['teal']}, stop:1 {C['blue']});
             border-color: rgba(125, 211, 252, 230);
+        }}
+        /* Ô bị KHOÁ phải NHÌN RA là đang khoá.
+           QSS đặt `color` không kèm trạng thái sẽ đè luôn cả lúc disabled, nên
+           trước đây ô khoá trông y hệt ô thường: khách bấm mãi không tick được
+           mà không hiểu vì sao (bản Light không có màn hình nhúng, hoặc chế độ
+           khách đang khoá). Làm mờ hẳn chữ và viền để thấy ngay. */
+        QCheckBox:disabled {{
+            color: rgba(148, 163, 184, 120);
+        }}
+        QCheckBox::indicator:disabled {{
+            border: 2px dashed rgba(148, 163, 184, 60);
+            background-color: rgba(15, 23, 42, 120);
+        }}
+        QCheckBox::indicator:checked:disabled {{
+            background: rgba(100, 116, 139, 110);
+            border: 2px dashed rgba(148, 163, 184, 60);
         }}
     """
 
@@ -245,8 +261,15 @@ class SettingsDialog(QDialog):
             font-family: {FONT};
             min-height: 20px;
         }}
-        QComboBox:hover {{
+        QComboBox:enabled:hover {{
             border-color: rgba(148, 163, 184, 100);
+        }}
+        /* Cùng lý do với QCheckBox:disabled ở trên: không có luật này thì ô chọn
+           bị khoá trông y hệt ô dùng được. */
+        QComboBox:disabled {{
+            color: rgba(148, 163, 184, 120);
+            background-color: rgba(15, 23, 42, 120);
+            border: 1px dashed rgba(148, 163, 184, 55);
         }}
         QComboBox:focus {{
             border-color: {C['teal']};
@@ -403,7 +426,32 @@ class SettingsDialog(QDialog):
         self._cb_embedded_player.setChecked(bool(settings.get("use_embedded_player", False)) and available)
         self._cb_embedded_player.setEnabled(available)
         if not available:
-            self._cb_embedded_player.setToolTip("Cần bản cài đặt đầy đủ")
+            # Nói thẳng lý do trên nhãn. Tooltip thôi thì không đủ: khách bấm mãi
+            # không tick được rồi báo "app lỗi" chứ ít ai rê chuột chờ tooltip.
+            #
+            # Và phải tách HAI ca khác hẳn nhau, đừng gộp làm một:
+            #   - bản Light: đúng thiết kế, chỉ cần cài bản đầy đủ;
+            #   - bản Heavy mà nạp QtWebEngine hỏng: đó là LỖI, khách có cài lại
+            #     bản đầy đủ cũng vô ích. Phải hiện lỗi thật ra để còn chẩn đoán.
+            err = capabilities.embedded_player_error()
+            la_ban_light = "No module named" in err
+            if la_ban_light:
+                self._cb_embedded_player.setText(
+                    "Phát YouTube trong màn hình karaoke nhúng (sạch)"
+                    " — cần bản cài đặt đầy đủ")
+                self._cb_embedded_player.setToolTip(
+                    "Bản Light không kèm bộ hiển thị web. Cài bản đầy đủ (Heavy)"
+                    " để dùng màn hình karaoke nhúng.")
+            else:
+                self._cb_embedded_player.setText(
+                    "Phát YouTube trong màn hình karaoke nhúng (sạch)"
+                    " — lỗi nạp bộ hiển thị web")
+                self._cb_embedded_player.setToolTip(
+                    "Bản này CÓ kèm bộ hiển thị web nhưng nạp không được — thường"
+                    " do phần mềm diệt virus cách ly file, hoặc cài đè lên bản cũ."
+                    f"\n\nChi tiết: {err or 'không rõ'}"
+                    "\n\nThử: cài lại bản đầy đủ, và cho thư mục cài đặt vào danh"
+                    " sách loại trừ của phần mềm diệt virus.")
 
         self._combo_monitor = QComboBox()
         self._combo_monitor.setStyleSheet(self._combo_qss)
