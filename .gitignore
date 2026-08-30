@@ -66,7 +66,11 @@ ffmpeg.exe
 *.ico
 !app_icon.png
 !app_icon.ico
-sfx/
+# sfx/ KHONG duoc ignore: 3 file .wav nay la tai san cua chinh du an, khong
+# tai lai duoc tu dau ca. Bo cai bat buoc phai co chung (Source: "sfx\*" trong
+# .iss khong co skipifsourcedoesntexist), nen de ngoai git la may CI khong bao
+# gio build noi bo cai — dung cai da chan build 1.6.2/1.6.3 tren CI.
+# sfx/
 
 # Data / cache (user-specific)
 activation.json

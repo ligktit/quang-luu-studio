@@ -12,9 +12,9 @@ jobs:
   build:
     name: Build installer (Windows)
     runs-on: windows-latest
-    # Hai lượt PyInstaller + hai lượt nén lzma2 solid (bản Heavy ~500MB) không
-    # kịp trong 60 phút.
-    timeout-minutes: 120
+    # Tải ~360MB tài nguyên, hai lượt PyInstaller, rồi hai lượt nén lzma2 solid
+    # (bản Heavy ~500MB) — 60 phút không đủ.
+    timeout-minutes: 180
 
     env:
       PYTHONIOENCODING: utf-8
@@ -47,8 +47,49 @@ jobs:
           python -m pip install --upgrade pip wheel
           # Core deps
           pip install -r requirements.txt
+          # yt-dlp LUÔN lấy bản mới nhất, y như build_installer.bat. requirements
+          # chỉ ghi ">=" nên môi trường có cache dễ đóng băng một bản cũ — mà
+          # yt-dlp cũ trong exe là nguyên nhân số một của "không tải được video
+          # YouTube" (YouTube đổi cơ chế phát gần như hàng tháng).
+          pip install --upgrade "yt-dlp[default]"
+          python -c "import yt_dlp; print('yt-dlp', yt_dlp.version.__version__)"
+          # yt-dlp-ejs giải 'n challenge'; thiếu nó là link tải bị bóp hoặc 403.
+          python -c "from yt_dlp.dependencies import yt_dlp_ejs; import sys; sys.exit(0 if yt_dlp_ejs else 1)"
           # Build tools
           pip install pyinstaller
+
+      # ── 3b. Tài nguyên đóng gói không nằm trong git ────────────────────────────
+      # Bộ cài cần nhiều thứ nặng mà repo cố ý không giữ. Trước đây chỉ
+      # build_installer.bat kéo về, nên bản CI (nếu có chạy được) sẽ thiếu ffmpeg,
+      # qjs và model giọng nói — bộ cài vẫn ra lò nhưng yếu hơn hẳn bản build tay,
+      # và không có gì báo cho ai biết.
+      - name: Fetch bundled assets
+        shell: pwsh
+        run: |
+          # qjs.exe (giải 'n challenge') + ffmpeg/ffprobe (chấm điểm, dò tone)
+          python tools\fetch_build_binaries.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Vosk lớn (ASR) + Piper voice/binary (TTS) — ~230MB
+          python tools\download_voice_models.py --all
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Thiếu một trong số này thì dừng ngay, đừng phát hành bản teo.
+          $required = @(
+            "binaries\qjs.exe",
+            "binaries\ffmpeg\ffmpeg.exe",
+            "binaries\ffmpeg\ffprobe.exe",
+            "models\vosk-vi\am\final.mdl",
+            "models\vosk-vi-large",
+            "models\piper-vi",
+            "tools\piper\piper.exe",
+            "sfx\sfx_applause.wav"
+          )
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) {
+            Write-Host "ERROR: Thieu tai nguyen dong goi:"
+            $missing | ForEach-Object { Write-Host "  - $_" }
+            exit 1
+          }
+          Write-Host "OK: du tai nguyen dong goi"
 
       # ── 4. Verify version matches tag ──────────────────────────────────────────
       - name: Verify version vs tag
@@ -65,11 +106,19 @@ jobs:
           print(f"OK: version {__version__} matches tag {tag}")
 
       # ── 5. Sync version → .iss ─────────────────────────────────────────────────
+      # PHẢI chạy như một script thật, đừng exec() nội dung nó trong `shell:
+      # python`. GitHub ghi khối `shell: python` ra D:\a\_temp\<uuid>.py rồi
+      # chạy file đó, nên __file__ của đoạn exec là thư mục temp — mà
+      # sync_version.py định vị mọi file theo Path(__file__).parent. Đó chính là
+      # lỗi đã làm hỏng lượt build của v1.6.2 lẫn v1.6.3:
+      #   FileNotFoundError: 'D:\a\_temp\QuangLuuStudio_Setup.iss'
+      # Hai bản đó cuối cùng phải build tay.
       - name: Sync version to .iss
-        shell: python
+        shell: pwsh
         run: |
-          import sys; sys.path.insert(0, '.')
-          exec(open('sync_version.py').read())
+          python sync_version.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Select-String -Path QuangLuuStudio_Setup.iss -Pattern '#define MyAppVersion'
 
       # ── 6a. Build exe bản HEAVY (có QtWebEngine) ───────────────────────────────
       # PHẢI build cả hai biến thể. Release chỉ có mỗi bản Light thì
