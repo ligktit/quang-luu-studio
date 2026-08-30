@@ -132,7 +132,7 @@ echo.
 echo ========================================
 echo  THANH CONG! (HEAVY)
 echo ========================================
-echo  File cai dat: installer_output\Setup_QuangLuuStudio_Heavy_v1.7.4.exe
+echo  File cai dat: installer_output\Setup_QuangLuuStudio_Heavy_v1.7.5.exe
 echo ========================================
 echo.
 pause
