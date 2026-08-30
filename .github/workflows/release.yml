@@ -150,8 +150,12 @@ jobs:
             Write-Host "ERROR: Khong thay $toc de kiem chung noi dung goi"
             exit 1
           }
-          if (-not (Select-String -Path $toc -Pattern 'Qt6WebEngineCore' -Quiet)) {
-            Write-Host "ERROR: Ban Heavy khong co QtWebEngine (QLS_WEBENGINE khong toi duoc spec?)"
+          # Bắt ĐÚNG file Qt6WebEngineCore.dll (~192MB) — đó mới là thứ quyết
+          # định màn hình nhúng chạy hay không. Đừng tìm chuỗi 'Qt6WebEngineCore'
+          # trống: TOC còn có PySide6\include\QtWebEngineCore, qml\QtWebEngine và
+          # mấy file .pyi — chúng có mặt ở CẢ bản Light nên khớp là báo động lầm.
+          if (-not (Select-String -Path $toc -SimpleMatch 'Qt6WebEngineCore.dll' -Quiet)) {
+            Write-Host "ERROR: Ban Heavy khong co Qt6WebEngineCore.dll (QLS_WEBENGINE khong toi duoc spec?)"
             exit 1
           }
           $size = (Get-Item "dist_heavy\QuangLuuStudio.exe").Length
@@ -182,8 +186,14 @@ jobs:
             Write-Host "ERROR: Khong thay $toc de kiem chung noi dung goi"
             exit 1
           }
-          if (Select-String -Path $toc -Pattern 'Qt6WebEngineCore' -Quiet) {
-            Write-Host "ERROR: Ban Light lai co QtWebEngine (build\ chua duoc xoa?)"
+          # Cùng lý do với lượt Heavy: so ĐÚNG tên file .dll. Bản Light vẫn hợp lệ
+          # khi mang theo PySide6\include\QtWebEngineCore, qml\QtWebEngine và các
+          # file .pyi — chúng chỉ là khai báo/tài nguyên, không kéo nổi màn hình
+          # nhúng dậy nếu thiếu Qt6WebEngineCore.dll.
+          $hit = Select-String -Path $toc -SimpleMatch 'Qt6WebEngineCore.dll'
+          if ($hit) {
+            Write-Host "ERROR: Ban Light lai co Qt6WebEngineCore.dll (build\ chua duoc xoa?)"
+            $hit | Select-Object -First 5 | ForEach-Object { Write-Host "  $($_.Line.Trim())" }
             exit 1
           }
           # Đối chiếu chéo hai bản. Cùng kích thước nghĩa là hai lượt build ra
