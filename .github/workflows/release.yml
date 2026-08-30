@@ -137,15 +137,26 @@ jobs:
             Get-ChildItem dist_heavy\
             exit 1
           }
-          # Kiểm chứng đây ĐÚNG là bản Heavy: thiếu Qt6WebEngineCore.dll thì cái
-          # exe này chỉ là bản Light mang tên Heavy, và khách cài vào sẽ mất
-          # màn hình nhúng mà không ai biết cho tới lúc họ báo lỗi.
-          $core = Get-ChildItem dist_heavy -Recurse -Filter "Qt6WebEngineCore.dll" -ErrorAction SilentlyContinue
-          if (-not $core) {
-            Write-Host "ERROR: Ban Heavy thieu Qt6WebEngineCore.dll"
+          # Kiểm chứng đây ĐÚNG là bản Heavy: thiếu QtWebEngine thì cái exe này
+          # chỉ là bản Light mang tên Heavy, khách cài vào mất màn hình nhúng mà
+          # không ai biết cho tới lúc họ báo lỗi.
+          #
+          # Spec build ONEFILE nên KHÔNG có DLL rời nào trong dist_heavy\ để mà
+          # tìm — mọi thứ nằm gọn trong QuangLuuStudio.exe. Bản kê nội dung là
+          # build\QuangLuuStudio\PKG-00.toc, và phải đọc NGAY đây: lượt Light
+          # ngay sau sẽ xoá build\.
+          $toc = "build\QuangLuuStudio\PKG-00.toc"
+          if (-not (Test-Path $toc)) {
+            Write-Host "ERROR: Khong thay $toc de kiem chung noi dung goi"
             exit 1
           }
-          Write-Host "OK: Heavy build co QtWebEngine"
+          if (-not (Select-String -Path $toc -Pattern 'Qt6WebEngineCore' -Quiet)) {
+            Write-Host "ERROR: Ban Heavy khong co QtWebEngine (QLS_WEBENGINE khong toi duoc spec?)"
+            exit 1
+          }
+          $size = (Get-Item "dist_heavy\QuangLuuStudio.exe").Length
+          Write-Host "OK: Heavy build co QtWebEngine ($([math]::Round($size/1MB)) MB)"
+          "$size" | Out-File -FilePath heavy_size.txt -Encoding ascii
 
       # ── 6b. Build exe bản LIGHT (mặc định) ─────────────────────────────────────
       # Xoá build\ giữa hai lượt: PyInstaller dùng lại kết quả Analysis đã cache,
@@ -166,9 +177,24 @@ jobs:
             Get-ChildItem dist\
             exit 1
           }
-          $core = Get-ChildItem dist -Recurse -Filter "Qt6WebEngineCore.dll" -ErrorAction SilentlyContinue
-          if ($core) {
+          $toc = "build\QuangLuuStudio\PKG-00.toc"
+          if (-not (Test-Path $toc)) {
+            Write-Host "ERROR: Khong thay $toc de kiem chung noi dung goi"
+            exit 1
+          }
+          if (Select-String -Path $toc -Pattern 'Qt6WebEngineCore' -Quiet) {
             Write-Host "ERROR: Ban Light lai co QtWebEngine (build\ chua duoc xoa?)"
+            exit 1
+          }
+          # Đối chiếu chéo hai bản. Cùng kích thước nghĩa là hai lượt build ra
+          # cùng một thứ — lúc đó tên file "Heavy"/"Light" chỉ là cái nhãn.
+          $light = (Get-Item "dist\QuangLuuStudio.exe").Length
+          $heavy = [long](Get-Content heavy_size.txt)
+          Write-Host "Heavy $([math]::Round($heavy/1MB)) MB | Light $([math]::Round($light/1MB)) MB"
+          # Ngưỡng để rộng tay: chỉ cần bắt ca "hai bản y hệt nhau". Riêng
+          # Qt6WebEngineCore.dll đã ~192MB, nên chênh lệch thật lớn hơn nhiều.
+          if (($heavy - $light) -lt 50MB) {
+            Write-Host "ERROR: Hai ban chenh nhau qua it - co ve la cung mot build"
             exit 1
           }
           Write-Host "OK: Light build khong kem QtWebEngine"
