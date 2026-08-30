@@ -12,7 +12,9 @@ jobs:
   build:
     name: Build installer (Windows)
     runs-on: windows-latest
-    timeout-minutes: 60
+    # Hai lượt PyInstaller + hai lượt nén lzma2 solid (bản Heavy ~500MB) không
+    # kịp trong 60 phút.
+    timeout-minutes: 120
 
     env:
       PYTHONIOENCODING: utf-8
@@ -69,10 +71,40 @@ jobs:
           import sys; sys.path.insert(0, '.')
           exec(open('sync_version.py').read())
 
-      # ── 6. Build exe (PyInstaller) ─────────────────────────────────────────────
-      - name: Build executable
+      # ── 6a. Build exe bản HEAVY (có QtWebEngine) ───────────────────────────────
+      # PHẢI build cả hai biến thể. Release chỉ có mỗi bản Light thì
+      # core/updater/_version_check.py không tìm ra asset "heavy", rơi xuống
+      # nhánh dự phòng `setup_exes[0]` và LẶNG LẼ đẩy mọi khách đang dùng bản
+      # Heavy sang bản Light — mất luôn màn hình karaoke nhúng.
+      - name: Build executable (Heavy)
+        shell: pwsh
+        env:
+          QLS_WEBENGINE: "1"
+        run: |
+          if (Test-Path build) { Remove-Item build -Recurse -Force }
+          pyinstaller QuangLuuStudio.spec --noconfirm --distpath dist_heavy
+          if (-not (Test-Path "dist_heavy\QuangLuuStudio.exe")) {
+            Write-Host "ERROR: No exe found in dist_heavy\"
+            Get-ChildItem dist_heavy\
+            exit 1
+          }
+          # Kiểm chứng đây ĐÚNG là bản Heavy: thiếu Qt6WebEngineCore.dll thì cái
+          # exe này chỉ là bản Light mang tên Heavy, và khách cài vào sẽ mất
+          # màn hình nhúng mà không ai biết cho tới lúc họ báo lỗi.
+          $core = Get-ChildItem dist_heavy -Recurse -Filter "Qt6WebEngineCore.dll" -ErrorAction SilentlyContinue
+          if (-not $core) {
+            Write-Host "ERROR: Ban Heavy thieu Qt6WebEngineCore.dll"
+            exit 1
+          }
+          Write-Host "OK: Heavy build co QtWebEngine"
+
+      # ── 6b. Build exe bản LIGHT (mặc định) ─────────────────────────────────────
+      # Xoá build\ giữa hai lượt: PyInstaller dùng lại kết quả Analysis đã cache,
+      # không xoá thì bản Light kéo theo luôn QtWebEngine của lượt Heavy.
+      - name: Build executable (Light)
         shell: pwsh
         run: |
+          if (Test-Path build) { Remove-Item build -Recurse -Force }
           pyinstaller QuangLuuStudio.spec --noconfirm
           # Rename _2 → production name expected by .iss
           if (Test-Path "dist\QuangLuuStudio_2.exe") {
@@ -85,6 +117,12 @@ jobs:
             Get-ChildItem dist\
             exit 1
           }
+          $core = Get-ChildItem dist -Recurse -Filter "Qt6WebEngineCore.dll" -ErrorAction SilentlyContinue
+          if ($core) {
+            Write-Host "ERROR: Ban Light lai co QtWebEngine (build\ chua duoc xoa?)"
+            exit 1
+          }
+          Write-Host "OK: Light build khong kem QtWebEngine"
 
       # ── 7. Install Inno Setup ──────────────────────────────────────────────────
       - name: Install Inno Setup
@@ -96,18 +134,27 @@ jobs:
           Start-Process $dest -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES" -Wait
           Write-Host "Inno Setup installed"
 
-      # ── 8. Build installer ─────────────────────────────────────────────────────
-      - name: Build installer
+      # ── 8. Build installer (cả hai biến thể) ───────────────────────────────────
+      - name: Build installers
         shell: pwsh
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) {
             $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
           }
+          # Heavy: .iss đọc dist_heavy\ và thêm hậu tố _Heavy vào tên file.
+          & $iscc /DVariant=heavy QuangLuuStudio_Setup.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Light: mặc định, đọc dist\.
           & $iscc QuangLuuStudio_Setup.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Write-Host "Installer built:"
+          Write-Host "Installers built:"
           Get-ChildItem installer_output\
+          $exes = @(Get-ChildItem installer_output\*.exe)
+          if ($exes.Count -ne 2) {
+            Write-Host "ERROR: Can dung 2 file cai (Heavy + Light), tim thay $($exes.Count)"
+            exit 1
+          }
 
       # ── 9. (Optional) Code signing ─────────────────────────────────────────────
       # Bỏ comment khi đã có code signing certificate
@@ -130,7 +177,11 @@ jobs:
         shell: pwsh
         run: |
           $outFile = "installer_output\SHA256SUMS.txt"
-          Get-ChildItem installer_output\*.exe | ForEach-Object {
+          # Heavy đứng TRƯỚC: client bản cũ (trước 1.6.1) chưa biết phân biệt biến
+          # thể, nó lấy file .exe đầu tiên trong danh sách.
+          $exes = @(Get-ChildItem installer_output\*.exe |
+                    Sort-Object { if ($_.Name -match 'Heavy') { 0 } else { 1 } })
+          $exes | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             "$hash  $($_.Name)"
           } | Out-File -FilePath $outFile -Encoding ascii
@@ -143,6 +194,19 @@ jobs:
         shell: python
         run: |
           import subprocess, os, re
+
+          # Ghi chú soạn tay thắng danh sách commit tự sinh. Khách đọc release
+          # notes là ca sĩ và kỹ thuật viên phòng thu, không phải lập trình
+          # viên — 19 dòng "fix(kiosk): ..." không nói cho họ biết bản này có gì.
+          current_tag = "${{ github.ref_name }}"
+          curated = os.path.join("docs", "release_notes", f"{current_tag}.md")
+          if os.path.exists(curated):
+              with open(curated, encoding="utf-8") as f:
+                  body = f.read().strip()
+              with open("RELEASE_NOTES.md", "w", encoding="utf-8") as f:
+                  f.write(body + "\n")
+              print(f"Release notes: dung ban soan tay {curated}")
+              raise SystemExit(0)
 
           # Lấy tag trước để so sánh
           result = subprocess.run(
@@ -183,6 +247,7 @@ jobs:
           draft: false
           prerelease: false
           files: |
+            installer_output/Setup_QuangLuuStudio_Heavy_v*.exe
             installer_output/Setup_QuangLuuStudio_v*.exe
             installer_output/SHA256SUMS.txt
         env:
