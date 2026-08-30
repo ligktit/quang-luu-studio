@@ -1,2 +1,10 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Script Windows PHAI la CRLF. CMD doc file .bat chi co LF se cat nham dong
+# va bao "'e' is not recognized as an internal or external command" — rat kho
+# doan ra. Truoc day chuyen nay chi dung duoc nho core.autocrlf=true tren may
+# dev; ai dat autocrlf=false la sinh ra file hong ngay trong cay lam viec.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
