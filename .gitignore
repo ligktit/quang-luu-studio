@@ -120,3 +120,6 @@ ytdlp/
 ytdlp_update.json
 qjs.exe
 ffmpeg/
+
+# Cache bien dich numba (app tu sinh; o che do dev nam canh source)
+numba_cache/

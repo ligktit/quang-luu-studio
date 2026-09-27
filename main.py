@@ -79,6 +79,50 @@ threading.excepthook = _thread_excepthook
 from core.version import __version__
 log.info("Quang Lưu Studio v%s starting", __version__)
 
+# ── Cache biên dịch của numba ─────────────────────────────────────────────────
+# Phải đặt TRƯỚC lần nạp librosa/numba đầu tiên (numba đọc NUMBA_CACHE_DIR lúc
+# nạp module). Cache để riêng trong thư mục dữ liệu app thì app mới tự xoá được
+# khi file hỏng — chi tiết trong core/numba_cache.py.
+try:
+    from core import numba_cache
+    log.info("Cache numba: %s", numba_cache.activate_private_cache() or "(mặc định)")
+
+    # Quét dọn file cache hỏng ngay từ lúc mở app: chỉ đọc vài file mục lục nhỏ
+    # (không nạp numba/librosa) nên rẻ, mà chữa được trước cả khi khách bấm dò
+    # tone. Chạy nền để không làm chậm lúc mở.
+    def _don_cache_numba():
+        try:
+            so = numba_cache.sweep_corrupt()
+            if so:
+                log.warning("Đã dọn %d file cache numba hỏng.", so)
+        except Exception as exc:
+            log.debug("Bỏ qua dọn cache numba: %s", exc)
+
+    threading.Thread(target=_don_cache_numba, daemon=True).start()
+except Exception as e:
+    log.debug("Bỏ qua cache numba riêng: %s", e)
+
+# ── Bộ tự kiểm tra ────────────────────────────────────────────────────────────
+# Chạy trên máy khách bằng kiem_tra_tone.bat (không cần cài Python). Đặt ở đây,
+# trước khi nạp Qt/backend, để bộ kiểm tra không phải dựng cả giao diện.
+if "--tu-kiem-tra" in sys.argv:
+    from core.self_check import main as _tu_kiem_tra
+    _ma_thoat = _tu_kiem_tra()
+    flush_logs()
+    logging.shutdown()
+    _cleanup_mei()
+    os._exit(_ma_thoat)
+
+# Chẩn đoán khâu TẢI audio (thu_tai_youtube.bat). Nhật ký thường của app không
+# thấy được yt-dlp nói gì — xem core/download_check.py.
+if "--thu-tai" in sys.argv:
+    from core.download_check import main as _thu_tai
+    _ma_thoat = _thu_tai()
+    flush_logs()
+    logging.shutdown()
+    _cleanup_mei()
+    os._exit(_ma_thoat)
+
 # ── yt-dlp ────────────────────────────────────────────────────────────────────
 # Bản yt-dlp nằm trong .exe đứng yên từ lúc build, còn YouTube đổi cơ chế phát
 # video gần như hàng tháng → vài tháng sau là không tải/dò tone được nữa. Ưu tiên

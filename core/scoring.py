@@ -11,6 +11,7 @@ import time
 import uuid
 
 from core.config import RECORDINGS_DIR, TEMP_AUDIO_PREFIX
+from core.numba_cache import run_healing
 from core.ytdlp_support import download_with_auth, extract_info_with_auth, make_ydl_opts
 
 
@@ -77,7 +78,8 @@ class ScoringEngine:
             except ImportError:
                 raise ImportError("Thu vien 'librosa' chua duoc cai dat. Chay: pip install librosa numpy")
 
-            self.audio_data, self.sample_rate = librosa.load(file_path, sr=None, mono=True)
+            self.audio_data, self.sample_rate = run_healing(
+                librosa.load, file_path, sr=None, mono=True)
             duration = len(self.audio_data) / self.sample_rate
             print(f"[SCORING] Loaded: {duration:.1f}s, sr={self.sample_rate}Hz, {len(self.audio_data)} samples")
             return True
@@ -90,7 +92,12 @@ class ScoringEngine:
     # ── YouTube Download ─────────────────────────────────────────────────────
 
     def download_youtube_audio(self, youtube_url, output_dir=None, max_seconds=None):
-        """Tai audio tu YouTube URL."""
+        """Tai audio tu YouTube URL.
+
+        max_seconds: so giay tai ve, MAC DINH 60. Caller nao can phan tich dai
+        hon 60s (vd: do tone toan bai) BAT BUOC phai truyen tham so nay, neu
+        khong se chi nhan duoc 60s dau.
+        """
         try:
             if output_dir is None:
                 output_dir = RECORDINGS_DIR
@@ -143,8 +150,13 @@ class ScoringEngine:
                 pass
             return None
 
-    def download_youtube_audio_with_info(self, youtube_url, output_dir=None):
-        """Tai audio + lay title trong 1 lan goi."""
+    def download_youtube_audio_with_info(self, youtube_url, output_dir=None,
+                                         extra_opts=None):
+        """Tai audio + lay title trong 1 lan goi.
+
+        extra_opts: tuy chon yt-dlp ghep them (logger rieng, progress_hooks...).
+        Chi bo chan doan --thu-tai dung toi; app goi nhu cu thi khong doi gi.
+        """
         try:
             if output_dir is None:
                 output_dir = RECORDINGS_DIR
@@ -167,6 +179,7 @@ class ScoringEngine:
                     'preferredcodec': 'wav',
                     'preferredquality': '192',
                 }],
+                **(extra_opts or {}),
             )
 
             video_title = ""
