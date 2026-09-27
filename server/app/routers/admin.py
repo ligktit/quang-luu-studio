@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -21,6 +21,7 @@ from app.models import (
     SharedTone,
     SupportMessage,
     SupportTicket,
+    ToneDetection,
     User,
 )
 from app.security import (
@@ -614,6 +615,163 @@ def library_page(
     return templates.TemplateResponse(
         request, "library.html", {"admin": admin, "groups": groups, "q": term}
     )
+
+
+@router.get("/library/export")
+def library_export(
+    all: int = 0,
+    admin: str = Depends(current_admin),
+    db: Session = Depends(get_db),
+):
+    """Bộ đáp án cho tools/danh_gia_do_tone.py: bản thắng của mỗi bài.
+
+    Mặc định chỉ lấy bản thắng do NGƯỜI sửa tay hoặc dev ghim — bản máy dò mà
+    dùng làm đáp án thì chỉ đo được thuật toán giống chính nó. `?all=1` lấy cả
+    bản thắng là máy dò (để xem phân bố, không để chấm điểm).
+    """
+    by_song: dict[str, list] = {}
+    for tone in db.scalars(select(SharedTone)).all():
+        by_song.setdefault(tone.song_key, []).append(tone)
+
+    items = []
+    for song_key, variants in sorted(by_song.items()):
+        best = tonelib.best_variant(variants)
+        if best is None:
+            continue
+        if not all and best.source != "human" and not best.pinned:
+            continue
+        try:
+            timeline = json.loads(best.timeline or "[]")
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(timeline, list) or not timeline:
+            continue
+        items.append({
+            "song_key": song_key,
+            "title": best.title or "",
+            "primary_key": best.primary_key or "",
+            "source": best.source,
+            "pinned": bool(best.pinned),
+            "votes": int(best.votes or 0),
+            "reports": int(best.reports or 0),
+            "timeline": timeline,
+        })
+
+    body = {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "count": len(items),
+        "items": items,
+    }
+    return JSONResponse(body, headers={
+        "Content-Disposition": 'attachment; filename="dap_an_tone.json"',
+    })
+
+
+_CONF_BUCKETS = [(None, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, None)]
+
+
+def _machine_vs_human(db: Session) -> dict:
+    """Đặt mọi kết quả MÁY DÒ cạnh bản NGƯỜI sửa tay (hoặc dev ghim) của cùng bài.
+
+    Hai nguồn máy dò:
+      - lượt dò (tone_detections): có số đo — độ tin cậy, tuning, chế độ, nguồn
+        audio. Chỉ client đời mới gửi.
+      - biến thể máy dò (shared_tones source=auto): mọi client, không có số đo.
+    Dữ liệu nội bộ cho dev chỉnh thuật toán — không bao giờ trả về cho khách.
+    """
+    variants: dict[str, list] = {}
+    for tone in db.scalars(select(SharedTone)).all():
+        variants.setdefault(tone.song_key, []).append(tone)
+    detections: dict[str, list] = {}
+    for det in db.scalars(select(ToneDetection)).all():
+        detections.setdefault(det.song_key, []).append(det)
+
+    songs = []
+    for song_key in sorted(variants):
+        best = tonelib.best_variant(variants[song_key])
+        if best is None or (best.source != "human" and not best.pinned):
+            continue
+        truth = tonelib.timeline_primary(best)
+        machine = []
+        for det in detections.get(song_key, []):
+            machine.append({
+                "loai": "luot_do",
+                "primary_key": det.primary_key,
+                "cls": tonelib.classify(truth, tonelib.timeline_primary(det)),
+                "mode": det.mode, "audio": det.audio,
+                "confidence": det.confidence, "tuning_cents": det.tuning_cents,
+                "app_version": det.app_version,
+                "updated_at": det.updated_at.isoformat() if det.updated_at else None,
+            })
+        for tone in variants[song_key]:
+            if tone.id == best.id or tone.source != "auto":
+                continue
+            machine.append({
+                "loai": "bien_the",
+                "primary_key": tone.primary_key,
+                "cls": tonelib.classify(truth, tonelib.timeline_primary(tone)),
+                "votes": int(tone.votes or 0), "reports": int(tone.reports or 0),
+                # Biến thể không có số đo — điền đủ trường để template khỏi đoán.
+                "mode": "", "audio": "", "confidence": None, "tuning_cents": None,
+                "app_version": "",
+            })
+        if machine:
+            songs.append({
+                "song_key": song_key,
+                "title": best.title or "",
+                "dap_an": best.primary_key or "",
+                "dap_an_ghim": bool(best.pinned),
+                "may_do": machine,
+            })
+
+    def tally(kind):
+        rows = [m for s in songs for m in s["may_do"] if m["loai"] == kind]
+        counts = {c: sum(1 for m in rows if m["cls"] == c) for c in tonelib.ERROR_CLASSES}
+        return {"tong": len(rows), "theo_loai": counts,
+                "dung_tap_not": counts["dung"] + counts["song_song"]}
+
+    # Độ tin cậy có nói thật không: tỉ lệ đúng theo mức confidence (chỉ lượt dò có số đo).
+    buckets = []
+    measured = [m for s in songs for m in s["may_do"]
+                if m["loai"] == "luot_do" and m.get("confidence") is not None]
+    for lo, hi in _CONF_BUCKETS:
+        grp = [m for m in measured
+               if (lo is None or m["confidence"] >= lo) and (hi is None or m["confidence"] < hi)]
+        label = f"< {hi}" if lo is None else (f">= {lo}" if hi is None else f"{lo}–{hi}")
+        buckets.append({
+            "muc": label, "so_luot": len(grp),
+            "dung": sum(1 for m in grp if m["cls"] == "dung"),
+            "dung_tap_not": sum(1 for m in grp if m["cls"] in ("dung", "song_song")),
+        })
+
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "so_bai": len(songs),
+        "luot_do": tally("luot_do"),
+        "bien_the": tally("bien_the"),
+        "theo_do_tin_cay": buckets,
+        "bai": songs,
+    }
+
+
+@router.get("/library/errors", response_class=HTMLResponse)
+def library_errors_page(
+    request: Request,
+    admin: str = Depends(current_admin),
+    db: Session = Depends(get_db),
+):
+    """Máy dò vs người sửa: máy dò sai kiểu gì, ở độ tin cậy nào."""
+    report = _machine_vs_human(db)
+    return templates.TemplateResponse(
+        request, "library_errors.html", {"admin": admin, "r": report}
+    )
+
+
+@router.get("/library/errors.json")
+def library_errors_json(admin: str = Depends(current_admin), db: Session = Depends(get_db)):
+    return JSONResponse(_machine_vs_human(db), headers={
+        "Content-Disposition": 'attachment; filename="may_do_vs_nguoi_sua.json"',
+    })
 
 
 @router.post("/library/{tone_id}/pin")

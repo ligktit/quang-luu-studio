@@ -123,3 +123,6 @@ ffmpeg/
 
 # Cache bien dich numba (app tu sinh; o che do dev nam canh source)
 numba_cache/
+
+# Audio tai ve de cham diem do tone (tools/danh_gia_do_tone.py)
+.cache/

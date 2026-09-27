@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -259,3 +260,27 @@ class SharedToneVote(Base):
     # vote (xác nhận đúng) | report (báo sai)
     kind:       Mapped[str] = mapped_column(String(10), default="vote")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ToneDetection(Base):
+    """Số đo kỹ thuật của lượt máy dò MỚI NHẤT — một dòng cho mỗi (bài, máy, chế độ).
+
+    Chỉ để dev chấm và chỉnh thuật toán: đặt cạnh bản NGƯỜI sửa tay của cùng bài
+    là biết máy dò sai kiểu gì, ở độ tin cậy bao nhiêu, lệch tuning bao nhiêu.
+    Không tham gia chọn biến thể/phiếu, không bao giờ trả về cho khách.
+    Upsert theo (song_key, device_fp, mode) nên bảng không phình theo số lần dò.
+    """
+    __tablename__ = "tone_detections"
+    __table_args__ = (UniqueConstraint("song_key", "device_fp", "mode", name="uq_tone_detection"),)
+
+    id:           Mapped[int] = mapped_column(Integer, primary_key=True)
+    song_key:     Mapped[str] = mapped_column(String(24), index=True)
+    device_fp:    Mapped[str] = mapped_column(String(128), index=True)
+    mode:         Mapped[str] = mapped_column(String(20), default="")   # nhanh | toan-bai
+    audio:        Mapped[str] = mapped_column(String(20), default="")   # youtube | loa
+    primary_key:  Mapped[str] = mapped_column(String(20), default="")
+    timeline:     Mapped[str] = mapped_column(Text, default="[]")       # JSON string
+    confidence:   Mapped[float | None] = mapped_column(Float, nullable=True)
+    tuning_cents: Mapped[float | None] = mapped_column(Float, nullable=True)
+    app_version:  Mapped[str] = mapped_column(String(20), default="")
+    updated_at:   Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

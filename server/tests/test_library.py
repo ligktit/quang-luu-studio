@@ -253,3 +253,126 @@ def test_admin_xoa_bien_the(admin_client):
 
     admin_client.post(f"/admin/library/{tone_id}/delete")
     assert _lookup(admin_client, token, fp).json()["results"] == {}
+
+
+def test_xuat_dap_an_chi_lay_ban_nguoi_sua_hoac_ghim(admin_client):
+    """Bộ đáp án cho công cụ chấm dò tone: bản máy dò không được làm đáp án."""
+    fp = "may-xuat-01"
+    token = _token(admin_client, fp)
+    _contribute(admin_client, token, fp, _timeline((0, "Am"), (95, "Bm")), source="human", song="AAAAAAAAAAA")
+    _contribute(admin_client, token, fp, _timeline((0, "C")), source="auto", song="BBBBBBBBBBB")
+
+    res = admin_client.get("/admin/library/export")
+    assert res.status_code == 200
+    assert "attachment" in res.headers["content-disposition"]
+    body = res.json()
+    assert [it["song_key"] for it in body["items"]] == ["AAAAAAAAAAA"]
+    assert [e["key_display"] for e in body["items"][0]["timeline"]] == ["Am", "Bm"]
+    assert body["count"] == 1
+
+    tat_ca = admin_client.get("/admin/library/export?all=1").json()
+    assert {it["song_key"] for it in tat_ca["items"]} == {"AAAAAAAAAAA", "BBBBBBBBBBB"}
+
+
+def test_xuat_dap_an_can_dang_nhap_admin(client):
+    res = client.get("/admin/library/export", follow_redirects=False)
+    assert res.status_code in (302, 303, 307)
+    assert "items" not in res.text
+
+
+# ── Số đo lượt máy dò (tone_detections) + trang Máy dò vs người sửa ──
+def _contribute_diag(client, token, fp, timeline, diag, source="auto", song=SONG):
+    return client.post("/api/v1/library/contribute", json={
+        "token": token, "device_fingerprint": fp,
+        "items": [{"song_key": song, "title": "Bài test", "primary_key": timeline[0]["key_display"],
+                   "source": source, "timeline": timeline, "diag": diag}],
+    })
+
+
+def _detections(song=SONG):
+    from app.models import ToneDetection
+    with SessionLocal() as db:
+        return db.query(ToneDetection).filter(ToneDetection.song_key == song).all()
+
+
+def test_luot_do_luu_so_do_va_chi_giu_ban_moi_nhat(client):
+    fp = "may-diag-01"
+    token = _token(client, fp)
+    diag = {"mode": "nhanh", "audio": "youtube", "confidence": 0.62, "tuning_cents": -46.0,
+            "app_version": "1.7.6"}
+    assert _contribute_diag(client, token, fp, _timeline((0, "Am")), diag).json()["accepted"] == 1
+    diag2 = dict(diag, confidence=0.81)
+    _contribute_diag(client, token, fp, _timeline((0, "C")), diag2)
+
+    rows = _detections()
+    assert len(rows) == 1, "cùng bài + cùng máy + cùng chế độ phải ghi đè, không phình bảng"
+    assert rows[0].primary_key == "C"
+    assert rows[0].confidence == 0.81
+    assert rows[0].tuning_cents == -46.0
+    assert rows[0].audio == "youtube"
+
+
+def test_ban_nguoi_sua_khong_ghi_luot_do(client):
+    fp = "may-diag-02"
+    token = _token(client, fp)
+    _contribute_diag(client, token, fp, _timeline((0, "Am")), {"mode": "nhanh"}, source="human")
+    assert _detections() == []
+
+
+def test_client_cu_khong_gui_diag_van_dong_gop_duoc(client):
+    fp = "may-diag-03"
+    token = _token(client, fp)
+    res = _contribute(client, token, fp, _timeline((0, "Am")))
+    assert res.json()["accepted"] == 1
+    assert _detections() == []
+
+
+def test_diag_sai_mien_gia_tri_bi_tu_choi(client):
+    fp = "may-diag-04"
+    token = _token(client, fp)
+    res = _contribute_diag(client, token, fp, _timeline((0, "Am")), {"confidence": 7.0})
+    assert res.status_code == 422
+
+
+def test_trang_may_do_vs_nguoi_sua(admin_client):
+    fps = ["may-err-1", "may-err-2"]
+    tokens = [_token(admin_client, fp) for fp in fps]
+    # máy 1: người sửa tay Am; máy 2: máy dò ra C (song song) có số đo
+    _contribute(admin_client, tokens[0], fps[0], _timeline((0, "Am")), source="human")
+    _contribute_diag(admin_client, tokens[1], fps[1], _timeline((0, "C")),
+                     {"mode": "toan-bai", "audio": "youtube", "confidence": 0.85})
+
+    r = admin_client.get("/admin/library/errors.json").json()
+    assert r["so_bai"] == 1
+    assert r["luot_do"]["tong"] == 1
+    assert r["luot_do"]["theo_loai"]["song_song"] == 1
+    assert r["luot_do"]["dung_tap_not"] == 1
+    assert r["bien_the"]["tong"] == 1  # bản C cũng là một biến thể máy dò
+    muc = {b["muc"]: b for b in r["theo_do_tin_cay"]}
+    assert muc[">= 0.8"]["so_luot"] == 1
+
+    page = admin_client.get("/admin/library/errors")
+    assert page.status_code == 200
+    assert "song song (C↔Am)" in page.text
+    assert SONG in page.text
+
+
+def test_trang_may_do_vs_nguoi_sua_can_dang_nhap(client):
+    for path in ("/admin/library/errors", "/admin/library/errors.json"):
+        res = client.get(path, follow_redirects=False)
+        assert res.status_code in (302, 303, 307)
+
+
+def test_phan_loai_tone():
+    from app.services import tonelib
+    C, Am, G, Cm, D = (0, "Major"), (9, "Minor"), (7, "Major"), (0, "Minor"), (2, "Major")
+    assert tonelib.classify(C, C) == "dung"
+    assert tonelib.classify(C, Am) == "song_song"
+    assert tonelib.classify(Am, C) == "song_song"
+    assert tonelib.classify(C, G) == "quang5"
+    assert tonelib.classify(C, Cm) == "cung_ten"
+    assert tonelib.classify(C, D) == "khac"
+    assert tonelib.classify(None, C) == "khong_ro"
+    assert tonelib.parse_key("Ebm") == (3, "Minor")
+    assert tonelib.parse_key("A Minor") == (9, "Minor")
+    assert tonelib.parse_key("H") is None

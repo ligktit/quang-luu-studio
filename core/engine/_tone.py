@@ -6,6 +6,7 @@ import numpy as np
 
 from core import tone_cache as tone_cache_module
 from core.memory import MemoryGuard
+from core.numba_cache import run_healing
 from core.tone_cache import ToneCacheManager, ManualToneTimeline
 from core.tone_detector import ToneDetector
 from core.utils import song_match_key
@@ -210,13 +211,35 @@ class _ToneMixin:
             return None
 
     @staticmethod
-    def _share_tone(url, title, cache_data, source='auto'):
-        """Đóng góp kết quả vừa dò cho mạng lưới. Xếp hàng + gửi nền, không chặn."""
+    def _share_tone(url, title, cache_data, source='auto', diag=None):
+        """Đóng góp kết quả vừa dò cho mạng lưới. Xếp hàng + gửi nền, không chặn.
+
+        diag: số đo kỹ thuật của lượt dò (xem _detection_diag) — server lưu riêng
+        cho dev chấm thuật toán, không hiển thị ở đâu cho khách.
+        """
         try:
             from core import tone_share
-            tone_share.contribute(url, title, cache_data, source=source)
+            tone_share.contribute(url, title, cache_data, source=source, diag=diag)
         except Exception as e:
             print(f"[SHARE] Không đóng góp được tone: {e}")
+
+    @staticmethod
+    def _detection_diag(mode, audio, entries, primary_key):
+        """Số đo của một lượt máy dò: độ tin cậy của tone chính + tuning.
+
+        mode: 'nhanh' | 'toan-bai'; audio: 'youtube' | 'loa'.
+        """
+        entries = entries or []
+        main = next((e for e in entries if e.get('key_display') == primary_key),
+                    entries[0] if entries else {})
+        tuning = next((e.get('tuning_cents') for e in entries
+                       if e.get('tuning_cents') is not None), None)
+        return {
+            'mode':         mode,
+            'audio':        audio or '',
+            'confidence':   main.get('confidence'),
+            'tuning_cents': tuning,
+        }
 
     def _tone_resolve_cache_sync_gen(self):
         """Bỏ sạch đệm phiên nếu dữ liệu tone trên đĩa đã đổi từ lần đọc trước.
@@ -298,7 +321,13 @@ class _ToneMixin:
             }]
         }
         ToneCacheManager.save_tone(url, cache_data)
-        self._share_tone(url, title, cache_data)
+        self._share_tone(url, title, cache_data, diag={
+            # nhanh-mo-rong: 45s đầu kém tự tin nên đã tự dò thêm (detect_key_from_file)
+            'mode':         'nhanh-mo-rong' if result.get('extended_seconds') else 'nhanh',
+            'audio':        result.get('audio_source', ''),
+            'confidence':   result.get('confidence'),
+            'tuning_cents': result.get('tuning_cents'),
+        })
         # Invalidate in-session cache so next resolve re-reads fresh data
         self._tone_resolve_cache_invalidate(url)
 
@@ -653,11 +682,14 @@ class _ToneMixin:
 
                 # 4. Tải audio từ YouTube (45s)
                 if on_progress:
-                    on_progress("Đang tải audio từ YouTube (45s)...")
+                    on_progress("Đang tải audio từ YouTube...")
 
                 scoring_engine = ScoringEngine()
                 try:
-                    audio_path, video_title = scoring_engine.download_youtube_audio_with_info(youtube_url)
+                    # Tải đủ cho lần dò bổ sung của detect_key_from_file (một lần đi
+                    # mạng; audio nén ~2MB cho 125s nên chênh lệch không đáng kể).
+                    audio_path, video_title = scoring_engine.download_youtube_audio_with_info(
+                        youtube_url, max_seconds=ToneDetector.FAST_EXTEND_SECONDS + 5)
                 except Exception:
                     audio_path, video_title = None, ''
 
@@ -670,19 +702,21 @@ class _ToneMixin:
                     if on_progress:
                         on_progress("Đang phân tích âm điệu...")
 
-                    # 5. Load + detect (sr=16000 for fast scan — CQT chroma only needs ≤4 kHz)
+                    # 5. Load + detect (sr=16000 for fast scan — CQT chroma only needs ≤4 kHz).
+                    # 45s đầu; kém tự tin thì tự dò thêm trên 120s — ngầm, không báo khách
+                    # (xem ToneDetector.detect_key_from_file). Lời gọi librosa đầu tiên
+                    # đi qua run_healing bên trong (cache numba hỏng thì tự chữa).
                     try:
-                        import librosa
+                        if _cancelled(cancel, watchdog_cancel):
+                            return
+                        result = ToneDetector.detect_key_from_file(
+                            audio_path, sr=16000,
+                            cancelled=lambda: _cancelled(cancel, watchdog_cancel))
 
                         if _cancelled(cancel, watchdog_cancel):
                             return
-                        audio_data, sr = librosa.load(audio_path, sr=16000, mono=True, duration=45)
-
-                        if _cancelled(cancel, watchdog_cancel):
-                            del audio_data
-                            return
-                        result = ToneDetector.detect_key_from_audio(audio_data, sr, skip_hum_detection=True)
-                        del audio_data
+                        if result:
+                            result['audio_source'] = 'youtube'
                         if not result:
                             fail_reason = ("Đã tải được audio từ YouTube nhưng không nhận diện "
                                            "được tone (bài quá nhiễu / không có giai điệu rõ).")
@@ -849,7 +883,12 @@ class _ToneMixin:
                     on_progress("Đang tải audio...")
 
                 scoring_engine = ScoringEngine()
-                audio_path     = scoring_engine.download_youtube_audio(url)
+                # PHẢI truyền max_seconds: download_youtube_audio mặc định chỉ
+                # tải 60 GIÂY ĐẦU (download_ranges). Thiếu tham số này thì chế độ
+                # "dò toàn bài" chỉ quét được 60s đầu — timeline cụt, bài đổi tone
+                # giữa chừng bị bỏ sót. Trần bằng đúng trần lúc nạp file bên dưới.
+                audio_path     = scoring_engine.download_youtube_audio(
+                    url, max_seconds=ToneDetector.TIMELINE_MAX_SECONDS)
 
                 if _cancelled(cancel, watchdog_cancel):
                     return
@@ -857,6 +896,7 @@ class _ToneMixin:
                 total_seconds    = 0
                 timeline_entries = None
                 fail_reason      = None  # nguyên nhân cụ thể khi thất bại
+                timeline_audio   = 'youtube'  # số đo nội bộ: nguồn audio thật sự đã dò
 
                 if audio_path:
                     if on_progress:
@@ -865,7 +905,15 @@ class _ToneMixin:
                     if _cancelled(cancel, watchdog_cancel):
                         return
 
-                    audio_data, sr = librosa.load(audio_path, sr=22050, mono=True)
+                    # Trần cứng: chặn NGAY TỪ LÚC NẠP, không nạp cả bài rồi mới
+                    # cắt. Một video 2 tiếng lọt vào đây là ~300MB audio thô cộng
+                    # chi phí giải mã — đủ để hạ app trên máy quán đang chạy kèm
+                    # Studio One. 20 phút dư cho mọi bài karaoke/liên khúc.
+                    # run_healing: xem chú thích ở _detect() — cache numba hỏng
+                    # thì tự xoá rồi nạp lại một lần.
+                    audio_data, sr = run_healing(
+                        librosa.load, audio_path, sr=22050, mono=True,
+                        duration=ToneDetector.TIMELINE_MAX_SECONDS)
                     total_seconds  = len(audio_data) / sr
                     num_segments   = math.ceil(total_seconds / SEGMENT_DURATION)
                     print(f"[AUTO TIMELINE] Audio: {total_seconds:.1f}giây, {num_segments} đoạn")
@@ -890,12 +938,14 @@ class _ToneMixin:
                     _reasons = []
                     fb = self._loopback_fallback_detect(on_progress, cancel, reason_out=_reasons)
                     if fb:
+                        timeline_audio = 'loa'
                         timeline_entries = [{
                             'time':        0,
                             'key_display': fb.get('key_display', 'C'),
                             'key_index':   fb.get('key_index', 0),
                             'scale':       fb.get('scale', 'Major'),
                             'confidence':  fb.get('confidence', 0),
+                            'tuning_cents': fb.get('tuning_cents'),
                         }]
                         if not video_title or video_title == "Bài hát không tên":
                             video_title = self._current_media_title() or video_title
@@ -927,7 +977,10 @@ class _ToneMixin:
                     'title':        video_title,
                 }
                 ToneCacheManager.save_tone(url, auto_entry)
-                self._share_tone(url, video_title, auto_entry)
+                # Chỉ có YouTube mới dò được cả bài; nghe loa thì chỉ một tone.
+                self._share_tone(url, video_title, auto_entry, diag=self._detection_diag(
+                    'toan-bai' if timeline_audio == 'youtube' else 'nhanh',
+                    timeline_audio, timeline_entries, primary_key))
                 print(f"[AUTO TIMELINE] Đã lưu cache: {video_title} "
                       f"({len(timeline_entries)} đoạn, tone tiêu biểu {primary_key})")
                 # Invalidate in-session cache after disk writes

@@ -189,12 +189,26 @@ class ToneEntry(BaseModel):
     scale:       str = Field(default="Major", max_length=20)
 
 
+class ToneDiag(BaseModel):
+    """Số đo kỹ thuật của MỘT lượt máy dò — chỉ để dev chấm/chỉnh thuật toán.
+
+    Không hiển thị cho khách, không ảnh hưởng biến thể/phiếu. Client cũ không
+    gửi trường này; server cũ bỏ qua nó (Pydantic mặc định ignore trường lạ).
+    """
+    mode:         str = Field(default="", max_length=20)    # nhanh | toan-bai
+    audio:        str = Field(default="", max_length=20)    # youtube | loa
+    confidence:   float | None = Field(default=None, ge=-1.0, le=1.0)
+    tuning_cents: float | None = Field(default=None, ge=-100.0, le=100.0)
+    app_version:  str = Field(default="", max_length=20)
+
+
 class ToneItem(BaseModel):
     song_key:    str = Field(min_length=11, max_length=11)
     title:       str = Field(default="", max_length=300)
     primary_key: str = Field(default="", max_length=20)
     source:      str = Field(default="auto", max_length=10)
     timeline:    list[ToneEntry] = Field(default_factory=list, max_length=300)
+    diag:        ToneDiag | None = None
 
 
 class ToneResult(BaseModel):

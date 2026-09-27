@@ -16,6 +16,7 @@ Covers:
   E-23..E-24  YouTube watcher start/stop + _normalize_url idempotency
 """
 import threading
+import numpy as np
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock, call
 
@@ -965,3 +966,118 @@ class TestSharedToneLibrary:
         args, kwargs = contribute.call_args
         assert args[0] == "https://youtu.be/dQw4w9WgXcQ"
         assert kwargs.get("source") == "auto"
+
+    def test_do_nhanh_gui_kem_so_do_noi_bo(self, engine, mocker):
+        """Số đo (độ tin cậy, tuning, nguồn audio) đi kèm lượt máy dò — chỉ để
+        dev chấm thuật toán ở /admin/library/errors, không hiển thị cho khách."""
+        mocker.patch("core.engine._tone.ToneCacheManager.save_tone")
+        contribute = mocker.patch("core.tone_share.contribute")
+
+        engine._save_tone_to_cache(
+            "https://youtu.be/dQw4w9WgXcQ",
+            {"key_display": "Am", "key_index": 9, "scale": "Minor", "confidence": 0.64,
+             "tuning_cents": -46.0, "audio_source": "loa"},
+        )
+
+        assert contribute.call_args.kwargs["diag"] == {
+            "mode": "nhanh", "audio": "loa", "confidence": 0.64, "tuning_cents": -46.0,
+        }
+
+    def test_so_do_chuoi_tone_lay_do_tin_cay_cua_tone_chinh(self, engine):
+        entries = [
+            {"time": 0, "key_display": "C", "confidence": 0.5, "tuning_cents": 3.0},
+            {"time": 90, "key_display": "C#", "confidence": 0.9, "tuning_cents": 3.0},
+        ]
+        diag = engine._detection_diag("toan-bai", "youtube", entries, "C#")
+        assert diag == {"mode": "toan-bai", "audio": "youtube", "confidence": 0.9,
+                        "tuning_cents": 3.0}
+
+
+# ──────────────────────────────────────────────────────────────
+# E-34 — auto_detect_youtube_timeline chặn trần độ dài NGAY TỪ LÚC NẠP
+#
+# Trước đây nạp nguyên bài vào RAM rồi mới phân tích: đỉnh RAM tỉ lệ với độ dài
+# bài (~1.17 GB ở bài 15 phút, đo thực tế). Video 2 tiếng lọt vào đây đủ để hạ
+# app trên máy quán đang chạy kèm Studio One. Trần phải áp ở librosa.load, không
+# phải cắt sau khi đã nạp — cắt sau thì RAM đã trót phình rồi.
+# ──────────────────────────────────────────────────────────────
+
+def test_auto_timeline_caps_audio_at_load(engine, mocker):
+    """E-34: librosa.load được gọi với duration=TIMELINE_MAX_SECONDS"""
+    from core.tone_detector import ToneDetector
+
+    # Không có timeline thủ công / cache sẵn → đi thẳng vào đường dò toàn bài
+    mocker.patch("core.engine._tone._ToneMixin._resolve_tone", return_value=(None, None))
+    mocker.patch("core.engine._tone.ToneCacheManager.save_tone")
+    mocker.patch("core.engine._tone._ToneMixin._send_tone_midi")
+    mocker.patch("core.engine._tone._ToneMixin._share_tone")
+    mocker.patch("core.engine._tone._ToneMixin._tone_resolve_cache_invalidate")
+    mocker.patch("core.engine._tone.MemoryGuard.force_cleanup")
+    mocker.patch("core.engine._tone.extract_info_with_auth", return_value={"title": "Bài dài"})
+    mocker.patch("core.engine._tone.make_ydl_opts", return_value={})
+    engine._replay_cached_timeline = MagicMock()
+
+    se = mocker.patch("core.engine._tone.ScoringEngine")
+    se.return_value.download_youtube_audio.return_value = "C:/tmp/a.wav"
+    se.return_value.cleanup_temp_file.return_value = None
+
+    fake_lib = MagicMock()
+    fake_lib.load.return_value = (np.zeros(22050, dtype=np.float32), 22050)
+    mocker.patch.dict("sys.modules", {"librosa": fake_lib})
+    mocker.patch("core.engine._tone.ToneDetector.detect_timeline_advanced",
+                 return_value=[{"time": 0, "key_display": "C",
+                                "key_index": 0, "scale": "Major"}])
+
+    done = threading.Event()
+    engine.auto_detect_youtube_timeline(
+        "https://youtu.be/abcdefghijk",
+        on_complete=MagicMock(side_effect=lambda r: done.set()),
+        on_error=MagicMock(side_effect=lambda e: done.set()),
+    )
+    assert done.wait(timeout=5)
+
+    fake_lib.load.assert_called_once()
+    assert fake_lib.load.call_args.kwargs["duration"] == ToneDetector.TIMELINE_MAX_SECONDS
+
+
+def test_auto_timeline_tai_du_ca_bai(engine, mocker):
+    """E-35: dò toàn bài phải TẢI đủ cả bài, không chỉ 60s mặc định.
+
+    download_youtube_audio() mặc định chỉ tải 60 giây đầu (download_ranges).
+    Gọi thiếu max_seconds thì "dò toàn bài" thực chất chỉ quét 60s đầu — bài
+    đổi tone giữa chừng bị bỏ sót mà không có dấu hiệu gì báo lỗi.
+    """
+    from core.tone_detector import ToneDetector
+
+    mocker.patch("core.engine._tone._ToneMixin._resolve_tone", return_value=(None, None))
+    mocker.patch("core.engine._tone.ToneCacheManager.save_tone")
+    mocker.patch("core.engine._tone._ToneMixin._send_tone_midi")
+    mocker.patch("core.engine._tone._ToneMixin._share_tone")
+    mocker.patch("core.engine._tone._ToneMixin._tone_resolve_cache_invalidate")
+    mocker.patch("core.engine._tone.MemoryGuard.force_cleanup")
+    mocker.patch("core.engine._tone.extract_info_with_auth", return_value={"title": "Bài test"})
+    mocker.patch("core.engine._tone.make_ydl_opts", return_value={})
+    engine._replay_cached_timeline = MagicMock()
+
+    se = mocker.patch("core.engine._tone.ScoringEngine")
+    se.return_value.download_youtube_audio.return_value = "C:/tmp/a.wav"
+    se.return_value.cleanup_temp_file.return_value = None
+
+    fake_lib = MagicMock()
+    fake_lib.load.return_value = (np.zeros(22050, dtype=np.float32), 22050)
+    mocker.patch.dict("sys.modules", {"librosa": fake_lib})
+    mocker.patch("core.engine._tone.ToneDetector.detect_timeline_advanced",
+                 return_value=[{"time": 0, "key_display": "C",
+                                "key_index": 0, "scale": "Major"}])
+
+    done = threading.Event()
+    engine.auto_detect_youtube_timeline(
+        "https://youtu.be/abcdefghijk",
+        on_complete=MagicMock(side_effect=lambda r: done.set()),
+        on_error=MagicMock(side_effect=lambda e: done.set()),
+    )
+    assert done.wait(timeout=5)
+
+    dl = se.return_value.download_youtube_audio
+    dl.assert_called_once()
+    assert dl.call_args.kwargs.get("max_seconds") == ToneDetector.TIMELINE_MAX_SECONDS

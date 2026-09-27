@@ -248,9 +248,40 @@ def lookup_many(urls) -> dict:
     return results
 
 
-def contribute(url, title, cache_data, source="auto") -> bool:
+def _clean_diag(diag):
+    """Số đo lượt dò → đúng miền giá trị server nhận, hoặc None.
+
+    Server từ chối (422) CẢ GÓI nếu một trường vượt miền — một con số lạ không
+    được phép làm mất luôn kết quả tone đi kèm, nên kẹp giá trị ở đây.
+    """
+    if not isinstance(diag, dict):
+        return None
+
+    def _num(value, lo, hi):
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return None
+        if v != v:  # NaN
+            return None
+        return round(min(hi, max(lo, v)), 4)
+
+    return {
+        "mode": str(diag.get("mode") or "")[:20],
+        "audio": str(diag.get("audio") or "")[:20],
+        "confidence": _num(diag.get("confidence"), -1.0, 1.0),
+        "tuning_cents": _num(diag.get("tuning_cents"), -100.0, 100.0),
+        "app_version": _app_version()[:20],
+    }
+
+
+def contribute(url, title, cache_data, source="auto", diag=None) -> bool:
     """
     Đóng góp kết quả dò tone của máy này. Xếp hàng rồi gửi nền.
+
+    diag: số đo kỹ thuật của lượt MÁY DÒ (mode, audio, confidence,
+    tuning_cents) — server lưu riêng cho dev chấm thuật toán, không ảnh hưởng
+    biến thể/phiếu, không hiển thị cho khách. Bản người sửa tay không gửi diag.
 
     Trả True nếu đã nhận vào hàng đợi. KHÔNG chặn luồng gọi.
     """
@@ -285,6 +316,10 @@ def contribute(url, title, cache_data, source="auto") -> bool:
     }
     if not item["timeline"]:
         return False
+    if item["source"] == "auto":
+        cleaned = _clean_diag(diag)
+        if cleaned is not None:
+            item["diag"] = cleaned
 
     _enqueue({"kind": "contribute", "item": item})
     flush_queue()

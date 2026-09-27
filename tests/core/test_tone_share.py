@@ -236,3 +236,49 @@ def test_report_wrong_gui_va_quen_ket_qua_cu(monkeypatch):
     sink.clear()
     tone_share.lookup(URL)
     assert any(c[0] == "/api/v1/library/lookup" for c in sink)
+
+
+# ── Số đo lượt máy dò (diag) — dữ liệu nội bộ cho dev chấm thuật toán ──
+_AUTO = {"primary_key": "Am", "key_timeline": [{"time": 0, "key_display": "Am", "key_index": 9, "scale": "Minor"}]}
+
+
+def test_may_do_gui_kem_so_do(monkeypatch):
+    sink = []
+    monkeypatch.setattr(tone_share, "_post", _fake_post(200, {"ok": True}, sink))
+    monkeypatch.setattr(tone_share, "_app_version", lambda: "1.7.6")
+
+    tone_share.contribute(URL, "Bài test", _AUTO, diag={
+        "mode": "nhanh", "audio": "youtube", "confidence": 0.8123456, "tuning_cents": -46.04,
+    })
+
+    diag = sink[0][1]["items"][0]["diag"]
+    assert diag == {"mode": "nhanh", "audio": "youtube", "confidence": 0.8123,
+                    "tuning_cents": -46.04, "app_version": "1.7.6"}
+
+
+def test_ban_nguoi_sua_khong_gui_so_do(monkeypatch):
+    sink = []
+    monkeypatch.setattr(tone_share, "_post", _fake_post(200, {"ok": True}, sink))
+    tone_share.contribute(URL, "Bài test", _AUTO, source="human", diag={"mode": "nhanh"})
+    assert "diag" not in sink[0][1]["items"][0]
+
+
+def test_khong_co_so_do_thi_khong_gui_truong_diag(monkeypatch):
+    sink = []
+    monkeypatch.setattr(tone_share, "_post", _fake_post(200, {"ok": True}, sink))
+    tone_share.contribute(URL, "Bài test", _AUTO)
+    assert "diag" not in sink[0][1]["items"][0]
+
+
+def test_so_do_la_bi_kep_ve_mien_hop_le(monkeypatch):
+    """Server từ chối CẢ GÓI nếu một số đo vượt miền — không được làm mất tone đi kèm."""
+    sink = []
+    monkeypatch.setattr(tone_share, "_post", _fake_post(200, {"ok": True}, sink))
+    tone_share.contribute(URL, "Bài test", _AUTO, diag={
+        "mode": "x" * 50, "confidence": float("nan"), "tuning_cents": 500, "audio": None,
+    })
+    diag = sink[0][1]["items"][0]["diag"]
+    assert diag["confidence"] is None
+    assert diag["tuning_cents"] == 100.0
+    assert len(diag["mode"]) == 20
+    assert diag["audio"] == ""

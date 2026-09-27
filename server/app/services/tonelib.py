@@ -101,3 +101,65 @@ def best_variant(tones):
             t.id,
         ),
     )
+
+
+# ── So máy dò với bản người sửa (trang /admin/library/errors) ──
+# Cùng quy ước với tools/danh_gia_do_tone.py ở client — đổi một bên thì đổi cả hai.
+NOTES_SHARP = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+NOTES_FLAT = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
+
+# dung: đúng tuyệt đối | song_song: C↔Am (cùng 7 nốt — Auto-Tune kéo như nhau)
+# quang5: lệch quãng 5 cùng thể | cung_ten: C↔Cm | khac: sai hẳn | khong_ro: không đọc được
+ERROR_CLASSES = ("dung", "song_song", "quang5", "cung_ten", "khac", "khong_ro")
+
+
+def parse_key(text):
+    """'C#m' / 'Bb' / 'A Minor' → (index 0..11, 'Major'|'Minor'), hoặc None."""
+    if not isinstance(text, str):
+        return None
+    words = text.strip().split()
+    if not words:
+        return None
+    if len(words) == 2 and words[1].lower() in ("major", "minor", "maj", "min"):
+        root, scale = words[0], ("Minor" if words[1].lower().startswith("min") else "Major")
+    elif len(words) == 1 and len(words[0]) > 1 and words[0].endswith("m"):
+        root, scale = words[0][:-1], "Minor"
+    elif len(words) == 1:
+        root, scale = words[0], "Major"
+    else:
+        return None
+    root = root[0].upper() + root[1:]
+    for names in (NOTES_SHARP, NOTES_FLAT):
+        if root in names:
+            return names.index(root), scale
+    return None
+
+
+def classify(truth, pred) -> str:
+    """Xếp loại kết quả máy dò so với đáp án (cả hai là (index, scale) hoặc None)."""
+    if truth is None or pred is None:
+        return "khong_ro"
+    (ti, ts), (pi, ps) = truth, pred
+    if ti == pi and ts == ps:
+        return "dung"
+    if ts == ps and (pi - ti) % 12 in (5, 7):
+        return "quang5"
+    if ts != ps:
+        major, minor = (ti, pi) if ts == "Major" else (pi, ti)
+        if (major + 9) % 12 == minor:
+            return "song_song"
+        if ti == pi:
+            return "cung_ten"
+    return "khac"
+
+
+def timeline_primary(tone_or_row):
+    """Tone chính của một biến thể/lượt dò: primary_key, không có thì mốc đầu."""
+    parsed = parse_key(getattr(tone_or_row, "primary_key", "") or "")
+    if parsed:
+        return parsed
+    try:
+        entries = json.loads(getattr(tone_or_row, "timeline", "") or "[]")
+        return parse_key(entries[0].get("key_display", "")) if entries else None
+    except (ValueError, TypeError, AttributeError):
+        return None

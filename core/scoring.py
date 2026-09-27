@@ -151,11 +151,14 @@ class ScoringEngine:
             return None
 
     def download_youtube_audio_with_info(self, youtube_url, output_dir=None,
-                                         extra_opts=None):
+                                         extra_opts=None, max_seconds=50):
         """Tai audio + lay title trong 1 lan goi.
 
         extra_opts: tuy chon yt-dlp ghep them (logger rieng, progress_hooks...).
         Chi bo chan doan --thu-tai dung toi; app goi nhu cu thi khong doi gi.
+        max_seconds: so giay dau bai tai ve (mac dinh 50). Do tone nhanh tai
+        du cho lan do bo sung (ToneDetector.FAST_EXTEND_SECONDS) de khong
+        phai di mang lan hai.
         """
         try:
             if output_dir is None:
@@ -185,7 +188,8 @@ class ScoringEngine:
             video_title = ""
             try:
                 ydl_opts_partial = dict(ydl_opts)
-                ydl_opts_partial['download_ranges'] = lambda info, ydl: [{'start_time': 0, 'end_time': 50}]
+                end_time = max_seconds or 50
+                ydl_opts_partial['download_ranges'] = lambda info, ydl: [{'start_time': 0, 'end_time': end_time}]
                 info = extract_info_with_auth(youtube_url, ydl_opts_partial, download=True, log_prefix="[SCORING]")
                 video_title = info.get('title', '') if info else ""
             except Exception:

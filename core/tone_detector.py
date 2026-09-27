@@ -67,6 +67,74 @@ class ToneDetector:
     
     # Voting window: số segments cần đồng thuận trước khi chuyển tone
     VOTING_WINDOW = 3
+
+    # ── Chia VÙNG tone cho "dò toàn bài" (xem _regionalize) ────────────────────
+    # Đoạn cắt theo cấu trúc chỉ dài 10–20s nên tone dò riêng từng đoạn thực chất
+    # là hợp âm của đoạn đó: trên 12 bài karaoke Việt có đáp án người sửa tay,
+    # cách gộp cũ báo 15.7 lần đổi tone/bài (đáp án: 0–1), nhảy qua lại giữa các
+    # tone cùng bộ nốt (A↔F#m↔Bm, C↔Am↔Dm). Chia vùng: 0.2 lần/bài, khớp tập nốt
+    # theo thời lượng 44% → 64%, vẫn bắt đúng nâng ½ cung / 1 cung / nâng cuối
+    # bài trên âm thanh tổng hợp. Số đo: tools/danh_gia_do_tone.py,
+    # docs/NGHIEN_CUU_DO_TONE.md.
+    # ── Dò nhanh: tự phân tích thêm khi kém tự tin (detect_key_from_file) ──────
+    # Chạy NGẦM, không báo gì cho khách. Trên 12 bài karaoke Việt có đáp án:
+    # 45s đầu đúng tập nốt 6/12; dò lại trên 120s khi confidence < 0.80 → 8/12
+    # (ngang dò cả bài, mà cả bài tốn 15s CPU, 120s chỉ ~5s; chỉ nửa số bài
+    # phải dò thêm). Mọi bài < 0.70 trong mẫu đều sai. Theo dõi tiếp ở
+    # /admin/library/errors — lượt dò mở rộng mang mode "nhanh-mo-rong".
+    FAST_FIRST_SECONDS = 45
+    FAST_EXTEND_SECONDS = 120
+    FAST_EXTEND_BELOW_CONFIDENCE = 0.80
+
+    TIMELINE_REGION_MIN_SECONDS = 30   # vùng tone ngắn hơn → nhập vào vùng kề
+    TIMELINE_REGION_MIN_GAIN = 0.20    # tone đoạn phải thắng tone vùng bấy nhiêu tương quan
+    TIMELINE_FAMILY_OVERLAP = 6        # chung >= bấy nhiêu nốt = cùng họ, không tính đổi tone
+
+    # ── Trần an toàn + tham số xử lý theo khối cho chế độ "dò toàn bài" ────────
+    #
+    # detect_timeline_advanced() trước đây nạp và xử lý NGUYÊN bài trong RAM.
+    # Đỉnh RAM tỉ lệ tuyến tính với độ dài bài (đo thực tế ~1.3 MB cho mỗi giây
+    # audio ở sr=22050): bài 15 phút ngốn ~1.17 GB đỉnh. Trên máy quán chạy kèm
+    # Studio One + VST + trình duyệt thì đó là vùng nguy hiểm — và gc.collect()
+    # sau khi dò xong KHÔNG cứu được, vì đỉnh xảy ra lúc bộ nhớ đang được dùng.
+    #
+    # Hai biện pháp, dùng cùng nhau:
+    #   1. TIMELINE_MAX_SECONDS — trần cứng, chặn từ lúc nạp file (xem _tone.py).
+    #   2. Xử lý theo khối — RAM đỉnh phẳng theo kích thước khối, không theo
+    #      độ dài bài. Đo thực tế: ~90 MB dù bài 5, 10 hay 15 phút.
+    TIMELINE_MAX_SECONDS = 20 * 60   # 20 phút — dư cho mọi bài karaoke/liên khúc
+
+    # Kích thước khối xử lý. librosa dựng lại filter bank CQT ở MỖI lần gọi
+    # (librosa.cache mặc định là no-op) nên khối càng nhỏ thì chi phí cố định
+    # càng lấn: đo trên bài 15 phút, khối 30s mất 6.3s còn khối 60s mất 6.0s,
+    # trong khi RAM đỉnh chỉ nhích từ 22MB lên 36MB. 60s là điểm cân bằng.
+    TIMELINE_BLOCK_SECONDS = 60
+
+    # Đệm hai bên mỗi khối rồi VỨT BỎ phần đệm sau khi tính. Phải phủ được nửa
+    # chiều dài filter CQT dài nhất (bin thấp nhất C1≈32.7Hz, bins_per_octave=36
+    # → Q≈51.4 → filter ≈ 51.4*sr/32.7 ≈ 1.57s ở sr=22050, nửa ≈ 0.79s). Lấy 2s
+    # cho dư. Nhờ vậy mọi frame được giữ đều "nhìn thấy" audio thật ở cả hai bên,
+    # đúng như khi tính nguyên bài.
+    TIMELINE_BLOCK_PAD_SECONDS = 2.0
+
+    # Ước lượng tuning: librosa.feature.chroma_cqt(tuning=None) tự gọi
+    # estimate_tuning() trên TOÀN BỘ mảng được truyền vào. Đó vừa là thủ phạm
+    # chính của đỉnh RAM (đo được 1098 MB / 1171 MB tổng ở bài 15 phút), vừa
+    # khiến chia khối làm SAI kết quả — mỗi khối tự ước lượng một tuning khác
+    # nhau nên chroma lệch nhau ~0.03. Cách xử lý: ước lượng tuning MỘT LẦN từ
+    # một mẫu có giới hạn, rồi truyền tuning đó vào mọi khối.
+    TUNING_SAMPLE_SECONDS = 60   # tổng độ dài audio dùng để ước lượng
+    TUNING_EXCERPT_COUNT = 6     # chia thành bấy nhiêu đoạn trải đều khắp bài
+
+    # Độ phân giải khi ƯỚC LƯỢNG tuning — KHÁC độ phân giải CQT (36 bin/quãng 8).
+    # librosa.estimate_tuning trả về phần lẻ của MỘT BIN trong [-0.5, 0.5). Ước
+    # lượng ở 36 bin thì một bin chỉ rộng 33 cent → chỉ đọc đúng ±16.7 cent, lệch
+    # hơn là bị gấp vòng (đo được: bài lệch +20 cent đọc thành -11 cent) và dò
+    # sang tone quãng 5. Ước lượng ở 12 bin (±50 cent) rồi đổi sang đơn vị bin
+    # của CQT. Chroma_cqt(tuning=None) mặc định mắc đúng lỗi này nên mọi lời gọi
+    # chroma_cqt trong file đều phải truyền tuning tường minh.
+    TUNING_ESTIMATE_BINS_PER_OCTAVE = 12
+    CHROMA_BINS_PER_OCTAVE = 36  # mặc định của librosa.feature.chroma_cqt
     
     # Bảng ánh xạ Key → MIDI CC value (từ knob% thực tế trên plugin Auto-Tune)
     # Plugin nhận 0-127 → hiển thị 0-100%. Công thức: round(knob% × 127/100)
@@ -295,7 +363,12 @@ class ToneDetector:
                     print(f"   ⚠ HPSS bỏ qua ({e}) — dùng audio gốc")
 
             # === BƯỚC 1: Chroma CQT (energy-weighted) ===
-            chroma_cqt = librosa.feature.chroma_cqt(y=chroma_source, sr=sample_rate)
+            # Tuning truyền tường minh — để None thì librosa ước lượng ở 36 bin và
+            # gấp vòng khi bài lệch quá ±16.7 cent (xem TUNING_ESTIMATE_BINS_PER_OCTAVE).
+            tuning_cents = ToneDetector._estimate_tuning_cents(chroma_source, sample_rate)
+            chroma_cqt = librosa.feature.chroma_cqt(
+                y=chroma_source, sr=sample_rate,
+                tuning=ToneDetector._cents_to_chroma_bins(tuning_cents))
             rms = librosa.feature.rms(y=chroma_source)[0]
             min_frames = min(len(rms), chroma_cqt.shape[1])
             rms = rms[:min_frames]
@@ -335,8 +408,13 @@ class ToneDetector:
                 print(f"   ✅ EMA blending (α={alpha})")
             else:
                 chroma_for_analysis = chroma_avg
-                
-            return ToneDetector._detect_key_from_chroma_impl(chroma_for_analysis, cqt_normalized)
+
+            result = ToneDetector._detect_key_from_chroma_impl(chroma_for_analysis, cqt_normalized)
+            if result is not None:
+                # Độ lệch so với A4=440Hz. Chưa ai dùng để điều khiển — ghi ra để
+                # đo (tools/danh_gia_do_tone.py) và làm nền cho Detune của Auto-Tune.
+                result["tuning_cents"] = round(tuning_cents, 1)
+            return result
 
         except Exception as e:
             print(f"[DÒ TONE] Lỗi phân tích: {e}")
@@ -345,7 +423,15 @@ class ToneDetector:
             return None
             
     @staticmethod
-    def _detect_key_from_chroma_impl(chroma_for_analysis, cqt_normalized):
+    def _detect_key_from_chroma_impl(chroma_for_analysis, cqt_normalized, verbose=True,
+                                     cleanup=True):
+        """verbose=False: không in log phân tích; cleanup=False: bỏ
+        MemoryGuard.force_cleanup() (full GC + xoá cache librosa) ở cuối. Cả hai
+        dùng khi gọi lặp nhiều lần trên vector 12 phần tử (chia vùng tone ở
+        detect_timeline_advanced) — dọn RAM mỗi lần là lãng phí, caller dọn một
+        lần ở cuối. Không dùng redirect_stdout thay cho verbose vì nó tráo
+        sys.stdout của CẢ tiến trình, nuốt log của các luồng khác."""
+        log = print if verbose else (lambda *a, **k: None)
         try:
             import numpy as np
 
@@ -426,7 +512,7 @@ class ToneDetector:
                     relation_of[id(r)] = level
 
             if len(family) >= 2:
-                print(f"   Key family ({len(family)} candidates):")
+                log(f"   Key family ({len(family)} candidates):")
 
                 # --- Trọng số động cho tonal_strength ---
                 # Khi correlation của các candidate gần đồng hạng (relative pair
@@ -437,7 +523,7 @@ class ToneDetector:
                               min(c["correlation"] for c in family)
                 if corr_spread < ToneDetector.RELATIVE_CORR_TIE_THRESHOLD:
                     corr_w, tonal_w = 0.60, 0.40
-                    print(f"   ⚖ Corr gần đồng hạng (spread={corr_spread:.3f}) → tonal weight 0.40")
+                    log(f"   ⚖ Corr gần đồng hạng (spread={corr_spread:.3f}) → tonal weight 0.40")
                 else:
                     corr_w, tonal_w = 0.85, 0.15
 
@@ -482,7 +568,7 @@ class ToneDetector:
 
                     family_scores.append((r, combined))
 
-                    print(f"      {r['key']:4s}[{level}]: corr={r['correlation']:.3f} "
+                    log(f"      {r['key']:4s}[{level}]: corr={r['correlation']:.3f} "
                           f"T={tonic:.3f} 5={fifth:.3f} 3={third:.3f} "
                           f"tn={tonal_norm:.2f} → {combined:.4f}{neigh_tag}")
 
@@ -501,12 +587,12 @@ class ToneDetector:
                         top2_common = KEY_COMMON.get(top2["key"], 0.5)
                         if top2_common > top1_common:
                             best_candidate = top2
-                            print(f"   Tiebreaker: {top1['key']} ({top1_common:.1f}) → {top2['key']} ({top2_common:.1f})")
+                            log(f"   Tiebreaker: {top1['key']} ({top1_common:.1f}) → {top2['key']} ({top2_common:.1f})")
 
                 if best_candidate and best_candidate["key"] != best["key"]:
-                    print(f"   Family winner: {best['key']} → {best_candidate['key']}")
+                    log(f"   Family winner: {best['key']} → {best_candidate['key']}")
                 else:
-                    print(f"   Giữ {best['key']}")
+                    log(f"   Giữ {best['key']}")
                 best = best_candidate or best
             
             best_key = best["key_index"]
@@ -530,20 +616,21 @@ class ToneDetector:
                 confidence_level = "medium"
                 uncertain = False
 
-            print(f"Kết quả: {key_display} (confidence: {best_corr:.4f} → {confidence_level}"
+            log(f"Kết quả: {key_display} (confidence: {best_corr:.4f} → {confidence_level}"
                   f"{', UNCERTAIN' if uncertain else ''})")
-            print(f"   📊 KS={best.get('ks_corr',0):.4f}  T={best.get('temp_corr',0):.4f}  A={best.get('aarden_corr',0):.4f}")
-            print(f"Top 5:")
+            log(f"   📊 KS={best.get('ks_corr',0):.4f}  T={best.get('temp_corr',0):.4f}  A={best.get('aarden_corr',0):.4f}")
+            log(f"Top 5:")
             for r in all_results[:5]:
-                print(f"   {r['key']}: {r['correlation']:.4f}")
+                log(f"   {r['key']}: {r['correlation']:.4f}")
 
             # Giải phóng mảng trung gian trước khi return
             del all_results
-            try:
-                from core.memory import MemoryGuard
-                MemoryGuard.force_cleanup()
-            except Exception:
-                pass
+            if cleanup:
+                try:
+                    from core.memory import MemoryGuard
+                    MemoryGuard.force_cleanup()
+                except Exception:
+                    pass
 
             return {
                 "key": ToneDetector.MAJOR_KEY_NAMES[best_key],
@@ -762,7 +849,9 @@ class ToneDetector:
             target_sr = 22050
             if device_sr > target_sr:
                 import librosa
-                audio_data = librosa.resample(audio_data, orig_sr=device_sr, target_sr=target_sr)
+                from core.numba_cache import run_healing
+                audio_data = run_healing(
+                    librosa.resample, audio_data, orig_sr=device_sr, target_sr=target_sr)
                 analyze_sr = target_sr
                 print(f"[DÒ TONE] Đã downsample loopback từ {device_sr}Hz xuống {target_sr}Hz (Đảm bảo độ chính xác)")
             else:
@@ -779,6 +868,8 @@ class ToneDetector:
             if not result:
                 return _fail("Đã nghe được âm thanh từ loa nhưng không nhận diện được tone "
                              "(âm thanh quá nhiễu hoặc không có giai điệu rõ ràng).")
+            # Nguồn audio — chỉ để ghi số đo nội bộ (tone_share diag), không hiển thị.
+            result["audio_source"] = "loa"
             return result
 
         except Exception as e:
@@ -806,6 +897,49 @@ class ToneDetector:
                     pass
     
     @staticmethod
+    def detect_key_from_file(audio_path, sr=16000, first_seconds=None, cancelled=None):
+        """Dò tone nhanh từ file audio đầu bài, tự phân tích thêm khi kém tự tin.
+
+        Dò trên `first_seconds` đầu (mặc định FAST_FIRST_SECONDS). Nếu
+        confidence < FAST_EXTEND_BELOW_CONFIDENCE và file có đủ audio thì dò lại
+        trên FAST_EXTEND_SECONDS đầu và DÙNG kết quả đó — lặng lẽ, không báo gì
+        cho khách (quyết định sản phẩm: không hiện "dò chưa chắc"). Kết quả mở
+        rộng mang 'extended_seconds' để số đo nội bộ tách riêng được.
+
+        cancelled: hàm không tham số trả True khi phiên đã huỷ — kiểm trước lần
+        dò bổ sung để không tốn CPU cho phiên đã bỏ.
+        """
+        import librosa
+        from core.numba_cache import run_healing
+
+        first = first_seconds or ToneDetector.FAST_FIRST_SECONDS
+        extend = max(first, ToneDetector.FAST_EXTEND_SECONDS)
+        # run_healing: cache numba hỏng thì xoá rồi nạp lại một lần
+        # (xem core/numba_cache.py). Nạp một lần đủ cho cả lần dò bổ sung.
+        audio_data, sr = run_healing(librosa.load, audio_path, sr=sr, mono=True,
+                                     duration=extend)
+        print(f"[DÒ TONE] Đã nạp {len(audio_data) / sr:.1f}giây, sr={sr}")
+
+        head = audio_data[:int(first * sr)]
+        result = ToneDetector.detect_key_from_audio(head, sr, skip_hum_detection=True)
+        del head
+
+        # Chỉ mở rộng khi thật sự có thêm audio đáng kể (bài ngắn / tải hụt thì thôi).
+        has_more = len(audio_data) >= int((first + 15) * sr)
+        if (result and has_more
+                and result.get("confidence", 0) < ToneDetector.FAST_EXTEND_BELOW_CONFIDENCE
+                and not (cancelled and cancelled())):
+            print(f"[DÒ TONE] confidence {result.get('confidence', 0):.2f} < "
+                  f"{ToneDetector.FAST_EXTEND_BELOW_CONFIDENCE} → phân tích thêm "
+                  f"{len(audio_data) / sr:.0f}s")
+            extended = ToneDetector.detect_key_from_audio(audio_data, sr, skip_hum_detection=True)
+            if extended:
+                extended["extended_seconds"] = round(len(audio_data) / sr, 1)
+                result = extended
+        del audio_data
+        return result
+
+    @staticmethod
     def detect_key_from_youtube(youtube_url, duration_limit=60):
         """
         Tải audio từ YouTube và phát hiện tone
@@ -817,43 +951,35 @@ class ToneDetector:
         detect_key_from_audio. Rủi ro lệch tonic do hum là thấp-trung.
         """
         try:
-            import librosa
             from core.scoring import ScoringEngine
-            
+
             print(f"Bắt đầu dò tone từ YouTube...")
             print(f"🔗 URL: {youtube_url}")
             
             # Download audio
             scoring_engine = ScoringEngine()
-            audio_path = scoring_engine.download_youtube_audio(youtube_url)
-            
+            # Tải đủ cho cả lần dò bổ sung (detect_key_from_file) — một lần đi
+            # mạng, không tải lại khi phải phân tích thêm.
+            audio_path = scoring_engine.download_youtube_audio(
+                youtube_url,
+                max_seconds=max(duration_limit, ToneDetector.FAST_EXTEND_SECONDS) + 5)
+
             if not audio_path:
                 print("[DÒ TONE] Không thể tải audio")
                 return None
-            
+
             try:
-                # Load audio (giới hạn thời gian để tăng tốc)
-                print(f"📂 [DÒ TONE] Đang tải audio (tối đa {duration_limit}giây)...")
-                audio_data, sr = librosa.load(
-                    audio_path,
-                    sr=22050,
-                    mono=True,
-                    duration=duration_limit
-                )
-                
-                actual_duration = len(audio_data) / sr
-                print(f"[DÒ TONE] Đã tải: {actual_duration:.1f}giây, sr={sr}")
-                
-                # Detect key
-                result = ToneDetector.detect_key_from_audio(audio_data, sr, skip_hum_detection=True)
-                del audio_data  # Giải phóng audio data ngay sau khi dò tone
+                result = ToneDetector.detect_key_from_file(
+                    audio_path, sr=22050, first_seconds=duration_limit)
                 try:
                     from core.memory import MemoryGuard
                     MemoryGuard.force_cleanup()
                 except Exception:
                     pass
+                if result:
+                    result["audio_source"] = "youtube"
                 return result
-                
+
             finally:
                 scoring_engine.cleanup_temp_file()
                 
@@ -864,27 +990,195 @@ class ToneDetector:
             return None
     
     @staticmethod
+    def _estimate_tuning_cents(y, sr):
+        """Độ lệch tuning của y so với A4=440Hz, tính bằng cent, trong [-50, 50).
+
+        Ước lượng ở TUNING_ESTIMATE_BINS_PER_OCTAVE (12) để không bị gấp vòng.
+        Trả 0.0 nếu thất bại — cùng nghĩa "không lệch", mặc định an toàn của librosa.
+        """
+        import librosa
+        import numpy as np
+
+        try:
+            bpo = ToneDetector.TUNING_ESTIMATE_BINS_PER_OCTAVE
+            frac = float(librosa.estimate_tuning(y=y, sr=sr, bins_per_octave=bpo))
+            cents = frac * 1200.0 / bpo
+            return cents if np.isfinite(cents) else 0.0
+        except Exception as e:
+            print(f"   ⚠ Ước lượng tuning thất bại ({e}) — dùng tuning=0")
+            return 0.0
+
+    @staticmethod
+    def _cents_to_chroma_bins(cents, bins_per_octave=None):
+        """Đổi cent sang đơn vị tham số `tuning` của chroma_cqt (phần lẻ của 1 bin)."""
+        if bins_per_octave is None:
+            bins_per_octave = ToneDetector.CHROMA_BINS_PER_OCTAVE
+        return cents * bins_per_octave / 1200.0
+
+    @staticmethod
+    def _estimate_tuning_bounded(audio_data, sr, bins_per_octave=36):
+        """Ước lượng tuning từ một mẫu có giới hạn thay vì toàn bài.
+
+        librosa.estimate_tuning() dựng piptrack (STFT) trên cả mảng đầu vào nên
+        RAM tỉ lệ với độ dài bài — đo được 1098 MB cho bài 15 phút. Tuning lại
+        là thuộc tính TOÀN CỤC và gần như bất biến trong một bản thu, nên lấy
+        vài đoạn trải đều khắp bài là đủ: đo trên tín hiệu thử, mẫu 60s cho ra
+        đúng cùng giá trị với toàn bài mà chỉ tốn ~73 MB.
+
+        Trả về tham số `tuning` cho chroma_cqt ở `bins_per_octave` (phần lẻ của
+        một bin CQT — có thể vượt ±0.5 vì ước lượng ở 12 bin, xem
+        TUNING_ESTIMATE_BINS_PER_OCTAVE). 0.0 nếu ước lượng thất bại — cùng
+        nghĩa "không lệch tuning", là mặc định an toàn của librosa.
+        """
+        import numpy as np
+
+        try:
+            n_excerpts = max(1, ToneDetector.TUNING_EXCERPT_COUNT)
+            budget = int(ToneDetector.TUNING_SAMPLE_SECONDS * sr)
+            if len(audio_data) <= budget:
+                sample = audio_data
+            else:
+                # Trải đều các đoạn khắp bài: intro/verse/chorus/outro đều có mặt,
+                # không thiên vị 60s đầu (nhiều bài mở đầu chỉ có nhạc nền).
+                ex_len = max(1, budget // n_excerpts)
+                offsets = np.linspace(0, len(audio_data) - ex_len, n_excerpts).astype(int)
+                sample = np.concatenate([audio_data[o:o + ex_len] for o in offsets])
+        except Exception as e:
+            print(f"   ⚠ Ước lượng tuning thất bại ({e}) — dùng tuning=0")
+            return 0.0
+        cents = ToneDetector._estimate_tuning_cents(sample, sr)
+        del sample
+        return ToneDetector._cents_to_chroma_bins(cents, bins_per_octave)
+
+    @staticmethod
+    def _chroma_rms_blockwise(audio_data, sr, hop_length, tuning,
+                              dc_offset=0.0, clip=False, want_rms=True,
+                              on_block=None):
+        """Tính chroma_cqt (+ rms) theo KHỐI — RAM đỉnh phẳng theo kích thước khối.
+
+        Kết quả khớp với cách tính nguyên bài tới sai số float32 (~1e-7), nhờ
+        hai điều kiện BẮT BUỘC:
+
+        1. `tuning` phải được truyền vào tường minh. Để tuning=None thì mỗi khối
+           tự ước lượng một giá trị khác nhau và chroma lệch nhau tới ~0.03.
+        2. Mỗi khối được nới thêm TIMELINE_BLOCK_PAD_SECONDS ở hai bên rồi bỏ
+           phần đệm đi, để frame ở rìa khối vẫn nhìn thấy audio thật hai bên
+           thay vì phần đệm phản chiếu do center=True sinh ra.
+
+        Lưới frame giữ nguyên quy ước của librosa (center=True): frame thứ i
+        tâm tại mẫu i*hop_length, tổng 1 + len(y)//hop_length frame.
+
+        dc_offset/clip: tiền xử lý áp cho từng khối thay vì nhân đôi cả mảng
+        audio trong RAM. dc_offset phải là trung bình TOÀN BÀI (tính sẵn bởi
+        caller) để giống hệt phép trừ trên nguyên mảng.
+
+        on_block(done, total): gọi sau mỗi khối, để caller báo tiến độ.
+        """
+        import librosa
+        import numpy as np
+        import math
+
+        n = len(audio_data)
+        if n == 0:
+            empty_rms = np.zeros(0, dtype=np.float32) if want_rms else None
+            return np.zeros((12, 0), dtype=np.float32), empty_rms
+
+        n_frames = 1 + n // hop_length
+        pad_frames = int(math.ceil(
+            ToneDetector.TIMELINE_BLOCK_PAD_SECONDS * sr / hop_length))
+        frames_per_block = max(1, int(round(
+            ToneDetector.TIMELINE_BLOCK_SECONDS * sr / hop_length)))
+        total_blocks = int(math.ceil(n_frames / frames_per_block))
+
+        chroma_parts, rms_parts = [], []
+        f0 = 0
+        done = 0
+        while f0 < n_frames:
+            f1 = min(f0 + frames_per_block, n_frames)
+
+            # Mốc đầu khối phải là bội của hop_length thì frame của khối con mới
+            # trùng lưới frame toàn bài (offset j0 dưới đây mới là số nguyên).
+            start_frame = max(0, f0 - pad_frames)
+            start = start_frame * hop_length
+            end = min(n, (f1 - 1 + pad_frames) * hop_length + 1)
+
+            block = np.array(audio_data[start:end], dtype=np.float32)
+            if dc_offset:
+                block -= dc_offset
+            if clip:
+                np.clip(block, -1.0, 1.0, out=block)
+
+            chroma_blk = librosa.feature.chroma_cqt(
+                y=block, sr=sr, hop_length=hop_length, tuning=tuning)
+            rms_blk = (librosa.feature.rms(y=block, hop_length=hop_length)[0]
+                       if want_rms else None)
+
+            j0 = f0 - start_frame
+            j1 = min(j0 + (f1 - f0), chroma_blk.shape[1])
+            chroma_parts.append(np.array(chroma_blk[:, j0:j1]))
+            if want_rms:
+                rms_parts.append(np.array(rms_blk[j0:j1]))
+
+            # KHÔNG gọi gc.collect() ở đây: numpy giải phóng ngay bằng đếm
+            # tham chiếu khi del, còn full GC mỗi khối tốn 2s/bài 15 phút mà
+            # RAM đỉnh không giảm (đo được 22MB có gc vs 22MB không gc).
+            del block, chroma_blk, rms_blk
+
+            f0 = f1
+            done += 1
+            if on_block:
+                on_block(done, total_blocks)
+
+        chroma = np.concatenate(chroma_parts, axis=1)
+        chroma_parts.clear()
+        rms = np.concatenate(rms_parts) if want_rms else None
+        rms_parts.clear()
+        return chroma, rms
+
+    @staticmethod
     def detect_timeline_advanced(audio_data, sr, on_progress=None):
         """
         Dò tone tiên tiến:
         1. Dùng novelty-based segmentation để tìm đổi cấu trúc.
         2. Refine với sliding window nhỏ (±3s).
         3. Dò tone mỗi segment.
-        4. Merge segment cùng key.
-        5. Filter chuyển tone ngắn (<8s).
+        4. Gộp segment thành VÙNG tone (_regionalize): chỉ báo đổi tone khi một
+           vùng >= TIMELINE_REGION_MIN_SECONDS lệch hẳn sang bộ nốt khác.
         """
-        import librosa
+        # Không import librosa ở đây nữa: mọi lời gọi librosa của hàm này đã dời
+        # vào _chroma_rms_blockwise / _estimate_tuning_bounded.
         import numpy as np
         import scipy.signal
         
+        # Trần cứng phòng thủ. Caller (_tone.py) đã chặn từ lúc nạp file, nhưng
+        # hàm này là public và còn được tools/batch_detect_tone.py gọi trực tiếp
+        # — không để một video 2 tiếng lọt vào đây làm sập app.
+        max_samples = int(ToneDetector.TIMELINE_MAX_SECONDS * sr)
+        if len(audio_data) > max_samples:
+            print(f"[TIMELINE] Bài dài {len(audio_data) / sr / 60:.1f} phút — "
+                  f"chỉ phân tích {ToneDetector.TIMELINE_MAX_SECONDS // 60} phút đầu")
+            if on_progress:
+                on_progress(f"Bài quá dài — phân tích "
+                            f"{ToneDetector.TIMELINE_MAX_SECONDS // 60} phút đầu...")
+            audio_data = audio_data[:max_samples]
+
         duration = len(audio_data) / sr
         if on_progress: on_progress("Phân tích cấu trúc...")
         print("[NOVELTY] Bắt đầu phân tích cấu trúc...")
-        
-        # 1. Novelty curve (dựa trên chroma)
+
+        # Ước lượng tuning MỘT LẦN cho cả hai lượt chroma bên dưới. Bắt buộc phải
+        # truyền tường minh vào từng khối — xem _chroma_rms_blockwise. Tiện thể
+        # bỏ luôn một lần estimate_tuning: trước đây mỗi lượt chroma_cqt tự gọi
+        # một lần trên nguyên bài, và chính nó là đỉnh RAM lớn nhất của hàm này.
+        tuning = ToneDetector._estimate_tuning_bounded(audio_data, sr)
+        print(f"[TIMELINE] Tuning = {tuning:+.4f} bin "
+              f"({tuning * 1200 / ToneDetector.CHROMA_BINS_PER_OCTAVE:+.0f} cent, mẫu giới hạn)")
+
+        # 1. Novelty curve (dựa trên chroma) — tính theo khối, RAM phẳng.
         hop_length = int(sr / 2) # 0.5s per frame
-        chroma = librosa.feature.chroma_cqt(y=audio_data, sr=sr, hop_length=hop_length)
-        
+        chroma, _ = ToneDetector._chroma_rms_blockwise(
+            audio_data, sr, hop_length, tuning, want_rms=False)
+
         novelty = np.zeros(chroma.shape[1])
         window_frames = 10 # 5s
         for i in range(window_frames, chroma.shape[1] - window_frames):
@@ -921,16 +1215,26 @@ class ToneDetector:
         # 3. Detect tone cho mỗi phân đoạn bằng cách slice từ chroma tổng
         # Tính CQT cho toàn bộ track một lần duy nhất (nhanh gấp nhiều lần gọi lại hàm detect)
         print("[TIMELINE] Bắt đầu tính ma trận CQT tổng...")
-        # Xoá mean và giới hạn độ lớn — thao tác trên BẢN SAO, không mutate
-        # in-place mảng audio_data của caller (caller có thể còn dùng tiếp)
-        audio_data = audio_data - np.mean(audio_data)
-        audio_data = np.clip(audio_data, -1.0, 1.0)
-        
+        if on_progress: on_progress("Tính ma trận CQT...")
+
+        # Xoá mean và giới hạn độ lớn. KHÔNG mutate in-place mảng audio_data của
+        # caller (caller có thể còn dùng tiếp) — nhưng cũng KHÔNG nhân đôi cả
+        # mảng nữa: mean tính một lần ở đây rồi áp cho từng khối bên trong
+        # _chroma_rms_blockwise, cho kết quả y hệt mà không tốn thêm RAM.
+        dc_offset = float(np.mean(audio_data))
+
         # Use fine-grained hop_length for the actual detection
         detect_hop_length = 512
-        full_chroma_cqt = librosa.feature.chroma_cqt(y=audio_data, sr=sr, hop_length=detect_hop_length)
-        full_rms = librosa.feature.rms(y=audio_data, hop_length=detect_hop_length)[0]
-        
+
+        def _cqt_progress(done, total):
+            if on_progress:
+                on_progress(f"Tính ma trận CQT {done}/{total}...")
+
+        full_chroma_cqt, full_rms = ToneDetector._chroma_rms_blockwise(
+            audio_data, sr, detect_hop_length, tuning,
+            dc_offset=dc_offset, clip=True, want_rms=True,
+            on_block=_cqt_progress)
+
         segments = []
         for i in range(len(boundaries) - 1):
             start = boundaries[i]
@@ -973,93 +1277,47 @@ class ToneDetector:
             cqt_normalized = chroma_avg.copy()
             
             # Re-use the extracted correlation logic
-            result = ToneDetector._detect_key_from_chroma_impl(chroma_avg, cqt_normalized)
+            # cleanup=False: hàm này tự dọn RAM một lần ở cuối, không dọn sau mỗi đoạn.
+            result = ToneDetector._detect_key_from_chroma_impl(chroma_avg, cqt_normalized,
+                                                                cleanup=False)
             
             if result:
                 segments.append({
                     'start': start, 'end': end,
                     'key_display': result['key_display'],
-                    'result': result
+                    'result': result,
+                    'start_frame': start_frame, 'end_frame': end_frame,
+                    'chroma': chroma_avg,
                 })
                 print(f"   🎵 Phân đoạn [{start:.1f}s - {end:.1f}s]: {result['key_display']} (conf={result.get('confidence',0):.3f})")
             else:
                 segments.append({'start': start, 'end': end, 'key_display': 'Unknown', 'result': None})
                 
-        # Giải phóng biến lớn
-        del full_chroma_cqt, full_rms
-                
-        # 4. Merge adjacent segments (bỏ Silence/Unknown)
-        merged_segments = []
-        for seg in segments:
-            if not merged_segments:
-                merged_segments.append(seg)
-            else:
-                last_seg = merged_segments[-1]
-                if seg['key_display'] in ['Silence', 'Unknown']:
-                    last_seg['end'] = seg['end']
-                elif last_seg['key_display'] in ['Silence', 'Unknown']:
-                    last_seg['key_display'] = seg['key_display']
-                    last_seg['result'] = seg['result']
-                    last_seg['end'] = seg['end']
-                elif last_seg['key_display'] == seg['key_display']:
-                    last_seg['end'] = seg['end']
-                    if seg['result'] and last_seg['result']:
-                        if seg['result'].get('confidence',0) > last_seg['result'].get('confidence',0):
-                            last_seg['result'] = seg['result']
-                else:
-                    merged_segments.append(seg)
-                    
-        # 5. Filter short segments (<8s) (Loc Nhiễu)
-        MIN_DURATION = 8.0
-        filtered_segments = []
-        for seg in merged_segments:
-            seg_dur = seg['end'] - seg['start']
-            if seg_dur < MIN_DURATION:
-                if not filtered_segments:
-                    filtered_segments.append(seg)
-                else:
-                    filtered_segments[-1]['end'] = seg['end']
-                    print(f"   ✂️ Bỏ qua đoạn chuyển nhiễu ({seg_dur:.1f}s), gộp vào {filtered_segments[-1]['key_display']}")
-            else:
-                if filtered_segments and filtered_segments[-1]['key_display'] == seg['key_display']:
-                    filtered_segments[-1]['end'] = seg['end']
-                else:
-                    filtered_segments.append(seg)
-                    
-        # Final pass merge
-        final_segments = []
-        for seg in filtered_segments:
-            if not final_segments:
-                final_segments.append(seg)
-            elif final_segments[-1]['key_display'] == seg['key_display']:
-                final_segments[-1]['end'] = seg['end']
-            else:
-                final_segments.append(seg)
-                
-        # Tạo kết quả cuối cùng
+        # 4. Gộp các đoạn thành VÙNG tone — mỗi vùng neo vào tone tính từ chroma
+        #    tích luỹ của chính nó (xem _regionalize và TIMELINE_REGION_*).
+        regions = ToneDetector._regionalize(segments, full_chroma_cqt, full_rms)
+        del full_chroma_cqt, full_rms  # Giải phóng biến lớn
+
         timeline_entries = []
-        for seg in final_segments:
-            if seg['result'] and seg['key_display'] not in ['Silence', 'Unknown']:
-                entry = {
-                    'time': float(seg['start']),
-                    'key_display': seg['result']['key_display'],
-                    'key_index': seg['result']['key_index'],
-                    'scale': seg['result']['scale'],
-                    'confidence': float(seg['result'].get('confidence', 0.8))
-                }
-                timeline_entries.append(entry)
-                print(f"[TIMELINE] {seg['start']:.1f}s -> {seg['key_display']}")
-                
-        # Xử lý case track toàn bị Silent/ngắn
-        if not timeline_entries and final_segments and final_segments[0]['result']:
-            seg = final_segments[0]
+        for idx, reg in enumerate(regions):
+            res = reg['result']
+            if not res:
+                continue
+            if timeline_entries and timeline_entries[-1]['key_display'] == res['key_display']:
+                continue
+            # Mốc đầu luôn ở 0s: đoạn im lặng/intro trước vùng đầu thuộc về vùng đó.
+            t = 0.0 if not timeline_entries else float(reg['start'])
             timeline_entries.append({
-                'time': 0.0,
-                'key_display': seg['result']['key_display'],
-                'key_index': seg['result']['key_index'],
-                'scale': seg['result']['scale'],
-                'confidence': float(seg['result'].get('confidence', 0.8))
+                'time': t,
+                'key_display': res['key_display'],
+                'key_index': res['key_index'],
+                'scale': res['scale'],
+                'confidence': float(res.get('confidence', 0.8)),
+                # Số đo nội bộ (tone_share diag) — tuning là của cả bài.
+                'tuning_cents': round(tuning * 1200 / ToneDetector.CHROMA_BINS_PER_OCTAVE, 1),
             })
+            print(f"[TIMELINE] {t:.1f}s -> {res['key_display']} "
+                  f"(vùng {reg['start']:.0f}–{reg['end']:.0f}s)")
             
         # Giải phóng RAM sau khi dò toàn bộ timeline
         try:
@@ -1070,6 +1328,114 @@ class ToneDetector:
         
         return timeline_entries
         
+    @staticmethod
+    def _weighted_key_corr(chroma, key_index, scale):
+        """Tương quan có trọng số (Aarden/Temperley/KS) của chroma với MỘT tone."""
+        import numpy as np
+        W = ToneDetector.PROFILE_WEIGHTS
+        if scale == "Minor":
+            profiles = (ToneDetector.AARDEN_MINOR, ToneDetector.TEMP_MINOR, ToneDetector.KS_MINOR)
+        else:
+            profiles = (ToneDetector.AARDEN_MAJOR, ToneDetector.TEMP_MAJOR, ToneDetector.KS_MAJOR)
+        rotated = np.roll(np.asarray(chroma, dtype=float), -int(key_index))
+        return sum(w * ToneDetector._safe_corrcoef(rotated, p)
+                   for w, p in zip((W['aarden'], W['temperley'], W['ks']), profiles))
+
+    @staticmethod
+    def _regionalize(segments, chroma, rms):
+        """Gộp các đoạn đã dò thành VÙNG tone.
+
+        Mỗi vùng neo vào tone tính từ chroma TÍCH LUỸ của cả vùng (chứ không phải
+        tone của từng đoạn 10–20s — đó thực chất là hợp âm). Đoạn kế tiếp:
+          - cùng họ với tone vùng (chung >= TIMELINE_FAMILY_OVERLAP nốt), hoặc
+          - không thắng tone vùng >= TIMELINE_REGION_MIN_GAIN trên chroma của nó
+        → bị hút vào vùng. Ngược lại là ỨNG VIÊN vùng mới: kéo dài qua các đoạn
+        tiếp theo cùng họ với nó; chỉ thành vùng mới nếu dài >=
+        TIMELINE_REGION_MIN_SECONDS. Cuối cùng vùng nào (kể cả intro) ngắn hơn
+        ngưỡng thì nhập vào vùng kề, rồi dò lại tone từng vùng trên chroma của nó.
+
+        segments: list dict của detect_timeline_advanced; đoạn có 'result' mới
+        mang 'start_frame'/'end_frame'/'chroma'. Trả list
+        {'start', 'end', 'result'} theo thứ tự thời gian.
+        """
+        import numpy as np
+
+        valid = [s for s in segments if s.get('result') and 'chroma' in s]
+        if not valid:
+            return []
+
+        n_frames = chroma.shape[1]
+
+        def region_result(fa, fb):
+            fb = min(fb, n_frames)
+            c, r = chroma[:, fa:fb], rms[fa:fb]
+            total = float(np.sum(r))
+            v = np.average(c, axis=1, weights=r / total) if total > 0 else np.mean(c, axis=1)
+            s = float(np.sum(v))
+            if s > 0:
+                v = v / s
+            return ToneDetector._detect_key_from_chroma_impl(v, v.copy(), verbose=False, cleanup=False)
+
+        def same_family(k1, k2):
+            return ToneDetector._note_overlap(k1[0], k1[1], k2[0], k2[1]) >= \
+                ToneDetector.TIMELINE_FAMILY_OVERLAP
+
+        def key_of(seg):
+            return (seg['result']['key_index'], seg['result']['scale'])
+
+        min_len = ToneDetector.TIMELINE_REGION_MIN_SECONDS
+        min_gain = ToneDetector.TIMELINE_REGION_MIN_GAIN
+
+        regions = []
+        i = 0
+        while i < len(valid):
+            seg = valid[i]
+            if not regions:
+                regions.append({'start': seg['start'], 'end': seg['end'],
+                                'fa': seg['start_frame'], 'fb': seg['end_frame']})
+                i += 1
+                continue
+            reg = regions[-1]
+            rres = region_result(reg['fa'], reg['fb'])
+            k = key_of(seg)
+            rkey = (rres['key_index'], rres['scale']) if rres else k
+            gain = (ToneDetector._weighted_key_corr(seg['chroma'], *k)
+                    - ToneDetector._weighted_key_corr(seg['chroma'], *rkey))
+            if same_family(k, rkey) or gain < min_gain:
+                reg['end'], reg['fb'] = seg['end'], seg['end_frame']
+                i += 1
+                continue
+            j = i + 1
+            while j < len(valid) and same_family(key_of(valid[j]), k):
+                j += 1
+            last = valid[j - 1]
+            if last['end'] - seg['start'] >= min_len:
+                regions.append({'start': seg['start'], 'end': last['end'],
+                                'fa': seg['start_frame'], 'fb': last['end_frame']})
+            else:
+                reg['end'], reg['fb'] = last['end'], last['end_frame']
+            i = j
+
+        # Vùng ngắn (kể cả vùng đầu = intro) nhập vào vùng kề sau, vùng cuối
+        # thì nhập vào vùng kề trước.
+        merged = True
+        while merged and len(regions) > 1:
+            merged = False
+            for idx, reg in enumerate(regions):
+                if reg['end'] - reg['start'] < min_len:
+                    if idx + 1 < len(regions):
+                        nxt = regions[idx + 1]
+                        nxt['start'], nxt['fa'] = reg['start'], reg['fa']
+                    else:
+                        prv = regions[idx - 1]
+                        prv['end'], prv['fb'] = reg['end'], reg['fb']
+                    regions.pop(idx)
+                    merged = True
+                    break
+
+        return [{'start': reg['start'], 'end': reg['end'],
+                 'result': region_result(reg['fa'], reg['fb'])} for reg in regions]
+
     @staticmethod
     def key_index_to_midi(key_index):
         """

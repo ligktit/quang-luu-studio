@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block content %}
+{% set TEN = {'dung': 'đúng', 'song_song': 'song song (C↔Am)', 'quang5': 'lệch quãng 5',
+              'cung_ten': 'cùng tên (C↔Cm)', 'khac': 'sai hẳn', 'khong_ro': 'không đọc được'} %}
+{% set MAU = {'dung': 'active', 'song_song': 'answered', 'quang5': 'expired',
+              'cung_ten': 'expired', 'khac': 'revoked', 'khong_ro': 'unused'} %}
+<h1>Máy dò vs người sửa</h1>
+<div style="color:var(--muted);font-size:13px;margin-bottom:12px">
+  Mọi kết quả máy dò của những bài đã có bản <b>người sửa tay</b> hoặc bản <b>dev ghim</b>.
+  "Đúng tập nốt" tính cả nhầm song song (C↔Am) vì Auto-Tune kéo về cùng 7 nốt.
+  Dữ liệu nội bộ — khách không bao giờ thấy.
+  · <a href="/admin/library/errors.json">Tải JSON</a> · <a href="/admin/library">Về thư viện</a>
+</div>
+
+{% for kind, label in [('luot_do', 'Lượt dò có số đo (client mới)'), ('bien_the', 'Biến thể máy dò (mọi client)')] %}
+{% set t = r[kind] %}
+<h3 style="margin:18px 0 8px">{{ label }}</h3>
+<div class="grid">
+  <div class="stat"><div class="n">{{ t.tong }}</div><div class="l">Kết quả</div></div>
+  <div class="stat"><div class="n">{{ t.theo_loai.dung }}</div><div class="l">Đúng tuyệt đối</div></div>
+  <div class="stat"><div class="n">{{ t.dung_tap_not }}</div><div class="l">Đúng tập nốt</div></div>
+  <div class="stat"><div class="n">{{ t.theo_loai.quang5 + t.theo_loai.cung_ten + t.theo_loai.khac }}</div><div class="l">Làm hát lệch</div></div>
+</div>
+{% endfor %}
+
+<div class="card" style="margin-top:18px">
+  <b>Độ tin cậy có nói thật không</b>
+  <span style="color:var(--muted);font-size:13px">— tỉ lệ đúng theo mức confidence của lượt dò</span>
+  <table style="margin-top:8px">
+    <tr><th>Confidence</th><th>Số lượt</th><th>Đúng tuyệt đối</th><th>Đúng tập nốt</th></tr>
+    {% for b in r.theo_do_tin_cay %}
+    <tr><td>{{ b.muc }}</td><td>{{ b.so_luot }}</td><td>{{ b.dung }}</td><td>{{ b.dung_tap_not }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+{% for s in r.bai %}
+<div class="card">
+  <div style="margin-bottom:10px">
+    <b>{{ s.title or '(chưa có tên)' }}</b> · <code>{{ s.song_key }}</code> ·
+    <a href="https://youtu.be/{{ s.song_key }}" target="_blank" rel="noopener">mở YouTube</a> ·
+    đáp án <b>{{ s.dap_an or '—' }}</b>{% if s.dap_an_ghim %} <span class="badge answered">ghim</span>{% endif %}
+  </div>
+  <table>
+    <tr><th>Máy dò</th><th>Kết quả</th><th>Chế độ</th><th>Audio</th><th>Confidence</th><th>Tuning</th><th>Bản app</th></tr>
+    {% for m in s.may_do %}
+    <tr>
+      <td>{{ m.primary_key or '—' }}{% if m.loai == 'bien_the' %} <span style="color:var(--muted);font-size:12px">(biến thể, {{ m.votes }} phiếu)</span>{% endif %}</td>
+      <td><span class="badge {{ MAU[m.cls] }}">{{ TEN[m.cls] }}</span></td>
+      <td>{{ m.mode or '—' }}</td>
+      <td>{{ m.audio or '—' }}</td>
+      <td>{{ '%.2f'|format(m.confidence) if m.confidence is not none else '—' }}</td>
+      <td>{{ '%+.0f cent'|format(m.tuning_cents) if m.tuning_cents is not none else '—' }}</td>
+      <td>{{ m.app_version or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endfor %}
+{% if not r.bai %}<p style="color:var(--muted)">Chưa có bài nào vừa có bản người sửa vừa có kết quả máy dò.</p>{% endif %}
+{% endblock %}

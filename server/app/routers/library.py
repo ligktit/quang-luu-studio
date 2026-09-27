@@ -9,6 +9,7 @@ Khác `sync.py` một trời một vực dù nghe giống nhau:
 Luật "kết quả nào đúng" nằm ở app/services/tonelib.py.
 """
 import json
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -17,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.models import SharedTone, SharedToneVote
+from app.models import SharedTone, SharedToneVote, ToneDetection
 from app.schemas import (
     LibraryContributeRequest,
     LibraryContributeResponse,
@@ -138,6 +139,33 @@ def _withdraw_other_votes(db: Session, song_key: str, keep_tone_id: int, fingerp
         db.delete(vote)
 
 
+def _record_detection(db: Session, item, raw: list, fingerprint: str) -> None:
+    """Lưu số đo của lượt máy dò (upsert theo bài + máy + chế độ).
+
+    Dữ liệu nội bộ cho dev (trang /admin/library/errors) — không ảnh hưởng
+    biến thể, phiếu hay kết quả trả về cho khách.
+    """
+    diag = item.diag
+    mode = (diag.mode or "").strip()[:20]
+    row = db.scalar(
+        select(ToneDetection).where(
+            ToneDetection.song_key == item.song_key,
+            ToneDetection.device_fp == fingerprint,
+            ToneDetection.mode == mode,
+        )
+    )
+    if row is None:
+        row = ToneDetection(song_key=item.song_key, device_fp=fingerprint, mode=mode)
+        db.add(row)
+    row.audio = (diag.audio or "").strip()[:20]
+    row.primary_key = (item.primary_key or "").strip()[:20]
+    row.timeline = json.dumps(raw[: tonelib.MAX_ENTRIES], ensure_ascii=False)
+    row.confidence = diag.confidence
+    row.tuning_cents = diag.tuning_cents
+    row.app_version = (diag.app_version or "").strip()[:20]
+    row.updated_at = datetime.now(timezone.utc)
+
+
 @router.post("/contribute", response_model=LibraryContributeResponse)
 @limiter.limit(settings.rate_limit_library)
 def contribute(request: Request, payload: LibraryContributeRequest, db: Session = Depends(get_db)):
@@ -191,6 +219,8 @@ def contribute(request: Request, payload: LibraryContributeRequest, db: Session 
 
         _record_vote(db, tone, fingerprint, "vote")
         _withdraw_other_votes(db, item.song_key, tone.id, fingerprint)
+        if source == "auto" and item.diag is not None:
+            _record_detection(db, item, raw, fingerprint)
         accepted += 1
 
     db.commit()
