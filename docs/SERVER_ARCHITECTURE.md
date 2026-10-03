@@ -98,6 +98,7 @@ server/
   cần hỗ trợ nhất. Ràng theo `device_fingerprint` (biết mã ticket thôi không đọc được), chống lạm
   dụng bằng `RATE_LIMIT_SUPPORT` (mặc định 6/giờ).
 - `POST /library/lookup` · `/library/contribute` · `/library/report` — thư viện tone cộng đồng.
+- `POST /library/changes` — feed bản **ghim** cho máy khách theo cursor opaque (xem bên dưới).
   Cần license token nhưng **không giới hạn Premium** (khác `/sync`): thư viện sống bằng hiệu ứng
   mạng, chặn Standard đóng góp là tự bóp nguồn dữ liệu. Mỗi máy 1 phiếu/biến thể; bản `human`
   nhân hệ số 3, mỗi lượt báo sai trừ 2; `song_key` chỉ nhận video_id YouTube 11 ký tự.
@@ -110,7 +111,15 @@ server/
 - **Versions**: upload `.exe` (tự tính sha256, lưu vào `STORAGE_DIR`), đặt channel/rollout/mandatory/min_version, bật/tắt active.
 - **Crashes**: danh sách gom theo fingerprint, xem traceback + log, đánh dấu resolved.
 - **Support**: hộp thư hỗ trợ, lọc theo trạng thái, xem hội thoại, trả lời (khách đọc trong app), đổi trạng thái.
-- **Library**: các biến thể tone của từng bài kèm điểm; ghim / ẩn / xoá biến thể rác — van an toàn duy nhất để sửa dữ liệu cộng đồng từ xa.
+- **Library**: các biến thể tone của từng bài kèm điểm; ghim / ẩn / xoá biến thể rác — van an toàn để sửa dữ liệu cộng đồng từ xa. **Đặt tone** (2026-10-03): form trên trang tạo biến thể `source="admin"` (trọng số 10), tự ghim, bỏ ghim anh em, `last_seen = now`.
+
+**Admin đặt tone → máy khách (2026-10-03).** `POST /admin/library/set` tạo biến thể
+`source="admin"`, tự ghim. `pin`/`hide`/`delete` cũng bơm `last_seen` cho bản thắng
+mới (`_touch_winner`). `POST /api/v1/library/changes` phát bản ghim từ cursor opaque
+(`tonelib.encode_cursor` = base64url của `{"ts": last_seen ISO, "id"}`), trang 500
+(+1 để biết `has_more`), sắp `last_seen, id` — keyset, không dùng mốc giờ để không
+sót bản commit muộn hay bản cùng `last_seen` ở ranh giới trang. Client gửi
+`source="admin"` qua `/contribute` bị ép về `auto` (`tonelib.CLIENT_SOURCES`).
 
 ## Bảo mật
 

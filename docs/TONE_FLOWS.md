@@ -42,6 +42,16 @@ Nguồn: `core/engine/_tone.py`, `_youtube.py`, `_autokey.py`, `_session.py`, `f
 >    làm cú dò tình cờ đó biến mất, nên `open_youtube_url` gọi thẳng — và bỏ qua
 >    nếu phiên dò/replay của CHÍNH bài đó đang chạy.
 
+> **⚠ Cập nhật 2026-10-03 — tone admin đặt trên server:** `core/tone_share.py::pull_overrides`
+> kéo feed `POST /api/v1/library/changes` (chỉ bản **ghim**, cursor keyset
+> `(last_seen, id)`) và ghi vào `ToneCache` với `origin="admin"`. Nấc resolve
+> **không đổi**: entry này nằm ở `tone_cache` nên **đè** tone bài đã lưu và cộng
+> đồng, nhưng **thua** chuỗi tone thủ công (`source="human"`), và
+> `pull_overrides` bỏ qua hẳn bài có chuỗi thủ công. Gọi từ vòng bảo trì nền
+> (6 giờ, chạy cả lúc khởi động), nút "☁ Đồng bộ tone" (`sync_songs`) và
+> "Đồng bộ ngay" mục Thư viện tone. Cursor lưu ở `DATA_DIR/tone_overrides_state.json`.
+> Spec: `docs/superpowers/specs/2026-10-03-admin-tone-override-design.md`.
+
 ---
 
 ## 1. State machine của `ToneSession`

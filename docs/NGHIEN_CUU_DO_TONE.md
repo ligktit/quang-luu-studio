@@ -344,6 +344,10 @@ Gợi ý cho GĐ1 (chưa làm): tín hiệu bass (nốt gốc chiếm thời lư
 kết bài đều chỉ đúng F#m ở bài này — đúng hướng "phân giải bằng bass/đoạn kết"
 đã nêu, và nên áp cho cả cặp quãng 5 chứ không riêng trưởng/thứ song song.
 
+**Đường sửa nhanh ngoài thuật toán (2026-10-03):** admin đặt tone trên
+`/admin/library`, máy khách nhận qua `tone_share.pull_overrides` (xem
+TONE_FLOWS.md). Ca thử đầu tiên: đặt `pMPvJE1wwnc` = F#m.
+
 ## Script đo nháp
 Bộ thử tổng hợp đã chuyển vào `tools/danh_gia_do_tone.py`. Nguyên mẫu HMM
 (`hmm_proto.py`) chỉ nằm trong thư mục tạm của phiên nghiên cứu, không giữ lại.
