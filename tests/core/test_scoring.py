@@ -151,3 +151,44 @@ def test_cleanup_temp_file(engine, tmp_path):
     assert engine.audio_data is None
     assert engine.temp_audio_path is None
     assert not test_file.exists()
+
+
+# --- Tai loi: khong tai lai ca bai vo ich, giu loi goc de ghi nhat ky ---
+
+@patch("core.scoring.download_with_auth")
+def test_partial_download_non_ffmpeg_error_no_full_retry(mock_download, engine, tmp_path):
+    # SC-20: YouTube chan / mat mang -> tai lai ca bai chi chay lai nguyen thang thu
+    err = RuntimeError("ERROR: [youtube] abc: Sign in to confirm you're not a bot")
+    mock_download.side_effect = err
+    res = engine.download_youtube_audio("http://yt.com", output_dir=str(tmp_path))
+    assert res is None
+    assert mock_download.call_count == 1
+    assert engine.last_download_error is err
+
+
+@patch("core.scoring.download_with_auth")
+def test_partial_download_ffmpeg_error_retries_full(mock_download, engine, tmp_path):
+    # SC-21: chinh ffmpeg hong (tai doan) -> duong HTTP (tai ca bai) con co hoi
+    def side_effect(url, ydl_opts, log_prefix):
+        if "download_ranges" in ydl_opts:
+            raise RuntimeError("ERROR: ffmpeg exited with code 1")
+        base = ydl_opts["outtmpl"].replace(".%(ext)s", "")
+        with open(base + ".m4a", "w") as f:
+            f.write("dummy")
+
+    mock_download.side_effect = side_effect
+    res = engine.download_youtube_audio("http://yt.com", output_dir=str(tmp_path))
+    assert res is not None
+    assert mock_download.call_count == 2
+    assert engine.last_download_error is None
+
+
+@patch("core.scoring.extract_info_with_auth")
+def test_download_with_info_cancelled_no_full_retry(mock_extract, engine, tmp_path):
+    # SC-22: phien do da huy -> khong tai lai ca bai
+    from core.ytdlp_support import DownloadCancelled
+    mock_extract.side_effect = DownloadCancelled("huy")
+    path, title = engine.download_youtube_audio_with_info("http://yt.com", output_dir=str(tmp_path))
+    assert (path, title) == (None, "")
+    assert mock_extract.call_count == 1
+    assert isinstance(engine.last_download_error, DownloadCancelled)

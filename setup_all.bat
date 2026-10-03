@@ -8,110 +8,26 @@ echo ========================================
 echo.
 
 REM ============================================
-REM  BƯỚC 1: Kiểm tra và cài đặt loopMIDI
+REM  BƯỚC 1: loopMIDI và các cổng MIDI ảo
 REM ============================================
+REM  Cả phần cài loopMIDI lẫn tạo cổng nằm trong setup_midi_ports.ps1:
+REM  script đó tạo xong còn ĐẾM LẠI danh sách cổng MIDI thật sự có trên
+REM  máy, thiếu thì mở loopMIDI lên chỉ cách thêm tay. Batch không làm
+REM  được bước kiểm chứng đó.
 echo ----------------------------------------
-echo  Buoc 1: Kiem tra loopMIDI
+echo  Buoc 1: loopMIDI + cong QuangLuuMIDI, QLS_PhanHoi
 echo ----------------------------------------
-
-set "LOOPMIDI_EXE="
-
-REM Tìm loopMIDI trong các vị trí phổ biến
-if exist "%ProgramFiles%\Tobias Erichsen\loopMIDI\loopMIDI.exe" (
-    set "LOOPMIDI_EXE=%ProgramFiles%\Tobias Erichsen\loopMIDI\loopMIDI.exe"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup_midi_ports.ps1"
+if !errorlevel! neq 0 (
+    echo [CANH BAO] Chua tao du cong MIDI - xem huong dan o tren.
 )
-if exist "%ProgramFiles(x86)%\Tobias Erichsen\loopMIDI\loopMIDI.exe" (
-    set "LOOPMIDI_EXE=%ProgramFiles(x86)%\Tobias Erichsen\loopMIDI\loopMIDI.exe"
-)
-if exist "%LOCALAPPDATA%\Programs\Tobias Erichsen\loopMIDI\loopMIDI.exe" (
-    set "LOOPMIDI_EXE=%LOCALAPPDATA%\Programs\Tobias Erichsen\loopMIDI\loopMIDI.exe"
-)
-
-if "!LOOPMIDI_EXE!"=="" (
-    echo [CHUA CAI] loopMIDI chua duoc cai dat.
-    echo.
-    echo Dang mo trang tai loopMIDI...
-    start "" "https://www.tobias-erichsen.de/software/loopmidi.html"
-    echo.
-    echo Vui long tai va cai dat loopMIDI, sau do nhan phim bat ky...
-    pause >nul
-    echo.
-    
-    REM Tìm lại sau khi user đã cài
-    if exist "%ProgramFiles%\Tobias Erichsen\loopMIDI\loopMIDI.exe" (
-        set "LOOPMIDI_EXE=%ProgramFiles%\Tobias Erichsen\loopMIDI\loopMIDI.exe"
-    )
-    if exist "%ProgramFiles(x86)%\Tobias Erichsen\loopMIDI\loopMIDI.exe" (
-        set "LOOPMIDI_EXE=%ProgramFiles(x86)%\Tobias Erichsen\loopMIDI\loopMIDI.exe"
-    )
-    if exist "%LOCALAPPDATA%\Programs\Tobias Erichsen\loopMIDI\loopMIDI.exe" (
-        set "LOOPMIDI_EXE=%LOCALAPPDATA%\Programs\Tobias Erichsen\loopMIDI\loopMIDI.exe"
-    )
-    
-    if "!LOOPMIDI_EXE!"=="" (
-        echo [ERROR] Van chua tim thay loopMIDI.
-        echo Vui long cai dat loopMIDI truoc roi chay lai file nay.
-        pause
-        exit /b 1
-    )
-)
-
-echo [OK] Tim thay loopMIDI: !LOOPMIDI_EXE!
 echo.
 
 REM ============================================
-REM  BƯỚC 2: Khởi động loopMIDI và tạo port
+REM  BƯỚC 2: Cài đặt Surface cho Studio One
 REM ============================================
 echo ----------------------------------------
-echo  Buoc 2: Tao MIDI port "QuangLuuMIDI"
-echo ----------------------------------------
-
-REM Kiểm tra loopMIDI đang chạy chưa
-tasklist /FI "IMAGENAME eq loopMIDI.exe" 2>nul | find /I "loopMIDI.exe" >nul
-if !errorlevel! neq 0 (
-    echo [INFO] Dang khoi dong loopMIDI...
-    start "" "!LOOPMIDI_EXE!"
-    timeout /t 3 /nobreak >nul
-)
-
-echo [INFO] Dang cau hinh port QuangLuuMIDI...
-
-REM Thêm port QuangLuuMIDI vào loopMIDI config (registry)
-reg query "HKCU\Software\Tobias Erichsen\loopMIDI\Ports" /v "QuangLuuMIDI" >nul 2>&1
-if !errorlevel! neq 0 (
-    reg add "HKCU\Software\Tobias Erichsen\loopMIDI\Ports" /v "QuangLuuMIDI" /t REG_SZ /d "QuangLuuMIDI" /f >nul 2>&1
-    
-    if !errorlevel! equ 0 (
-        echo [OK] Da them port QuangLuuMIDI vao cau hinh
-        REM Khởi động lại loopMIDI để nhận port mới
-        taskkill /F /IM loopMIDI.exe >nul 2>&1
-        timeout /t 2 /nobreak >nul
-        start "" "!LOOPMIDI_EXE!"
-        timeout /t 3 /nobreak >nul
-    ) else (
-        echo [CANH BAO] Khong the tu dong tao port.
-        echo Vui long tao port thu cong trong loopMIDI:
-        echo   1. Mo loopMIDI tu system tray
-        echo   2. Go "QuangLuuMIDI" vao o "New port-name"
-        echo   3. Nhan nut "+" de tao port
-        echo.
-        echo Nhan phim bat ky sau khi da tao port...
-        pause >nul
-    )
-) else (
-    echo [OK] Port QuangLuuMIDI da ton tai
-)
-
-REM Cấu hình autostart cho loopMIDI
-reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "loopMIDI" /t REG_SZ /d "\"!LOOPMIDI_EXE!\" /autostart" /f >nul 2>&1
-echo [OK] Da cau hinh loopMIDI tu dong chay khi khoi dong Windows
-echo.
-
-REM ============================================
-REM  BƯỚC 3: Cài đặt Surface cho Studio One
-REM ============================================
-echo ----------------------------------------
-echo  Buoc 3: Cai dat QuangLuuMIDI Surface
+echo  Buoc 2: Cai dat QuangLuuMIDI Surface
 echo ----------------------------------------
 
 set "SURFACE_DIR="
@@ -184,10 +100,10 @@ echo de nhan dien QuangLuuMIDI Surface.
 echo.
 
 REM ============================================
-REM  BƯỚC 4: Cài đặt FFmpeg (cho YouTube)
+REM  BƯỚC 3: Cài đặt FFmpeg (cho YouTube)
 REM ============================================
 echo ----------------------------------------
-echo  Buoc 4: Kiem tra FFmpeg
+echo  Buoc 3: Kiem tra FFmpeg
 echo ----------------------------------------
 
 REM Kiểm tra FFmpeg đã có chưa (cả PATH lẫn %LOCALAPPDATA%\FFmpeg)
@@ -302,7 +218,8 @@ echo  2. Options ^> External Devices ^> Add
 echo  3. Tim "QuangLuuStudio" trong danh sach
 echo  4. Chon "QuangLuuMIDI"
 echo  5. Receive From: QuangLuuMIDI (loopMIDI)
-echo  6. Dung Control Link de gan controls
+echo  6. Send To: QLS_PhanHoi  (KHONG chon QuangLuuMIDI - se thanh vong lap)
+echo  7. Dung Control Link de gan controls
 echo.
 pause
 

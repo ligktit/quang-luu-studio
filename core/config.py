@@ -88,6 +88,7 @@ CALIBRATION_KEYS = (
     "scale_values",
     "mode_midi_map",
     "mode_config",
+    "toggle_invert",
 )
 
 # Prefix cho file audio TẠM do app tải về (yt-dlp/scoring).
@@ -103,6 +104,44 @@ APP_CONFIG_FILE = "app_config.json"
 # xoá một dòng là app mất đường kiểm tra license. Cho phép trỏ sang server khác
 # qua app_config.json, nhưng không cho phép bỏ trống.
 DEFAULT_LICENSE_SERVER_URL = "https://qlstudio.duckdns.org"
+
+# Cấu hình MIDI mặc định của các nút MODE (CC + giá trị bật/tắt).
+# Tách thành hằng số CÔNG KHAI để UI có một đường lấy fallback duy nhất khi
+# AppConfig hỏng — trước đây frontend_qt chép tay 3 bản và còn lệch nhau
+# (Dân Ca lúc CC 30, lúc CC 34).
+# Mỗi nút là một toggle ĐỘC LẬP: bật Lofi không đụng tới Remix hay Đa Thể Loại.
+DEFAULT_MODE_CONFIG = {
+    "Dân Ca":       {"cc": 46, "on_value": 127, "off_value": 0},
+    "Lofi":         {"cc": 37, "on_value": 127, "off_value": 0},
+    "Remix":        {"cc": 38, "on_value": 127, "off_value": 0},
+    "Đa Thể Loại":  {"cc": 39, "on_value": 127, "off_value": 0}
+}
+
+# Đảo chiều giá trị MIDI của các nút bật/tắt trên panel Công cụ (key = tên CC
+# trong midi_cc). Mặc định app gửi 127 = BẬT, 0 = TẮT. Nếu trong Studio One nút
+# được gán vào tham số kiểu **Bypass** (127 = bỏ qua plugin = TẮT) thì bật cờ
+# này: app gửi 127 − giá trị (BẬT → 0, TẮT → 127) và đọc phản hồi cũng theo
+# chiều đó, để đèn nút + dải "ĐANG BẬT" khớp với Studio One.
+DEFAULT_TOGGLE_INVERT = {
+    "tone_auto": False,   # Auto-Tune
+    "fix_meo":   False,   # Fix Méo
+    "be":        False,   # Bè
+    "tat_on":    False,   # Tắt Ồn
+}
+
+
+def toggle_midi_value(on, invert=False, on_value=127, off_value=0):
+    """Giá trị CC gửi đi cho nút bật/tắt; invert=True → 127 − giá trị."""
+    value = int(on_value) if on else int(off_value)
+    value = max(0, min(127, value))
+    return 127 - value if invert else value
+
+
+def toggle_state_from_midi(value, invert=False):
+    """Trạng thái BẬT/TẮT đọc từ giá trị CC nhận về (ngưỡng 64, cùng chiều khi gửi)."""
+    on = int(value) >= 64
+    return (not on) if invert else on
+
 
 # Defaults nếu file không tồn tại hoặc thiếu field
 _DEFAULT_APP_CONFIG = {
@@ -128,7 +167,7 @@ _DEFAULT_APP_CONFIG = {
     # ── MIDI CC mapping ──────────────────────────────────────
     # QUAN TRỌNG: mỗi chức năng có nút vật lý riêng phải có CC DUY NHẤT.
     # Caller tra theo TÊN key (vd MIDI_CC.get("fix_meo")), KHÔNG theo số —
-    # nên chỉ cần đổi số, không đổi tên. Dải CC trống còn lại: 43-44, 49.
+    # nên chỉ cần đổi số, không đổi tên. Dải CC trống còn lại: 55 trở lên.
     "midi_cc": {
         "tone_music": 10, "tone_voice": 11,
         "mix_music": 20, "mix_mic": 21, "mix_reverb": 22, "mix_backing": 23,
@@ -150,11 +189,19 @@ _DEFAULT_APP_CONFIG = {
         # tat_on (48): nút Tắt Ồn — bật/tắt bộ khử ồn (noise gate) cho mic.
         #        KHÁC mute_mic (51, tắt hẳn tiếng mic): nút này chỉ chặn tiếng ồn nền.
         "tune_on_off": 36, "tone_auto": 40, "fix_meo": 45, "be": 47, "tat_on": 48,
+        # ready_ping (49): hỏi–đáp "Studio One sẵn sàng chưa" — app gửi N,
+        #        Studio One trả N qua cổng phản hồi (QLS_PhanHoi). Control
+        #        readyPing trong surface.xml là control DUY NHẤT có transmit.
+        "ready_ping": 49,
         # mode_danca (46): TÁCH khỏi 30 để không đè live-tuner "mode".
         #        Nút Dân Ca thật đi qua mode_config["Dân Ca"]["cc"], nay cũng = 46
         #        để đồng bộ với key này (xem mode_config bên dưới).
         "mode_danca": 46, "mode_lofi": 37, "mode_remix": 38, "mode_datheloai": 39,
         "mute_music": 50, "mute_mic": 51, "mute_reverb": 52, "mute_backing": 53,
+        # voice_fx (54): thanh trượt "Giọng" ở mixer — hiệu ứng chất giọng
+        #        (em bé ↔ robot). KHÁC tone_voice (11, dịch cao độ giọng).
+        #        Trước đây thanh này gửi nhầm CC 10, trùng với Tone Nhạc.
+        "voice_fx": 54,
     },
     # ⚠ NGUỒN TRÙNG: scale_values {major,minor} và scale_midi_map {Major,Minor}
     # (bên dưới) chứa CÙNG giá trị 13/18 nhưng khác cách viết hoa key.
@@ -181,12 +228,8 @@ _DEFAULT_APP_CONFIG = {
     "mode_midi_map": {
         "Fix Méo": 127
     },
-    "mode_config": {
-        "Dân Ca":       {"cc": 46, "on_value": 127, "off_value": 0},
-        "Lofi":         {"cc": 37, "on_value": 127, "off_value": 0},
-        "Remix":        {"cc": 38, "on_value": 127, "off_value": 0},
-        "Đa Thể Loại":  {"cc": 39, "on_value": 127, "off_value": 0}
-    },
+    "mode_config": copy.deepcopy(DEFAULT_MODE_CONFIG),
+    "toggle_invert": copy.deepcopy(DEFAULT_TOGGLE_INVERT),
     "mute_multi_cc": {
         "mix_music":   [],
         "mix_mic":     [],
@@ -331,6 +374,20 @@ class AppConfig:
     def get_mode_config(cls):
         """Lấy cấu hình MIDI chi tiết của các chế độ (CC, on_value, off_value)"""
         return cls.load().get("mode_config", _DEFAULT_APP_CONFIG["mode_config"])
+
+    @classmethod
+    def get_toggle_invert(cls):
+        """Cờ đảo chiều của các nút bật/tắt (xem DEFAULT_TOGGLE_INVERT).
+
+        Gộp lên mặc định: file cấu hình chỉ cần ghi nút muốn đảo, nút thiếu
+        coi như không đảo. Giá trị lạ (không phải bool) coi như False.
+        """
+        merged = dict(DEFAULT_TOGGLE_INVERT)
+        loaded = cls.load().get("toggle_invert")
+        if isinstance(loaded, dict):
+            for key, value in loaded.items():
+                merged[key] = value is True
+        return merged
 
     @classmethod
     def get_accessibility(cls):
@@ -517,15 +574,15 @@ class UiConfigManager:
             },
             {
                 "id": "mix_mic", "type": "slider", "label": "Mic", "icon": "☉", "color": "#f97316",
-                "cc": "mix_mic", "range": [-10, 10], "default": 0, "unit": "", "has_mute": True, "has_inf_bottom": True, "hidden": False
+                "cc": "mix_mic", "range": [-10, 10], "default": 0, "unit": " dB", "has_mute": True, "has_inf_bottom": True, "hidden": False
             },
             {
                 "id": "mix_reverb", "type": "slider", "label": "Vang", "icon": "≡", "color": "#eab308",
-                "cc": "mix_reverb", "range": [-10, 10], "default": 0, "unit": "", "has_mute": True, "has_inf_bottom": True, "hidden": False
+                "cc": "mix_reverb", "range": [-10, 10], "default": 0, "unit": " dB", "has_mute": True, "has_inf_bottom": True, "hidden": False
             },
             {
-                "id": "tone_music", "type": "slider", "label": "Giọng", "icon": "↕", "color": "#8b5cf6",
-                "cc": "tone_music", "range": [-12, 12], "default": 0, "unit": "", "has_mute": False, "has_inf_bottom": False, "hidden": False
+                "id": "voice_fx", "type": "slider", "label": "Giọng", "icon": "↕", "color": "#8b5cf6",
+                "cc": "voice_fx", "range": [-12, 12], "default": 0, "unit": "", "has_mute": False, "has_inf_bottom": False, "hidden": False
             }
         ],
         "tools": [
@@ -569,13 +626,30 @@ class UiConfigManager:
         return ui_config
 
     @staticmethod
+    def _migrate(ui_config):
+        """Nâng ui_config.json đời cũ lên bố cục hiện tại (không ghi file).
+
+        Thanh "Giọng" (hiệu ứng em bé ↔ robot) từng có id/cc "tone_music" — tức
+        gửi CC 10, trùng Tone Nhạc. Nay là "voice_fx" (CC 54). Chỉ đổi entry còn
+        nguyên cc mặc định; kỹ thuật viên đã tự gán CC số thì để nguyên. Phải
+        chạy TRƯỚC _merge_new_defaults, không thì id mới bị nối thêm thành 2 thanh.
+        """
+        for entry in ui_config.get("mixer") or []:
+            if (isinstance(entry, dict) and entry.get("id") == "tone_music"
+                    and entry.get("cc") == "tone_music"):
+                entry["id"] = "voice_fx"
+                entry["cc"] = "voice_fx"
+        return ui_config
+
+    @staticmethod
     def load_ui_config():
         if os.path.exists(UI_CONFIG_FILE):
             try:
                 with open(UI_CONFIG_FILE, "r", encoding="utf-8") as f:
                     user_config = json.load(f)
                 if isinstance(user_config, dict):
-                    return UiConfigManager._merge_new_defaults(user_config)
+                    return UiConfigManager._merge_new_defaults(
+                        UiConfigManager._migrate(user_config))
             except Exception:
                 pass
         return copy.deepcopy(UiConfigManager._DEFAULT_UI_CONFIG)

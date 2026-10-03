@@ -89,7 +89,7 @@
 <div class="layout">
 <nav class="toc">
   <div class="brand"><span class="dot"></span> Quang Lưu Studio</div>
-  <div class="ver">Hướng dẫn sử dụng · v1.7.5</div>
+  <div class="ver">Hướng dẫn sử dụng · v1.7.8</div>
   <h2>Bắt đầu</h2>
   <a href="#gioi-thieu">1. Giới thiệu</a>
   <a href="#cai-dat">2. Cài đặt & kích hoạt</a>
@@ -117,7 +117,7 @@
 
 <main>
   <h1>Quang Lưu Studio</h1>
-  <div class="subtitle">Hướng dẫn sử dụng đầy đủ — dành cho ca sĩ &amp; kỹ thuật viên phòng thu · Phiên bản 1.7.5</div>
+  <div class="subtitle">Hướng dẫn sử dụng đầy đủ — dành cho ca sĩ &amp; kỹ thuật viên phòng thu · Phiên bản 1.7.8</div>
 
   <!-- 1 -->
   <section id="gioi-thieu">
@@ -201,7 +201,7 @@
       <tr><td><b>♪ Nhạc</b></td><td>0 – 100</td><td>Âm lượng nhạc nền (beat/karaoke).</td></tr>
       <tr><td><b>☉ Mic</b></td><td>−10 – +10</td><td>Tăng/giảm âm lượng micro.</td></tr>
       <tr><td><b>≡ Vang</b></td><td>−10 – +10</td><td>Lượng vang (reverb) cho giọng.</td></tr>
-      <tr><td><b>↕ Giọng</b></td><td>−12 – +12</td><td>Dịch cao độ giọng (theo bán cung).</td></tr>
+      <tr><td><b>↕ Giọng</b></td><td>−12 – +12</td><td>Hiệu ứng chất giọng: từ giọng em bé đến giọng robot. Khác với <b>Tone Giọng</b> (dịch cao độ) ở panel TOOLS.</td></tr>
     </table>
     <p>Biểu tượng <b>loa 🔊</b> bên phải mỗi kênh (Nhạc/Mic/Vang) là nút <b>tắt tiếng</b> nhanh — bấm để mute/unmute mà không mất vị trí thanh trượt.</p>
     <div class="tip"><b>Mẹo:</b> kéo thanh trượt bằng chuột, hoặc click vào thanh rồi dùng phím mũi tên để chỉnh từng nấc.</div>
@@ -227,12 +227,20 @@
       <li><b>Tone Giọng</b> — dịch cao độ giọng hát.</li>
     </ul>
     <p>Số ở giữa là giá trị hiện tại; bấm số <b>0</b> để đưa về gốc.</p>
+    <p>Khi <b>Tone Nhạc</b> khác 0, tone Auto-Tune tự dịch theo cùng số bán cung — tone hiển thị ở đầu cửa sổ là tone nhạc đang vang thật.</p>
+    <h3>Thiết lập theo bài</h3>
+    <ul>
+      <li><b>Sang bài mới</b>: Tone Nhạc, Tone Giọng về 0, các nút <b>MODE</b> tắt hết, tone Auto-Tune theo kết quả dò của bài mới.</li>
+      <li><b>Lưu bài</b> (nút 💾 khi đang phát bài đó): app lưu kèm Tone Nhạc, Tone Giọng, tone đã chỉnh tay, mức mixer, các MODE và nút Auto-Tune/Fix Méo/Bè/Tắt Ồn đang bật.</li>
+      <li><b>Mở lại bài đã lưu</b> — từ Danh sách bài hát, Setlist, ô tìm kiếm hay mở thẳng trên trình duyệt — mọi thiết lập trên tự khôi phục như lúc lưu.</li>
+    </ul>
   </section>
 
   <!-- 8 -->
   <section id="mode">
     <h2>8. MODE &amp; SFX</h2>
-    <p>Khu <b>MODE</b> chọn thể loại trình diễn — mỗi nút áp một bộ thiết lập hiệu ứng tương ứng trên Studio One:</p>
+    <p>Khu <b>MODE</b> chọn thể loại trình diễn — mỗi nút áp một bộ thiết lập hiệu ứng tương ứng trên Studio One. Các nút <b>độc lập với nhau</b>: bấm để bật (nút sáng đèn), bấm lần nữa để tắt, và có thể bật nhiều mode cùng lúc (ví dụ Lofi + Remix). Bật mode này <b>không</b> tự tắt mode kia.</p>
+    <p>Ngay dưới dải nhạc ở đỉnh cửa sổ có hàng <b>ĐANG BẬT</b> — điểm danh mọi thứ đang bật: các mode (Dân Ca, Lofi, Remix, Đa Thể Loại) và các nút hiệu ứng (Auto-Tune, Fix Méo, Bè, Tắt Ồn, Tắt Vang), mỗi thứ một chấm màu đúng bằng màu nút của nó. Đang hát chỉ cần liếc một hàng này là biết máy đang chạy gì, không phải dò từng nút. Chưa bật gì thì cả hàng <b>tự ẩn đi</b> cho gọn màn hình, bật lại thứ gì là hàng hiện ngay. Hàng này có ở <b>mọi gói</b> và không tắt được — khác dải nhạc (chỉ Premium, tắt được trong Thiết lập).</p>
     <div class="grid">
       <div class="card"><div class="t"><span class="pill" style="background:var(--pink)"></span>Dân Ca</div></div>
       <div class="card"><div class="t"><span class="pill" style="background:var(--teal)"></span>Lofi</div></div>
@@ -318,6 +326,10 @@
       <li><b>Tắt ồn tự động</b> — có nhạc thì tắt khử ồn cho mic (hát không bị cắt đầu câu, đuôi ngân giữ nguyên), hết nhạc khoảng 3 giây thì bật lại để tiếng ồn phòng không lọt lên loa.</li>
     </ul>
     <p>Cả hai đều <b>bật nhanh, tắt chậm</b> nên nhạc khựng một nhịp hay tua bài sẽ không làm lật qua lật lại. Đang chạy tự động bạn vẫn bấm tay nút <b>Tắt Ồn</b> hoặc chỉnh Vang như thường; tắt tính năng đi thì app giữ nguyên trạng thái bạn đang nghe, không tự đụng vào nữa.</p>
+
+    <h4>Ẩn dải visualizer <span class="badge">Premium</span></h4>
+    <p>Dải thanh phổ nhảy theo nhạc ở đỉnh cửa sổ có thể ẩn đi: <b>tab Hệ thống → Giao diện</b>, bỏ tích <b>"Hiện dải visualizer"</b>. Ẩn xong màn hình gọn hơn và <b>nhẹ máy hơn thật</b> — phần mềm gỡ hẳn dải này chứ không chỉ giấu đi, nên dừng luôn việc thu âm chạy nền để vẽ. Tích lại là dải quay về ngay, không cần khởi động lại.</p>
+    <div class="note">Gói <b>Standard</b> vốn không có dải visualizer nên ô này bị khoá — không có gì để ẩn.</div>
 
     <h3>Tab Công cụ</h3>
     <figure>
@@ -406,6 +418,7 @@
     <table>
       <tr><th>Hiện tượng</th><th>Cách xử lý</th></tr>
       <tr><td>Đèn MIDI đỏ, nút không tác dụng</td><td>Kiểm tra Studio One đã mở và cổng <code>QuangLuuMIDI</code> đã bật. Đảm bảo đường dẫn Studio One đúng trong Thiết lập.</td></tr>
+      <tr><td>Mở app trước Studio One, mode/vang không ăn</td><td>App tự nhận ra lúc Studio One dựng xong cửa sổ rồi gửi lại toàn bộ trạng thái (mode, vang, tone, mức trộn) — chờ khoảng nửa phút sau khi Studio One nạp xong bài. Vẫn lệch thì bấm lại chính nút đó.</td></tr>
       <tr><td>App không nhảy theo lời bài hát</td><td>Thiết lập → <b>Công cụ → Sửa lỗi đồng bộ (CDP)</b>: Force Kill trình duyệt ngầm → Thêm Flag vào Shortcut → Kiểm tra.</td></tr>
       <tr><td>Lỗi "Could not copy Chrome cookie database"</td><td>Đóng hẳn Chrome rồi <b>Xuất Cookie ra File</b>, hoặc chuyển sang Firefox (Thiết lập → Công cụ).</td></tr>
       <tr><td>Giọng bị đôi/lặp khi hát</td><td>Tắt tuỳ chọn bật Mic ở tab Âm thanh khi đang đi qua Studio One (Loopback đã có giọng).</td></tr>

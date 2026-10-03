@@ -17,7 +17,6 @@ from ui import responsive as rp
 # Mô tả ngắn gọn từng tính năng Premium (hiển thị trong dialog).
 _FEATURE_BLURB = {
     "scoring":      "Chấm điểm giọng hát chi tiết: cao độ, nhịp, độ ổn định + gợi ý luyện tập.",
-    "smart_recall": "Tự khôi phục tone, scale, mức mixer và mode đã chỉnh cho từng bài.",
     "cloud_sync":   "Đồng bộ thư viện bài, timeline và lịch sử điểm qua nhiều thiết bị.",
     "progress":     "Theo dõi tiến bộ luyện hát qua biểu đồ điểm số theo thời gian.",
     "setlist":      "Hàng đợi bài cho buổi live: tự dò tone trước và chuyển bài mượt mà.",

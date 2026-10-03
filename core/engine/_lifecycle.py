@@ -107,16 +107,16 @@ class _LifecycleMixin:
 
     def close_studio_one_safely(self, timeout_sec: float = 30.0, save: bool = True,
                                 force_kill: bool = False, on_progress=None,
-                                should_abort=None) -> dict:
-        """Lưu bài rồi đóng Studio One **sạch**, không dùng taskkill.
+                                should_abort=None, fallback_save: bool = False) -> dict:
+        """Đóng Studio One **sạch**, không dùng taskkill.
 
         Vì sao phải làm khác cách cũ: taskkill để lại cờ "thoát bất thường" trong
         Studio One → lần mở sau nó đòi phục hồi phiên và không vào thẳng file đã
         lưu được. Muốn hết cảnh báo đó thì Studio One phải tự thoát.
 
         Trình tự:
-          1. Ctrl+S trước — bài đã lưu thì lúc đóng Studio One không hỏi gì cả,
-             tức là không còn hộp thoại nào để đoán mò.
+          1. Ctrl+S trước (chỉ khi save=True) — bài đã lưu thì lúc đóng Studio One
+             không hỏi gì cả, tức là không còn hộp thoại nào để đoán mò.
           2. WM_CLOSE tới cửa sổ chính.
           3. Còn hộp thoại nào bật lên thì giành foreground thật (AttachThreadInput)
              rồi Enter — nút mặc định của Studio One là "Save".
@@ -125,12 +125,18 @@ class _LifecycleMixin:
         Hết giờ thì **không** giết process (trừ khi force_kill=True): để Studio One
         chạy tiếp còn an toàn hơn là giết nó giữa lúc đang ghi file.
 
-        `save=False` (đóng để phục hồi bản mẫu .song lúc khởi động) đổi bước 1 và
-        3: không Ctrl+S, và hộp thoại hỏi lưu được trả lời bằng cách **bấm đúng
-        nút "Don't Save"** (`so_windows.click_no_save`) chứ không phải Enter —
-        Enter chính là Save. Không tìm ra nút đó thì huỷ đóng luôn và trả
-        "no_save_button": thà để Studio One chạy tiếp còn hơn lưu đè bản khách
-        đã chỉnh.
+        `save=False` là đường mặc định của cả lúc thoát app lẫn lúc khởi động
+        (đóng để chép bản mẫu .song lên). Nó đổi bước 1 và 3: không Ctrl+S, và
+        hộp thoại hỏi lưu được trả lời bằng cách **bấm đúng nút "Don't Save"**
+        (`so_windows.click_no_save`) chứ không phải Enter — Enter chính là Save.
+        Bấm bằng BM_CLICK nên không cần foreground: cửa sổ Studio One đang ẩn
+        (chế độ khách) vẫn đóng được mà không phải hiện lên.
+
+        Không tìm ra nút "Don't Save" thì mặc định huỷ đóng và trả
+        "no_save_button" — thà để Studio One chạy tiếp còn hơn lưu đè bản khách
+        đã chỉnh. `fallback_save=True` đổi nước cuối đó thành Enter (= Save):
+        chỉ bật khi đã chốt bản mẫu .song, vì lúc đó bản lưu ra đằng nào cũng bị
+        bản mẫu chép đè ở lần khởi động sau nên lưu là vô hại.
 
         Trả dict {"status": ..., "saved": bool} với status là một trong
         "closed" | "not_running" | "timeout" | "force_killed" | "aborted" |
@@ -220,13 +226,20 @@ class _LifecycleMixin:
                             enter_count += 1
                             break
                         _p("Không tìm thấy nút 'Không lưu' trong hộp thoại")
-                        if force_kill:
-                            _p("Tắt cứng Studio One (không lưu gì cả)")
-                            self._force_kill_studio_one()
-                            return {"status": "force_killed", "saved": False}
-                        so_windows.cancel_dialog(hwnd)
-                        _p("Đã huỷ đóng Studio One để không lưu nhầm")
-                        return {"status": "no_save_button", "saved": False}
+                        if fallback_save:
+                            # Đã chốt bản mẫu → bản lưu ra sẽ bị chép đè ở lần
+                            # khởi động sau, nên lưu là vô hại. Chọn đóng sạch
+                            # thay vì để Studio One kẹt lại với hộp thoại.
+                            _p("Có bản mẫu — lưu rồi đóng để Studio One thoát sạch")
+                            saved = True
+                        else:
+                            if force_kill:
+                                _p("Tắt cứng Studio One (không lưu gì cả)")
+                                self._force_kill_studio_one()
+                                return {"status": "force_killed", "saved": False}
+                            so_windows.cancel_dialog(hwnd)
+                            _p("Đã huỷ đóng Studio One để không lưu nhầm")
+                            return {"status": "no_save_button", "saved": False}
 
                     if so_windows.force_foreground(hwnd):
                         time.sleep(0.2)

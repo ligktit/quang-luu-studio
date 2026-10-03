@@ -9,8 +9,10 @@ Cách chắc chắn: kỹ thuật viên **chốt bản mẫu** (snapshot) sau kh
 xong; mỗi lần app khởi động, file .song được chép đè lại từ bản mẫu **trước khi**
 Studio One được mở. Nhờ vậy:
   - Khách chỉnh gì cũng chỉ sống trong phiên đó, buổi sau về nguyên trạng.
-  - Lúc thoát app được phép Ctrl+S thoải mái → Studio One không hiện hộp thoại
-    "lưu hay không" → đóng sạch → lần sau mở không còn cảnh báo phục hồi.
+  - Lúc thoát app không cần lưu gì cả: hộp thoại "lưu hay không" của Studio One
+    được trả lời bằng nút "Don't Save" (xem close_studio_one_safely). Có bản mẫu
+    ở đây còn mở thêm nước cuối `fallback_save` cho luồng thoát — hụt nút đó thì
+    lưu cũng vô hại vì bản mẫu chép đè ngay lần khởi động sau.
 
 Vị trí lưu: %APPDATA%\\QuangLuuStudio\\so_template\\
   template.song        — bản mẫu kỹ thuật viên đã chốt

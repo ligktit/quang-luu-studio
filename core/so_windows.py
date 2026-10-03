@@ -465,3 +465,119 @@ class HideGuard:
                     hide_all()
             except Exception as e:
                 log.debug("HideGuard lỗi: %s", e)
+
+
+# ── Chờ Studio One sẵn sàng nhận MIDI ────────────────────────────────────────
+#
+# Vấn đề: cổng MIDI ảo (QuangLuuMIDI, loopMIDI) mở được ngay cả khi Studio One
+# CHƯA chạy, nên `is_midi_connected()` bật True từ giây đầu. App bắn hết CC khởi
+# tạo (mode, vang, auto-tune, khử ồn) trong lúc Studio One còn đang nạp bài →
+# lệnh rơi vào khoảng không, cả buổi Studio One lệch trạng thái với giao diện mà
+# không ai hay.
+#
+# Không có cách nào hỏi Studio One "nạp xong chưa". Nên làm hai việc:
+#   1. Chờ nó thật sự dựng xong CỬA SỔ CHÍNH (mốc sớm nhất quan sát được).
+#   2. Bắn lại **nhiều lần** theo mốc thời gian giãn dần — cửa sổ chính hiện ra
+#      sớm hơn lúc bài nạp xong (MIDI map nằm trong bài), mà thời gian nạp thì
+#      tuỳ máy, tuỳ số plugin. CC là lệnh idempotent nên gửi thừa hoàn toàn vô
+#      hại, rẻ hơn nhiều so với đoán trượt một lần rồi lệch cả buổi.
+#
+# Studio One tắt rồi mở lại giữa phiên (KTV mở khoá kỹ thuật) thì lịch được nạp
+# lại từ đầu — cửa sổ mới nghĩa là bài mới nạp, phải đồng bộ lại.
+
+# Mốc bắn lại, tính từ lúc THẤY cửa sổ chính (giây).
+DEFAULT_RESEND_DELAYS = (3.0, 10.0, 25.0, 50.0)
+
+
+class ReadySchedule:
+    """Máy trạng thái thuần cho lịch bắn lại MIDI. Không ngủ, không thread.
+
+    Tách khỏi phần polling để test được bằng thời gian giả: chỉ cần bơm
+    (thời điểm, Studio One có cửa sổ chưa) rồi xem nó bảo bắn hay không.
+    """
+
+    def __init__(self, resend_delays=DEFAULT_RESEND_DELAYS):
+        self._delays = tuple(sorted(float(d) for d in resend_delays))
+        self._seen_at = None    # lúc thấy cửa sổ chính (None = chưa thấy)
+        self._done = 0          # số lần đã bắn cho lần xuất hiện này
+
+    @property
+    def pending(self) -> bool:
+        """Còn mốc bắn nào chưa tới hay không (dùng để chọn nhịp quét)."""
+        return self._seen_at is not None and self._done < len(self._delays)
+
+    def reset(self):
+        self._seen_at = None
+        self._done = 0
+
+    def update(self, now: float, so_ready: bool) -> bool:
+        """Bơm một lần quét. True = tới lúc bắn lại toàn bộ trạng thái MIDI.
+
+        `so_ready` = Studio One đang có cửa sổ chính. Mất cửa sổ (thoát Studio
+        One) thì lịch reset — lần mở sau được đồng bộ lại từ đầu.
+        """
+        if not so_ready:
+            self.reset()
+            return False
+
+        if self._seen_at is None:
+            # Vừa thấy cửa sổ — chưa bắn ngay, chờ mốc đầu tiên cho bài kịp nạp.
+            self._seen_at = now
+            return False
+
+        if self._done < len(self._delays) and now - self._seen_at >= self._delays[self._done]:
+            self._done += 1
+            return True
+        return False
+
+
+class ReadyWatcher:
+    """Vòng nền gọi `on_ready()` mỗi khi tới mốc bắn lại MIDI.
+
+    `on_ready` chạy trên thread nền — phía Qt phải bắn signal về main thread chứ
+    đừng đụng widget trực tiếp.
+
+    Nhịp quét đổi theo trạng thái: dày (`poll`) trong lúc còn mốc chưa bắn để
+    bám sát mốc, thưa (`idle_poll`) khi đang chờ Studio One xuất hiện hoặc đã
+    bắn hết — mỗi vòng quét đều phải duyệt process list nên không quét dày mãi.
+    """
+
+    def __init__(self, on_ready, poll=2.0, idle_poll=6.0,
+                 resend_delays=DEFAULT_RESEND_DELAYS):
+        self._on_ready = on_ready
+        self._poll = poll
+        self._idle_poll = idle_poll
+        self._schedule = ReadySchedule(resend_delays)
+        self._stop = threading.Event()
+        self._thread = None
+
+    def start(self):
+        if self.is_running():
+            return
+        # Vòng cũ vừa bị stop() có thể còn thoi thóp — chờ nó chết hẳn, nếu không
+        # cờ _stop bị clear ngay dưới rồi vòng cũ chạy tiếp thành hai vòng.
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=3.0)
+        self._stop.clear()
+        self._schedule.reset()
+        self._thread = threading.Thread(target=self._loop, daemon=True,
+                                        name="so-ready-watcher")
+        self._thread.start()
+        log.info("Bật vòng chờ Studio One sẵn sàng nhận MIDI")
+
+    def stop(self):
+        self._stop.set()
+
+    def is_running(self) -> bool:
+        return bool(self._thread and self._thread.is_alive() and not self._stop.is_set())
+
+    def _loop(self):
+        while True:
+            try:
+                if self._schedule.update(time.monotonic(), bool(main_windows())):
+                    self._on_ready()
+            except Exception as e:
+                log.debug("ReadyWatcher lỗi: %s", e)
+            interval = self._poll if self._schedule.pending else self._idle_poll
+            if self._stop.wait(interval):
+                return

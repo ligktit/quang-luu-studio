@@ -484,18 +484,19 @@ class SongsListDialog(QDialog):
 
     def _make_play(self, song):
         def _play():
-            url   = song.get("url")
-            tone  = song.get("tone", "C")
-            title = song.get("title", "")
+            url = song.get("url")
             if not url:
                 return
             dash = self._dashboard
             manual_tl = dash._saved_manual_timeline(url)
-            # Nạp timeline cho phần hiển thị (ô "kế tiếp" + đếm ngược ở header).
-            dash._set_tone_timeline(manual_tl or [], song.get("duration", 0) or 0)
             play_cb = dash._load_embedded_video if dash._embedded_player_active() else None
             if play_cb is not None:
                 dash._embedded_current_url = url
+            # Chọn bài từ danh sách = nạp lại thiết lập của bài, kể cả khi nó
+            # đang phát. open_youtube_url báo đổi bài → dashboard._on_song_changed
+            # reset thiết lập bài cũ, nạp timeline, hiện tone đã lưu và khôi
+            # phục preset (Smart Recall).
+            dash.engine.forget_current_song()
             dash.engine.open_youtube_url(
                 url,
                 on_video_end_callback=lambda res: None,
@@ -503,23 +504,6 @@ class SongsListDialog(QDialog):
                 manual_timeline=manual_tl,
                 play_callback=play_cb,
             )
-            # Ô tone chỉ chứa 12 nốt gốc: bài lưu tone thể thứ ("Am") mà set
-            # thẳng thì combo lặng lẽ giữ nguyên tone bài TRƯỚC. Tách nốt gốc +
-            # thể ra rồi mới hiển thị.
-            from core.tone_cache import make_timeline_entry
-            tone_entry = make_timeline_entry(tone)
-            tone_root  = tone_entry["key_display"].rstrip("m")
-            tone_scale = tone_entry["scale"]
-            from PySide6.QtCore import QSignalBlocker
-            with QSignalBlocker(self._dashboard.tone_combo):
-                self._dashboard.tone_combo.setCurrentText(tone_root)
-            # Smart Recall (Premium): khôi phục preset đã lưu (tự gate, im lặng nếu Standard).
-            if hasattr(self._dashboard, "_apply_song_preset"):
-                self._dashboard._apply_song_preset(song)
-            if self._dashboard._waveform is not None and title:
-                self._dashboard._waveform.set_song_info(title, tone_root, tone_scale, 0)
-            if title:
-                self._dashboard._marquee_text = f"🎵 {title}   ★   {tone}"
             self.close()
         return _play
 
@@ -570,10 +554,8 @@ class SongsListDialog(QDialog):
         return _open_menu
 
     def _save_preset_for(self, song):
-        """Smart Recall (Premium): lưu trạng thái UI hiện tại làm preset của bài."""
+        """Lưu mọi thiết lập đang dùng làm thiết lập của bài (mọi gói)."""
         dash = self._dashboard
-        if not dash._require_premium("smart_recall", "Smart Recall"):
-            return
         preset = dash._capture_current_preset()
         if backend.SongManager.save_preset(song.get("id"), preset):
             dash._show_message("Đã lưu thiết lập cho bài hát")

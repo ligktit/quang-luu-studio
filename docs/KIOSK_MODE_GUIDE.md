@@ -11,11 +11,12 @@
 |---|---|
 | Khách táy máy chỉnh thông số trong Studio One → phần mềm chạy sai | **Chế độ khách**: ẩn hẳn cửa sổ Studio One, chỉ mở lại được bằng mã PIN |
 | Khách đã lỡ chỉnh và lưu đè → sai vĩnh viễn | **Bản mẫu .song**: mỗi lần khởi động app chép đè bản KTV đã chốt lên file đang dùng |
-| Thoát app xong, mở Studio One lần sau nó đòi phục hồi phiên, không vào thẳng file đã lưu | **Đóng an toàn**: lưu bài trước rồi để Studio One tự thoát, không còn `taskkill /F` |
+| Thoát app xong, mở Studio One lần sau nó đòi phục hồi phiên, không vào thẳng file đã lưu | **Đóng an toàn**: để Studio One tự thoát, không còn `taskkill /F` |
 
-Ba phần này ăn khớp với nhau: vì bản mẫu luôn được phục hồi lúc khởi động, app
-**được phép** Ctrl+S trước khi đóng — mà đã lưu rồi thì Studio One không hỏi gì,
-không hỏi thì không có hộp thoại nào để đoán mò, nên nó thoát sạch.
+Ba phần này ăn khớp với nhau. App **không lưu** khi đóng: hộp thoại "lưu hay
+không" được trả lời bằng đúng nút **"Don't Save"**, bấm qua `BM_CLICK` nên cửa sổ
+Studio One đang ẩn vẫn đóng được — không phải hiện lên (lộ chế độ khách) chỉ để
+gõ Ctrl+S. Chỉnh sửa của khách chết theo phiên, đúng ý đồ của bản mẫu.
 
 ---
 
@@ -77,7 +78,7 @@ trỏ tới `.exe` chứ không phải `.song`, hoặc nội dung đã trùng b�
 
 **Studio One còn chạy lúc app khởi động** (phiên trước thoát bị quá hạn chờ, hoặc
 KTV bấm *"Bỏ qua, thoát ngay"*): không ghi đè lên file đang mở được, mà bỏ qua
-luôn thì bản mẫu mất tác dụng cả buổi trong khi bài đã bị Ctrl+S lúc thoát. Nên
+luôn thì bản mẫu mất tác dụng cả buổi. Nên
 app hiện hộp thoại *"Đang chuẩn bị bản mẫu"*, **đóng Studio One mà không lưu**,
 chép bản mẫu, rồi mở Studio One lên lại — kể cả khi tắt "Tự mở Studio One". Bấm
 *"Bỏ qua, dùng bản hiện tại"* thì giữ nguyên bài đang mở, phiên đó không phục hồi.
@@ -96,6 +97,9 @@ Không bấm được nút đó thì app **huỷ luôn việc đóng** (Escape),
 tiếp và bỏ qua phục hồi phiên đó — thà mất một phiên còn hơn lưu đè bản khách đã
 chỉnh lên bài gốc. Log ghi `[KIOSK] Không đóng được Studio One (no_save_button)`.
 
+Cùng cơ chế bấm "Don't Save" đó cũng được dùng ở **luồng thoát app** (mục 5), chỉ
+khác nước cuối khi hụt nút — xem bên dưới.
+
 > Chỉ chép **file `.song`**. Nếu bài có media rời nằm trong thư mục bài hát
 > (bản thu, sample import) thì phần đó không nằm trong bản mẫu.
 
@@ -106,15 +110,29 @@ Tắt tính năng này bằng cách bỏ tích **"Phục hồi bản mẫu .song
 Bật ở **Thiết lập → Khởi động / Tắt tự động → "Đóng Studio One khi thoát"**.
 
 Khi thoát app, hiện hộp thoại *"Đang đóng Studio One an toàn"* và chạy tuần tự
-(`core/engine/_lifecycle.py` → `close_studio_one_safely`):
+(`core/engine/_lifecycle.py` → `close_studio_one_safely`, gọi với `save=False`):
 
-1. Giành foreground thật bằng `AttachThreadInput` rồi gửi **Ctrl+S**.
-   Cửa sổ đang bị ẩn (chế độ khách) được hiện lại trước — phím chỉ tới được cửa
-   sổ đang hiển thị và giữ focus.
-2. Hộp thoại nào bật lên trong lúc lưu → Enter (tối đa 2 lần).
-3. Gửi **WM_CLOSE** tới cửa sổ chính.
-4. Còn hộp thoại nào → giành foreground rồi Enter (tối đa 5 lần, cách nhau 1.2s).
-5. Chờ process biến mất, mặc định tối đa 45 giây.
+1. Gửi **WM_CLOSE** tới cửa sổ chính. **Không Ctrl+S** — xem "Vì sao không lưu"
+   ngay dưới.
+2. Hộp thoại hỏi lưu bật lên → bấm đúng nút **"Don't Save"** qua ba lớp giống hệt
+   mục 4 (IDNO → nhãn → UI Automation). Bấm bằng `BM_CLICK` nên **không cần
+   foreground**: cửa sổ Studio One đang ẩn vẫn đóng được, không phải hiện lên.
+3. Hộp thoại khác (không phải hỏi lưu) → giành foreground rồi Enter (tối đa 5
+   lần, cách nhau 1.2s).
+4. Chờ process biến mất, mặc định tối đa 45 giây.
+
+**Vì sao không lưu.** Bản cũ gõ Ctrl+S trước khi đóng, nhưng đó chỉ là *mẹo* để
+Studio One khỏi hỏi — không phải nhu cầu giữ dữ liệu, vì bản mẫu chép đè hết ở
+lần khởi động sau. Cái giá của mẹo đó quá đắt: phải **hiện cửa sổ Studio One lên**
+để gõ phím (lộ chế độ khách), chậm, và ghi đè bài mẫu bằng đúng bản khách vừa táy
+máy. Trả lời thẳng hộp thoại bằng "Don't Save" bỏ được cả ba.
+
+**Nước cuối khi hụt nút "Don't Save"** (`fallback_save`): nếu **đã chốt bản mẫu
+`.song`** thì app nhấn Enter (= Save) cho Studio One thoát sạch — bản lưu ra đằng
+nào cũng bị bản mẫu chép đè ở lần khởi động sau nên vô hại. **Chưa chốt bản mẫu**
+thì huỷ đóng, để Studio One chạy tiếp (`no_save_button`), tuyệt đối không ghi đè.
+Luồng khởi động ở mục 4 **luôn tắt** nước cuối này: ở đó lưu là phá đúng file mà
+bản mẫu sắp phục hồi.
 
 **Hết giờ thì KHÔNG giết process.** App báo *"Studio One chưa đóng xong"* rồi thoát,
 để Studio One chạy tiếp — an toàn hơn hẳn việc giết nó giữa lúc đang ghi file.
@@ -166,9 +184,10 @@ không lấy lại được PIN.
    `keep_hidden`. Không bật thì app không đụng tới instance đó.
 5. **Quên PIN thì không có cửa hậu**: phải xoá mục `"tech_lock"` trong
    `settings.json` bằng tay.
-6. **Ctrl+S / Enter cần foreground.** Nếu máy có phần mềm khác giữ cửa sổ
-   always-on-top hoặc chặn `SetForegroundWindow`, bước lưu bị bỏ qua (có ghi log)
-   và chuỗi đóng rơi về việc bấm Enter trên hộp thoại như trước.
+6. **Chỉnh sửa của khách không được giữ lại.** Thoát app là đóng Studio One
+   **không lưu** — cố ý, để bài mẫu không bị bản khách đè lên. KTV muốn giữ
+   thay đổi thì phải tự Ctrl+S trong Studio One **trước khi** thoát app, rồi
+   chốt lại bản mẫu.
 
 ## 8. Xử lý sự cố
 
@@ -178,7 +197,45 @@ không lấy lại được PIN.
 | "Studio One đang khoá — cần mở khoá kỹ thuật" | Đúng như thiết kế: mở phiên kỹ thuật trước |
 | Chốt bản mẫu báo "Hãy đóng Studio One trước" | File `.song` đang mở, không ghi đè được |
 | Thoát app báo "Studio One chưa đóng xong" | Studio One đang kẹt hộp thoại lạ. Đóng tay, hoặc tăng `studio_one_close_timeout` |
+| Thoát app báo "Đã huỷ đóng Studio One để không lưu nhầm" | Không bấm được nút "Don't Save" và **chưa chốt bản mẫu** nên app không dám lưu. Chốt bản mẫu (mục 4) là lần sau app tự lưu-rồi-đóng được |
+| KTV chỉnh trong Studio One xong, thoát app, buổi sau mất hết | Đúng thiết kế (mục 7.6). Phải Ctrl+S trong Studio One rồi **chốt bản mẫu** trước khi thoát |
 | Mở Studio One vẫn thấy đòi phục hồi phiên | Lần trước thoát bằng tắt cứng (mất điện, Task Manager, hoặc `force_kill_studio_one: true`) |
+| Mở app trước Studio One → mode/vang không ăn | Đã có cơ chế tự bắn lại (mục 9). Nếu vẫn lệch: Studio One chưa MIDI Learn CC đó, hoặc bài đang mở không phải bản mẫu |
+
+## 9. Đồng bộ MIDI khi Studio One sẵn sàng
+
+**Vấn đề.** Cổng MIDI ảo `QuangLuuMIDI` (loopMIDI) tồn tại **độc lập với Studio
+One** — nó mở được ngay cả khi Studio One chưa chạy. Nên `is_midi_connected()`
+bật `True` từ giây đầu, app tưởng "đã thông" và bắn hết trạng thái khởi tạo
+(mode, vang, auto-tune, khử ồn, tone, mức trộn) trong khi Studio One còn đang nạp
+bài. Lệnh rơi vào khoảng không: cả buổi Studio One lệch trạng thái với giao diện,
+mà chế độ khách lại giấu cửa sổ nên không ai thấy để sửa.
+
+**Cách xử lý** (`core/so_windows.py` → `ReadySchedule` / `ReadyWatcher`):
+
+1. Một vòng nền bám theo Studio One, mốc quan sát được là lúc nó dựng xong **cửa
+   sổ chính** (`main_windows()`).
+2. Từ mốc đó, app bắn lại **toàn bộ** trạng thái ở các thời điểm **+3s, +10s,
+   +25s, +50s** (`DEFAULT_RESEND_DELAYS`). Bắn nhiều lần vì cửa sổ chính hiện ra
+   **sớm hơn** lúc bài nạp xong — mà MIDI map nằm trong bài, và thời gian nạp thì
+   tuỳ máy, tuỳ số plugin. Không có cách nào hỏi Studio One "xong chưa".
+3. CC là lệnh **idempotent** nên gửi thừa hoàn toàn vô hại. Rẻ hơn nhiều so với
+   đoán trượt một lần rồi lệch cả buổi.
+4. Studio One **tắt rồi mở lại** giữa phiên (KTV mở khoá kỹ thuật) → lịch nạp lại
+   từ đầu: cửa sổ mới nghĩa là bài mới nạp, phải đồng bộ lại.
+
+Mỗi lượt bắn gọi `frontend_qt.py:_sync_midi_states`, đẩy 6 nhóm: Auto-Tune, MODE
+(từng nút), Tắt Ồn, Tắt Vang (kèm multi-CC), tone + thể, và **mức mọi thanh trượt
+mixer**. Nhóm cuối quan trọng không kém nhóm Tắt Vang: thiếu nó thì Studio One
+giữ mức của bản mẫu `.song` trong khi giao diện hiển thị mức khác.
+
+Giá trị lấy từ trạng thái **sống** của giao diện chứ không phải trạng thái lúc
+khởi động — khách bấm gì trong lúc Studio One nạp bài thì lượt sau chốt đúng cái
+họ đang thấy.
+
+> Nhịp quét đổi theo trạng thái: dày (2s) khi còn mốc chưa bắn, thưa (6s) khi
+> đang chờ Studio One xuất hiện hoặc đã bắn hết — mỗi vòng quét đều duyệt process
+> list nên không quét dày mãi.
 
 ---
 
@@ -186,5 +243,8 @@ không lấy lại được PIN.
 (tìm/ẩn/hiện cửa sổ theo PID), `core/so_template.py` (bản mẫu .song),
 `core/engine/_lifecycle.py:close_studio_one_safely`, `ui/dialogs/tech_unlock.py`,
 `ui/dialogs/shutdown_dialog.py`, `ui/panels/header.py`, `frontend_qt.py`
-(`_apply_kiosk_visibility`, `_toggle_tech_session`, `_auto_launch_apps`, `closeEvent`).
-Kiểm thử: `tests/core/test_kiosk.py`, `tests/core/test_so_template.py`.*
+(`_apply_kiosk_visibility`, `_toggle_tech_session`, `_auto_launch_apps`,
+`_start_so_ready_watcher`, `_sync_midi_states`, `closeEvent`).
+Kiểm thử: `tests/core/test_kiosk.py`, `tests/core/test_so_template.py`,
+`tests/core/test_close_studio_one_no_save.py`, `tests/core/test_so_ready_watcher.py`,
+`tests/ui/test_exit_close_studio_one.py`, `tests/ui/test_midi_resync_on_so_ready.py`.*

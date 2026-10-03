@@ -96,7 +96,8 @@ def test_saved_timeline_falls_back_to_song_tone(isolated_data):
 
 def test_play_by_url_replays_saved_tone(isolated_data):
     """U-06: ĐIỂM MÙ — mở bài bằng link ở chế độ trình duyệt trước đây xoá sạch
-    timeline rồi để engine dò lại. Nay phải trao thẳng chuỗi tone đã lưu."""
+    timeline rồi để engine dò lại. Nay phải trao thẳng chuỗi tone đã lưu, và báo
+    đổi bài để _on_song_changed nạp timeline + thiết lập của bài."""
     chain = [make_timeline_entry("Am"), make_timeline_entry("C", at=60)]
     ManualToneTimeline.save_timeline(WATCH_URL, "Bài A", chain, source="human")
 
@@ -105,45 +106,39 @@ def test_play_by_url_replays_saved_tone(isolated_data):
 
     kwargs = stub.engine.open_youtube_url.call_args.kwargs
     assert kwargs["manual_timeline"] == chain
-    stub._set_tone_timeline.assert_called_once_with(chain, 0.0)
-    stub._clear_tone_timeline.assert_not_called()
+    stub.engine.note_current_song.assert_called_once_with(SHARE_URL)
 
 
 def test_play_by_url_unknown_song_clears_timeline(isolated_data):
-    """U-07: bài lạ → vẫn xoá timeline bài trước (không để mốc bài cũ rò sang)."""
+    """U-07: bài lạ → timeline bài trước bị thay bằng rỗng khi reset đổi bài
+    (không để mốc bài cũ rò sang)."""
+    from ui import song_settings
+
     stub = _dashboard_stub()
     MainDashboard.play_youtube_in_app(stub, WATCH_URL)
-
     assert stub.engine.open_youtube_url.call_args.kwargs["manual_timeline"] is None
-    stub._clear_tone_timeline.assert_called_once()
+
+    song_settings._key_reset(stub, WATCH_URL, None)
+    stub._set_tone_timeline.assert_called_once_with([], 0)
 
 
 # ── U-08 — Danh sách bài hát → nút Phát ────────────────────────────────────
 
 def test_songs_list_play_uses_saved_tone(qapp, qtbot, isolated_data):
     """U-08: bài lưu tone bằng ô Tone (chưa từng sửa chuỗi) — nút Phát vẫn phải
-    gửi tone đó cho engine, không mở bài trắng tone rồi chờ dò."""
-    from PySide6.QtWidgets import QComboBox
-    from core.tone_cache import CHROMATIC_NOTES
+    gửi tone đó cho engine, không mở bài trắng tone rồi chờ dò. Chọn lại đúng
+    bài đang phát cũng phải tính là nạp bài (forget_current_song)."""
     from ui.dialogs.songs_list import SongsListDialog
 
     _write_songs(isolated_data, [{"id": 1, "url": WATCH_URL, "tone": "Am", "title": "Bài A"}])
     song = {"id": 1, "url": WATCH_URL, "tone": "Am", "title": "Bài A"}
 
-    combo = QComboBox()
-    qtbot.addWidget(combo)
-    combo.addItems(CHROMATIC_NOTES)   # ô tone thật: chỉ 12 nốt gốc
-    combo.setCurrentText("C")
-
     dash = _dashboard_stub()
-    dash._waveform = None
-    dash.tone_combo = combo
     dlg_stub = MagicMock()
     dlg_stub._dashboard = dash
 
     SongsListDialog._make_play(dlg_stub, song)()
 
+    dash.engine.forget_current_song.assert_called_once()
     kwargs = dash.engine.open_youtube_url.call_args.kwargs
     assert kwargs["manual_timeline"] == [make_timeline_entry("Am")]
-    # "Am" phải hiện thành "A" chứ không rơi vào hư không (giữ nguyên tone bài trước).
-    assert combo.currentText() == "A"

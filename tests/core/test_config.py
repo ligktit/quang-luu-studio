@@ -203,3 +203,52 @@ def test_ui_config_keeps_user_customisation(tmp_path):
     assert by_id["btn_be"]["color"] == "#123456"
     assert by_id["btn_tat_on"]["hidden"] is True
 
+
+
+# ── Đảo chiều nút bật/tắt (toggle_invert) ──
+# Nút gán vào tham số kiểu Bypass trong Studio One thì 127 = TẮT: phải đảo được
+# chiều cả lúc gửi lẫn lúc đọc phản hồi, nếu không đèn nút ngược với plugin.
+from core.config import (DEFAULT_TOGGLE_INVERT, toggle_midi_value,
+                         toggle_state_from_midi)
+
+
+def test_toggle_mac_dinh_127_bat_0_tat():
+    assert toggle_midi_value(True) == 127
+    assert toggle_midi_value(False) == 0
+
+
+def test_toggle_dao_chieu_cho_tham_so_bypass():
+    assert toggle_midi_value(True, invert=True) == 0
+    assert toggle_midi_value(False, invert=True) == 127
+
+
+def test_toggle_giu_gia_tri_can_chinh_khi_dao_chieu():
+    # Fix Méo có giá trị BẬT cân chỉnh (mode_midi_map) — đảo = 127 − giá trị
+    assert toggle_midi_value(True, on_value=100) == 100
+    assert toggle_midi_value(True, invert=True, on_value=100) == 27
+
+
+def test_toggle_doc_phan_hoi_cung_chieu_voi_luc_gui():
+    for invert in (False, True):
+        for on in (False, True):
+            assert toggle_state_from_midi(toggle_midi_value(on, invert), invert) is on
+
+
+def test_get_toggle_invert_gop_len_mac_dinh():
+    with patch.object(AppConfig, "load", return_value={"toggle_invert": {"tone_auto": True, "be": "co"}}):
+        got = AppConfig.get_toggle_invert()
+    assert got["tone_auto"] is True
+    assert got["be"] is False, "giá trị không phải bool thì coi như không đảo"
+    assert set(got) >= set(DEFAULT_TOGGLE_INVERT)
+
+
+def test_get_toggle_invert_thieu_khoa_thi_khong_dao():
+    with patch.object(AppConfig, "load", return_value={}):
+        assert AppConfig.get_toggle_invert() == DEFAULT_TOGGLE_INVERT
+
+
+def test_toggle_invert_ghi_de_duoc_qua_file_calibration():
+    # app_config.json nằm trong Program Files (thường chỉ đọc) → kỹ thuật viên
+    # phải đảo được qua calibration_overrides.json trong thư mục dữ liệu.
+    from core.config import CALIBRATION_KEYS
+    assert "toggle_invert" in CALIBRATION_KEYS

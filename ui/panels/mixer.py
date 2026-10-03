@@ -17,6 +17,10 @@ def _make_mute_callback(dashboard, cc_key, mute_cc_map, val_range=(0, 100)):
     min_v, max_v = val_range
     def toggle(is_muted):
         dashboard.mute_states[cc_key] = is_muted
+        # Tắt Vang được kể trong dải "ĐANG BẬT" — cập nhật ngay từ đây.
+        refresh = getattr(dashboard, "_refresh_active_bar", None)
+        if refresh is not None:
+            refresh()
         mute_cc = mute_cc_map.get(cc_key)
         if mute_cc is not None:
             dashboard.engine.send_midi(dashboard.MIDI_CC[mute_cc], 127 if is_muted else 0)
@@ -60,13 +64,20 @@ def _make_value_changed_callback(dashboard, cc_key, range_tuple, unit):
         if cc_num is None:
             return
         if cc_key in ["mix_mic", "mix_reverb"]:
-            # UI -10..+10 là dB thật. Calibrate với Studio One: 0 dB = MIDI 76, +10 dB = MIDI 100
-            # (tuyến tính trong dải UI: 2.4 MIDI / dB)
+            # UI -10..+10 là dB thật. Calibrate với Studio One:
+            #   -10 dB (đáy / -∞) -> MIDI 0   (0.0%)
+            #     0 dB (giữa / 0dB) -> MIDI 76  (59.8% - Unity 0 dB)
+            #   +10 dB (đỉnh / +10dB) -> MIDI 127 (100.0% - Giá trị tối đa)
             db = float(raw_value)
-            midi = int(round(76 + db * 2.4))
+            if db <= min_v:
+                midi = 0
+            elif db <= 0:
+                midi = int(round(76 + db * 7.6))
+            else:
+                midi = int(round(76 + db * 5.1))
             midi = max(0, min(127, midi))
         else:
-            # tone_music, mix_music và slider custom: tuyến tính min..max -> 0..127
+            # voice_fx, mix_music và slider custom: tuyến tính min..max -> 0..127
             normalized = (raw_value - min_v) / (max_v - min_v) if max_v > min_v else 0
             midi = int(normalized * 127)
             midi = max(0, min(127, midi))
@@ -91,10 +102,14 @@ def build_panel_mixer(dashboard) -> GlassPanel:
     saved_levels = dashboard.settings.get("mixer_levels", {}) if dashboard.settings else {}
     
     def _get_level(key, fallback):
-        val = saved_levels.get(key, fallback)
+        # Thanh "Giọng" đời cũ lưu mức dưới tên "tone_music" (trước khi tách CC 54).
+        if key == "voice_fx" and key not in saved_levels:
+            val = saved_levels.get("tone_music", fallback)
+        else:
+            val = saved_levels.get(key, fallback)
         # Nếu giá trị là 50 (mặc định cũ của thang 0-100) và dải hiện tại là âm-dương
         # thì khả năng cao là setting cũ, ta reset về 0.
-        if val == 50 and key in ["mix_mic", "mix_reverb", "tone_music"]:
+        if val == 50 and key in ["mix_mic", "mix_reverb", "voice_fx"]:
             return 0
         return val
 
@@ -130,6 +145,10 @@ def build_panel_mixer(dashboard) -> GlassPanel:
     dashboard._mixer_val_labels = {}
     dashboard._mixer_icon_btns = {}
     dashboard._mixer_channels = {}
+    # Hàm gửi MIDI của từng kênh, giữ lại để lượt đồng bộ toàn cục
+    # (_sync_midi_states) bắn lại được mức thanh trượt mà không phải chép lại
+    # phép quy đổi dB -> MIDI ở chỗ khác.
+    dashboard._mixer_senders = {}
 
     for ch in channels:
         ch_view = HMixerChannel(
@@ -168,9 +187,9 @@ def build_panel_mixer(dashboard) -> GlassPanel:
         if ch["has_mute"]:
             ch_view.mute_btn.clicked.connect(_bind_mute(ch_view))
 
-        ch_view.slider.valueChanged.connect(
-            _make_value_changed_callback(dashboard, ch["cc"], ch["range"], ch["unit"])
-        )
+        _send_value = _make_value_changed_callback(dashboard, ch["cc"], ch["range"], ch["unit"])
+        ch_view.slider.valueChanged.connect(_send_value)
+        dashboard._mixer_senders[ch["cc"]] = _send_value
 
         # Announce slider value change qua announcer (debounced).
         def _announce_slider_value(value, cc_key=ch["cc"]):

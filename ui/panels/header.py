@@ -6,7 +6,7 @@ from ui.design_tokens import C, SP, FONT
 from ui.components.painter_button import PainterButton
 from ui.components.painter_header import PaintedHeaderBar, PaintedMidiDot
 from ui.components.marquee import SmoothMarqueeLabel
-from ui.components.svg_icons import SVG_EYE_OPEN, SVG_HELP, SVG_SETTINGS
+from ui.components.svg_icons import SVG_EYE_OPEN, SVG_HELP, SVG_PIN, SVG_SETTINGS
 from ui.components.tone_display import ToneDisplay, ScaleToggle, NextTonePill
 
 
@@ -112,6 +112,20 @@ def build_header(dashboard) -> PaintedHeaderBar:
     layout.addWidget(dashboard._next_tone_pill)
 
     layout.addSpacing(SP.SM)
+    # Ghim cửa sổ luôn nằm trên cùng — để app không bị Studio One / trình duyệt
+    # che mất. Trạng thái lưu vào settings["always_on_top"], xem
+    # MainDashboard._set_always_on_top.
+    dashboard._pin_btn = PainterButton(
+        "", color=C["card_hover"], height=28, radius=6,
+        font_size=10, svg_content=SVG_PIN, svg_size=16, fixed_width=30,
+    )
+    dashboard._pin_btn.setToolTip("Ghim Quang Lưu Studio luôn nằm trên cùng")
+    dashboard._pin_btn.setAccessibleName("Ghim cửa sổ trên cùng")
+    dashboard._pin_btn.setCursor(Qt.PointingHandCursor)
+    dashboard._pin_btn.clicked.connect(dashboard._on_toggle_always_on_top)
+    layout.addWidget(dashboard._pin_btn)
+
+    layout.addSpacing(SP.XS)
     # Hỗ trợ — kênh hai chiều với đội kỹ thuật. Nút đỏ lên khi có trả lời chưa
     # đọc (MainDashboard._refresh_support_badge). Ẩn khi khoá kiosk: khách hát
     # không phải người gửi ticket.

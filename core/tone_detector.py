@@ -104,6 +104,16 @@ class ToneDetector:
     #      độ dài bài. Đo thực tế: ~90 MB dù bài 5, 10 hay 15 phút.
     TIMELINE_MAX_SECONDS = 20 * 60   # 20 phút — dư cho mọi bài karaoke/liên khúc
 
+    # Thu loopback (nghe từ loa) — chống treo. stream.read() của WASAPI loopback
+    # CHẶN cho tới khi có gói âm thanh, mà Windows KHÔNG gửi gói nào khi loa không
+    # phát gì (nhạc đang dừng) hoặc loa vừa bị rút/tắt (Bluetooth, HDMI) — luồng dò
+    # treo mãi. Nên chỉ đọc phần đã có sẵn (get_read_available) và tự bỏ cuộc:
+    #   - quá LOOPBACK_NO_DATA_SEC giây liền không nhận được mẫu nào → coi như im lặng;
+    #   - tổng thời gian thu vượt duration + LOOPBACK_GRACE_SEC → dừng với phần đã có.
+    LOOPBACK_NO_DATA_SEC = 4
+    LOOPBACK_GRACE_SEC = 5
+    LOOPBACK_POLL_SEC = 0.02
+
     # Kích thước khối xử lý. librosa dựng lại filter bank CQT ở MỖI lần gọi
     # (librosa.cache mặc định là no-op) nên khối càng nhỏ thì chi phí cố định
     # càng lấn: đo trên bài 15 phút, khối 30s mất 6.3s còn khối 60s mất 6.0s,
@@ -426,7 +436,7 @@ class ToneDetector:
     def _detect_key_from_chroma_impl(chroma_for_analysis, cqt_normalized, verbose=True,
                                      cleanup=True):
         """verbose=False: không in log phân tích; cleanup=False: bỏ
-        MemoryGuard.force_cleanup() (full GC + xoá cache librosa) ở cuối. Cả hai
+        MemoryGuard.force_cleanup() (full GC + trả RAM về Windows) ở cuối. Cả hai
         dùng khi gọi lặp nhiều lần trên vector 12 phần tử (chia vùng tone ở
         detect_timeline_advanced) — dọn RAM mỗi lần là lãng phí, caller dọn một
         lần ở cuối. Không dùng redirect_stdout thay cho verbose vì nó tráo
@@ -717,7 +727,7 @@ class ToneDetector:
 
     @staticmethod
     def detect_key_from_system_audio(duration=10, sample_rate=48000, on_progress=None,
-                                     reason_out=None):
+                                     reason_out=None, cancelled=None):
         """
         Thu âm loopback từ hệ thống (bắt âm thanh đang phát trên loa)
         và phát hiện tone bài hát. Không cần tải từ YouTube.
@@ -726,7 +736,11 @@ class ToneDetector:
 
         ``reason_out``: nếu truyền vào 1 list, khi thất bại (trả None) hàm sẽ
         append một câu mô tả NGUYÊN NHÂN cụ thể (để hiển thị cho người dùng).
+
+        ``cancelled``: hàm không tham số trả True khi phiên dò đã huỷ/hết giờ —
+        kiểm trong lúc thu để dừng ngay, không nghe loa cho phiên đã bỏ.
         """
+        import time
         import numpy as np
 
         def _fail(reason):
@@ -803,13 +817,34 @@ class ToneDetector:
             if channels_used > 1:
                 print(f"[DÒ TONE] Thu {channels_used} kênh, sẽ downmix về mono")
 
-            # Thu âm theo từng giây để cập nhật progress
+            # Thu âm theo từng giây để cập nhật progress. KHÔNG gọi stream.read()
+            # khi chưa có dữ liệu — xem LOOPBACK_NO_DATA_SEC.
             audio_chunks = []
+            started = time.monotonic()
+            hard_deadline = started + duration + ToneDetector.LOOPBACK_GRACE_SEC
+            last_data = started
+            stop_reason = None
             for sec in range(duration):
                 frames_needed = device_sr
                 frames_read = 0
                 while frames_read < frames_needed:
-                    data = stream.read(chunk_size, exception_on_overflow=False)
+                    if cancelled is not None and cancelled():
+                        print("[DÒ TONE] Phiên dò đã huỷ — dừng nghe loa")
+                        return _fail("Đã dừng dò tone.")
+                    now = time.monotonic()
+                    if now - last_data > ToneDetector.LOOPBACK_NO_DATA_SEC:
+                        stop_reason = "no_data"
+                        break
+                    if now > hard_deadline:
+                        stop_reason = "deadline"
+                        break
+                    available = stream.get_read_available()
+                    if available <= 0:
+                        time.sleep(ToneDetector.LOOPBACK_POLL_SEC)
+                        continue
+                    data = stream.read(min(available, chunk_size),
+                                       exception_on_overflow=False)
+                    last_data = time.monotonic()
                     chunk_np = np.frombuffer(data, dtype=np.float32)
                     if channels_used > 1:
                         # Downmix về mono: trung bình các kênh interleaved
@@ -817,16 +852,28 @@ class ToneDetector:
                         chunk_np = chunk_np[:usable].reshape(-1, channels_used).mean(axis=1)
                     audio_chunks.append(chunk_np)
                     frames_read += len(chunk_np)
-                
+                if stop_reason:
+                    break
+
                 remaining = duration - sec - 1
                 if on_progress:
                     try:
                         on_progress(remaining)
                     except Exception:
                         pass
-                
+
                 print(f"   Còn {remaining}s...")
-            
+
+            got_sec = sum(len(c) for c in audio_chunks) / device_sr
+            if stop_reason:
+                print(f"[DÒ TONE] Dừng thu sớm ({stop_reason}) sau "
+                      f"{time.monotonic() - started:.1f}s, có {got_sec:.1f}s âm thanh")
+            # Quá ít để phân tích (loa không đẩy dữ liệu = đang không phát gì).
+            if got_sec < min(3.0, duration * 0.5):
+                return _fail(f"Loa '{loopback_dev['name']}' không phát ra âm thanh (im lặng). "
+                             "Kiểm tra: bài hát có đang phát không, và loa đang phát có đúng "
+                             "là loa MẶC ĐỊNH của Windows không.")
+
             # Ghép các chunks
             audio_data = np.concatenate(audio_chunks)
             del audio_chunks  # Giải phóng list chunks ngay lập tức
@@ -940,10 +987,13 @@ class ToneDetector:
         return result
 
     @staticmethod
-    def detect_key_from_youtube(youtube_url, duration_limit=60):
+    def detect_key_from_youtube(youtube_url, duration_limit=60, errors_out=None):
         """
         Tải audio từ YouTube và phát hiện tone
         Chỉ phân tích tối đa duration_limit giây đầu tiên
+
+        ``errors_out``: list (tùy chọn) — khi thất bại nhận lỗi gốc (exception) để
+        người gọi ghi nhật ký; hàm vẫn trả None như cũ.
 
         Lưu ý: truyền skip_hum_detection=True (bỏ notch hum để nhanh hơn) vì đa
         số nhạc YouTube đã master sạch hum. ĐÁNH ĐỔI cho nguồn quay điện thoại /
@@ -966,6 +1016,8 @@ class ToneDetector:
 
             if not audio_path:
                 print("[DÒ TONE] Không thể tải audio")
+                if errors_out is not None and scoring_engine.last_download_error is not None:
+                    errors_out.append(scoring_engine.last_download_error)
                 return None
 
             try:
@@ -987,8 +1039,10 @@ class ToneDetector:
             print(f"[DÒ TONE] Lỗi: {e}")
             import traceback
             print(traceback.format_exc())
+            if errors_out is not None:
+                errors_out.append(e)
             return None
-    
+
     @staticmethod
     def _estimate_tuning_cents(y, sr):
         """Độ lệch tuning của y so với A4=440Hz, tính bằng cent, trong [-50, 50).

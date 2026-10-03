@@ -5,6 +5,15 @@ import time
 from unittest.mock import patch, MagicMock
 from core.memory import MemoryProfiler, MemoryGuard
 
+@pytest.fixture(autouse=True)
+def reset_tone_jobs():
+    """Bộ đếm phiên dò là trạng thái CẤP LỚP: luồng dò tone rò từ test khác
+    (test_engine) có thể vẫn đang chạy → reset để test ở đây độc lập."""
+    MemoryGuard._active_tone_jobs = 0
+    yield
+    MemoryGuard._active_tone_jobs = 0
+
+
 @pytest.fixture
 def mock_psutil():
     mock_psutil_module = MagicMock()
@@ -90,10 +99,86 @@ def test_cleanup_temp_files(tmp_path):
 
 def test_get_status(mock_psutil):
     # MM-07
-    guard = MemoryGuard(gc_threshold_mb=50, emergency_threshold_mb=500)
+    guard = MemoryGuard()
     status = guard.get_status()
-    
+
     assert "running" in status
     assert status["rss_mb"] == 100
-    assert status["gc_threshold_mb"] == 50
-    assert status["emergency_threshold_mb"] == 500
+    assert status["active_tone_jobs"] == 0
+    # Không còn ngưỡng RAM (gc/khẩn cấp)
+    assert "emergency_threshold_mb" not in status
+    assert "gc_threshold_mb" not in status
+
+
+@pytest.fixture
+def no_real_cleanup():
+    """Không GC/compact/trim thật."""
+    with patch("core.memory.gc.collect") as gc_mock,          patch.object(MemoryGuard, "_compact_heap") as heap_mock,          patch.object(MemoryGuard, "_trim_working_set") as trim_mock:
+        yield gc_mock, heap_mock, trim_mock
+
+
+def test_cleanup_after_tone_job(no_real_cleanup):
+    # MM-08: dò tone xong → dọn RAM (GC + compact heap + trim)
+    gc_mock, heap_mock, trim_mock = no_real_cleanup
+    MemoryGuard.begin_tone_job()
+    gc_mock.assert_not_called()
+    MemoryGuard.end_tone_job()
+    gc_mock.assert_called_once_with(2)
+    heap_mock.assert_called_once()
+    trim_mock.assert_called_once()
+    assert MemoryGuard.active_tone_jobs() == 0
+
+
+def test_cleanup_deferred_while_tone_job_running(no_real_cleanup):
+    # MM-09: dọn giữa chừng bị hoãn; chỉ phiên dò CUỐI CÙNG mới dọn
+    gc_mock, _, trim_mock = no_real_cleanup
+    MemoryGuard.begin_tone_job()
+    MemoryGuard.begin_tone_job()
+
+    assert MemoryGuard.force_cleanup() is False  # đang dò → bỏ qua
+    MemoryGuard.end_tone_job()                    # còn 1 phiên → chưa dọn
+    gc_mock.assert_not_called()
+    trim_mock.assert_not_called()
+
+    MemoryGuard.end_tone_job()                    # phiên cuối xong → dọn
+    gc_mock.assert_called_once_with(2)
+    trim_mock.assert_called_once()
+
+
+def test_end_tone_job_never_negative(no_real_cleanup):
+    # MM-10: end thừa không làm bộ đếm âm (nếu âm sẽ không bao giờ hoãn được nữa)
+    MemoryGuard.end_tone_job()
+    assert MemoryGuard.active_tone_jobs() == 0
+    MemoryGuard.begin_tone_job()
+    assert MemoryGuard.force_cleanup() is False
+
+
+def test_monitor_loop_has_no_ram_threshold(mock_psutil, no_real_cleanup):
+    # MM-11: daemon KHÔNG dọn RAM theo ngưỡng, kể cả khi RSS rất lớn
+    gc_mock, _, trim_mock = no_real_cleanup
+    _, mock_mem_info = mock_psutil
+    mock_mem_info.rss = 4 * 1024 * 1024 * 1024  # 4GB
+
+    guard = MemoryGuard(interval=1)
+    calls = {"n": 0}
+
+    def _one_pass():
+        calls["n"] += 1
+        guard._running = False
+
+    with patch.object(guard, "_cleanup_caches", side_effect=_one_pass),          patch.object(guard, "_cleanup_temp_files"):
+        guard._running = True
+        guard._monitor_loop()
+
+    assert calls["n"] == 1
+    gc_mock.assert_not_called()
+    trim_mock.assert_not_called()
+
+
+def test_end_tone_job_never_raises(no_real_cleanup):
+    # MM-12: end_tone_job nằm trong finally của luồng dò, TRƯỚC khi đóng phiên
+    # tone — lỗi dọn RAM không được làm luồng dò bỏ dở phần đóng phiên.
+    MemoryGuard.begin_tone_job()
+    with patch.object(MemoryGuard, "force_cleanup", side_effect=RuntimeError("x")):
+        MemoryGuard.end_tone_job()  # không ném
+    assert MemoryGuard.active_tone_jobs() == 0

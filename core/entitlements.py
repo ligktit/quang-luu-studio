@@ -19,9 +19,10 @@ import logging
 log = logging.getLogger(__name__)
 
 # Tên các tính năng bị khóa ở Premium. Dùng làm khóa tra cứu trong UI/engine.
+# "smart_recall" (thiết lập theo bài) đã mở cho mọi gói từ 2026-09-30 — code
+# vẫn hỏi has_feature("smart_recall"), thêm lại vào đây là khóa lại được ngay.
 PREMIUM_FEATURES = frozenset({
     "scoring",       # Chấm điểm
-    "smart_recall",  # Preset tone/mix/mode theo bài
     "cloud_sync",    # Đồng bộ thư viện
     "progress",      # Bảng tiến bộ luyện hát
     "setlist",       # Live Setlist / Auto-Pilot

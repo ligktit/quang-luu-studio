@@ -71,6 +71,9 @@ echo  Buoc tiep theo trong Studio One:
 echo  1. Mo Studio One
 echo  2. Vao Options ^> External Devices ^> Add
 echo  3. Chon "QuangLuuMIDI" tu danh sach
-echo  4. Chon MIDI port: QuangLuuMIDI (loopMIDI)
+echo  4. Receive From: QuangLuuMIDI (loopMIDI)
+echo  5. Send To: QLS_PhanHoi (loopMIDI)
+echo     - de app biet Studio One da nap bai xong chua
+echo     - KHONG chon QuangLuuMIDI: se thanh vong phan hoi vo tan
 echo.
 pause

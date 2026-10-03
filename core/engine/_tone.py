@@ -1,10 +1,13 @@
 """Tone detection pipeline for SystemEngine."""
 import gc
+import sys
 import time
 import threading
+import traceback
 import numpy as np
 
 from core import tone_cache as tone_cache_module
+from core import ytdlp_support
 from core.memory import MemoryGuard
 from core.numba_cache import run_healing
 from core.tone_cache import ToneCacheManager, ManualToneTimeline
@@ -22,8 +25,12 @@ _CAMELOT_MINOR = ["5A", "12A", "7A", "2A", "9A", "4A", "11A", "6A", "1A", "8A", 
 # return within these windows, the watchdog fires on_error so the UI can
 # recover instead of displaying "Đang dò..." forever. Fast scan is capped
 # tighter because it only downloads 45s of audio.
-_FAST_SCAN_TIMEOUT_SEC = 90
-_FULL_SCAN_TIMEOUT_SEC = 300
+#
+# 60s / 240s (trước: 90s / 300s). Lượt dò nhanh khoẻ mạnh mất 5–15s, tải chỉ ~2s;
+# mọi tầng dưới giờ đều có hạn riêng (mạng 10s/thao tác, ffmpeg -rw_timeout, nghe
+# loa tối đa thời lượng + 5s) nên hạn tổng không cần rộng như trước.
+_FAST_SCAN_TIMEOUT_SEC = 60
+_FULL_SCAN_TIMEOUT_SEC = 240
 
 # Thời lượng thu loopback (giây) cho PHƯƠNG ÁN DỰ PHÒNG khi yt-dlp tải thất bại.
 # Bài hát phải đang phát trên loa để thu được — đây là cách dò tone cho các
@@ -31,18 +38,11 @@ _FULL_SCAN_TIMEOUT_SEC = 300
 _LOOPBACK_FALLBACK_SEC = 12
 
 
-def _log_exc(label, exc):
-    """Log CHI TIẾT kỹ thuật (exception + traceback) cho DEV vào file log.
-
-    Quy ước thông báo:
-      - DEV  → dùng hàm này (đầy đủ exception + traceback) để debug.
-      - USER → on_error/on_progress với câu chữ dễ hiểu, có gợi ý xử lý;
-               TUYỆT ĐỐI không đẩy str(exc)/traceback ra giao diện.
-    """
-    import logging
-    import traceback
-    logging.getLogger(__name__).error("[%s] %s\n%s", label, exc, traceback.format_exc())
-
+# Quy ước thông báo lỗi:
+#   - DEV  → _ToneJob.note_error(exc) trong luồng dò; khi on_error được gọi,
+#            _ToneJob.log_failure ghi đầy đủ exception + traceback vào nhật ký.
+#   - USER → on_error/on_progress với câu chữ dễ hiểu, có gợi ý xử lý;
+#            TUYỆT ĐỐI không đẩy str(exc)/traceback ra giao diện.
 
 # Thông báo chung, thân thiện cho người dùng phổ thông khi gặp lỗi không lường trước.
 _USER_ERR_GENERIC = (
@@ -51,21 +51,204 @@ _USER_ERR_GENERIC = (
 )
 
 
+class _ToneCancelled(Exception):
+    """Phiên dò đã huỷ/hết giờ — ném từ on_progress để cắt ngang vòng phân tích."""
+
+
+class _ToneJob:
+    """Gắn MỘT lần dò tone với luồng worker của nó.
+
+    Watchdog chỉ báo lỗi lên giao diện được, không giết được luồng Python. Trước
+    đây luồng kẹt (mạng đứng, loa không đẩy dữ liệu...) cứ nằm đó mãi mà nhật ký
+    không để lại dấu vết gì về chỗ kẹt. Đối tượng này:
+      - PHÁT HIỆN: hết giờ thì ghi vào nhật ký ngăn xếp hiện tại của luồng worker
+        (kẹt ở hàm nào, dòng nào) + luồng đó thoát muộn bao lâu sau hạn chót;
+      - NGĂN CHẶN: cấp hàm cancelled() cho các tầng dưới (yt-dlp qua
+        ytdlp_support.set_cancel_check, thu loa, phân tích) để dừng ở điểm kế tiếp;
+      - không để luồng kẹt giữ bộ đếm phiên dò của MemoryGuard (chặn dọn RAM).
+      - NHẬT KÝ LỖI: luồng đánh dấu bước (step) và ghi nhận lỗi gốc (note_error /
+        note); khi on_error được gọi, log_failure ghi MỘT bản ghi ERROR đủ để chẩn
+        đoán mà không cần tái hiện: chế độ, URL, bước lỗi, dòng thời gian các
+        bước, câu báo khách, lỗi gốc + chuỗi nguyên nhân + traceback.
+    """
+
+    def __init__(self, label, timeout_sec, watchdog_cancel):
+        self.label = label
+        self.timeout_sec = timeout_sec
+        self.url = None
+        self.stage = "khoi dong"
+        self._steps = []        # [(tên bước, giây kể từ lúc bắt đầu)]
+        self._errors = []       # lỗi gốc (exception) đã ghi nhận
+        self._notes = []        # chi tiết dạng chữ (lý do nghe loa hỏng...)
+        self._watchdog_cancel = watchdog_cancel
+        self._session_cancel = None
+        self._thread_id = None
+        self._started = None
+        self._counted = False   # đã tăng bộ đếm phiên dò của MemoryGuard chưa
+        self._released = False
+        self._lock = threading.Lock()
+
+    # ── Nhật ký ──────────────────────────────────────────────────────────────
+
+    def _elapsed(self):
+        return time.monotonic() - self._started if self._started is not None else 0.0
+
+    def step(self, name):
+        """Đánh dấu luồng bắt đầu một bước mới."""
+        self.stage = name
+        self._steps.append((name, self._elapsed()))
+
+    def note_error(self, exc):
+        """Ghi nhận lỗi gốc (kể cả lỗi đã được xử lý / chuyển sang dự phòng)."""
+        if isinstance(exc, BaseException) and all(e is not exc for e in self._errors):
+            self._errors.append(exc)
+
+    def note(self, text):
+        if text:
+            self._notes.append(str(text))
+
+    def _describe(self, outcome, reason=None, stuck_stack=None):
+        lines = [
+            f"[DÒ TONE] {outcome} — {self.label}",
+            f"  URL: {self.url or '(chua xac dinh)'}",
+            f"  Buoc cuoi: {self.stage} (sau {self._elapsed():.1f}s)",
+            "  Cac buoc: " + (" -> ".join(f"{n} @{t:.1f}s" for n, t in self._steps)
+                              or "(chua co)"),
+        ]
+        if reason:
+            lines.append(f"  Bao khach: {reason}")
+        for text in self._notes:
+            lines.append(f"  Chi tiet: {text}")
+        for i, exc in enumerate(self._errors, 1):
+            lines.append(f"  Loi goc #{i}: {type(exc).__name__}: {exc}")
+            cause = exc.__cause__ or exc.__context__
+            depth = 0
+            while cause is not None and depth < 5:
+                lines.append(f"    <- do {type(cause).__name__}: {cause}")
+                cause = cause.__cause__ or cause.__context__
+                depth += 1
+            tb = "".join(traceback.format_exception(exc)).rstrip()
+            lines.extend("    | " + ln for ln in tb.splitlines())
+        if stuck_stack is not None:
+            lines.append("  Luong worker dang ket tai:")
+            lines.extend("    | " + ln for ln in stuck_stack.rstrip().splitlines())
+        return "\n".join(lines)
+
+    def log_failure(self, reason):
+        """MỘT bản ghi ERROR cho mỗi lần dò thất bại (vào cả errors.log)."""
+        _log_error(self._describe("THAT BAI", reason))
+
+    def log_success(self):
+        _log_info("[DÒ TONE] XONG — %s | %s | %.1fs | %s", self.label,
+                  self.url or "-", self._elapsed(),
+                  " -> ".join(f"{n} @{t:.1f}s" for n, t in self._steps) or "-")
+
+    # Gọi ở ĐẦU luồng worker.
+    def attach(self):
+        self._thread_id = threading.get_ident()
+        self._started = time.monotonic()
+        # Cùng khoá với _release: watchdog bắn đúng lúc này thì hoặc chưa đếm
+        # (không trừ), hoặc đã đếm (trừ đúng một lần) — không bao giờ lệch.
+        with self._lock:
+            if not self._released:
+                MemoryGuard.begin_tone_job()
+                self._counted = True
+        ytdlp_support.set_cancel_check(self.cancelled)
+
+    def watch(self, cancel):
+        """Gắn cancel của phiên (tone_session) khi luồng đã có nó."""
+        self._session_cancel = cancel
+
+    def cancelled(self):
+        return _cancelled(self._session_cancel, self._watchdog_cancel)
+
+    def progress(self, on_progress):
+        """Bọc on_progress: phiên đã huỷ thì ném _ToneCancelled để dừng vòng lặp
+        phân tích dài (timeline toàn bài) ngay ở lần báo tiến độ kế tiếp."""
+        def _wrapped(*args, **kwargs):
+            if self.cancelled():
+                raise _ToneCancelled()
+            if on_progress:
+                on_progress(*args, **kwargs)
+        return _wrapped
+
+    def _release(self):
+        with self._lock:
+            if self._released:
+                return
+            self._released = True
+            # Chưa đếm thì không trừ — trừ là trừ nhầm phiên khác.
+            if not self._counted:
+                return
+        MemoryGuard.end_tone_job()
+
+    # Gọi trong finally của luồng worker.
+    def detach(self):
+        if self._thread_id == threading.get_ident():
+            ytdlp_support.set_cancel_check(None)
+        if self._watchdog_cancel.is_set() and self._started is not None:
+            _log_warning("[WATCHDOG] %s: luong worker thoat muon, %.1fs sau khi bat dau "
+                         "(han %ds)", self.label, time.monotonic() - self._started,
+                         self.timeout_sec)
+        self._release()
+
+    def report_hang(self, reason=None):
+        """Watchdog hết giờ: ghi luồng worker đang kẹt ở đâu, rồi nhả phiên RAM."""
+        frame = sys._current_frames().get(self._thread_id) if self._thread_id else None
+        if frame is None:
+            where = "(luong worker chua chay hoac da ket thuc)"
+        else:
+            where = "".join(traceback.format_stack(frame))
+        _log_error(self._describe(f"QUA GIO {self.timeout_sec}s", reason,
+                                  stuck_stack=where))
+        self._release()
+
+
+def _log_at(level, msg, *args):
+    try:
+        import logging
+        logging.getLogger(__name__).log(level, msg, *args)
+    except Exception:
+        pass
+
+
+def _log_warning(msg, *args):
+    import logging
+    _log_at(logging.WARNING, msg, *args)
+
+
+def _log_error(msg, *args):
+    import logging
+    _log_at(logging.ERROR, msg, *args)
+
+
+def _log_info(msg, *args):
+    import logging
+    _log_at(logging.INFO, msg, *args)
+
+
 def _install_watchdog(timeout_sec, on_complete, on_error, label, on_timeout_hook=None):
     """Wrap detection callbacks with a once-only timeout guard.
 
-    Returns (safe_complete, safe_error, cancel_event). When the deadline fires,
+    Returns (safe_complete, safe_error, cancel_event, job). When the deadline fires,
     `on_timeout_hook` (if provided) is invoked so the worker thread can stop
-    cleanly via the session state machine. Both callbacks are idempotent.
+    cleanly via the session state machine, and `job` logs where the worker is
+    stuck. Both callbacks are idempotent. The worker must call job.attach() first
+    and job.detach() in its finally.
     """
     done = threading.Event()
     watchdog_cancel = threading.Event()
+    job = _ToneJob(label, timeout_sec, watchdog_cancel)
 
     def _safe_complete(result):
         if done.is_set():
             return
         done.set()
         timer.cancel()
+        try:
+            job.log_success()
+        except Exception:
+            pass
         if on_complete:
             on_complete(result)
 
@@ -74,6 +257,10 @@ def _install_watchdog(timeout_sec, on_complete, on_error, label, on_timeout_hook
             return
         done.set()
         timer.cancel()
+        try:
+            job.log_failure(msg)
+        except Exception:
+            pass
         if on_error:
             on_error(msg)
 
@@ -91,6 +278,14 @@ def _install_watchdog(timeout_sec, on_complete, on_error, label, on_timeout_hook
             )
         except Exception:
             pass
+        timeout_msg = (
+            f"Dò tone quá lâu (quá {timeout_sec}s khi {label}) nên đã dừng. "
+            "Thử bấm Dò Lại; nếu video bị chặn, app sẽ tự nghe từ loa."
+        )
+        try:
+            job.report_hang(timeout_msg)
+        except Exception:
+            pass
         if on_timeout_hook:
             try:
                 on_timeout_hook()
@@ -98,17 +293,14 @@ def _install_watchdog(timeout_sec, on_complete, on_error, label, on_timeout_hook
                 pass
         if on_error:
             try:
-                on_error(
-                    f"Dò tone quá lâu (quá {timeout_sec}s khi {label}) nên đã dừng. "
-                    "Thử bấm Dò Lại; nếu video bị chặn, app sẽ tự nghe từ loa."
-                )
+                on_error(timeout_msg)
             except Exception:
                 pass
 
     timer = threading.Timer(timeout_sec, _fire_timeout)
     timer.daemon = True
     timer.start()
-    return _safe_complete, _safe_error, watchdog_cancel
+    return _safe_complete, _safe_error, watchdog_cancel, job
 
 
 def _cancelled(cancel, watchdog_cancel=None):
@@ -369,7 +561,8 @@ class _ToneMixin:
     # ── Loopback fallback (yt-dlp tải thất bại) ──────────────────────────────────
 
     def _loopback_fallback_detect(self, on_progress=None, cancel=None,
-                                  duration=_LOOPBACK_FALLBACK_SEC, reason_out=None):
+                                  duration=_LOOPBACK_FALLBACK_SEC, reason_out=None,
+                                  cancelled=None):
         """Dò tone bằng cách NGHE TRỰC TIẾP âm thanh đang phát trên loa.
 
         Dùng làm phương án dự phòng khi yt-dlp KHÔNG tải được audio (video bị
@@ -377,6 +570,7 @@ class _ToneMixin:
         thực sự phát. Trả về result dict (đánh dấu ``from_loopback``) hoặc None.
 
         ``reason_out``: list (tùy chọn) — khi thất bại sẽ chứa câu mô tả nguyên nhân.
+        ``cancelled``: hàm kiểm tra huỷ (gồm cả watchdog); mặc định chỉ xét ``cancel``.
         """
         if cancel is not None and cancel.is_set():
             return None
@@ -393,8 +587,11 @@ class _ToneMixin:
 
         if cancel is not None and cancel.is_set():
             return None
+        if cancelled is None and cancel is not None:
+            cancelled = cancel.is_set
         result = ToneDetector.detect_key_from_system_audio(
-            duration=duration, on_progress=_cap_progress, reason_out=reason_out
+            duration=duration, on_progress=_cap_progress, reason_out=reason_out,
+            cancelled=cancelled,
         )
         if result:
             result['from_loopback'] = True
@@ -410,6 +607,10 @@ class _ToneMixin:
     def _send_tone_midi(self, result):
         from core.config import AppConfig
 
+        if getattr(self, 'key_locked', False) is True:
+            print(f"[MIDI] Bỏ qua tone {result.get('key_display', '?')} — tone đang chốt tay")
+            return
+
         key_index = result.get('key_index', 0)
         scale     = result.get('scale', 'Major')
 
@@ -419,7 +620,15 @@ class _ToneMixin:
 
         # Key
         key_names  = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-        key_name   = key_names[key_index % 12] if 0 <= key_index < 12 else 'C'
+        if 0 <= key_index < 12:
+            # Nhạc đang dịch N bán cung (Tone Nhạc) → tone thật đang vang cũng dịch N.
+            try:
+                transpose = int(getattr(self, 'tone_transpose', 0) or 0)
+            except (TypeError, ValueError):
+                transpose = 0
+            key_name = key_names[(key_index + transpose) % 12]
+        else:
+            key_name = 'C'
         key_cc_val = key_map.get(key_name, 0)
 
         # Scale
@@ -439,7 +648,7 @@ class _ToneMixin:
     # ── Detect from system audio ────────────────────────────────────────────────
 
     def detect_tone(self, duration=10, on_complete=None, on_error=None, on_progress=None):
-        on_complete, on_error, watchdog_cancel = _install_watchdog(
+        on_complete, on_error, watchdog_cancel, job = _install_watchdog(
             _FAST_SCAN_TIMEOUT_SEC, on_complete, on_error,
             label="dò tone từ loa",
             on_timeout_hook=lambda: self._tone_session.stop(),
@@ -453,10 +662,14 @@ class _ToneMixin:
         # Đi qua session để chống bấm chồng: start_scanning() hủy phiên cũ
         # (set cancel của nó) và cấp token mới cho phiên này.
         cancel = self._tone_session.start_scanning(youtube_url or "")
+        job.watch(cancel)
+        job.url = youtube_url
 
         def _detect():
+            job.attach()
             try:
                 if youtube_url:
+                    job.step("tra cache")
                     source, resolved_data = self._resolve_tone(youtube_url)
                     if source == 'manual':
                         timeline = resolved_data['timeline']
@@ -488,20 +701,30 @@ class _ToneMixin:
                 result = None
                 if youtube_url:
                     print("[DÒ TONE] Dùng YouTube audio...")
+                    job.step("tai + phan tich YouTube")
+                    _yt_errors = []
                     try:
                         result = ToneDetector.detect_key_from_youtube(
-                            youtube_url, duration_limit=30
+                            youtube_url, duration_limit=30, errors_out=_yt_errors
                         )
                     except Exception as e:
                         print(f"[DÒ TONE] YouTube download thất bại: {e}")
+                        _yt_errors.append(e)
+                    for _e in _yt_errors:
+                        job.note_error(_e)
 
                 if _cancelled(cancel, watchdog_cancel):
                     return
 
                 if not result:
+                    job.step("nghe loa")
+                    _reasons = []
                     result = ToneDetector.detect_key_from_system_audio(
-                        duration=duration, on_progress=on_progress
+                        duration=duration, on_progress=on_progress,
+                        cancelled=job.cancelled, reason_out=_reasons,
                     )
+                    for _r in _reasons:
+                        job.note(f"Nghe loa: {_r}")
 
                 # Kiểm tra timeout/cancel TRƯỚC mọi side-effect (gửi MIDI / ghi
                 # cache): nếu UI đã báo timeout thì không gửi MIDI/ghi cache muộn.
@@ -518,11 +741,11 @@ class _ToneMixin:
                     if on_error:
                         on_error("Không thể dò tone. Hãy đảm bảo đang phát nhạc.")
             except Exception as e:
-                _log_exc("DÒ TONE", e)
+                job.note_error(e)
                 if on_error:
                     on_error(_USER_ERR_GENERIC)
             finally:
-                MemoryGuard.force_cleanup()
+                job.detach()
                 if self._tone_session.is_scanning:
                     self._tone_session.stop()
 
@@ -537,7 +760,7 @@ class _ToneMixin:
                 on_error("Không có YouTube URL để dò tone.")
             return
 
-        on_complete, on_error, watchdog_cancel = _install_watchdog(
+        on_complete, on_error, watchdog_cancel, job = _install_watchdog(
             _FAST_SCAN_TIMEOUT_SEC, on_complete, on_error,
             label="dò tone từ YouTube",
             on_timeout_hook=lambda: self._tone_session.stop(),
@@ -545,9 +768,13 @@ class _ToneMixin:
 
         # Đi qua session để chống bấm chồng (hủy phiên cũ + cấp token mới).
         cancel = self._tone_session.start_scanning(youtube_url)
+        job.watch(cancel)
+        job.url = youtube_url
 
         def _detect():
+            job.attach()
             try:
+                job.step("tra cache")
                 if on_progress:
                     on_progress("Đang kiểm tra cache...")
 
@@ -582,7 +809,12 @@ class _ToneMixin:
                 if on_progress:
                     on_progress("Đang tải audio từ YouTube...")
 
-                result = ToneDetector.detect_key_from_youtube(youtube_url, duration_limit=30)
+                job.step("tai + phan tich YouTube")
+                _yt_errors = []
+                result = ToneDetector.detect_key_from_youtube(
+                    youtube_url, duration_limit=30, errors_out=_yt_errors)
+                for _e in _yt_errors:
+                    job.note_error(_e)
 
                 # Kiểm tra timeout/cancel TRƯỚC side-effect (gửi MIDI / ghi cache).
                 if _cancelled(cancel, watchdog_cancel):
@@ -597,11 +829,11 @@ class _ToneMixin:
                     if on_error:
                         on_error("Không thể dò tone từ YouTube. Hãy thử lại.")
             except Exception as e:
-                _log_exc("LẤY TONE YT", e)
+                job.note_error(e)
                 if on_error:
                     on_error(_USER_ERR_GENERIC)
             finally:
-                MemoryGuard.force_cleanup()
+                job.detach()
                 if self._tone_session.is_scanning:
                     self._tone_session.stop()
 
@@ -611,17 +843,19 @@ class _ToneMixin:
 
     def detect_tone_from_browser(self, on_complete=None, on_error=None, on_progress=None,
                                   url=None, skip_resolve=False):
-        on_complete, on_error, watchdog_cancel = _install_watchdog(
+        on_complete, on_error, watchdog_cancel, job = _install_watchdog(
             _FAST_SCAN_TIMEOUT_SEC, on_complete, on_error,
             label="dò tone nhanh",
             on_timeout_hook=lambda: self._tone_session.stop(),
         )
 
         def _detect():
+            job.attach()
             try:
                 # 1. Xác định URL
                 youtube_url = url
                 if not youtube_url:
+                    job.step("tim URL tren trinh duyet")
                     if on_progress:
                         on_progress("Đang tìm URL YouTube...")
                     youtube_url = self.detect_youtube_url_from_browser(quiet=True)
@@ -633,9 +867,12 @@ class _ToneMixin:
 
                 # 2. Bắt đầu session
                 cancel = self._tone_session.start_scanning(youtube_url)
+                job.watch(cancel)
+                job.url = youtube_url
 
                 # 3. Kiểm tra manual/cache (trừ khi skip_resolve)
                 if not skip_resolve:
+                    job.step("tra cache")
                     source, resolved_data = self._resolve_tone(youtube_url)
                     if source == 'manual':
                         timeline    = resolved_data['timeline']
@@ -681,6 +918,7 @@ class _ToneMixin:
                     return
 
                 # 4. Tải audio từ YouTube (45s)
+                job.step("tai audio YouTube")
                 if on_progress:
                     on_progress("Đang tải audio từ YouTube...")
 
@@ -690,8 +928,11 @@ class _ToneMixin:
                     # mạng; audio nén ~2MB cho 125s nên chênh lệch không đáng kể).
                     audio_path, video_title = scoring_engine.download_youtube_audio_with_info(
                         youtube_url, max_seconds=ToneDetector.FAST_EXTEND_SECONDS + 5)
-                except Exception:
+                except Exception as e:
+                    job.note_error(e)
                     audio_path, video_title = None, ''
+                if not audio_path:
+                    job.note_error(getattr(scoring_engine, 'last_download_error', None))
 
                 if _cancelled(cancel, watchdog_cancel):
                     return
@@ -699,6 +940,7 @@ class _ToneMixin:
                 result = None
                 fail_reason = None  # nguyên nhân cụ thể khi thất bại
                 if audio_path:
+                    job.step("phan tich am dieu")
                     if on_progress:
                         on_progress("Đang phân tích âm điệu...")
 
@@ -721,7 +963,7 @@ class _ToneMixin:
                             fail_reason = ("Đã tải được audio từ YouTube nhưng không nhận diện "
                                            "được tone (bài quá nhiễu / không có giai điệu rõ).")
                     except Exception as e:
-                        _log_exc("DÒ TONE/phân tích audio", e)
+                        job.note_error(e)
                         fail_reason = ("Đã tải được audio nhưng phân tích âm điệu bị lỗi. "
                                        "Vui lòng thử lại sau giây lát.")
                     finally:
@@ -735,7 +977,11 @@ class _ToneMixin:
                         pass
                     del scoring_engine
                     _reasons = []
-                    result = self._loopback_fallback_detect(on_progress, cancel, reason_out=_reasons)
+                    job.step("nghe loa (du phong)")
+                    result = self._loopback_fallback_detect(on_progress, cancel, reason_out=_reasons,
+                                                         cancelled=job.cancelled)
+                    for _r in _reasons:
+                        job.note(f"Nghe loa: {_r}")
                     if result and not video_title:
                         video_title = self._current_media_title()
                     if not result:
@@ -786,11 +1032,11 @@ class _ToneMixin:
                                  "(phương án nghe từ loa cần có âm thanh).")
 
             except Exception as e:
-                _log_exc("DÒ TONE", e)
+                job.note_error(e)
                 if on_error:
                     on_error(_USER_ERR_GENERIC)
             finally:
-                MemoryGuard.force_cleanup()
+                job.detach()
 
         threading.Thread(target=_detect, daemon=True).start()
 
@@ -802,7 +1048,7 @@ class _ToneMixin:
                 on_error("Không có YouTube URL.")
             return
 
-        on_complete, on_error, watchdog_cancel = _install_watchdog(
+        on_complete, on_error, watchdog_cancel, job = _install_watchdog(
             _FULL_SCAN_TIMEOUT_SEC, on_complete, on_error,
             label="dò tone toàn bộ bài",
             on_timeout_hook=lambda: self._tone_session.stop(),
@@ -852,8 +1098,11 @@ class _ToneMixin:
                     return
 
         cancel = self._tone_session.start_scanning(url)
+        job.watch(cancel)
+        job.url = url
 
         def _detect_full():
+            job.attach()
             scoring_engine = None
             audio_data     = None
             try:
@@ -861,6 +1110,7 @@ class _ToneMixin:
 
                 SEGMENT_DURATION = 15
 
+                job.step("lay thong tin video")
                 if on_progress:
                     on_progress("Đang lấy thông tin video...")
 
@@ -875,10 +1125,12 @@ class _ToneMixin:
                     gc.collect()
                 except Exception as e:
                     print(f"[AUTO TIMELINE] Không lấy được title: {e}")
+                    job.note(f"Lay tieu de loi (khong chan): {type(e).__name__}: {e}")
 
                 if _cancelled(cancel, watchdog_cancel):
                     return
 
+                job.step("tai audio YouTube")
                 if on_progress:
                     on_progress("Đang tải audio...")
 
@@ -889,6 +1141,8 @@ class _ToneMixin:
                 # giữa chừng bị bỏ sót. Trần bằng đúng trần lúc nạp file bên dưới.
                 audio_path     = scoring_engine.download_youtube_audio(
                     url, max_seconds=ToneDetector.TIMELINE_MAX_SECONDS)
+                if not audio_path:
+                    job.note_error(getattr(scoring_engine, 'last_download_error', None))
 
                 if _cancelled(cancel, watchdog_cancel):
                     return
@@ -899,6 +1153,7 @@ class _ToneMixin:
                 timeline_audio   = 'youtube'  # số đo nội bộ: nguồn audio thật sự đã dò
 
                 if audio_path:
+                    job.step("nap file am thanh")
                     if on_progress:
                         on_progress("Đang load file âm thanh...")
 
@@ -923,12 +1178,12 @@ class _ToneMixin:
                         audio_data = None
                         return
 
-                    timeline_entries = ToneDetector.detect_timeline_advanced(audio_data, sr, on_progress)
+                    job.step("phan tich timeline")
+                    timeline_entries = ToneDetector.detect_timeline_advanced(
+                        audio_data, sr, job.progress(on_progress))
 
                     del audio_data
                     audio_data = None
-                    gc.collect()
-                    MemoryGuard.force_cleanup()
                     if not timeline_entries:
                         fail_reason = ("Đã tải được audio từ YouTube nhưng không nhận diện được "
                                        "tone nào (bài quá nhiễu / không có giai điệu rõ).")
@@ -936,7 +1191,11 @@ class _ToneMixin:
                     # PHƯƠNG ÁN DỰ PHÒNG: yt-dlp tải thất bại → nghe trực tiếp từ loa.
                     # Không tải được toàn bài nên chỉ dò được MỘT tone (timeline 1 mốc).
                     _reasons = []
-                    fb = self._loopback_fallback_detect(on_progress, cancel, reason_out=_reasons)
+                    job.step("nghe loa (du phong)")
+                    fb = self._loopback_fallback_detect(on_progress, cancel, reason_out=_reasons,
+                                                         cancelled=job.cancelled)
+                    for _r in _reasons:
+                        job.note(f"Nghe loa: {_r}")
                     if fb:
                         timeline_audio = 'loa'
                         timeline_entries = [{
@@ -963,6 +1222,7 @@ class _ToneMixin:
                         on_error(fail_reason or "Không phát hiện được tone nào trong bài hát.")
                     return
 
+                job.step("luu ket qua")
                 if on_progress:
                     on_progress("Đang lưu kết quả...")
 
@@ -1006,8 +1266,10 @@ class _ToneMixin:
                         'from_loopback':  audio_path is None,
                     })
 
+            except _ToneCancelled:
+                print("[AUTO TIMELINE] Phiên dò đã huỷ/hết giờ — dừng phân tích")
             except Exception as e:
-                _log_exc("AUTO TIMELINE", e)
+                job.note_error(e)
                 if on_error:
                     on_error(_USER_ERR_GENERIC)
             finally:
@@ -1019,7 +1281,7 @@ class _ToneMixin:
                     except Exception:
                         pass
                     del scoring_engine
-                MemoryGuard.force_cleanup()
+                job.detach()
                 if self._tone_session.is_scanning:
                     self._tone_session.stop()
 

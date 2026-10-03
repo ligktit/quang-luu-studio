@@ -169,6 +169,20 @@ class SongManager:
         return None
 
     @staticmethod
+    def find_song_by_url(url):
+        """Bài đã lưu ứng với URL (so theo video_id như add_song), hoặc None.
+
+        Dùng khi đổi bài từ BẤT KỲ đường nào (trình duyệt, ô tìm kiếm, Setlist)
+        để khôi phục thiết lập của bài dù không mở từ Danh sách bài hát."""
+        if not url:
+            return None
+        key = _song_match_key(url)
+        for song in SongManager.load_songs():
+            if isinstance(song, dict) and _song_match_key(song.get("url", "")) == key:
+                return song
+        return None
+
+    @staticmethod
     def sort_for_display(songs):
         """Sắp xếp để hiển thị: bài yêu thích lên đầu, giữ thứ tự gốc trong nhóm."""
         return sorted(songs, key=lambda s: 0 if s.get("favorite") else 1)

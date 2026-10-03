@@ -12,7 +12,7 @@
 ; ============================================================
 
 #define MyAppName "Quang Luu Studio"
-#define MyAppVersion "1.7.5"
+#define MyAppVersion "1.7.8"
 #define MyAppPublisher "Quang Luu"
 #define MyAppExeName "QuangLuuStudio.exe"
 #define MyAppURL "https://github.com/ligktit/quang-luu-studio"
@@ -95,8 +95,15 @@ Source: "app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Script cài đặt loopMIDI + Surface
 Source: "setup_all.bat"; DestDir: "{app}"; Flags: ignoreversion
+; Tạo cổng MIDI ảo (QuangLuuMIDI + QLS_PhanHoi) rồi ĐẾM LẠI để chắc chắn cổng
+; đã hiện ra. setup_all.bat gọi file này ở bước 1 — thiếu nó thì không có cổng.
+Source: "setup_midi_ports.ps1"; DestDir: "{app}"; Flags: ignoreversion
 ; Script cấu hình YouTube cookies
 Source: "configure_youtube_cookies.bat"; DestDir: "{app}"; Flags: ignoreversion
+; Bộ tự kiểm tra cơ chế dò tone (chạy bằng chính exe, máy khách không cần Python)
+Source: "kiem_tra_tone.bat"; DestDir: "{app}"; Flags: ignoreversion
+; Chẩn đoán khâu tải audio khi dò tone báo "quá lâu nên đã dừng"
+Source: "thu_tai_youtube.bat"; DestDir: "{app}"; Flags: ignoreversion
 
 ; App config — MIDI mapping (admin editable, không ghi đè nếu đã tồn tại)
 Source: "app_config.json"; DestDir: "{app}"; Flags: onlyifdoesntexist
@@ -144,12 +151,14 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFile
 Name: "{autoprograms}\Gỡ cài đặt {#MyAppName}"; Filename: "{uninstallexe}"; Tasks: startmenuicon
 ; Shortcut cấu hình YouTube Cookies
 Name: "{autoprograms}\{#MyAppName} - Cấu hình YouTube Cookies"; Filename: "{app}\configure_youtube_cookies.bat"; Tasks: startmenuicon
+; Shortcut tự kiểm tra cơ chế dò tone (dùng khi khách báo "phân tích âm điệu bị lỗi")
+Name: "{autoprograms}\{#MyAppName} - Kiểm tra dò tone"; Filename: "{app}\kiem_tra_tone.bat"; Tasks: startmenuicon
 ; Shortcut mở thư mục Recordings
 Name: "{autoprograms}\{#MyAppName} Recordings"; Filename: "{userdocs}\{#MyAppDataFolder}"; Tasks: startmenuicon
 
 [Run]
 ; Cài đặt loopMIDI + Surface sau khi cài đặt
-Filename: "{app}\setup_all.bat"; Description: "Cài đặt loopMIDI và Surface cho Studio One"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\setup_all.bat"; Description: "Cài đặt loopMIDI, cổng MIDI và Surface cho Studio One"; Flags: nowait postinstall skipifsilent
 ; Chạy ứng dụng sau khi cài đặt (tùy chọn)
 Filename: "{app}\{#MyAppExeName}"; Description: "Chạy {#MyAppName} ngay bây giờ"; Flags: nowait postinstall skipifsilent unchecked
 

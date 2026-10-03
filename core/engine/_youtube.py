@@ -27,9 +27,15 @@ from core.ytdlp_support import extract_info_with_auth, make_ydl_opts
 # Module-level ctypes callback type (cached once — prevents ctypes ref leaks on poll)
 _WNDENUMPROC_TYPE = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
 
-# Tự động thử lại khi dò tone TỰ ĐỘNG thất bại — áp dụng cho CẢ 2 chế độ (fast/full).
-# Sau khi hết số lần thử, hiển thị rõ nguyên nhân lỗi cho người dùng.
-_AUTO_DETECT_MAX_ATTEMPTS    = 3
+# Số lần dò khi dò tone TỰ ĐỘNG — áp dụng cho CẢ 2 chế độ (fast/full). Sau khi hết
+# số lần thử, hiển thị rõ nguyên nhân lỗi cho người dùng.
+#
+# 1 = KHÔNG tự thử lại. Trước đây là 3 lần × watchdog 90s: khách chờ tới 276s
+# (dò nhanh) / 906s (toàn bài) chỉ để nhận lại cùng một lỗi — lỗi dò tone gần như
+# luôn do nguyên nhân bền (YouTube chặn, mạng hỏng, loa im) chứ không phải chập
+# chờn. Khách muốn thử lại thì bấm "Dò Lại". Cơ chế thử lại vẫn giữ nguyên, chỉ
+# cần tăng hằng số này nếu sau này cần.
+_AUTO_DETECT_MAX_ATTEMPTS    = 1
 _AUTO_DETECT_RETRY_DELAY_SEC = 3
 
 
@@ -335,6 +341,7 @@ class _YouTubeMixin:
             return
 
         self.stop_tone_detection()
+        self.note_current_song(url)
         self.current_youtube_url       = url
         self.on_video_end_callback     = on_video_end_callback
         self.on_tone_detected_callback = on_tone_detected
@@ -450,6 +457,7 @@ class _YouTubeMixin:
         mới" rồi dò. Từ khi watcher so theo BÀI (đúng đắn), cú dò tình cờ đó mất
         — nên đường mở bài phải tự chịu trách nhiệm gọi dò.
         """
+        self.note_current_song(url)
         try:
             session = self._tone_session
             if session.is_active and _same_song(session.url, url):
@@ -457,6 +465,32 @@ class _YouTubeMixin:
             self._dispatch_auto_detect(url, weakref.ref(self))
         except Exception as e:
             print(f"[TONE] Không kích được dò tone cho {str(url)[:60]}: {e}")
+
+    def forget_current_song(self):
+        """Lần mở bài kế tiếp luôn tính là đổi bài — kể cả khi đang phát đúng bài
+        đó. Dùng khi người dùng CHỦ ĐỘNG chọn bài (Danh sách bài hát, Setlist):
+        chọn lại bài đang phát nghĩa là muốn nạp lại thiết lập đã lưu của nó."""
+        self._current_song_url = None
+
+    def note_current_song(self, url):
+        """Ghi nhận bài đang xem; đổi bài thì báo on_song_changed(url) đúng MỘT lần.
+
+        So theo BÀI (_same_song) chứ không theo chuỗi URL: cùng một video mở
+        bằng link rút gọn, link có ?t= hay link chuẩn vẫn là một bài — báo nhầm
+        là đổi bài thì app reset tone giữa chừng. Gọi được từ mọi thread.
+        """
+        if not url:
+            return
+        prev = getattr(self, "_current_song_url", None)
+        if prev is not None and _same_song(prev, url):
+            return
+        self._current_song_url = url
+        cb = getattr(self, "on_song_changed", None)
+        if cb is not None:
+            try:
+                cb(url)
+            except Exception as e:
+                print(f"[SONG] on_song_changed lỗi: {e}")
 
     # ── notify_video_ended ───────────────────────────────────────────────────────
 
@@ -570,6 +604,9 @@ class _YouTubeMixin:
 
                 def _handle_new_url(url):
                     self._no_browser_count = 0
+                    # Báo đổi bài NGAY khi thấy, kể cả lúc phải xếp hàng chờ dò:
+                    # người hát đã sang bài mới rồi, tone bài cũ phải được gỡ.
+                    self.note_current_song(url)
                     if not _same_song(url, self._last_watched_url):
                         if not self._tone_session.is_active:
                             self._dispatch_auto_detect(url, engine_ref)
@@ -707,12 +744,17 @@ class _YouTubeMixin:
                 threading.Thread(target=_retry, daemon=True).start()
                 return
 
-            # Hết lượt thử → báo lỗi rõ nguyên nhân.
-            final_msg = (
-                f"Dò tone thất bại sau {max_attempts} lần thử.\n"
-                f"Nguyên nhân: {msg}"
-            )
-            print(f"[YT WATCHER] {final_msg}")
+            # Hết lượt thử → báo lỗi rõ nguyên nhân. Chi tiết kỹ thuật (bước lỗi,
+            # lỗi gốc, traceback) đã được luồng dò ghi vào nhật ký — xem
+            # _ToneJob.log_failure trong _tone.py.
+            if max_attempts > 1:
+                final_msg = (
+                    f"Dò tone thất bại sau {max_attempts} lần thử.\n"
+                    f"Nguyên nhân: {msg}"
+                )
+            else:
+                final_msg = f"Dò tone thất bại.\nNguyên nhân: {msg}"
+            print(f"[YT WATCHER] {final_msg} (URL: {url})")
             if eng.on_auto_tone_error:
                 eng.on_auto_tone_error(final_msg)
 

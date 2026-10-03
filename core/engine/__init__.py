@@ -84,6 +84,20 @@ class SystemEngine(
         self.on_auto_tone_error       = None
         self.on_auto_tone_progress    = None
 
+        # Đổi bài: bắn on_song_changed(url) MỘT lần mỗi khi bài đang xem đổi,
+        # dù bài tới từ watcher trình duyệt, Danh sách bài hát, Setlist hay ô
+        # tìm kiếm — xem _YouTubeMixin._note_current_song.
+        self._current_song_url        = None
+        self.on_song_changed          = None
+
+        # Số bán cung đang dịch nhạc (núm Tone Nhạc, CC 10). Tone dò được là
+        # tone GỐC của bài; nhạc đã bị dịch thì Auto-Tune phải nhận tone gốc +
+        # độ dịch — _send_tone_midi cộng vào ở MỘT chỗ duy nhất.
+        self.tone_transpose           = 0
+        # Người dùng đã chốt tone tay (hoặc preset của bài khôi phục tone chốt
+        # tay) → mọi lượt dò/replay KHÔNG được gửi tone đè lên. UI bật/tắt cờ.
+        self.key_locked               = False
+
         # 2-tier watcher caches
         self._prev_browser_titles  = None
         self._pwa_title_cache      = {}
@@ -97,13 +111,12 @@ class SystemEngine(
         self._tone_resolve_cache_lock = threading.Lock()
         self._TONE_RESOLVE_CACHE_MAX = 8
 
-        # Memory management
+        # Memory management: RAM được trả về Windows sau mỗi lần dò tone
+        # (MemoryGuard.end_tone_job); daemon chỉ dọn cache/file tạm định kỳ.
         self._memory_guard = MemoryGuard(
             engine=self,
             interval=30,
-            gc_threshold_mb=50,
             cache_ttl_seconds=600,
-            emergency_threshold_mb=500,
         )
         self._memory_guard.start()
 

@@ -3,7 +3,7 @@ import os
 from PySide6.QtWidgets import QHBoxLayout, QLabel
 from PySide6.QtCore import Qt
 
-from ui.design_tokens import C, SP, FONT, lighten
+from ui.design_tokens import C, SP, FONT
 from ui.components.painter_button import PainterButton
 from ui.components.painter_panel import GlassPanel
 from ui.components.sfx_button_area import SfxButtonArea
@@ -20,27 +20,26 @@ def build_panel_mode(dashboard) -> GlassPanel:
     modes_config = ui_config.get("mode", [])
 
     mode_config = []
-    dashboard._mode_colors = {}
-    
     for m_cfg in modes_config:
         if m_cfg.get("hidden", False):
             continue
-        
+
         label = m_cfg.get("label", "Unknown")
         c_val = m_cfg.get("color", "#ffffff")
         if c_val in C:
             c_val = C[c_val]
-            
+
         mode_config.append((label, c_val, m_cfg))
-        dashboard._mode_colors[label] = c_val
 
     mode_row = QHBoxLayout()
     mode_row.setSpacing(3)
     for mlabel, mcolor, m_cfg in mode_config:
         mbtn = PainterButton(mlabel, color=mcolor, height=26, radius=8, font_size=9)
-        mbtn.setToolTip(f"Chuyển sang chế độ {mlabel}")
+        mbtn.setToolTip(f"Bật/tắt chế độ {mlabel} (độc lập với các mode khác)")
         mbtn.setAccessibleName(f"Chế độ {mlabel}")
-        
+        # Panel có thể bị dựng lại (Dev Mode) — lấy lại đèn theo trạng thái cũ.
+        mbtn.setActive(bool(dashboard.mode_states.get(mlabel, False)))
+
         # Determine callback: built-in mode or custom?
         action_name = m_cfg.get("action", "")
         cc_val = m_cfg.get("cc")
@@ -62,29 +61,12 @@ def build_panel_mode(dashboard) -> GlassPanel:
             
             def make_custom_cb(c=cc_val, on=on_val, off=off_val, m=mlabel):
                 def _do_action():
-                    if dashboard.current_mode == m:
-                        dashboard.engine.send_midi(c, off)
-                        dashboard.current_mode = None
-                    else:
-                        dashboard.engine.send_midi(c, on)
-                        dashboard.current_mode = m
-                    
-                    # Visual update
-                    for mx, btn in dashboard._mode_buttons.items():
-                        base = dashboard._mode_colors.get(mx, C["card_hover"])
-                        if mx == dashboard.current_mode:
-                            btn.setStyleSheet(f"""
-                                QPushButton {{
-                                    background-color: {lighten(base, 0.25)};
-                                    color: white; border: 2px solid white;
-                                    border-radius: 10px; font-size: 10px; font-weight: 700;
-                                    font-family: {FONT};
-                                }}
-                                QPushButton:hover {{ background-color: {lighten(base, 0.3)}; }}
-                            """)
-                        else:
-                            from ui.components.button import _make_pill_qss
-                            btn.setStyleSheet(_make_pill_qss(base, lighten(base, 0.15), 10, 10))
+                    # Toggle độc lập y như mode built-in: chỉ chạm CC của
+                    # chính nút này, không tắt nút nào khác.
+                    new_state = not dashboard.mode_states.get(m, False)
+                    dashboard.mode_states[m] = new_state
+                    dashboard.engine.send_midi(c, on if new_state else off)
+                    dashboard._refresh_mode_button(m)
                 return _do_action
             cb = make_custom_cb()
             mbtn.clicked.connect(cb)

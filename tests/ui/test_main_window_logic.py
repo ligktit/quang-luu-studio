@@ -260,20 +260,73 @@ def test_mode_buttons_send_configured_cc(qapp, mock_engine, qtbot):
         off_val = int(mode_cfg[label].get("off_value", 0))
 
         # Bật
-        dashboard.current_mode = None
+        dashboard.mode_states.clear()
         mock_engine.send_midi.reset_mock()
         qtbot.mouseClick(btn, Qt.LeftButton)
-        assert dashboard.current_mode == label
+        assert dashboard.mode_states[label] is True
+        assert btn._active is True, "Nút MODE bật phải sáng đèn"
         mock_engine.send_midi.assert_called_once_with(expected_cc, on_val)
 
         # Bấm lại → toggle tắt
         mock_engine.send_midi.reset_mock()
         qtbot.mouseClick(btn, Qt.LeftButton)
-        assert dashboard.current_mode is None
+        assert dashboard.mode_states[label] is False
+        assert btn._active is False
         mock_engine.send_midi.assert_called_once_with(expected_cc, off_val)
 
     # Không nút nào được gửi CC None (triệu chứng của bug cũ)
     assert not [c for c in mock_engine.send_midi.call_args_list if c.args[0] is None]
+
+
+def test_mode_buttons_are_independent(qapp, mock_engine, qtbot):
+    # Lofi / Remix / Đa Thể Loại KHÔNG còn là nhóm radio độc quyền: bấm nút này
+    # chỉ chạm CC của chính nó, các nút khác giữ nguyên trạng thái.
+    from PySide6.QtCore import Qt
+    import backend
+
+    dashboard = _make_dashboard(qtbot)
+    mode_cfg = backend.AppConfig.get_mode_config()
+    lofi_cc = int(mode_cfg["Lofi"]["cc"])
+    remix_cc = int(mode_cfg["Remix"]["cc"])
+    da_cc = int(mode_cfg["Đa Thể Loại"]["cc"])
+
+    dashboard.mode_states.clear()
+    qtbot.mouseClick(dashboard._mode_buttons["Lofi"], Qt.LeftButton)
+
+    # Bật Remix: không được đụng tới CC của Lofi / Đa Thể Loại
+    mock_engine.send_midi.reset_mock()
+    qtbot.mouseClick(dashboard._mode_buttons["Remix"], Qt.LeftButton)
+    sent_ccs = [c.args[0] for c in mock_engine.send_midi.call_args_list]
+    assert sent_ccs == [remix_cc]
+    assert lofi_cc not in sent_ccs and da_cc not in sent_ccs
+
+    # Cả hai cùng bật
+    assert dashboard.mode_states["Lofi"] is True
+    assert dashboard.mode_states["Remix"] is True
+    assert dashboard.active_modes() == ["Lofi", "Remix"]
+
+    # Tắt Remix không kéo Lofi tắt theo
+    qtbot.mouseClick(dashboard._mode_buttons["Remix"], Qt.LeftButton)
+    assert dashboard.mode_states["Remix"] is False
+    assert dashboard.mode_states["Lofi"] is True
+
+
+def test_initial_midi_sync_turns_all_modes_off(qapp, mock_engine, qtbot):
+    # Khởi động không tự bật "Đa Thể Loại" nữa — UI trắng thì DAW cũng trắng.
+    import backend
+
+    dashboard = _make_dashboard(qtbot)
+    mode_cfg = backend.AppConfig.get_mode_config()
+
+    dashboard.mode_states.clear()
+    mock_engine.send_midi.reset_mock()
+    dashboard._sync_midi_states()
+
+    sent = {c.args[0]: c.args[1] for c in mock_engine.send_midi.call_args_list}
+    for label, cfg in mode_cfg.items():
+        assert sent[int(cfg["cc"])] == int(cfg.get("off_value", 0)), \
+            f"Mode {label} phải được đồng bộ về OFF lúc khởi động"
+    assert dashboard.active_modes() == []
 
 
 def test_be_button_toggles_cc(qapp, mock_engine, qtbot):
@@ -664,3 +717,71 @@ def test_quick_score_button(qapp, mock_engine, qtbot):
         mock_engine.quick_score_active = True
         dashboard._on_score()
         mock_engine.stop_quick_score.assert_called_once()
+
+
+# ── Đảo chiều nút bật/tắt (toggle_invert): gán vào tham số Bypass trong Studio One ──
+def _invert(**flags):
+    from core.config import DEFAULT_TOGGLE_INVERT
+    merged = dict(DEFAULT_TOGGLE_INVERT)
+    merged.update(flags)
+    return patch("frontend_qt.backend.AppConfig.get_toggle_invert", return_value=merged)
+
+
+def test_auto_tune_dao_chieu_gui_0_khi_bat(qapp, mock_engine, qtbot):
+    from PySide6.QtCore import Qt
+    import backend
+
+    dashboard = _make_dashboard(qtbot)
+    cc = int(backend.AppConfig.get_midi_cc()["tone_auto"])
+    btn = dashboard._func_buttons["Auto-Tune"]
+    with _invert(tone_auto=True):
+        dashboard.tune_state = False
+        mock_engine.send_midi.reset_mock()
+        qtbot.mouseClick(btn, Qt.LeftButton)          # BẬT → Bypass = 0
+        assert dashboard.tune_state is True
+        mock_engine.send_midi.assert_called_once_with(cc, 0)
+
+        mock_engine.send_midi.reset_mock()
+        qtbot.mouseClick(btn, Qt.LeftButton)          # TẮT → Bypass = 127
+        assert dashboard.tune_state is False
+        mock_engine.send_midi.assert_called_once_with(cc, 127)
+
+
+def test_auto_tune_dao_chieu_doc_phan_hoi_cung_chieu(qapp, mock_engine, qtbot):
+    import backend
+
+    dashboard = _make_dashboard(qtbot)
+    cc = int(backend.AppConfig.get_midi_cc()["tone_auto"])
+    btn = dashboard._func_buttons["Auto-Tune"]
+    with _invert(tone_auto=True):
+        dashboard._on_midi_cc_received(cc, 0)          # Bypass tắt = Auto-Tune chạy
+        assert dashboard.tune_state is True and btn._active is True
+        dashboard._on_midi_cc_received(cc, 127)
+        assert dashboard.tune_state is False and btn._active is False
+
+
+def test_dong_bo_gui_auto_tune_theo_chieu_da_dao(qapp, mock_engine, qtbot):
+    import backend
+
+    dashboard = _make_dashboard(qtbot)
+    cc = int(backend.AppConfig.get_midi_cc()["tone_auto"])
+    dashboard.tune_state = True
+    with _invert(tone_auto=True):
+        mock_engine.send_midi.reset_mock()
+        dashboard._sync_midi_states()
+    assert (cc, 0) in [c.args for c in mock_engine.send_midi.call_args_list]
+
+
+def test_fix_meo_dao_chieu_van_dung_gia_tri_can_chinh(qapp, mock_engine, qtbot):
+    from PySide6.QtCore import Qt
+    import backend
+
+    dashboard = _make_dashboard(qtbot)
+    cc = int(backend.AppConfig.get_midi_cc()["fix_meo"])
+    btn = dashboard._func_buttons["Fix Méo"]
+    with _invert(fix_meo=True), \
+         patch("frontend_qt.backend.AppConfig.get_mode_midi_map", return_value={"Fix Méo": 100}):
+        dashboard.fix_meo_state = False
+        mock_engine.send_midi.reset_mock()
+        qtbot.mouseClick(btn, Qt.LeftButton)
+        mock_engine.send_midi.assert_called_once_with(cc, 27)   # 127 − 100

@@ -15,6 +15,7 @@ from core.ytdlp_support import (
     _is_terminal_error,
     _no_cookie_ladder,
     NO_COOKIE_PLAYER_CLIENTS,
+    EMBEDDED_PLAYER_CLIENTS,
     POT_PLAYER_CLIENTS,
     PURPOSE_VIDEO,
     YouTubeAuthenticationRequiredError,
@@ -165,11 +166,12 @@ def test_make_ydl_opts_does_not_force_player_clients():
 def test_expand_attempts_puts_android_first():
     attempts = _expand_attempts([{"kind": "none"}, {"kind": "browser", "browser": "firefox"}])
     assert attempts[0]["player_clients"][0] == "android"
+    assert attempts[1]["player_clients"] == list(EMBEDDED_PLAYER_CLIENTS)
     # None = để yt-dlp tự chọn client (khác với "ép danh sách rỗng")
-    assert attempts[1]["kind"] == "none" and not attempts[1].get("player_clients")
+    assert attempts[2]["kind"] == "none" and not attempts[2].get("player_clients")
     # lượt có cookie KHÔNG được ép client android (android không dùng được cookie)
-    assert attempts[2]["kind"] == "browser"
-    assert not attempts[2].get("player_clients")
+    assert attempts[3]["kind"] == "browser"
+    assert not attempts[3].get("player_clients")
 
 
 @patch("core.ytdlp_support._configured_player_clients", return_value=["web_safari"])
@@ -210,6 +212,19 @@ def test_pot_provider_wired_when_installed():
     register.assert_called_once_with(r"C:\data\pot\plugins")
 
 
+def test_force_ipv4_sets_source_address():
+    """Mạng IPv6 hỏng: khoá youtube_force_ipv4 phải thành source_address 0.0.0.0
+    (đúng thứ `--force-ipv4` của CLI làm); không bật thì không đụng tới."""
+    values = {"youtube_force_ipv4": True}
+    with patch("core.ytdlp_support.AppConfig.get",
+               side_effect=lambda k, d=None: values.get(k, d)):
+        assert make_ydl_opts()["source_address"] == "0.0.0.0"
+    values.clear()
+    with patch("core.ytdlp_support.AppConfig.get",
+               side_effect=lambda k, d=None: values.get(k, d)):
+        assert "source_address" not in make_ydl_opts()
+
+
 def test_pot_provider_not_wired_when_binary_missing():
     """Chỉ có plugin mà thiếu binary thì đừng bật — sẽ chỉ tổ chậm."""
     with patch("core.ytdlp_support.pot_provider.plugin_dir", return_value=r"C:\data\pot\plugins"), \
@@ -218,21 +233,38 @@ def test_pot_provider_not_wired_when_binary_missing():
     assert "youtubepot-bgutilcli" not in (opts.get("extractor_args") or {})
 
 
-def test_ladder_without_pot_is_android_then_default():
-    assert _no_cookie_ladder("audio") == [list(NO_COOKIE_PLAYER_CLIENTS), None]
-    assert _no_cookie_ladder(PURPOSE_VIDEO) == [list(NO_COOKIE_PLAYER_CLIENTS), None]
+def test_ladder_without_pot_is_android_then_embedded_then_default():
+    expected = [list(NO_COOKIE_PLAYER_CLIENTS), list(EMBEDDED_PLAYER_CLIENTS), None]
+    with patch("core.ytdlp_support.pot_provider.is_available", return_value=False):
+        assert _no_cookie_ladder("audio") == expected
+        assert _no_cookie_ladder(PURPOSE_VIDEO) == expected
 
 
 def test_ladder_with_pot_puts_full_clients_first_for_video():
     """Có PO Token: video ưu tiên bộ client cho nhiều luồng progressive nét hơn;
-    audio vẫn để android đứng đầu vì nhanh nhất và 360p đã thừa để phân tích."""
+    audio vẫn để android đứng đầu vì nhanh nhất và 360p đã thừa để phân tích.
+    web_embedded chen ngay sau nấc đầu: đo 17/09/2026 nó là client duy nhất tải
+    được mọi bài, trong khi web_safari/mweb dính 403 dù có token."""
     with patch("core.ytdlp_support.pot_provider.is_available", return_value=True):
         assert _no_cookie_ladder(PURPOSE_VIDEO) == [
-            None, list(POT_PLAYER_CLIENTS), list(NO_COOKIE_PLAYER_CLIENTS),
+            None, list(EMBEDDED_PLAYER_CLIENTS), list(POT_PLAYER_CLIENTS),
+            list(NO_COOKIE_PLAYER_CLIENTS),
         ]
         assert _no_cookie_ladder("audio") == [
-            list(NO_COOKIE_PLAYER_CLIENTS), None, list(POT_PLAYER_CLIENTS),
+            list(NO_COOKIE_PLAYER_CLIENTS), list(EMBEDDED_PLAYER_CLIENTS), None,
+            list(POT_PLAYER_CLIENTS),
         ]
+
+
+def test_web_embedded_hotfix_pin_is_retired_on_this_version():
+    """Khoá client do SuaPOToken.bat ép cho bản cũ phải bị bỏ qua ở bản này."""
+    from core.ytdlp_support import _configured_player_clients
+
+    values = {"youtube_player_clients": ["web_embedded", "android", "android_vr"],
+              "youtube_player_clients_vanhanh_web_embedded": True}
+    with patch("core.ytdlp_support.AppConfig.get",
+               side_effect=lambda k, d=None: values.get(k, d)):
+        assert _configured_player_clients() is None
 
 
 def test_expand_attempts_respects_caller_player_clients():
@@ -310,8 +342,8 @@ def test_forbidden_does_not_trigger_missing_pot_pass(mock_build_auth, mock_yt_dl
 
     with pytest.raises(RuntimeError) as err:
         run_with_auth_fallback("http://yt.com", operation=operation)
-    # chỉ đúng 2 nấc không-cookie, KHÔNG có lượt missing_pot nào
-    assert seen == [False, False]
+    # chỉ đúng 3 nấc không-cookie, KHÔNG có lượt missing_pot nào
+    assert seen == [False, False, False]
     assert "PO Token" in str(err.value)
 
 
@@ -357,7 +389,7 @@ def test_unknown_error_falls_through_to_next_rung(mock_build_auth, mock_yt_dlp):
     mock_yt_dlp.YoutubeDL.side_effect = _fake_ydl
 
     assert run_with_auth_fallback("http://yt.com", operation=operation) == "SUCCESS"
-    assert seen == [list(NO_COOKIE_PLAYER_CLIENTS), None]
+    assert seen == [list(NO_COOKIE_PLAYER_CLIENTS), list(EMBEDDED_PLAYER_CLIENTS), None]
 
 
 @patch("core.ytdlp_support._build_auth_attempts")
@@ -422,8 +454,8 @@ def test_cookie_source_error_does_not_kill_chain(mock_build_auth, mock_yt_dlp):
     mock_yt_dlp.YoutubeDL.side_effect = _fake_ydl
 
     assert run_with_auth_fallback("http://yt.com", operation=operation) == "SUCCESS"
-    # 2 lượt đầu là không cookie (client android rồi mặc định)
-    assert tried == [None, None, ("chrome",), ("firefox",)]
+    # 3 lượt đầu là không cookie (android, web_embedded, rồi mặc định)
+    assert tried == [None, None, None, ("chrome",), ("firefox",)]
 
 
 @patch("core.ytdlp_support._build_auth_attempts")
@@ -451,9 +483,9 @@ def test_format_error_retries_without_pot_filter(mock_build_auth, mock_yt_dlp):
 
     mock_yt_dlp.YoutubeDL.side_effect = _fake_ydl
 
-    # 2 lượt không cookie (android rồi mặc định) đều trượt, lượt cuối mới đậu
+    # 3 lượt không cookie (android, web_embedded, mặc định) đều trượt, lượt cuối mới đậu
     assert run_with_auth_fallback("http://yt.com", operation=operation) == "SUCCESS"
-    assert seen == [False, False, True]
+    assert seen == [False, False, False, True]
 
 
 @patch("core.ytdlp_support._build_auth_attempts")
@@ -634,3 +666,78 @@ def test_khong_dong_toi_cdp_khi_van_de_khong_phai_cookie(mock_build_auth, mock_c
     with pytest.raises(Exception):
         run_with_auth_fallback("http://yt.com", operation=operation)
     assert not mock_cdp.called
+
+
+# --- Chong treo: huy tai giua chung + timeout mang cua ffmpeg ---
+
+from core import ytdlp_support as _ys
+
+
+@pytest.fixture
+def clear_cancel():
+    _ys.set_cancel_check(None)
+    yield
+    _ys.set_cancel_check(None)
+
+
+def test_make_ydl_opts_sets_ffmpeg_rw_timeout():
+    # Y-H1: tai DOAN bai di qua ffmpeg; khong co -rw_timeout la ffmpeg cho mang vo han
+    opts = make_ydl_opts()
+    args = opts["external_downloader_args"]["ffmpeg_i"]
+    assert args[0] == "-rw_timeout"
+    assert int(args[1]) == opts["socket_timeout"] * 1_000_000
+
+
+def test_make_ydl_opts_cancel_hook_not_duplicated():
+    # Y-H2: opts di qua make_ydl_opts 2 lan (ScoringEngine roi run_with_auth_fallback)
+    once = make_ydl_opts()
+    twice = make_ydl_opts(**once)
+    assert twice["progress_hooks"].count(_ys._cancel_progress_hook) == 1
+
+
+def test_cancel_progress_hook_raises_only_when_cancelled(clear_cancel):
+    # Y-H3
+    _ys._cancel_progress_hook({"status": "downloading"})   # khong huy -> khong nem
+    _ys.set_cancel_check(lambda: True)
+    with pytest.raises(_ys.DownloadCancelled):
+        _ys._cancel_progress_hook({"status": "downloading"})
+
+
+def test_cancel_check_is_thread_local(clear_cancel):
+    # Y-H4: huy phien do o luong nay KHONG duoc chan tai o luong khac
+    import threading
+    _ys.set_cancel_check(lambda: True)
+    seen = []
+    t = threading.Thread(target=lambda: seen.append(_ys.cancel_requested()))
+    t.start(); t.join()
+    assert _ys.cancel_requested() is True
+    assert seen == [False]
+
+
+@patch("core.ytdlp_support._build_auth_attempts")
+def test_run_attempts_stop_when_cancelled(mock_build_auth, mock_yt_dlp, clear_cancel):
+    # Y-H5: phien do da huy/het gio -> dung o nac thu KE TIEP, khong chay het thang
+    mock_build_auth.return_value = [{"kind": "none"},
+                                    {"kind": "browser", "browser": "chrome"},
+                                    {"kind": "browser", "browser": "edge"}]
+    calls = []
+
+    def operation(ydl):
+        calls.append(1)
+        _ys.set_cancel_check(lambda: True)      # watchdog ban trong luc nac 1 chay
+        raise mock_yt_dlp.utils.DownloadError("Sign in to confirm you're not a bot")
+
+    with pytest.raises(_ys.DownloadCancelled):
+        run_with_auth_fallback("http://yt.com", operation=operation)
+    assert len(calls) == 1
+
+
+@patch("core.ytdlp_support._build_auth_attempts")
+def test_run_attempts_cancelled_before_start(mock_build_auth, mock_yt_dlp, clear_cancel):
+    # Y-H6
+    mock_build_auth.return_value = [{"kind": "none"}]
+    operation = MagicMock(return_value="SUCCESS")
+    _ys.set_cancel_check(lambda: True)
+    with pytest.raises(_ys.DownloadCancelled):
+        run_with_auth_fallback("http://yt.com", operation=operation)
+    operation.assert_not_called()

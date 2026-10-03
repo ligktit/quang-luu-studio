@@ -20,13 +20,15 @@ class _CloseWorker(QThread):
     progress = Signal(str)
     finished_result = Signal(dict)
 
-    def __init__(self, engine, timeout_sec, force_kill, should_abort, save=True, parent=None):
+    def __init__(self, engine, timeout_sec, force_kill, should_abort, save=True,
+                 fallback_save=False, parent=None):
         super().__init__(parent)
         self._engine = engine
         self._timeout = timeout_sec
         self._force_kill = force_kill
         self._should_abort = should_abort
         self._save = save
+        self._fallback_save = fallback_save
 
     def run(self):
         try:
@@ -36,6 +38,7 @@ class _CloseWorker(QThread):
                 force_kill=self._force_kill,
                 on_progress=self.progress.emit,
                 should_abort=self._should_abort,
+                fallback_save=self._fallback_save,
             )
         except Exception as e:
             result = {"status": "error", "saved": False, "error": str(e)}
@@ -43,14 +46,17 @@ class _CloseWorker(QThread):
 
 
 class StudioOneShutdownDialog(QDialog):
-    """Chờ Studio One lưu bài và thoát. exec() trả về khi xong hoặc bị bỏ qua.
+    """Chờ Studio One thoát. exec() trả về khi xong hoặc bị bỏ qua.
 
-    `save=False` để đóng mà không chủ động Ctrl+S — dùng lúc khởi động, khi phải
-    dẹp Studio One còn sót lại của phiên trước để chép bản mẫu .song lên.
+    `save=False` (đường mặc định của cả lúc thoát app lẫn lúc khởi động) đóng mà
+    không Ctrl+S: hộp thoại hỏi lưu được trả lời bằng nút "Don't Save".
+    `fallback_save=True` cho phép lưu như nước cuối nếu không bấm được nút đó —
+    chỉ dùng khi đã chốt bản mẫu .song, lúc đó lưu là vô hại.
     """
 
     def __init__(self, engine, timeout_sec=45.0, force_kill=False, parent=None,
-                 save=True, title=None, hint=None):
+                 save=True, title=None, hint=None, fallback_save=False,
+                 skip_text=None, skip_tip=None):
         super().__init__(parent)
         self.setWindowTitle(title or "Đang đóng Studio One")
         self.setModal(True)
@@ -73,7 +79,7 @@ class StudioOneShutdownDialog(QDialog):
         lay.addWidget(heading)
 
         hint_lbl = QLabel(hint or (
-            "Đang lưu bài và chờ Studio One tự thoát. Đừng tắt máy lúc này — "
+            "Đang chờ Studio One tự thoát. Đừng tắt máy lúc này — "
             "tắt ngang sẽ khiến lần mở sau Studio One đòi phục hồi phiên."
         ))
         hint_lbl.setWordWrap(True)
@@ -103,7 +109,7 @@ class StudioOneShutdownDialog(QDialog):
 
         row = QHBoxLayout()
         row.addStretch()
-        skip = QPushButton("Bỏ qua, thoát ngay" if save else "Bỏ qua, dùng bản hiện tại")
+        skip = QPushButton(skip_text or "Bỏ qua, thoát ngay")
         skip.setCursor(Qt.PointingHandCursor)
         skip.setStyleSheet(f"""
             QPushButton {{
@@ -113,14 +119,14 @@ class StudioOneShutdownDialog(QDialog):
             }}
             QPushButton:hover {{ background-color: {lighten(C['card_hover'], 0.12)}; }}
         """)
-        skip.setToolTip("Để Studio One chạy tiếp và thoát app ngay" if save
-                        else "Giữ nguyên bài đang mở, không phục hồi bản mẫu phiên này")
+        skip.setToolTip(skip_tip or "Để Studio One chạy tiếp và thoát app ngay")
         skip.clicked.connect(self._on_skip)
         row.addWidget(skip)
         lay.addLayout(row)
 
         self._worker = _CloseWorker(engine, timeout_sec, force_kill,
-                                    lambda: self._aborted, save=save, parent=self)
+                                    lambda: self._aborted, save=save,
+                                    fallback_save=fallback_save, parent=self)
         self._worker.progress.connect(self._status.setText)
         self._worker.finished_result.connect(self._on_done)
         self._worker.start()

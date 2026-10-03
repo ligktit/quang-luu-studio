@@ -464,10 +464,47 @@ class TestLoopbackFallback:
 
 class TestAutoDetectRetry:
 
+    def test_default_single_attempt_no_retry(self, engine, mocker):
+        """E-27: mặc định chỉ dò 1 lần — lỗi là báo ngay nguyên nhân, không tự thử
+        lại (trước đây 3 lần × watchdog khiến khách chờ tới 276s)."""
+        import weakref
+        from core.engine import _youtube
+        assert _youtube._AUTO_DETECT_MAX_ATTEMPTS == 1
+        sleep = mocker.patch("core.engine._youtube.time.sleep", return_value=None)
+        engine.tone_scan_mode = "fast"
+
+        calls = []
+
+        def fake_detect(on_complete=None, on_error=None, on_progress=None,
+                        url=None, skip_resolve=False):
+            calls.append(skip_resolve)
+            on_error("Loa im lặng")
+
+        mocker.patch.object(engine, "detect_tone_from_browser", side_effect=fake_detect)
+        errors = []
+        engine.on_auto_tone_error = lambda m: errors.append(m)
+        engine.on_auto_tone_progress = MagicMock()
+
+        engine._dispatch_auto_detect("https://youtu.be/abcdefghijk", weakref.ref(engine))
+        # Nếu có luồng thử lại thì nó đã kịp chạy. Không dùng time.sleep: mock ở
+        # trên vá time.sleep của CẢ module time.
+        threading.Event().wait(0.2)
+
+        assert len(calls) == 1
+        assert len(errors) == 1
+        assert errors[0].startswith("Dò tone thất bại.")
+        assert "lần thử" not in errors[0]
+        assert "Loa im lặng" in errors[0]
+        # Không chờ khoảng thử lại nào. (Chỉ xét đúng lời chờ này: luồng nền của
+        # test khác cũng gọi time.sleep đã bị vá.)
+        assert call(_youtube._AUTO_DETECT_RETRY_DELAY_SEC) not in sleep.call_args_list
+
     def test_retries_then_surfaces_cause(self, engine, mocker):
-        """E-28: dò tone tự động lỗi → thử lại đủ 3 lần rồi báo rõ nguyên nhân."""
+        """E-28: nếu bật lại thử nhiều lần (hằng số > 1) → thử đủ số lần rồi báo rõ
+        nguyên nhân. Giữ để cơ chế thử lại không mục khi mặc định là 1."""
         import time as _time
         import weakref
+        mocker.patch("core.engine._youtube._AUTO_DETECT_MAX_ATTEMPTS", 3)
         mocker.patch("core.engine._youtube.time.sleep", return_value=None)
         engine.tone_scan_mode = "fast"
 
@@ -498,9 +535,11 @@ class TestAutoDetectRetry:
         assert "Loa im lặng" in errors[0]      # giữ nguyên nhân gốc
 
     def test_success_on_retry_no_error(self, engine, mocker):
-        """E-29: lần 1 lỗi, lần 2 thành công → on_complete chạy, không báo lỗi."""
+        """E-29: (thử nhiều lần) lần 1 lỗi, lần 2 thành công → on_complete chạy,
+        không báo lỗi."""
         import time as _time
         import weakref
+        mocker.patch("core.engine._youtube._AUTO_DETECT_MAX_ATTEMPTS", 3)
         mocker.patch("core.engine._youtube.time.sleep", return_value=None)
         engine.tone_scan_mode = "fast"
 

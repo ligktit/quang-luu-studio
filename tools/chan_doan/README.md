@@ -11,6 +11,10 @@ Các tệp trong thư mục này chạy được trên **mọi máy Windows 10/1
 | `QLS_SuaLoi.ps1` | Toàn bộ phần sửa lỗi |
 | `VaNhanh172.bat` | **Chỉ dùng cho máy đang cài bản 1.7.2** — xem mục dưới |
 | `QLS_VaNhanh172.ps1` | Toàn bộ phần vá nhanh 1.7.2 |
+| `SuaPOToken.bat` | Sửa lỗi `PO Token provider: CHUA co (binary)` rồi **tải thử** một bài YouTube bằng `yt-dlp.exe` độc lập (chạy với **mọi** bản app, có tiến độ, mỗi lượt tối đa 100 giây, đứng im 45 giây là diệt) qua từng nhóm client (`-Link`, `-ExeFile`, `-Auto`, `-ChiThuTai`). Nấc đầu của app hỏng mà bản vá tải được thì đề nghị **vá nhanh**: ép `youtube_player_clients = web_embedded, android, android_vr` trong `app_config.json` (có sao lưu) rồi tải thử lại |
+| `QLS_SuaPOToken.ps1` | Toàn bộ phần sửa PO Token + tải thử |
+| `SuaManHinhNhung.bat` | Sửa lỗi **nạp QtWebEngine thất bại** (ô "Màn hình karaoke nhúng" bị mờ): đọc lỗi trong `app.log` → cài Heavy / loại trừ Defender / dọn `_MEI` / cập nhật VC++ → mở app xác nhận (`-Xem`, `-Auto`, `-LoaiTruTemp`, `-KhongMoApp`) |
+| `QLS_SuaManHinhNhung.ps1` | Toàn bộ phần sửa màn hình nhúng |
 
 > Các tệp phải nằm **cùng một thư mục**. Gửi cho khách dạng file nén rồi bảo giải nén ra Desktop.
 > Quy trình chuẩn: chạy `ChanDoan.bat` → gửi báo cáo cho kỹ thuật → chạy `SuaLoi.bat` → chạy lại

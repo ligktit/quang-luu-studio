@@ -415,6 +415,7 @@ class TestDetectKeyFromSystemAudio:
         }
         mock_stream = MagicMock()
         mock_stream.read.return_value = non_silent_chunk
+        mock_stream.get_read_available.return_value = 1024
         mock_pa.open.return_value = mock_stream
         mock_pa.paFloat32 = 1
 
@@ -451,6 +452,7 @@ class TestDetectKeyFromSystemAudio:
         mock_pa.get_wasapi_loopback_analogue_by_index.side_effect = AttributeError
         mock_stream = MagicMock()
         mock_stream.read.return_value = silent_chunk
+        mock_stream.get_read_available.return_value = 1024
         mock_pa.open.return_value = mock_stream
         mock_pa.paFloat32 = 1
 
@@ -467,6 +469,92 @@ class TestDetectKeyFromSystemAudio:
 
         assert result is None
         assert reasons and "im lặng" in reasons[0]
+
+    @staticmethod
+    def _fake_pa_with_stream(mock_stream):
+        mock_pa = MagicMock()
+        mock_pa.get_host_api_count.return_value = 1
+        mock_pa.get_host_api_info_by_index.return_value = {
+            "name": "Windows WASAPI", "index": 0, "defaultOutputDevice": -1,
+        }
+        mock_pa.get_device_count.return_value = 1
+        mock_pa.get_device_info_by_index.return_value = {
+            "isLoopbackDevice": True, "hostApi": 0, "name": "Speakers",
+            "defaultSampleRate": 16000, "index": 0, "maxInputChannels": 1,
+        }
+        mock_pa.get_wasapi_loopback_analogue_by_index.side_effect = AttributeError
+        mock_pa.open.return_value = mock_stream
+        fake_pyaudio = types.ModuleType("pyaudiowpatch")
+        fake_pyaudio.PyAudio = lambda: mock_pa
+        fake_pyaudio.paFloat32 = 1
+        return fake_pyaudio
+
+    def test_no_data_from_speaker_does_not_hang(self):
+        """TD-10c: loa không đẩy gói nào (nhạc dừng / loa bị rút) → KHÔNG gọi
+        stream.read() (vốn chặn vô hạn), bỏ cuộc sau LOOPBACK_NO_DATA_SEC."""
+        import time as _time
+        mock_stream = MagicMock()
+        mock_stream.get_read_available.return_value = 0
+        mock_stream.read.side_effect = AssertionError("read() chặn khi không có dữ liệu")
+        fake_pyaudio = self._fake_pa_with_stream(mock_stream)
+
+        reasons = []
+        with patch.dict("sys.modules", {"pyaudiowpatch": fake_pyaudio}), \
+             patch.object(ToneDetector, "LOOPBACK_NO_DATA_SEC", 0.2), \
+             patch("ctypes.windll.ole32.CoInitializeEx", return_value=0), \
+             patch("ctypes.windll.ole32.CoUninitialize"):
+            t0 = _time.monotonic()
+            result = ToneDetector.detect_key_from_system_audio(duration=10, reason_out=reasons)
+            elapsed = _time.monotonic() - t0
+
+        assert result is None
+        assert elapsed < 3
+        mock_stream.read.assert_not_called()
+        assert reasons and "im lặng" in reasons[0]
+
+    def test_cancelled_stops_capture(self):
+        """TD-10d: phiên dò bị huỷ giữa lúc nghe loa → dừng ngay, không phân tích."""
+        mock_stream = MagicMock()
+        mock_stream.get_read_available.return_value = 0
+        fake_pyaudio = self._fake_pa_with_stream(mock_stream)
+
+        with patch.dict("sys.modules", {"pyaudiowpatch": fake_pyaudio}), \
+             patch.object(ToneDetector, "detect_key_from_audio") as mock_detect, \
+             patch("ctypes.windll.ole32.CoInitializeEx", return_value=0), \
+             patch("ctypes.windll.ole32.CoUninitialize"):
+            result = ToneDetector.detect_key_from_system_audio(
+                duration=10, cancelled=lambda: True)
+
+        assert result is None
+        mock_detect.assert_not_called()
+        mock_stream.stop_stream.assert_called_once()   # vẫn đóng stream
+
+    def test_trickle_data_bounded_by_deadline(self):
+        """TD-10e: loa đẩy dữ liệu nhỏ giọt → tổng thời gian thu vẫn có trần
+        (duration + LOOPBACK_GRACE_SEC), không kéo dài vô hạn."""
+        import time as _time
+        chunk = (np.ones(16, dtype=np.float32) * 0.1).tobytes()
+        mock_stream = MagicMock()
+        mock_stream.get_read_available.return_value = 16
+
+        def _slow_read(*_a, **_k):                # 16 mẫu / 10ms ≈ 1/10 tốc độ thật
+            _time.sleep(0.01)
+            return chunk
+        mock_stream.read.side_effect = _slow_read
+        fake_pyaudio = self._fake_pa_with_stream(mock_stream)
+
+        with patch.dict("sys.modules", {"pyaudiowpatch": fake_pyaudio}), \
+             patch.object(ToneDetector, "LOOPBACK_GRACE_SEC", 0.3), \
+             patch.object(ToneDetector, "detect_key_from_audio") as mock_detect, \
+             patch("ctypes.windll.ole32.CoInitializeEx", return_value=0), \
+             patch("ctypes.windll.ole32.CoUninitialize"):
+            t0 = _time.monotonic()
+            result = ToneDetector.detect_key_from_system_audio(duration=1)
+            elapsed = _time.monotonic() - t0
+
+        assert elapsed < 5
+        assert result is None               # quá ít âm thanh để phân tích
+        mock_detect.assert_not_called()
 
 
 class TestFindLoopbackDevice:

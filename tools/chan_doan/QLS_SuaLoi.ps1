@@ -754,7 +754,7 @@ if ($potExeOk -and $potPlugOk) {
                         Move-Item -LiteralPath (Join-Path $stage "yt_dlp_plugins") -Destination $POT_PLUG_DIR -Force
                         Copy-Item -LiteralPath $tmpExe -Destination $POT_EXE -Force
                         $stamp = @{ version = $POT_VERSION; last_check = [int][double]::Parse((Get-Date -UFormat %s)) }
-                        $stamp | ConvertTo-Json | Set-Content -LiteralPath $POT_STAMP -Encoding utf8
+                        [System.IO.File]::WriteAllText($POT_STAMP, ($stamp | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))  # KHONG BOM: Python json.load se vo
                         $ok = (Test-Path -LiteralPath $POT_EXE) -and (Test-Path -LiteralPath $POT_MARKER)
                     }
                 }

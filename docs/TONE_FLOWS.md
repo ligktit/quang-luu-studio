@@ -65,11 +65,20 @@ stateDiagram-v2
 
 ---
 
-## 1b. Tự động thử lại 3 lần + báo nguyên nhân (`_dispatch_auto_detect`)
+## 1b. Dò 1 lần + báo nguyên nhân (`_dispatch_auto_detect`)
 
-Áp dụng cho **cả 2 chế độ** (fast & full). Khi 1 lần dò lỗi → tự động dò lại tối
-đa `_AUTO_DETECT_MAX_ATTEMPTS = 3` lần, cách nhau `_AUTO_DETECT_RETRY_DELAY_SEC = 3`s.
-Hết lượt mới hiển thị lỗi kèm **nguyên nhân cụ thể**.
+Áp dụng cho **cả 2 chế độ** (fast & full). Mặc định `_AUTO_DETECT_MAX_ATTEMPTS = 1`:
+lỗi là báo ngay kèm **nguyên nhân cụ thể** ("Dò tone thất bại.\nNguyên nhân: …"),
+khách muốn thử lại thì bấm **Dò Lại**. Trước 28/09/2026 là 3 lần × watchdog — khách
+chờ tới 276s (nhanh) / 906s (toàn bài) chỉ để nhận lại cùng một lỗi. Cơ chế thử lại
+bên dưới vẫn còn nguyên, chỉ chạy khi tăng hằng số > 1 (cách nhau
+`_AUTO_DETECT_RETRY_DELAY_SEC = 3`s).
+
+Mỗi lần dò thất bại ghi **một** bản ghi ERROR (vào cả `errors.log`) qua
+`_ToneJob.log_failure`: chế độ, URL, bước lỗi, dòng thời gian các bước, câu báo khách,
+chi tiết nghe loa, lỗi gốc + chuỗi nguyên nhân + traceback. Quá giờ thì ghi thêm ngăn
+xếp chỗ luồng worker đang kẹt. Dò xong ghi một dòng INFO `[DÒ TONE] XONG` có thời gian
+từng bước.
 
 ```mermaid
 flowchart TD
@@ -77,13 +86,13 @@ flowchart TD
     RUN --> OK{Thành công?}
     OK -->|có| DONE([on_auto_tone_complete])
     OK -->|lỗi msg| STOP[_tone_session.stop]
-    STOP --> CNT{attempt < 3?}
-    CNT -->|có| WAIT["progress: 'đang thử lại lần X/3'<br/>chờ 3s"]
+    STOP --> CNT{"attempt < MAX_ATTEMPTS?<br/>(mặc định 1 → luôn 'không')"}
+    CNT -->|có| WAIT["progress: 'đang thử lại lần X/N'<br/>chờ 3s"]
     WAIT --> GUARD{Có phiên dò khác<br/>đang chạy?}
     GUARD -->|có| ABORT[Hủy thử lại]
     GUARD -->|không| RETRY["_dispatch_auto_detect<br/>attempt+1, skip_resolve=True"]
     RETRY --> RUN
-    CNT -->|"không (đã 3 lần)"| ERR["on_auto_tone_error:<br/>'Thất bại sau 3 lần.<br/>Nguyên nhân: …'"]
+    CNT -->|không| ERR["on_auto_tone_error:<br/>'Dò tone thất bại.<br/>Nguyên nhân: …'"]
 ```
 
 Nguyên nhân (`msg`) lấy từ tầng dò: yt-dlp lỗi + loa im lặng / không tìm thấy loopback /
@@ -159,7 +168,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    F0([detect_tone_from_browser]) --> WD["Lắp watchdog 90s<br/>(timeout → stop session + on_error)"]
+    F0([detect_tone_from_browser]) --> WD["Lắp watchdog 60s<br/>(timeout → stop session + on_error)"]
     WD --> URL{Có URL chưa?}
     URL -->|chưa| SCAN[detect_youtube_url_from_browser]
     URL -->|có| SS
@@ -186,7 +195,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    G0([auto_detect_youtube_timeline]) --> GWD[Lắp watchdog 300s]
+    G0([auto_detect_youtube_timeline]) --> GWD[Lắp watchdog 240s]
     GWD --> GM{"_resolve_tone(url)<br/>(nếu !skip_resolve)"}
     GM -->|manual| GREPLAY[Replay timeline thủ công] --> GDONE
     GM -->|cache| GREPLAY2["_build_cache_result + replay cache"] --> GDONE

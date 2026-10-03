@@ -25,6 +25,32 @@ def _make_temp_audio_path(output_dir):
     return os.path.join(output_dir, f"{TEMP_AUDIO_PREFIX}{uuid.uuid4().hex}.wav")
 
 
+def _should_retry_full_download(exc):
+    """Tải ĐOẠN đầu bài hỏng thì có nên tải lại CẢ bài không?
+
+    Tải đoạn đi qua ffmpeg (download_ranges); tải cả bài đi qua downloader HTTP
+    của yt-dlp. Chỉ khi chính ffmpeg hỏng ("ffmpeg exited with code …", ffmpeg
+    đứng mạng quá -rw_timeout) thì đường HTTP mới có cơ hội khác. Mọi lỗi khác
+    (YouTube chặn bot, thiếu định dạng, video riêng tư, mất mạng, phiên đã huỷ)
+    xảy ra ở khâu bóc thông tin — tải lại chỉ chạy lại NGUYÊN thang thử một lần
+    nữa rồi hỏng y hệt, nhân đôi thời gian khách phải chờ.
+    """
+    from core.ytdlp_support import DownloadCancelled
+    if isinstance(exc, DownloadCancelled):
+        return False
+    return "ffmpeg" in str(exc).lower()
+
+
+def _log_download_error(label, youtube_url, exc):
+    """Ghi lỗi tải ĐẦY ĐỦ (loại lỗi + thông điệp + traceback, kèm lỗi gốc)."""
+    import logging
+    logging.getLogger(__name__).warning(
+        "[SCORING] %s that bai\n  URL: %s\n  Loi: %s: %s",
+        label, youtube_url, type(exc).__name__, exc,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+
+
 def _cleanup_temp_candidates(temp_path):
     """Xóa các file dở dang quanh temp_path khi download thất bại."""
     base_path = temp_path[:-4] if temp_path.endswith('.wav') else temp_path
@@ -56,6 +82,9 @@ class ScoringEngine:
         self.sample_rate = None
         self.temp_audio_path = None
         self.key_reference = None  # e.g. "Am", "C", "F#m"
+        # Lỗi gốc của lần tải gần nhất (None nếu thành công) — để luồng dò tone
+        # ghi vào nhật ký lỗi. KHÔNG đưa ra giao diện.
+        self.last_download_error = None
 
     # ── Audio Loading ────────────────────────────────────────────────────────
 
@@ -122,12 +151,17 @@ class ScoringEngine:
                 }],
             )
 
+            self.last_download_error = None
             dl_seconds = max_seconds or 60
             try:
                 ydl_opts_partial = dict(ydl_opts)
                 ydl_opts_partial['download_ranges'] = lambda info, ydl: [{'start_time': 0, 'end_time': dl_seconds}]
                 download_with_auth(youtube_url, ydl_opts_partial, log_prefix="[SCORING]")
-            except Exception:
+            except Exception as partial_exc:
+                if not _should_retry_full_download(partial_exc):
+                    raise
+                print(f"[SCORING] Tai doan dau bai hong vi ffmpeg ({partial_exc}) "
+                      f"-> thu tai ca bai qua HTTP")
                 download_with_auth(youtube_url, ydl_opts, log_prefix="[SCORING]")
 
             base_path = temp_path.replace('.wav', '')
@@ -142,7 +176,8 @@ class ScoringEngine:
         except ImportError:
             raise
         except Exception as e:
-            print(f"[SCORING] Download error: {e}")
+            self.last_download_error = e
+            _log_download_error("Tai audio", youtube_url, e)
             # Dọn file dở dang nếu download thất bại giữa chừng
             try:
                 _cleanup_temp_candidates(temp_path)
@@ -185,6 +220,7 @@ class ScoringEngine:
                 **(extra_opts or {}),
             )
 
+            self.last_download_error = None
             video_title = ""
             try:
                 ydl_opts_partial = dict(ydl_opts)
@@ -192,7 +228,12 @@ class ScoringEngine:
                 ydl_opts_partial['download_ranges'] = lambda info, ydl: [{'start_time': 0, 'end_time': end_time}]
                 info = extract_info_with_auth(youtube_url, ydl_opts_partial, download=True, log_prefix="[SCORING]")
                 video_title = info.get('title', '') if info else ""
-            except Exception:
+            except Exception as partial_exc:
+                # Xem _should_retry_full_download: chỉ ffmpeg hỏng mới đáng tải lại.
+                if not _should_retry_full_download(partial_exc):
+                    raise
+                print(f"[SCORING] Tai doan dau bai hong vi ffmpeg ({partial_exc}) "
+                      f"-> thu tai ca bai qua HTTP")
                 info = extract_info_with_auth(youtube_url, ydl_opts, download=True, log_prefix="[SCORING]")
                 video_title = info.get('title', '') if info else ""
 
@@ -206,7 +247,8 @@ class ScoringEngine:
         except ImportError:
             raise
         except Exception as e:
-            print(f"[SCORING] Download+info error: {e}")
+            self.last_download_error = e
+            _log_download_error("Tai audio + thong tin", youtube_url, e)
             # Dọn file dở dang nếu download thất bại giữa chừng
             try:
                 _cleanup_temp_candidates(temp_path)

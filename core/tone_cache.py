@@ -55,6 +55,22 @@ def _bump_data_version():
 CHROMATIC_NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 
+def transpose_key(key_display, semitones):
+    """Dịch tên tone ('Am', 'C#', 'F') đi `semitones` bán cung, giữ nguyên thể.
+
+    Tên lạ (rỗng, '?', '...') trả về nguyên văn — đây là hàm hiển thị, không
+    được biến một chỗ trống thành tone C.
+    """
+    kd = (key_display or "").strip()
+    minor = kd.endswith("m")
+    root = kd[:-1] if minor else kd
+    try:
+        idx = CHROMATIC_NOTES.index(root)
+    except ValueError:
+        return key_display
+    return CHROMATIC_NOTES[(idx + int(semitones or 0)) % 12] + ("m" if minor else "")
+
+
 def make_timeline_entry(key_display, at=0.0):
     """Dựng 1 mốc timeline từ tên tone hiển thị ('Am', 'C#', ...).
 

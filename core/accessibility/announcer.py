@@ -105,7 +105,7 @@ class Announcer(QObject):
             "mix_music":  "Nhạc",
             "mix_mic":    "Mic",
             "mix_reverb": "Vang",
-            "tone_music": "Giọng",
+            "voice_fx": "Giọng",
         }
 
     # ── Settings ────────────────────────────────────────────

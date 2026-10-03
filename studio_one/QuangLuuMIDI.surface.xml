@@ -31,7 +31,11 @@
   - CC 46:    Mode Dân Ca (button) — TÁCH khỏi 30
   - CC 47:    Bè (button)
   - CC 48:    Tắt Ồn — khử ồn mic (button)
+  - CC 49:    Ping Sẵn Sàng (knob, HAI CHIỀU) — app gửi giá trị N, Studio One
+              gửi trả đúng N ra cổng "Send To" (QLS_PhanHoi). Nhận được N tức là
+              bài đã nạp xong và bảng MIDI của bài đang chạy.
   - CC 50-53: Mute toggles (buttons)
+  - CC 54:    Hiệu ứng giọng em bé ↔ robot (knob) — thanh "Giọng" ở mixer của app
 -->
 <ControlSurface name="QuangLuuMIDI" 
                 manufacturer="QuangLuuStudio" 
@@ -216,6 +220,30 @@
       <MidiMessage status="#B0" address="53"/>
     </Control>
     
+    <!-- ============================================ -->
+    <!-- HIỆU ỨNG GIỌNG (CC 54)                       -->
+    <!-- ============================================ -->
+
+    <!-- voice_fx: thanh "Giọng" ở mixer của app — chất giọng em bé ↔ robot
+         (-12 đến +12, mapped 0-127). KHÁC Tone Giọng (CC 11, dịch cao độ). -->
+    <Control name="voiceFx" title="Hiệu Ứng Giọng" type="knob" options="receive public">
+      <MidiMessage status="#B0" address="54"/>
+    </Control>
+
+    <!-- ============================================ -->
+    <!-- PING SẴN SÀNG (CC 49)                        -->
+    <!-- ============================================ -->
+
+    <!-- readyPing: control DUY NHẤT có transmit — Studio One gửi trả giá trị
+         vừa nhận, app dựa vào đó để biết Studio One đã sẵn sàng nhận MIDI.
+         Gán (Control Link) vào MỘT tham số vô hại TRONG BÀI (vd Pan của track
+         PING đã mute). KHÔNG gán Global: gán Global thì Studio One trả lời
+         trước cả khi bài nạp xong, đúng cái lỗi cần tránh.
+         Chưa gán thì app không nhận được trả lời và tự quay về cách hẹn giờ. -->
+    <Control name="readyPing" title="Ping San Sang" type="knob" options="transmit receive public">
+      <MidiMessage status="#B0" address="49"/>
+    </Control>
+
   </Controls>
   
 </ControlSurface>

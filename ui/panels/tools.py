@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QFrame,
     QLineEdit, QListWidget,
 )
-from PySide6.QtCore import Qt, QSignalBlocker
+from PySide6.QtCore import Qt
 
 from ui.design_tokens import C, SP, FONT, FONT_MONO, lighten
 from ui.components.painter_button import PainterButton
@@ -126,46 +126,18 @@ def _build_tone_knob_widget(dashboard, label: str, cc_key: str, color: str) -> Q
     stepper_row.addStretch()
     vl.addLayout(stepper_row)
 
-    _current = [0]
-    _CHROMATIC = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-    _ENHARMONIC = {"Bb": "A#", "Eb": "D#", "Ab": "G#", "Db": "C#", "Gb": "F#"}
+    # Giá trị sống nằm ở dashboard (tone_music_value / tone_voice_value) chứ
+    # không nằm trong closure: đổi bài phải reset được, mở bài đã lưu phải khôi
+    # phục được, và panel dựng lại (Dev Mode) không được làm nhãn về 0 sai.
+    dashboard._tone_value_labels[cc_key] = val_lbl
+    dashboard._refresh_tone_offset_label(cc_key)
 
-    def _shift_key_midi(delta):
-        base = _ENHARMONIC.get(dashboard.current_tone, dashboard.current_tone)
-        try:
-            base_idx = _CHROMATIC.index(base)
-        except ValueError:
-            base_idx = 0
-        new_key = _CHROMATIC[(base_idx + delta) % 12]
-        if hasattr(dashboard, "tone_combo") and dashboard.tone_combo.findText(new_key) >= 0:
-            with QSignalBlocker(dashboard.tone_combo):
-                dashboard.tone_combo.setCurrentText(new_key)
-        dashboard.current_tone = new_key
-        key_midi_map = backend.AppConfig.get_key_midi_map()
-        key_midi = key_midi_map.get(new_key, 0)
-        dashboard.engine.send_midi(dashboard.MIDI_CC["key_root"], key_midi)
-        print(f"[KEY] {label} -> {base} -> {new_key} (MIDI {key_midi})")
+    def _step(delta):
+        current = dashboard._tone_offset(cc_key)
+        dashboard._set_tone_offset(cc_key, current + delta)
 
-    def _apply_value(new_val):
-        new_val = max(-12, min(12, new_val))
-        old_val = _current[0]
-        if new_val == old_val:
-            return
-        _current[0] = new_val
-        sign = "+" if new_val >= 0 else ""
-        val_lbl.setText(f"{sign}{new_val}")
-        midi_value = int(((new_val + 12) / 24) * 127)
-        dashboard.engine.send_midi(dashboard.MIDI_CC[cc_key], midi_value)
-        if cc_key == "tone_music":
-            delta = new_val - old_val
-            dashboard.tone_music_value = new_val
-            if delta != 0:
-                _shift_key_midi(delta)
-        else:
-            dashboard.tone_voice_value = new_val
-
-    btn_minus.clicked.connect(lambda: _apply_value(_current[0] - 1))
-    btn_plus.clicked.connect(lambda: _apply_value(_current[0] + 1))
+    btn_minus.clicked.connect(lambda: _step(-1))
+    btn_plus.clicked.connect(lambda: _step(+1))
 
     return wrapper
 

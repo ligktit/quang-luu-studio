@@ -183,3 +183,55 @@ def test_save_false_khong_bao_gio_gui_ctrl_s(monkeypatch):
         _Engine().close_studio_one_safely(timeout_sec=3, save=False)
 
     pg.hotkey.assert_not_called()
+
+
+def test_fallback_save_lam_nuoc_cuoi_khi_hut_nut(monkeypatch):
+    # Lúc THOÁT app: đã chốt bản mẫu .song nên bản lưu ra đằng nào cũng bị chép
+    # đè ở lần khởi động sau → thà Enter (= Save) cho Studio One thoát sạch, còn
+    # hơn để nó kẹt lại với hộp thoại đang mở.
+    fake = _fake_so_windows([{1}, {1}, {1}], click_ok=False)
+    import core
+    monkeypatch.setattr(core, "so_windows", fake, raising=False)
+
+    with patch("core.engine._lifecycle.pyautogui") as pg:
+        result = _Engine().close_studio_one_safely(
+            timeout_sec=3, save=False, fallback_save=True)
+
+    assert result["status"] == "closed"
+    assert result["saved"] is True
+    fake.cancel_dialog.assert_not_called()
+    pg.press.assert_called_with("enter")
+    # Vẫn không Ctrl+S: chỉ trả lời hộp thoại, không chủ động lưu trước khi đóng.
+    pg.hotkey.assert_not_called()
+
+
+def test_fallback_save_van_uu_tien_nut_khong_luu(monkeypatch):
+    # Bấm được "Don't Save" thì nước cuối không được đụng tới — fallback_save
+    # chỉ là phao, không phải đường mặc định.
+    fake = _fake_so_windows([{1}, {1}, {1}], click_ok=True)
+    import core
+    monkeypatch.setattr(core, "so_windows", fake, raising=False)
+
+    with patch("core.engine._lifecycle.pyautogui") as pg:
+        result = _Engine().close_studio_one_safely(
+            timeout_sec=3, save=False, fallback_save=True)
+
+    assert result["saved"] is False
+    fake.click_no_save.assert_called_once_with(20)
+    pg.press.assert_not_called()
+
+
+def test_khong_bat_fallback_thi_van_huy_dong(monkeypatch):
+    # Lúc KHỞI ĐỘNG (chưa chốt bản mẫu / phục hồi bản mẫu) fallback tắt: hụt nút
+    # là huỷ đóng, tuyệt đối không ghi đè file .song.
+    fake = _fake_so_windows([{1}] * 20, click_ok=False)
+    import core
+    monkeypatch.setattr(core, "so_windows", fake, raising=False)
+
+    with patch("core.engine._lifecycle.pyautogui") as pg:
+        result = _Engine().close_studio_one_safely(
+            timeout_sec=3, save=False, fallback_save=False)
+
+    assert result["status"] == "no_save_button"
+    fake.cancel_dialog.assert_called_once_with(20)
+    pg.press.assert_not_called()

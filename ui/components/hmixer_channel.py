@@ -175,8 +175,10 @@ class HMixerChannel(QWidget):
         if self._has_inf_bottom and val <= self._min + 0.1:
             return f"−∞{self._unit}"
 
-        if self._unit == " dB":
-            return f"{val:+.1f}{self._unit}"
+        if self._unit.strip() == "dB":
+            if int(val) == 0:
+                return f"0{self._unit}"
+            return f"{int(val):+d}{self._unit}"
         elif self._min < 0:
             if int(val) == 0:
                 return f"0{self._unit}"

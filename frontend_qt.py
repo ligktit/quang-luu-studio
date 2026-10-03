@@ -105,6 +105,9 @@ class MainDashboard(QMainWindow):
 
     _midi_status_signal = Signal()
     _browser_status_signal = Signal()
+    # Studio One vừa dựng xong cửa sổ → bắn lại toàn bộ trạng thái MIDI
+    _so_ready_signal = Signal()
+    _song_changed_signal = Signal(str)   # engine báo đổi bài (từ mọi thread)
     _message_signal = Signal(str, bool)
     _score_report_signal = Signal(dict)
     _score_btn_reset_signal = Signal()
@@ -140,12 +143,16 @@ class MainDashboard(QMainWindow):
             print(f"[KIOSK] bind lỗi: {e}")
         self._so_hide_guard = None
         self._so_shutdown_done = False
+        self._so_ready_watcher = None
         self._kiosk_timer = None
 
         # State
         self.tone_music_value = 0
         self.tone_voice_value = 0
-        self.current_mode = "Đa Thể Loại"
+        # Trạng thái BẬT/TẮT của từng nút MODE: {"Lofi": True, "Remix": False, ...}
+        # Mỗi nút là một toggle ĐỘC LẬP — trước đây Lofi/Remix/Đa Thể Loại dùng
+        # chung một biến current_mode nên bật cái này là tắt cái kia.
+        self.mode_states = {}
         self.is_recording = False
         self.current_tone = "C"
         self.current_score = None
@@ -162,6 +169,7 @@ class MainDashboard(QMainWindow):
         self.fix_meo_state = False
         self.current_scale = "Major"
         self.is_dev_mode = False
+        self._has_synced_initial_midi = False
         # Cờ khoá replay khi user chỉnh tone/scale tay (xem _lock_replay_for_manual_override)
         self._manual_tone_override = False
 
@@ -179,18 +187,23 @@ class MainDashboard(QMainWindow):
         self.current_title = ""
 
         self._mixer_channels = {}
+        self._mixer_senders = {}
 
         # Widgets / timers populated by _build_* — init to None so hot paths can
         # do `is None` checks instead of `hasattr` probes.
         self._marquee_widget = None
         self._marquee_timer = None
         self._waveform = None
+        self._premium_viz = None     # dải visualizer (Premium, ẩn được trong Thiết lập)
+        self._active_bar = None      # dải "ĐANG BẬT" (mọi gói, không tắt được)
+        self._ui_colors = None       # {nhãn nút: màu} đọc từ ui_config, nhớ lại để khỏi đọc file mỗi lần bấm
+        self._body_inner_layout = None
         self._player_window = None   # KaraokePlayerWindow (chế độ màn hình nhúng)
         self._search_input = None
         self._search_results_list = None
         self._func_buttons = {}
         self._mode_buttons = {}
-        self._mode_colors = {}
+        self._tone_value_labels = {}   # {"tone_music"/"tone_voice": QLabel số bán cung}
         self._marquee_text_value = ""
 
         # Tự động bật/tắt Vang theo nhạc (Premium) — xem _apply_auto_echo_setting
@@ -268,6 +281,11 @@ class MainDashboard(QMainWindow):
         
         self._midi_status_signal.connect(self._update_midi_status)
         self._browser_status_signal.connect(self._update_browser_status)
+        self._so_ready_signal.connect(self._on_studio_one_ready)
+        # Đổi bài (trình duyệt, Danh sách bài hát, Setlist, ô tìm kiếm) → reset
+        # thiết lập theo bài rồi khôi phục preset nếu bài đã lưu.
+        self._song_changed_signal.connect(self._on_song_changed)
+        self.engine.on_song_changed = self._song_changed_signal.emit
         self._message_signal.connect(self._show_message)
         self._score_report_signal.connect(self._show_scoring_report)
         self._score_btn_reset_signal.connect(self._reset_score_btn)
@@ -288,6 +306,11 @@ class MainDashboard(QMainWindow):
         # Auto launch (Studio One + Browser theo settings)
         self._auto_launch_apps()
 
+        # Bám theo Studio One để bắn lại MIDI khi nó dựng xong cửa sổ — xem
+        # _on_studio_one_ready. Phải đặt SAU _auto_launch_apps để bắt được cả
+        # tiến trình vừa được khởi chạy ở trên.
+        self._start_so_ready_watcher()
+
         # Player nhúng (bản Heavy) hoặc YouTube URL Watcher (mặc định).
         # Chế độ nhúng KHÔNG dùng watcher trình duyệt ngoài (tránh dò trùng).
         self._embedded_volume_signal.connect(self._set_embedded_volume)
@@ -304,8 +327,11 @@ class MainDashboard(QMainWindow):
         # Accessibility — TTS, theme, shortcuts (sau khi UI đã build xong)
         self._init_accessibility()
 
-        # Đồng bộ chế độ mặc định lúc khởi động
-        self._on_mode_selected(self.current_mode, toggle=False)
+        # Đẩy trạng thái sang MIDI ngay — ăn ngay nếu Studio One đã mở sẵn và
+        # nạp xong bài. Chưa mở/chưa nạp xong thì _start_so_ready_watcher ở trên
+        # sẽ bắn lại khi nó dựng cửa sổ.
+        self._sync_midi_states()
+        self._has_synced_initial_midi = True
         
         # Dev Mode Shortcut
         from PySide6.QtGui import QShortcut, QKeySequence
@@ -336,6 +362,61 @@ class MainDashboard(QMainWindow):
         self.is_dev_mode = not self.is_dev_mode
         self._show_message(f"Dev Mode: {'ON' if self.is_dev_mode else 'OFF'}")
         self.refresh_ui()
+
+    # ── Ghim cửa sổ trên cùng ────────────────────────────────────────────────
+
+    def _on_toggle_always_on_top(self):
+        on = not self.settings.get("always_on_top", False)
+        self.settings["always_on_top"] = on
+        try:
+            backend.ConfigManager.save_settings(self.settings)
+        except Exception as e:
+            print(f"[PIN] Không lưu được settings: {e}")
+        self._set_always_on_top(on)
+        self._show_message("Đã ghim cửa sổ trên cùng" if on else "Đã bỏ ghim cửa sổ")
+
+    def _set_always_on_top(self, on):
+        """Đặt/bỏ trạng thái luôn nằm trên cùng mà KHÔNG ẩn–hiện lại cửa sổ.
+
+        QWidget.setWindowFlag(WindowStaysOnTopHint) buộc phải show() lại (cửa
+        sổ chớp tắt, mất focus). Thay vào đó: đặt cờ trên QWindow để Qt không
+        tự gỡ ở lần đổi cờ sau, và trên Windows gọi thẳng SetWindowPos.
+        """
+        on = bool(on)
+        handle = self.windowHandle()
+        if handle is not None:
+            handle.setFlag(Qt.WindowStaysOnTopHint, on)
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                user32 = ctypes.WinDLL("user32", use_last_error=True)
+                set_pos = user32.SetWindowPos
+                set_pos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_int, ctypes.c_int, wintypes.UINT]
+                set_pos.restype = wintypes.BOOL
+                hwnd_topmost, hwnd_notopmost = -1, -2
+                swp_nosize, swp_nomove, swp_noactivate = 0x0001, 0x0002, 0x0010
+                if not set_pos(int(self.winId()), hwnd_topmost if on else hwnd_notopmost,
+                               0, 0, 0, 0, swp_nosize | swp_nomove | swp_noactivate):
+                    print(f"[PIN] SetWindowPos lỗi {ctypes.get_last_error()}")
+            except Exception as e:
+                print(f"[PIN] SetWindowPos lỗi: {e}")
+        elif handle is None:
+            self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
+
+        btn = getattr(self, "_pin_btn", None)
+        if btn is not None:
+            btn.setActive(on)
+            btn.setColor(C["primary"] if on else C["card_hover"])
+            btn.setToolTip("Bỏ ghim cửa sổ" if on else "Ghim Quang Lưu Studio luôn nằm trên cùng")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Áp lại mỗi lần hiện (kể cả sau thu nhỏ): cửa sổ native có thể được
+        # tạo lại, hoặc lần đầu hiện khi __init__ chưa có HWND để ghim.
+        if self.settings.get("always_on_top", False):
+            QTimer.singleShot(0, self, lambda: self._set_always_on_top(True))
 
     # ── Khoá kỹ thuật (chế độ khách) ─────────────────────────────────────────
 
@@ -432,6 +513,13 @@ class MainDashboard(QMainWindow):
                 f"Mở khoá kỹ thuật {kiosk.session_minutes()} phút — Studio One chưa chạy")
 
     def refresh_ui(self):
+        # Gỡ dải visualizer TRƯỚC khi dọn layout: xoá widget qua layout thôi thì
+        # stop() không chạy, ref AudioPulse rò thêm một nấc mỗi lần rebuild.
+        self._destroy_visualizer()
+        # Dải "ĐANG BẬT" bị xoá cùng layout ngay dưới đây — bỏ ref trước, kẻo
+        # _refresh_active_bar chạm vào đối tượng C++ đã chết.
+        self._active_bar = None
+
         # Clear body layout
         removed_roots = []
         for i in reversed(range(self._body_layout.count())):
@@ -475,6 +563,7 @@ class MainDashboard(QMainWindow):
             panel_list.append(dialog.result_data)
             ui_config[panel_name] = panel_list
             backend.UiConfigManager.save_ui_config(ui_config)
+            self._apply_widget_calibration(dialog.result_calibration)
             self.refresh_ui()
 
     def _on_edit_widget(self, panel_name, widget_data):
@@ -489,7 +578,42 @@ class MainDashboard(QMainWindow):
                     break
             ui_config[panel_name] = panel_list
             backend.UiConfigManager.save_ui_config(ui_config)
+            self._apply_widget_calibration(dialog.result_calibration)
             self.refresh_ui()
+
+    def _apply_widget_calibration(self, calibration):
+        """Ghi giá trị bật/tắt của nút có sẵn (Bypass, mode_config) từ Dev Mode.
+
+        Các nút này không đọc on/off từ ui_config mà từ toggle_invert /
+        mode_config — lưu vào calibration_overrides.json (DATA_DIR) rồi bắn lại
+        trạng thái hiện tại: đổi chiều Bypass mà không gửi lại thì Studio One
+        vẫn giữ giá trị theo chiều cũ, đèn trên app sẽ ngược cho tới lần bấm sau.
+        """
+        if not calibration:
+            return
+        if not backend.AppConfig.set_calibration(**calibration):
+            self._show_message("Không lưu được cấu hình MIDI của nút", is_error=True)
+            return
+
+        for mode in calibration.get("mode_config", {}):
+            self._set_mode(mode, self.mode_states.get(mode, False))
+
+        states = {
+            "tone_auto": ("tune_state", True),
+            "fix_meo": ("fix_meo_state", False),
+            "be": ("be_state", False),
+            "tat_on": ("tat_on_state", False),
+        }
+        for key in calibration.get("toggle_invert", {}):
+            if key not in states:
+                continue
+            attr, default = states[key]
+            on_value = 127
+            if key == "fix_meo":
+                mode_map = backend.AppConfig.get_mode_midi_map()
+                on_value = int(mode_map.get("Fix Méo", 127)) if isinstance(mode_map, dict) else 127
+            val = self._toggle_value(key, getattr(self, attr, default), on_value=on_value)
+            self.engine.send_midi(int(MIDI_CC.get(key)), val)
             
     def _on_hide_widget(self, panel_name, widget_data):
         ui_config = backend.UiConfigManager.load_ui_config()
@@ -511,6 +635,60 @@ class MainDashboard(QMainWindow):
     # ─────────────────────────────────────────
     #  BODY — Performance Stage (Waveform Hero + 4-Panel Dock)
     # ─────────────────────────────────────────
+    # ── Dải visualizer (Premium) ─────────────────────────────
+    def _visualizer_enabled(self) -> bool:
+        """Dải visualizer có được hiện hay không: Premium VÀ user chưa ẩn đi."""
+        if not self.settings.get("show_visualizer", True):
+            return False
+        try:
+            from core import entitlements
+            return entitlements.is_premium()
+        except Exception as e:
+            print(f"[PREMIUM-VIZ] Không đọc được gói: {e}")
+            return False
+
+    def _destroy_visualizer(self):
+        """Gỡ dải visualizer và NHẢ ref AudioPulse.
+
+        Phải gọi stop(): AudioPulse đếm ref, quên nhả thì luồng thu loopback
+        chạy mãi dù dải đã biến mất — ẩn đi mà máy vẫn tốn CPU thì ẩn làm gì.
+        """
+        viz = getattr(self, "_premium_viz", None)
+        self._premium_viz = None
+        if viz is None:
+            return
+        try:
+            viz.stop()
+        except Exception as e:
+            print(f"[PREMIUM-VIZ] stop lỗi: {e}")
+        try:
+            viz.setParent(None)
+            viz.deleteLater()
+        except Exception:
+            pass
+
+    def _apply_visualizer_setting(self):
+        """Tạo/gỡ dải visualizer theo thiết lập hiện tại.
+
+        Gọi lúc dựng thân cửa sổ và mỗi khi lưu Settings. Ẩn = huỷ hẳn widget
+        chứ không chỉ setVisible(False), để nhả luôn timer 30fps và nguồn thu
+        audio đứng sau nó.
+        """
+        want = self._visualizer_enabled()
+        if want and self._premium_viz is None:
+            layout = getattr(self, "_body_inner_layout", None)
+            if layout is None:
+                return
+            try:
+                from ui.components.premium_visualizer import PremiumVisualizer
+                self._premium_viz = PremiumVisualizer()
+                layout.insertWidget(0, self._premium_viz)
+            except Exception as e:
+                print(f"[PREMIUM-VIZ] init lỗi: {e}")
+                self._premium_viz = None
+        elif not want:
+            self._destroy_visualizer()
+
     def _build_body(self):
         wrapper = QWidget()
         wrapper.setStyleSheet(f"background-color: {C['bg']};")
@@ -518,16 +696,21 @@ class MainDashboard(QMainWindow):
         wl.setContentsMargins(SP.SM, 2, SP.SM, 2)
         wl.setSpacing(4)
 
-        # ── Visualizer Premium (chỉ hiện cho gói Premium) ──
+        # ── Dải visualizer Premium — có thể ẩn trong Thiết lập ──
+        # Dựng qua _apply_visualizer_setting để đường "dựng lần đầu" và đường
+        # "user vừa đổi ô tích" đi chung một chỗ, không lệch nhau.
         self._premium_viz = None
-        try:
-            from core import entitlements
-            if entitlements.is_premium():
-                from ui.components.premium_visualizer import PremiumVisualizer
-                self._premium_viz = PremiumVisualizer()
-                wl.addWidget(self._premium_viz)
-        except Exception as e:
-            print(f"[PREMIUM-VIZ] init lỗi: {e}")
+        self._body_inner_layout = wl
+        self._apply_visualizer_setting()
+
+        # ── Dải "ĐANG BẬT" — nằm ngay dưới dải sóng, nhưng là widget RIÊNG ──
+        # Cố ý không vẽ chồng lên visualizer: visualizer chỉ có ở gói Premium
+        # và tắt được trong Thiết lập, mà trạng thái mode thì bản nào cũng
+        # phải thấy.
+        from ui.components.active_modes_bar import ActiveModesBar
+        self._ui_colors = None   # panel vừa dựng lại (Dev Mode) → đọc lại màu
+        self._active_bar = ActiveModesBar()
+        wl.addWidget(self._active_bar)
 
         # ── Hàng 1: Mixer + Mode + Tools ──
         top_dock = QHBoxLayout()
@@ -616,6 +799,19 @@ class MainDashboard(QMainWindow):
             return "Major"
         return "Minor" if abs(value - minor_val) < abs(value - major_val) else "Major"
 
+    def _set_manual_tone_override(self, on):
+        """Bật/tắt khoá "tone chỉnh tay" ở CẢ UI lẫn engine.
+
+        Engine cũng phải biết: lượt dò/replay gửi thẳng MIDI tone trước khi báo
+        lên UI, nên chỉ chặn ở UI thì Auto-Tune vẫn bị đổi sau lưng người dùng
+        (ca hay gặp: mở bài đã lưu với tone chốt tay, lượt dò nền về sau và đè).
+        """
+        self._manual_tone_override = bool(on)
+        try:
+            self.engine.key_locked = bool(on)
+        except Exception:
+            pass
+
     def _lock_replay_for_manual_override(self):
         """Khi user chỉnh tone/scale tay → dừng replay timeline để mốc kế tiếp
         không gửi MIDI đè lên lựa chọn của user. Replay sẽ bật lại khi user
@@ -624,7 +820,7 @@ class MainDashboard(QMainWindow):
             self.engine.stop_tone_detection()
         except Exception as e:
             print(f"[TONE] Không dừng được replay khi override tay: {e}")
-        self._manual_tone_override = True
+        self._set_manual_tone_override(True)
         # Dừng nhịp bám timeline ngay lập tức, nếu không mốc kế tiếp sẽ ghi đè
         # lựa chọn vừa chỉnh tay của user trong vòng 250ms.
         self._tone_ticker_sync()
@@ -645,6 +841,77 @@ class MainDashboard(QMainWindow):
         self.engine.send_midi(MIDI_CC.get("scale_type", MIDI_CC.get("key_scale", 35)), scale_midi)
         self._sync_scale_button(self.scale_is_major)
         self._lock_replay_for_manual_override()
+
+    # ── Tone Nhạc / Tone Giọng (dịch bán cung, CC tone_music / tone_voice) ──
+    _TONE_OFFSET_ATTR = {"tone_music": "tone_music_value", "tone_voice": "tone_voice_value"}
+    _ENHARMONIC = {"Bb": "A#", "Eb": "D#", "Ab": "G#", "Db": "C#", "Gb": "F#"}
+
+    def _tone_offset(self, which) -> int:
+        try:
+            return int(getattr(self, self._TONE_OFFSET_ATTR[which], 0) or 0)
+        except (TypeError, ValueError, KeyError):
+            return 0
+
+    def _refresh_tone_offset_label(self, which):
+        lbl = self._tone_value_labels.get(which)
+        if lbl is None:
+            return
+        try:
+            lbl.setText(f"{self._tone_offset(which):+d}")
+        except RuntimeError:
+            # Nhãn thuộc panel vừa bị dựng lại (Dev Mode) — bỏ ref chết.
+            self._tone_value_labels.pop(which, None)
+
+    def _set_tone_offset(self, which, value, shift_key=True, send=True):
+        """Đặt Tone Nhạc / Tone Giọng — ĐƯỜNG DUY NHẤT đổi hai giá trị này.
+
+        shift_key: Tone Nhạc dịch cả nhạc nên tone Auto-Tune phải dịch theo cùng
+                   số bán cung (bấm núm). Reset khi đổi bài / khôi phục preset thì
+                   KHÔNG dịch: tone của bài mới do lượt dò/preset quyết định.
+        send:      False khi chỉ cần cập nhật trạng thái, không gửi lại CC.
+        """
+        attr = self._TONE_OFFSET_ATTR.get(which)
+        if attr is None:
+            return 0
+        lo, hi = -12, 12
+        try:
+            value = max(lo, min(hi, int(value)))
+        except (TypeError, ValueError):
+            return self._tone_offset(which)
+        old = self._tone_offset(which)
+        setattr(self, attr, value)
+        self._refresh_tone_offset_label(which)
+
+        if which == "tone_music":
+            # Tone dò/timeline là tone GỐC — engine cộng độ dịch trước khi gửi.
+            self.engine.tone_transpose = value
+
+        if send:
+            self.engine.send_midi(MIDI_CC.get(which, 10 if which == "tone_music" else 11),
+                                  int(((value + 12) / 24) * 127))
+        if which == "tone_music" and shift_key and value != old:
+            self._shift_key_by(value - old)
+        return value
+
+    def _shift_key_by(self, delta):
+        """Dịch tone Auto-Tune đang dùng `delta` bán cung (theo Tone Nhạc)."""
+        from core.tone_cache import CHROMATIC_NOTES, transpose_key
+        base = self._ENHARMONIC.get(self.current_tone, self.current_tone)
+        if base not in CHROMATIC_NOTES:
+            base = "C"   # tone lạ → tính từ C thay vì gửi rác
+        new_key = transpose_key(base, delta)
+        if self.tone_combo.findText(new_key) >= 0:
+            with QSignalBlocker(self.tone_combo):
+                self.tone_combo.setCurrentText(new_key)
+        self.current_tone = new_key
+        key_midi = backend.AppConfig.get_key_midi_map().get(new_key, 0)
+        self.engine.send_midi(MIDI_CC.get("key_root", 33), key_midi)
+        print(f"[KEY] Tone Nhạc {delta:+d} -> {base} -> {new_key} (MIDI {key_midi})")
+
+    def _display_key(self, key_display):
+        """Tone gốc của bài → tone đang vang thật (đã cộng Tone Nhạc) để hiển thị."""
+        from core.tone_cache import transpose_key
+        return transpose_key(key_display, self._tone_offset("tone_music"))
 
     def _on_toggle_relative(self):
         """Đổi tone hiện tại sang tone tương đối (C Trưởng ↔ La Thứ).
@@ -676,12 +943,143 @@ class MainDashboard(QMainWindow):
         self._on_scale_selected(new_scale)
         self._show_message(f"Đổi sang tone tương đối: {new_key} {new_scale}")
 
+    def _start_so_ready_watcher(self):
+        """Bám theo Studio One để bắn lại MIDI khi nó thật sự sẵn sàng.
+
+        Vì sao cần: cổng MIDI ảo mở được ngay cả khi Studio One chưa chạy, nên
+        `is_midi_connected()` bật True từ giây đầu và lượt đồng bộ lúc khởi động
+        bắn vào khoảng không — Studio One còn đang nạp bài. Watcher chờ nó dựng
+        xong cửa sổ chính rồi bắn lại (nhiều lần, xem core.so_windows).
+        """
+        try:
+            from core import so_windows
+            self._so_ready_watcher = so_windows.ReadyWatcher(
+                on_ready=self._so_ready_signal.emit
+            )
+            self._so_ready_watcher.start()
+        except Exception as e:
+            print(f"[MIDI SYNC] Không bật được vòng chờ Studio One: {e}")
+            self._so_ready_watcher = None
+
+    def _on_studio_one_ready(self):
+        """Studio One vừa dựng xong cửa sổ (hoặc tới mốc bắn lại) → đồng bộ MIDI.
+
+        Chạy trên main thread (qua _so_ready_signal). Bắn lại nguyên trạng thái
+        hiện tại của giao diện, không phải trạng thái lúc khởi động — nếu khách
+        đã bấm nút nào trong lúc Studio One nạp bài thì lượt này chốt đúng cái
+        họ đang thấy.
+        """
+        print("[MIDI SYNC] Studio One đã sẵn sàng — bắn lại toàn bộ trạng thái")
+        self._sync_midi_states()
+
+    def _sync_midi_states(self):
+        """Đẩy TOÀN BỘ trạng thái giao diện sang Studio One qua MIDI.
+
+        Không chỉ chạy lúc khởi động: `_on_studio_one_ready` gọi lại mỗi khi
+        Studio One dựng xong cửa sổ. Mọi giá trị đều đọc từ trạng thái SỐNG của
+        UI, nên gọi bao nhiêu lần cũng ra cùng kết quả (CC là lệnh idempotent).
+
+        Thứ tự các nhóm không quan trọng — chúng nằm trên các CC rời nhau.
+        """
+        try:
+            # 1. Auto-Tune
+            at_on = getattr(self, 'tune_state', True)
+            at_val = self._toggle_value("tone_auto", at_on)
+            at_cc = int(MIDI_CC.get("tone_auto", 40))
+            self.engine.send_midi(at_cc, at_val)
+            print(f"[TONE AUTO] Đồng bộ -> {'ON' if at_on else 'OFF'} (CC {at_cc} Value {at_val})")
+
+            # 2. MODE — gửi đúng trạng thái của TỪNG nút (mặc định TẮT hết).
+            # Không tự bật "Đa Thể Loại" nữa: các nút giờ độc lập nên không có
+            # mode nền, và UI khởi động trắng thì DAW cũng phải trắng.
+            for m_name in self._get_mode_config():
+                self._set_mode(m_name, self.mode_states.get(m_name, False))
+
+            # 3. Tắt Ồn (Noise Suppression)
+            tat_on = getattr(self, 'tat_on_state', False)
+            tat_on_val = self._toggle_value("tat_on", tat_on)
+            tat_on_cc = int(MIDI_CC.get("tat_on", 48))
+            self.engine.send_midi(tat_on_cc, tat_on_val)
+            print(f"[TAT ON] Đồng bộ -> {'ON' if tat_on else 'OFF'} (CC {tat_on_cc} Value {tat_on_val})")
+
+            # 4. Tắt Vang (Mute Vang / mix_reverb)
+            is_reverb_muted = self.mute_states.get("mix_reverb", False)
+            mute_reverb_cc = int(MIDI_CC.get("mute_reverb", 52))
+            mute_val = 127 if is_reverb_muted else 0
+            self.engine.send_midi(mute_reverb_cc, mute_val)
+            print(f"[MUTE REVERB] Đồng bộ -> {'MUTED' if is_reverb_muted else 'ACTIVE'} (CC {mute_reverb_cc} Value {mute_val})")
+            try:
+                multi_cc_map = backend.AppConfig.get_mute_multi_cc()
+                for entry in multi_cc_map.get("mix_reverb", []):
+                    cc_num = int(entry["cc"])
+                    val = int(entry["on_value"]) if is_reverb_muted else int(entry["off_value"])
+                    self.engine.send_midi(cc_num, val)
+            except Exception as e:
+                print(f"[MIDI SYNC] Multi CC sync error: {e}")
+
+            # 5. Tone + thể (key_root / scale_type)
+            # Gửi CC thẳng chứ KHÔNG gọi _on_tone_selected: hàm đó kéo theo
+            # _lock_replay_for_manual_override, mà đây là đồng bộ máy móc chứ
+            # không phải người dùng vừa chỉnh tay.
+            self._sync_tone_midi()
+
+            # 6. Mức các thanh trượt mixer (nhạc, mic, VANG, giọng...).
+            # Thiếu bước này thì Studio One giữ nguyên mức của bản mẫu .song
+            # trong khi giao diện hiển thị mức khác — chính là ca "vang không
+            # ăn" hay gặp nhất.
+            self._sync_mixer_midi()
+
+            # 7. Tone Nhạc / Tone Giọng — Tone Giọng không nằm trên thanh trượt
+            # nào nên bước 6 không gửi; thiếu bước này Studio One mở lại sẽ giữ
+            # độ dịch giọng của bản mẫu .song thay vì số app đang hiển thị.
+            for which in ("tone_music", "tone_voice"):
+                self._set_tone_offset(which, self._tone_offset(which), shift_key=False)
+        except Exception as e:
+            print(f"[MIDI SYNC] Đồng bộ trạng thái MIDI lỗi: {e}")
+
+    def _sync_tone_midi(self):
+        """Gửi lại tone gốc + thể hiện hành (không đụng cờ chỉnh tay)."""
+        try:
+            tone = getattr(self, "current_tone", "C") or "C"
+            scale = getattr(self, "current_scale", "Major") or "Major"
+            key_midi = backend.AppConfig.get_key_midi_map().get(tone, 0)
+            scale_midi = backend.AppConfig.get_scale_midi_map().get(scale, 13)
+            self.engine.send_midi_pair(
+                int(MIDI_CC.get("key_root", 33)), int(key_midi),
+                int(MIDI_CC.get("scale_type", MIDI_CC.get("key_scale", 35))), int(scale_midi),
+            )
+            print(f"[TONE] Đồng bộ -> {tone} {scale}")
+        except Exception as e:
+            print(f"[MIDI SYNC] Đồng bộ tone lỗi: {e}")
+
+    def _sync_mixer_midi(self):
+        """Gửi lại mức của mọi thanh trượt mixer theo đúng giá trị đang hiển thị.
+
+        Dùng lại chính hàm gửi mà panel mixer nối vào `valueChanged`
+        (`_mixer_senders`) nên phép quy đổi dB -> MIDI chỉ tồn tại một bản.
+        """
+        senders = getattr(self, "_mixer_senders", None) or {}
+        sliders = getattr(self, "_mixer_sliders", None) or {}
+        for cc_key, send in senders.items():
+            slider = sliders.get(cc_key)
+            if slider is None:
+                continue
+            try:
+                send(slider.value())
+            except Exception as e:
+                print(f"[MIDI SYNC] Đồng bộ mixer {cc_key} lỗi: {e}")
+        if senders:
+            print(f"[MIXER] Đồng bộ {len(senders)} kênh")
+
     def _update_midi_status(self):
         try:
             connected = self.engine.is_midi_connected()
         except Exception:
             connected = False
         if connected:
+            if not getattr(self, '_has_synced_initial_midi', False):
+                self._has_synced_initial_midi = True
+                self._sync_midi_states()
             try:
                 name = self.engine.get_midi_port_name()
                 if "QuangLuuMIDI" not in name:
@@ -755,68 +1153,46 @@ class MainDashboard(QMainWindow):
 
             # --- Xử lý phản hồi Toggles khác ---
             if cc == int(MIDI_CC.get("tone_auto", 40)):
-                self.tune_state = (value >= 64)
+                self.tune_state = self._toggle_state("tone_auto", value)
                 btn = self._func_buttons.get("Auto-Tune")
                 if btn: btn.setActive(self.tune_state)
 
             if cc == int(MIDI_CC.get("fix_meo", 45)):
-                self.fix_meo_state = (value >= 64)
+                self.fix_meo_state = self._toggle_state("fix_meo", value)
                 btn = self._func_buttons.get("Fix Méo")
                 if btn: btn.setActive(self.fix_meo_state)
 
             if cc == int(MIDI_CC.get("be", 47)):
-                self.be_state = (value >= 64)
+                self.be_state = self._toggle_state("be", value)
                 btn = self._func_buttons.get("Bè")
                 if btn: btn.setActive(self.be_state)
 
             if cc == int(MIDI_CC.get("tat_on", 48)):
-                self.tat_on_state = (value >= 64)
+                self.tat_on_state = self._toggle_state("tat_on", value)
                 btn = self._func_buttons.get("Tắt Ồn")
                 if btn: btn.setActive(self.tat_on_state)
 
             # --- Xử lý phản hồi Chế độ (Mode) từ MIDI ---
-            try:
-                mode_config = backend.AppConfig.get_mode_config()
-            except Exception:
-                mode_config = {
-                    "Dân Ca": {"cc": 30, "on_value": 127, "off_value": 0},
-                    "Lofi": {"cc": 37, "on_value": 127, "off_value": 0},
-                    "Remix": {"cc": 38, "on_value": 127, "off_value": 0},
-                    "Đa Thể Loại": {"cc": 39, "on_value": 127, "off_value": 0}
-                }
+            # Mỗi mode có CC riêng và trạng thái riêng: CC nào về thì chỉ cập
+            # nhật đúng nút đó, không đụng tới các nút còn lại.
+            for m_name, cfg in self._get_mode_config().items():
+                if cc != int(cfg.get("cc", 30)):
+                    continue
+                on_val = int(cfg.get("on_value", 127))
+                off_val = int(cfg.get("off_value", 0))
+                if value == on_val:
+                    new_state = True
+                elif value == off_val:
+                    new_state = False
+                else:
+                    continue
+                if self.mode_states.get(m_name, False) != new_state:
+                    self.mode_states[m_name] = new_state
+                    self._refresh_mode_button(m_name)
+                    print(f"[MIDI SYNC] Mode {m_name} -> {'ON' if new_state else 'OFF'}")
 
-            mode_changed = False
-            for m_name, cfg in mode_config.items():
-                m_cc = int(cfg.get("cc", 30))
-                if cc == m_cc:
-                    on_val = int(cfg.get("on_value", 127))
-                    off_val = int(cfg.get("off_value", 0))
-
-                    if value == on_val:
-                        self.current_mode = m_name
-                        mode_changed = True
-                        break
-                    elif value == off_val and self.current_mode == m_name:
-                        self.current_mode = None
-                        mode_changed = True
-                        break
-
-            if mode_changed:
-                for m, btn in self._mode_buttons.items():
-                    base = self._mode_colors.get(m, C["card_hover"])
-                    if m == self.current_mode:
-                        btn.setStyleSheet(f"""
-                            QPushButton {{
-                                background-color: {_lighten(base, 0.25)};
-                                color: white; border: 2px solid white;
-                                border-radius: 10px; font-size: 10px; font-weight: 700;
-                                font-family: {FONT};
-                            }}
-                            QPushButton:hover {{ background-color: {_lighten(base, 0.3)}; }}
-                        """)
-                    else:
-                        btn.setStyleSheet(pill_btn_qss(base, _lighten(base, 0.15), 10, 10))
-                print(f"[MIDI SYNC] Cập nhật Mode thành: {self.current_mode}")
+            # Studio One vừa đổi trạng thái nút nào đó → dải phải theo.
+            self._refresh_active_bar()
 
         except Exception as e:
             print(f"[MIDI SYNC] UI MIDI Sync Error: {e}")
@@ -1076,12 +1452,9 @@ class MainDashboard(QMainWindow):
         # công — tra trước khi coi là bài lạ. Không tra thì đường này xoá sạch
         # timeline rồi để engine dò lại từ đầu, đè mất tone khách chỉnh tay.
         manual_tl = self._saved_manual_timeline(url)
-        if manual_tl:
-            self._set_tone_timeline(manual_tl, 0.0)
-        else:
-            # Bài lạ: xoá timeline bài cũ kẻo ô "kế tiếp" đếm ngược theo mốc của
-            # bài trước đó.
-            self._clear_tone_timeline()
+        # Báo đổi bài NGAY (kể cả khi autodetect=False): _on_song_changed reset
+        # thiết lập bài cũ, nạp timeline bài này và khôi phục preset nếu đã lưu.
+        self.engine.note_current_song(url)
         if not self._embedded_player_active():
             self.engine.open_youtube_url(
                 url,
@@ -1401,7 +1774,7 @@ class MainDashboard(QMainWindow):
             return
         self._do_tone_running = True
         # User chủ động dò lại → bỏ khoá override tay (cho phép kết quả mới ghi đè).
-        self._manual_tone_override = False
+        self._set_manual_tone_override(False)
 
         self._set_rescan_button_state("running")
         self.autokey_dot.setStyleSheet(f"color: {C['orange']}; font-size: 16px;")
@@ -1642,7 +2015,7 @@ class MainDashboard(QMainWindow):
         if idx != self._tone_index:
             self._tone_index = idx
             entry = self._tone_timeline[idx]
-            key_root = self._key_root_of(entry)
+            key_root = self._display_key(self._key_root_of(entry))
             changed = self._sync_tone_widgets(
                 key_root, entry.get("scale", "Major"), flash=True,
             )
@@ -1655,9 +2028,9 @@ class MainDashboard(QMainWindow):
         if pill is None:
             return
         if nxt is not None and remaining is not None:
-            pill.set_next(nxt.get("key_display", "?"), remaining, fraction)
+            pill.set_next(self._display_key(nxt.get("key_display", "?")), remaining, fraction)
         elif nxt is not None:
-            pill.set_next(nxt.get("key_display", "?"), 0.0, None)
+            pill.set_next(self._display_key(nxt.get("key_display", "?")), 0.0, None)
         else:
             pill.set_message("đoạn cuối")
 
@@ -1715,7 +2088,7 @@ class MainDashboard(QMainWindow):
         # idx < 0 = chưa bám được đoạn nào (vừa dò xong, chưa phát). Lúc đó chưa
         # biết "kế tiếp" là gì — timeline[0] là đoạn ĐẦU chứ không phải đoạn sau.
         if idx >= 0 and idx + 1 < len(self._tone_timeline):
-            core += f"  ▸ kế: {self._tone_timeline[idx + 1].get('key_display', '?')}"
+            core += f"  ▸ kế: {self._display_key(self._tone_timeline[idx + 1].get('key_display', '?'))}"
         if len(self._tone_timeline) > 1 and idx >= 0:
             core += f"  ({idx + 1}/{len(self._tone_timeline)})"
 
@@ -1768,9 +2141,12 @@ class MainDashboard(QMainWindow):
         
         # === Trường hợp THÀNH CÔNG ===
         self._do_tone_running = False
-        # Kết quả dò mới từ backend → bỏ khoá manual override (replay/auto được
-        # phép gửi MIDI lại bình thường).
-        self._manual_tone_override = False
+        # Tone đang bị CHỐT TAY (người dùng chọn, hoặc preset của bài khôi phục)
+        # → kết quả dò không được đổi tone. Engine đã tự chặn MIDI (key_locked);
+        # ở đây giữ nguyên phần hiển thị. Khoá chỉ gỡ khi bấm "Dò Lại" hoặc đổi
+        # bài — trước đây mọi kết quả đều gỡ khoá, nên tone của preset bị lượt dò
+        # nền về sau đè mất.
+        key_locked = bool(self._manual_tone_override)
 
         # Nếu là auto-detect → cập nhật trạng thái nút mà không cần user nhấn trước
         is_auto = result.get('auto_detected', False)
@@ -1793,22 +2169,29 @@ class MainDashboard(QMainWindow):
         if title:
             self.current_title = title
 
-        # Kết quả dò toàn bài mang theo cả timeline → nạp cho phần hiển thị bám
-        # theo. Sự kiện chuyển tone lẻ (có 'time') thì không đụng tới timeline
-        # đang có.
-        if result.get('timeline'):
-            self._set_tone_timeline(result['timeline'], result.get('total_duration', 0))
-        elif 'time' not in result and not result.get('from_cache') and not result.get('from_manual'):
-            # Dò ra đúng MỘT tone cho cả bài → không còn timeline nào hợp lệ.
-            self._clear_tone_timeline()
+        if key_locked:
+            key_root, scale = self.current_tone, self.current_scale
+        else:
+            # Tone dò được là tone GỐC của bài; nhạc đang dịch theo Tone Nhạc thì
+            # hiển thị tone đang vang thật (engine cũng gửi đúng tone đó).
+            key_root = self._display_key(key_root)
 
-        # Tránh gửi MIDI trùng lặp khi set combo (backend đã gửi rồi)
-        is_low_conf_pre = bool(uncertain) or (confidence_level == 'low')
-        self._sync_tone_widgets(
-            key_root, scale,
-            accent=C['orange'] if is_low_conf_pre else C['green'],
-            flash=True,
-        )
+            # Kết quả dò toàn bài mang theo cả timeline → nạp cho phần hiển thị bám
+            # theo. Sự kiện chuyển tone lẻ (có 'time') thì không đụng tới timeline
+            # đang có.
+            if result.get('timeline'):
+                self._set_tone_timeline(result['timeline'], result.get('total_duration', 0))
+            elif 'time' not in result and not result.get('from_cache') and not result.get('from_manual'):
+                # Dò ra đúng MỘT tone cho cả bài → không còn timeline nào hợp lệ.
+                self._clear_tone_timeline()
+
+            # Tránh gửi MIDI trùng lặp khi set combo (backend đã gửi rồi)
+            is_low_conf_pre = bool(uncertain) or (confidence_level == 'low')
+            self._sync_tone_widgets(
+                key_root, scale,
+                accent=C['orange'] if is_low_conf_pre else C['green'],
+                flash=True,
+            )
 
         # Đổi style combobox theo độ tin cậy:
         #  - chắc chắn  → text xanh lá (green)
@@ -1918,34 +2301,53 @@ class MainDashboard(QMainWindow):
                 backend.SongManager.add_song(title, url, key_display)
             threading.Thread(target=_auto_save, daemon=True).start()
 
+    # ── Nút bật/tắt panel Công cụ: giá trị MIDI theo cờ đảo chiều ─────────────
+    def _toggle_invert_map(self) -> dict:
+        """Cờ đảo chiều của Auto-Tune / Fix Méo / Bè / Tắt Ồn (app_config toggle_invert)."""
+        try:
+            return backend.AppConfig.get_toggle_invert()
+        except Exception:
+            from core.config import DEFAULT_TOGGLE_INVERT
+            return dict(DEFAULT_TOGGLE_INVERT)
+
+    def _toggle_value(self, key: str, on: bool, on_value: int = 127) -> int:
+        """Giá trị CC gửi cho nút bật/tắt `key` — ĐƯỜNG DUY NHẤT tính giá trị này,
+        để nút bấm tay, lượt đồng bộ và phản hồi từ Studio One cùng một chiều."""
+        from core.config import toggle_midi_value
+        return toggle_midi_value(on, self._toggle_invert_map().get(key, False),
+                                 on_value=on_value)
+
+    def _toggle_state(self, key: str, value: int) -> bool:
+        """Trạng thái BẬT/TẮT của nút `key` đọc từ giá trị CC Studio One gửi về."""
+        from core.config import toggle_state_from_midi
+        return toggle_state_from_midi(value, self._toggle_invert_map().get(key, False))
+
     def _on_tone_auto(self):
         self.tune_state = not getattr(self, 'tune_state', True)
-        val = 127 if self.tune_state else 0
+        val = self._toggle_value("tone_auto", self.tune_state)
         self.engine.send_midi(MIDI_CC.get("tone_auto", 40), val)
         btn = self._func_buttons.get("Auto-Tune")
         if btn:
             btn.setActive(self.tune_state)
         print(f"[TONE AUTO] -> {'ON' if self.tune_state else 'OFF'} (Value {val})")
+        self._refresh_active_bar()
 
     def _on_fix_meo(self):
         self.fix_meo_state = not getattr(self, 'fix_meo_state', False)
-        val = 127 if self.fix_meo_state else 0
-        
-        # Ưu tiên dùng giá trị cân chỉnh trong mode_midi_map nếu có
+
+        # Giá trị BẬT ưu tiên số cân chỉnh trong mode_midi_map["Fix Méo"] (nếu
+        # có), rồi mới áp cờ đảo chiều toggle_invert["fix_meo"].
         mode_map = backend.AppConfig.get_mode_midi_map()
         cc_num = int(MIDI_CC.get("fix_meo", 45))
-        if "Fix Méo" in mode_map:
-            # Nếu dùng mode_map thì thường là giá trị cố định, nhưng ta vẫn dùng toggle logic
-            midi_val = mode_map["Fix Méo"] if self.fix_meo_state else 0
-            self.engine.send_midi(cc_num, midi_val)
-        else:
-            # Fallback dùng giá trị mặc định 127/0
-            self.engine.send_midi(cc_num, val)
+        on_value = int(mode_map.get("Fix Méo", 127)) if isinstance(mode_map, dict) else 127
+        val = self._toggle_value("fix_meo", self.fix_meo_state, on_value=on_value)
+        self.engine.send_midi(cc_num, val)
         
         btn = self._func_buttons.get("Fix Méo")
         if btn:
             btn.setActive(self.fix_meo_state)
         print(f"[FIX MEO] -> {'ON' if self.fix_meo_state else 'OFF'} (Value {val})")
+        self._refresh_active_bar()
 
     def _on_be(self):
         """Toggle hiệu ứng bè giọng (CC "be") trên Studio One.
@@ -1954,12 +2356,13 @@ class MainDashboard(QMainWindow):
         bật/tắt bản thân hiệu ứng bè.
         """
         self.be_state = not getattr(self, 'be_state', False)
-        val = 127 if self.be_state else 0
+        val = self._toggle_value("be", self.be_state)
         self.engine.send_midi(int(MIDI_CC.get("be", 47)), val)
         btn = self._func_buttons.get("Bè")
         if btn:
             btn.setActive(self.be_state)
         print(f"[BE] -> {'ON' if self.be_state else 'OFF'} (Value {val})")
+        self._refresh_active_bar()
 
     def _on_tat_on(self):
         """Toggle bộ khử tiếng ồn nền cho mic (CC "tat_on") — có ở MỌI phiên bản.
@@ -1979,7 +2382,7 @@ class MainDashboard(QMainWindow):
         thêm bằng TTS mỗi lần vào/ra bài sẽ thành ồn ào.
         """
         self.tat_on_state = bool(on)
-        val = 127 if self.tat_on_state else 0
+        val = self._toggle_value("tat_on", self.tat_on_state)
         self.engine.send_midi(int(MIDI_CC.get("tat_on", 48)), val)
         btn = self._func_buttons.get("Tắt Ồn")
         if btn:
@@ -1987,6 +2390,7 @@ class MainDashboard(QMainWindow):
         if speak:
             self._a11y_speak(f"Tắt ồn {'bật' if self.tat_on_state else 'tắt'}")
         print(f"[TAT ON] -> {'ON' if self.tat_on_state else 'OFF'} (Value {val})")
+        self._refresh_active_bar()
 
     # ── Tự động bật/tắt Vang theo nhạc (Premium) ────────────────────────────
     # Chu kỳ lấy mẫu + số mẫu liên tiếp cần có trước khi CHỐT trạng thái mới.
@@ -2250,73 +2654,80 @@ class MainDashboard(QMainWindow):
         from ui.dialogs.progress_dialog import ProgressDialog
         ProgressDialog(self).exec()
 
-    # ── Phase 2: Smart Recall (Premium) ──
-    def _apply_song_preset(self, song):
-        """Khôi phục tone/scale/mixer/mode đã lưu của bài (Smart Recall).
-
-        Dùng has_feature im lặng (KHÔNG upsell) ở luồng mở bài: Standard mở bài
-        bình thường, chỉ bỏ qua việc auto-apply. Fail-soft toàn bộ."""
-        if not song:
-            return
+    # ── Phase 2: Smart Recall (thiết lập theo bài — mọi gói) ──
+    def _smart_recall_allowed(self) -> bool:
+        """Khôi phục thiết lập theo bài. Nay mở cho mọi gói (smart_recall không
+        còn trong PREMIUM_FEATURES); gate vẫn giữ, IM LẶNG (không upsell), để
+        khóa lại chỉ cần sửa core/entitlements.py."""
         try:
             from core import entitlements
-            if not entitlements.has_feature("smart_recall"):
-                return
-            preset = backend.SongManager.get_preset(song.get("id"))
+            return bool(entitlements.has_feature("smart_recall"))
         except Exception:
-            return
-        if not preset:
-            return  # Bài chưa có preset → tương thích ngược
+            return False
 
-        from PySide6.QtCore import QSignalBlocker
+    def _song_preset(self, song):
+        """Preset (đã normalize) sẽ áp cho bài, hoặc None (chưa lưu / không được phép)."""
+        if not song or not self._smart_recall_allowed():
+            return None
         try:
-            tone = preset.get("tone")
-            if tone:
-                with QSignalBlocker(self.tone_combo):
-                    self.tone_combo.setCurrentText(tone)
-                self._on_tone_selected(tone)
+            return backend.SongManager.get_preset(song.get("id"))
+        except Exception:
+            return None
 
-            scale = preset.get("scale")
-            if scale and hasattr(self, "scale_combo"):
-                with QSignalBlocker(self.scale_combo):
-                    self.scale_combo.setCurrentText(scale)
-                self._on_scale_selected(scale)
+    def _apply_song_preset(self, song, preset=None):
+        """Khôi phục mọi thiết lập đã lưu của bài (Smart Recall). Fail-soft.
 
-            mixer = preset.get("mixer") or {}
-            key_map = {"music": "mix_music", "mic": "mix_mic",
-                       "reverb": "mix_reverb", "backing": "mix_backing"}
-            sliders = getattr(self, "_mixer_sliders", {})
-            for pkey, cc_key in key_map.items():
-                if pkey not in mixer:
-                    continue
-                slider = sliders.get(cc_key)
-                if slider is not None:
-                    slider.setValue(int(mixer[pkey]))
-
-            mode = preset.get("mode")
-            if mode:
-                self._on_mode_selected(mode, toggle=False)
-
-            self._show_message(f"Đã khôi phục thiết lập: {song.get('title','')}")
-        except Exception as e:
-            print(f"[SMART_RECALL] apply preset error: {e}")
+        Trả True nếu đã áp một preset."""
+        preset = preset or self._song_preset(song)
+        if not preset:
+            return False  # Bài chưa có preset → tương thích ngược
+        from ui import song_settings
+        song_settings.apply_all(self, preset)
+        self._show_message(f"Đã khôi phục thiết lập: {song.get('title', '')}")
+        return True
 
     def _capture_current_preset(self) -> dict:
-        """Chụp trạng thái UI hiện tại thành preset dict (tone/scale/mixer/mode)."""
-        preset = {
-            "tone":  self.tone_combo.currentText() if hasattr(self, "tone_combo") else None,
-            "scale": self.scale_combo.currentText() if hasattr(self, "scale_combo") else None,
-            "mode":  getattr(self, "current_mode", None),
-            "mixer": {},
-        }
-        key_map = {"mix_music": "music", "mix_mic": "mic",
-                   "mix_reverb": "reverb", "mix_backing": "backing"}
-        sliders = getattr(self, "_mixer_sliders", {})
-        for cc_key, pkey in key_map.items():
-            slider = sliders.get(cc_key)
-            if slider is not None:
-                preset["mixer"][pkey] = slider.value()
-        return preset
+        """Chụp mọi thiết lập theo bài đang dùng (xem ui/song_settings.py)."""
+        from ui import song_settings
+        return song_settings.capture_all(self)
+
+    def _on_song_changed(self, url):
+        """Engine báo đã sang bài khác — chạy trên GUI thread.
+
+        1. Reset thiết lập theo bài (tone Auto-Tune chốt tay, Tone Nhạc, Tone
+           Giọng, MODE, timeline) — không thì bài mới kế thừa của bài cũ. Mục
+           nào preset của bài sẽ đặt lại thì bỏ qua reset (xem song_settings).
+        2. Bài đã lưu → hiện ngay tone đã lưu + khôi phục preset của bài, dù bài
+           mở từ đâu (trình duyệt, ô tìm kiếm, Setlist, Danh sách bài hát).
+        """
+        from ui import song_settings
+        try:
+            song = backend.SongManager.find_song_by_url(url)
+        except Exception as e:
+            print(f"[SONG] Tra bài đã lưu lỗi: {e}")
+            song = None
+        print(f"[SONG] Đổi bài -> {str(url)[:70]} ({'đã lưu' if song else 'bài mới'})")
+
+        preset = self._song_preset(song)
+        song_settings.reset_all(self, url, song, preset)
+        self.current_title = (song or {}).get("title", "") or ""
+
+        restored = self._apply_song_preset(song, preset) if preset else False
+
+        # Hiện ngay tone đã lưu của bài (chỉ hiển thị — MIDI do lượt resolve tone
+        # của engine gửi, kèm cả chuỗi tone nhiều mốc nếu có).
+        if song and song.get("tone") and not self._manual_tone_override:
+            from core.tone_cache import make_timeline_entry
+            entry = make_timeline_entry(song.get("tone"))
+            self._sync_tone_widgets(self._display_key(entry["key_display"].rstrip("m")),
+                                    entry["scale"])
+        if self._waveform is not None and self.current_title:
+            self._waveform.set_song_info(self.current_title, self.current_tone,
+                                         self.current_scale, 0)
+        if self.current_title:
+            self._refresh_tone_marquee()
+        self._refresh_active_bar()
+        return restored
 
     # ── Phase 5: Live Setlist / Auto-Pilot (Premium) ──
     def _show_setlist(self):
@@ -2334,17 +2745,16 @@ class MainDashboard(QMainWindow):
         if not song:
             return
         url   = song.get("url")
-        tone  = song.get("tone", "C")
         if not url:
             return
         try:
             manual_tl = self._saved_manual_timeline(url)
-            # Timeline đã lưu chính là thứ engine sắp replay — nạp luôn cho phần
-            # hiển thị để ô "kế tiếp" đếm ngược được ngay từ giây đầu.
-            self._set_tone_timeline(manual_tl or [], song.get("duration", 0) or 0)
             play_cb   = self._load_embedded_video if self._embedded_player_active() else None
             if play_cb is not None:
                 self._embedded_current_url = url
+            # Timeline, tone hiển thị và preset của bài do _on_song_changed lo
+            # (open_youtube_url báo đổi bài) — cùng một đường với mọi cách mở bài.
+            self.engine.forget_current_song()
             self.engine.open_youtube_url(
                 url,
                 on_video_end_callback=lambda res: None,
@@ -2352,13 +2762,6 @@ class MainDashboard(QMainWindow):
                 manual_timeline=manual_tl,
                 play_callback=play_cb,
             )
-            from core.tone_cache import make_timeline_entry
-            from PySide6.QtCore import QSignalBlocker
-            with QSignalBlocker(self.tone_combo):
-                # Ô tone chỉ có 12 nốt gốc — "Am" phải tách thành "A" mới hiện được.
-                self.tone_combo.setCurrentText(
-                    make_timeline_entry(tone)["key_display"].rstrip("m"))
-            self._apply_song_preset(song)
         except Exception as e:
             print(f"[SETLIST] play song error: {e}")
 
@@ -2532,7 +2935,14 @@ class MainDashboard(QMainWindow):
     def _on_save(self):
         """Lưu bài hát — popup nhập đầy đủ Tên + Tone + URL (điền sẵn nếu đang phát)."""
         auto_url   = getattr(self.engine, 'current_youtube_url', '') or ''
+        # Tone của BÀI là tone gốc: ô tone đang hiện tone đã cộng Tone Nhạc, còn
+        # độ dịch được lưu riêng trong thiết lập của bài. Kèm cả thể thứ ("Am")
+        # — trước đây chỉ lấy nốt gốc nên bài thứ bị lưu thành trưởng.
+        from core.tone_cache import transpose_key
         auto_tone  = getattr(self, 'current_tone', 'C') or 'C'
+        if getattr(self, 'current_scale', 'Major') == 'Minor':
+            auto_tone += 'm'
+        auto_tone  = transpose_key(auto_tone, -self._tone_offset("tone_music"))
         auto_title = getattr(self, 'current_title', '') or ''
 
         from PySide6.QtWidgets import QDialog, QLineEdit, QVBoxLayout, QHBoxLayout, QFrame as _QF
@@ -2629,8 +3039,15 @@ class MainDashboard(QMainWindow):
             chosen_tone = tone_combo.currentText()
             tone_is_human = (chosen_tone != auto_tone
                              or bool(getattr(self, "_manual_tone_override", False)))
+            # Lưu kèm TOÀN BỘ thiết lập đang dùng (Tone Nhạc/Giọng, tone chốt
+            # tay, mixer, MODE, nút bật/tắt) — nhưng chỉ khi đang lưu đúng bài
+            # đang phát; lưu một link khác thì thiết lập hiện tại không thuộc về nó.
+            from core.utils import song_match_key
+            preset = None
+            if auto_url and song_match_key(url) == song_match_key(auto_url):
+                preset = self._capture_current_preset()
             self._process_quick_save(url, chosen_tone, title_input.text().strip(),
-                                     tone_is_human=tone_is_human)
+                                     tone_is_human=tone_is_human, preset=preset)
 
         save_btn.clicked.connect(save_from_form)
         cancel_btn.clicked.connect(dlg.reject)
@@ -2646,7 +3063,7 @@ class MainDashboard(QMainWindow):
         dlg.exec()
 
 
-    def _process_quick_save(self, url, tone, title=None, tone_is_human=False):
+    def _process_quick_save(self, url, tone, title=None, tone_is_human=False, preset=None):
         """Lưu bài. Nếu title rỗng → tự lấy từ timeline manual / yt-dlp (chạy nền).
 
         tone_is_human=True (khách tự chọn tone ở ô Tone) → ghi thêm chuỗi tone
@@ -2678,7 +3095,7 @@ class MainDashboard(QMainWindow):
             if not save_title:
                 save_title = 'Bài hát không tên'
 
-            if backend.SongManager.add_song(save_title, url, save_tone):
+            if backend.SongManager.add_song(save_title, url, save_tone, preset=preset):
                 if tone_is_human and save_tone:
                     self._save_single_tone_timeline(url, save_title, save_tone)
                 self._message_signal.emit(f"✅ Đã lưu: {save_title[:40]}", False)
@@ -2886,59 +3303,156 @@ class MainDashboard(QMainWindow):
                 err = getattr(self.engine.recorder, 'last_error', None) or "Không tìm thấy thiết bị WASAPI Loopback"
                 self._show_message(f"Không thể ghi âm: {err[:80]}", is_error=True)
 
-    def _on_mode_selected(self, mode, toggle=False):
-        old_mode = self.current_mode
-        if toggle and old_mode == mode:
-            self.current_mode = None
-        else:
-            self.current_mode = mode
+    # ── MODE: mỗi nút một toggle độc lập ─────────────────────
+    def _get_mode_config(self) -> dict:
+        """Cấu hình MIDI (cc / on_value / off_value) của các nút MODE.
 
-        # Load mode config từ AppConfig
+        AppConfig.load() đã fail-soft sẵn, đây chỉ là lớp chặn cuối khi backend
+        hỏng hẳn — và là chỗ DUY NHẤT giữ fallback (trước đây chép tay 3 bản,
+        còn lệch nhau ở CC của Dân Ca).
+        """
         try:
-            mode_config = backend.AppConfig.get_mode_config()
-        except Exception:
-            mode_config = {
-                "Dân Ca": {"cc": 30, "on_value": 127, "off_value": 0},
-                "Lofi": {"cc": 37, "on_value": 127, "off_value": 0},
-                "Remix": {"cc": 38, "on_value": 127, "off_value": 0},
-                "Đa Thể Loại": {"cc": 39, "on_value": 127, "off_value": 0}
-            }
+            cfg = backend.AppConfig.get_mode_config()
+            if isinstance(cfg, dict) and cfg:
+                return cfg
+        except Exception as e:
+            print(f"[MODE] Không đọc được mode_config: {e}")
+        import copy
+        from core.config import DEFAULT_MODE_CONFIG
+        return copy.deepcopy(DEFAULT_MODE_CONFIG)
 
-        # Gửi DUY NHẤT 1 tin nhắn MIDI CC tương ứng với sự thay đổi của nút vừa bấm
-        if toggle and old_mode == mode:
-            # Tắt chế độ đang chọn
-            cfg = mode_config.get(mode)
-            if cfg:
-                cc_num = int(cfg.get("cc", 30))
-                off_val = int(cfg.get("off_value", 0))
-                self.engine.send_midi(cc_num, off_val)
-                print(f"🎭 [MODE] Tắt {mode} -> MIDI CC {cc_num} Value {off_val}")
+    def active_modes(self) -> list:
+        """Danh sách MODE đang bật, theo đúng thứ tự nút trên panel.
+
+        Mode có trạng thái nhưng không còn nút (bị ẩn ở Dev Mode) vẫn được kể
+        ra ở cuối — nếu không thì lưu preset sẽ đánh rơi nó.
+        """
+        order = list(self._mode_buttons.keys())
+        order += [m for m in self.mode_states if m not in order]
+        return [m for m in order if self.mode_states.get(m, False)]
+
+    def _widget_colors(self) -> dict:
+        """{nhãn nút: mã màu} lấy từ ui_config (panel MODE + Công cụ).
+
+        Dải "ĐANG BẬT" phải dùng ĐÚNG màu của nút tương ứng — khác màu thì
+        người dùng không nối được hai thứ với nhau. Đọc một lần rồi nhớ lại:
+        hàm này chạy mỗi lần bấm nút, đọc file JSON mỗi lượt là phí.
+        """
+        if self._ui_colors is not None:
+            return self._ui_colors
+        colors = {}
+        try:
+            ui_config = backend.UiConfigManager.load_ui_config()
+            for group in ("mode", "tools"):
+                for cfg in ui_config.get(group, []):
+                    color = cfg.get("color", "")
+                    colors[cfg.get("label", "")] = C.get(color, color)
+        except Exception as e:
+            print(f"[ACTIVE BAR] Không đọc được màu nút: {e}")
+        self._ui_colors = colors
+        return colors
+
+    def _active_status_items(self) -> list:
+        """[(nhãn, màu)] của mọi MODE + nút chức năng đang bật.
+
+        Đọc thẳng từ trạng thái sống của app chứ không giữ danh sách riêng —
+        thêm một nguồn sự thật nữa là sớm muộn cũng lệch với đèn trên nút.
+        """
+        colors = self._widget_colors()
+        items = [(m, colors.get(m, C["pink"])) for m in self.active_modes()]
+        toggles = (
+            ("Auto-Tune", getattr(self, "tune_state", False)),
+            ("Fix Méo", getattr(self, "fix_meo_state", False)),
+            ("Bè", getattr(self, "be_state", False)),
+            ("Tắt Ồn", getattr(self, "tat_on_state", False)),
+        )
+        items += [(label, colors.get(label, C["primary"]))
+                  for label, on in toggles if on]
+        # Tắt Vang không phải nút trên panel Công cụ mà là nút mute của kênh
+        # VANG — vẫn phải kể, vì đây là thứ hay bị quên bật lại nhất.
+        if self.mute_states.get("mix_reverb", False):
+            items.append(("Tắt Vang", C["accent"]))
+        return items
+
+    def _refresh_active_bar(self):
+        """Vẽ lại dải "ĐANG BẬT". Gọi được ở bất kỳ đâu, kể cả khi chưa dựng dải."""
+        bar = getattr(self, "_active_bar", None)
+        if bar is None:
+            return
+        try:
+            bar.set_items(self._active_status_items())
+        except Exception as e:
+            print(f"[ACTIVE BAR] Cập nhật lỗi: {e}")
+
+    def _refresh_mode_button(self, mode):
+        """Bật/tắt đèn LED của một nút MODE theo mode_states."""
+        btn = self._mode_buttons.get(mode)
+        if btn is not None:
+            # PainterButton tự vẽ — setStyleSheet KHÔNG có tác dụng (code cũ
+            # dùng stylesheet nên nút chưa bao giờ sáng lên). Phải là setActive.
+            btn.setActive(bool(self.mode_states.get(mode, False)))
+        self._refresh_active_bar()
+
+    @staticmethod
+    def _dev_mode_cc_override(panel, label):
+        """{cc, on_value, off_value} của nút `label` nếu Dev Mode gán CC SỐ cho nó.
+
+        Nút đó (tự thêm, hoặc nút có sẵn bị gán lại CC) gửi thẳng CC này khi
+        bấm (ui/panels/mode.py) — mọi đường khác đổi trạng thái nó (khôi phục
+        thiết lập bài, reset khi đổi bài) phải gửi CÙNG CC đó, không thì đèn
+        trên app đổi mà Studio One đứng yên.
+        """
+        try:
+            for entry in backend.UiConfigManager.load_ui_config().get(panel, []):
+                if entry.get("label") == label and isinstance(entry.get("cc"), int):
+                    return {"cc": entry["cc"],
+                            "on_value": entry.get("on_value", 127),
+                            "off_value": entry.get("off_value", 0)}
+        except Exception as e:
+            print(f"[MODE] Không đọc được ui_config: {e}")
+        return None
+
+    def _set_mode(self, mode, on):
+        """Đặt trạng thái BẬT/TẮT cho MỘT nút MODE và gửi CC của riêng nó.
+
+        Đây là chỗ duy nhất chạm tới MIDI của MODE — và nó chỉ chạm CC của
+        `mode`, không đụng tới nút nào khác. Nhờ vậy Lofi, Remix, Đa Thể Loại,
+        Dân Ca hoàn toàn độc lập: bật cái này không tắt cái kia.
+        """
+        on = bool(on)
+        self.mode_states[mode] = on
+
+        cfg = self._dev_mode_cc_override("mode", mode) or self._get_mode_config().get(mode)
+        if cfg:
+            cc_num = int(cfg.get("cc", 30))
+            val = int(cfg.get("on_value", 127)) if on else int(cfg.get("off_value", 0))
+            self.engine.send_midi(cc_num, val)
+            print(f"🎭 [MODE] {mode} -> {'ON' if on else 'OFF'} (CC {cc_num} Value {val})")
         else:
-            # Bật chế độ mới
-            cfg = mode_config.get(mode)
-            if cfg:
-                cc_num = int(cfg.get("cc", 30))
-                on_val = int(cfg.get("on_value", 127))
-                self.engine.send_midi(cc_num, on_val)
-                print(f"🎭 [MODE] Bật {mode} -> MIDI CC {cc_num} Value {on_val}")
+            # Mode do user tự thêm ở Dev Mode nhưng chưa khai báo CC trong
+            # app_config → vẫn đổi trạng thái UI, chỉ không có gì để gửi.
+            print(f"🎭 [MODE] {mode} -> {'ON' if on else 'OFF'} (chưa cấu hình CC)")
 
-        # Cập nhật style trên UI cho tất cả các nút
-        for m, btn in self._mode_buttons.items():
-            base = self._mode_colors.get(m, C["card_hover"])
-            if m == self.current_mode:
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background-color: {_lighten(base, 0.25)};
-                        color: white; border: 2px solid white;
-                        border-radius: 10px; font-size: 10px; font-weight: 700;
-                        font-family: {FONT};
-                    }}
-                    QPushButton:hover {{ background-color: {_lighten(base, 0.3)}; }}
-                """)
-            else:
-                btn.setStyleSheet(pill_btn_qss(base, _lighten(base, 0.15), 10, 10))
+        self._refresh_mode_button(mode)
 
+    def _on_mode_selected(self, mode, toggle=False):
+        """Handler của nút MODE.
 
+        toggle=True  → đảo trạng thái nút (hành vi khi bấm chuột / ra lệnh giọng nói).
+        toggle=False → ép BẬT (dùng khi khôi phục preset hoặc đồng bộ ban đầu).
+        """
+        self._set_mode(mode, (not self.mode_states.get(mode, False)) if toggle else True)
+
+    def _apply_mode_states(self, modes):
+        """Ép hàng nút MODE về đúng danh sách `modes` (dùng khi khôi phục preset).
+
+        Nút không có trong danh sách sẽ bị TẮT — preset là ảnh chụp đầy đủ của
+        hàng nút MODE, không phải bản vá từng nút.
+        """
+        wanted = set(modes or [])
+        known = list(self._mode_buttons.keys()) or list(self._get_mode_config().keys())
+        for m in known:
+            self._set_mode(m, m in wanted)
 
     def _on_sfx_play(self, file_path: str):
         """Phát sound effect theo đường dẫn file (hỗ trợ wav, mp3, ogg, flac...)."""
@@ -3108,12 +3622,12 @@ class MainDashboard(QMainWindow):
         """Thiết lập Tab order rõ ràng cho điều hướng bằng bàn phím."""
         # Header → Tools → Mixer → Mode → Bottom
         chain = []
-        for attr in ("tone_combo", "scale_combo", "_support_btn", "_settings_btn", "_eye_btn"):
+        for attr in ("tone_combo", "scale_combo", "_pin_btn", "_support_btn", "_settings_btn", "_eye_btn"):
             w = getattr(self, attr, None)
             if w is not None:
                 chain.append(w)
         # Mixer sliders
-        for cc in ("mix_music", "mix_mic", "mix_reverb", "tone_music"):
+        for cc in ("mix_music", "mix_mic", "mix_reverb", "voice_fx"):
             sl = self._mixer_sliders.get(cc) if hasattr(self, "_mixer_sliders") else None
             if sl is not None:
                 chain.append(sl)
@@ -3290,14 +3804,15 @@ class MainDashboard(QMainWindow):
             midi_ok = False
         tone = getattr(self, "current_tone", "C")
         scale = getattr(self, "current_scale", "Major")
-        mode = getattr(self, "current_mode", "")
+        modes = self.active_modes()
         from core.accessibility.announcer import key_to_vn
         parts = [
             f"MIDI {'kết nối' if midi_ok else 'mất kết nối'}",
             f"tone {key_to_vn(tone, scale)}",
         ]
-        if mode:
-            parts.append(f"chế độ {mode}")
+        if modes:
+            # Nhiều mode có thể cùng bật → đọc hết, vd "chế độ Lofi, Remix".
+            parts.append(f"chế độ {', '.join(modes)}")
         try:
             sl = self._mixer_sliders.get("mix_music")
             if sl is not None:
@@ -3375,24 +3890,12 @@ class MainDashboard(QMainWindow):
         self._a11y_step_tone("tone_voice", -1)
 
     def _a11y_step_tone(self, which: str, delta: int):
-        # Reuse existing slider if present (Tone Giọng = "tone_music" slider trong mixer
-        # với range -12..+12 đã có sẵn).  Tone "tone_voice" được điều khiển qua knob,
-        # nên ta gửi MIDI trực tiếp + cập nhật state.
+        # Đi chung đường với núm trên panel Công cụ (_set_tone_offset): nhãn số,
+        # thanh trượt cùng CC và tone Auto-Tune đều cập nhật theo.
         try:
-            if which == "tone_music":
-                sl = self._mixer_sliders.get("tone_music")
-                if sl is not None:
-                    new = max(sl.minimum(), min(sl.maximum(), sl.value() + delta))
-                    sl.setValue(new)
-                    self._a11y_speak(f"Tone Giọng {new:+d}")
-                    return
-            # tone_voice: knob — tự gửi MIDI
-            cur = getattr(self, "tone_voice_value", 0)
-            new = max(-12, min(12, cur + delta))
-            self.tone_voice_value = new
-            midi_value = int(((new + 12) / 24) * 127)
-            self.engine.send_midi(MIDI_CC.get("tone_voice", 11), midi_value)
-            self._a11y_speak(f"Tone Nhạc {new:+d}")
+            new = self._set_tone_offset(which, self._tone_offset(which) + delta)
+            name = "Tone Nhạc" if which == "tone_music" else "Tone Giọng"
+            self._a11y_speak(f"{name} {new:+d}")
         except Exception as e:
             print(f"[A11Y] step_tone lỗi: {e}")
 
@@ -3450,10 +3953,12 @@ class MainDashboard(QMainWindow):
             "volume_down_mic":  lambda: self._a11y_step_volume("mix_mic", -1),
             "volume_up_reverb": lambda: self._a11y_step_volume("mix_reverb", +1),
             "volume_down_reverb": lambda: self._a11y_step_volume("mix_reverb", -1),
-            "mode_danca":       lambda: self._on_mode_selected("Dân Ca"),
-            "mode_lofi":        lambda: self._on_mode_selected("Lofi"),
-            "mode_remix":       lambda: self._on_mode_selected("Remix"),
-            "mode_datheloai":   lambda: self._on_mode_selected("Đa Thể Loại"),
+            # toggle=True: các mode đã độc lập nên nói "đa thể loại" không còn
+            # tắt được Lofi — phải nói lại đúng tên mode đó để tắt.
+            "mode_danca":       lambda: self._on_mode_selected("Dân Ca", toggle=True),
+            "mode_lofi":        lambda: self._on_mode_selected("Lofi", toggle=True),
+            "mode_remix":       lambda: self._on_mode_selected("Remix", toggle=True),
+            "mode_datheloai":   lambda: self._on_mode_selected("Đa Thể Loại", toggle=True),
         }
         action = actions.get(name)
         if action is None:
@@ -3531,6 +4036,8 @@ class MainDashboard(QMainWindow):
                 title="Đang chuẩn bị bản mẫu",
                 hint=("Studio One còn mở từ phiên trước. Đang đóng lại (không lưu) "
                       "để chép bản mẫu đã chốt, rồi mở lên lại."),
+                skip_text="Bỏ qua, dùng bản hiện tại",
+                skip_tip="Giữ nguyên bài đang mở, không phục hồi bản mẫu phiên này",
                 parent=self,
             )
             dlg.exec()
@@ -3542,23 +4049,48 @@ class MainDashboard(QMainWindow):
             print(f"[KIOSK] đóng Studio One để phục hồi lỗi: {e}")
         return False
 
+    def _has_song_template(self) -> bool:
+        """Đã chốt bản mẫu .song cho đúng đường dẫn Studio One đang dùng chưa."""
+        try:
+            from core import so_template
+            path = self.settings.get("studio_one_path", "")
+            return so_template.has_template() and so_template.is_song_file(path)
+        except Exception as e:
+            print(f"[STUDIO ONE] Không kiểm được bản mẫu: {e}")
+            return False
+
     def _run_studio_one_shutdown(self):
-        """Chờ Studio One lưu bài và thoát, có hộp thoại tiến trình trước mặt."""
+        """Chờ Studio One thoát, có hộp thoại tiến trình trước mặt.
+
+        KHÔNG lưu (`save=False`): Ctrl+S trước đây chỉ là mẹo để Studio One khỏi
+        hỏi lúc đóng, nhưng nó bắt phải hiện cửa sổ Studio One lên (lộ chế độ
+        khách) và ghi đè bài mẫu bằng bản khách vừa táy máy. Nay trả lời thẳng
+        hộp thoại bằng nút "Don't Save" — bấm qua BM_CLICK nên cửa sổ đang ẩn
+        vẫn đóng được.
+
+        Nước cuối `fallback_save` chỉ mở khi đã chốt bản mẫu: lúc đó bản lưu ra
+        đằng nào cũng bị chép đè ở lần khởi động sau, nên thà lưu để Studio One
+        thoát sạch còn hơn để nó kẹt với hộp thoại.
+        """
         from ui.dialogs.shutdown_dialog import StudioOneShutdownDialog
         try:
             dlg = StudioOneShutdownDialog(
                 self.engine,
                 timeout_sec=float(self.settings.get("studio_one_close_timeout", 45)),
                 force_kill=bool(self.settings.get("force_kill_studio_one", False)),
+                save=False,
+                fallback_save=self._has_song_template(),
+                hint=("Đang đóng Studio One mà không lưu. Đừng tắt máy lúc này — "
+                      "tắt ngang sẽ khiến lần mở sau Studio One đòi phục hồi phiên."),
                 parent=self,
             )
             dlg.exec()
             status = (dlg.result_data or {}).get("status")
             if status not in ("closed", "not_running"):
                 print(f"[STUDIO ONE] Thoát app khi chưa đóng xong ({status})")
-                # Bước lưu đã phải hiện cửa sổ Studio One lên để gõ Ctrl+S. Nếu
-                # nó không đóng được thì phải giấu lại, kẻo app thoát xong khách
-                # ngồi trước một cửa sổ Studio One đang mở.
+                # Studio One ở lại thì phải chắc nó vẫn đang ẩn: hộp thoại hỏi
+                # lưu có thể đã kéo cửa sổ lên, app thoát xong khách ngồi trước
+                # một cửa sổ Studio One đang mở là hỏng chế độ khách.
                 from core import kiosk, so_windows
                 if kiosk.is_locked():
                     so_windows.hide_all()
@@ -3571,8 +4103,8 @@ class MainDashboard(QMainWindow):
     def closeEvent(self, event):
         """Đóng cửa sổ không block — set flags ngay, cleanup nặng chạy nền."""
         # ── BƯỚC 0: đóng Studio One an toàn ───────────────────────────────────
-        # Phải xong TRƯỚC khi app tắt: chuỗi lưu-rồi-đóng mất vài chục giây, mà
-        # main.py chỉ chờ thread nền 4 giây rồi os._exit(0) — chạy nền là chắc
+        # Phải xong TRƯỚC khi app tắt: chờ Studio One tự thoát mất vài chục giây,
+        # mà main.py chỉ chờ thread nền 4 giây rồi os._exit(0) — chạy nền là chắc
         # chắn bị cắt ngang, đúng cái đã khiến Studio One đòi phục hồi phiên.
         if not self._so_shutdown_done and self._needs_studio_one_shutdown():
             self._so_shutdown_done = True
@@ -3606,6 +4138,15 @@ class MainDashboard(QMainWindow):
             except Exception:
                 pass
             self._player_window = None
+
+        # Vòng chờ Studio One — dừng trước khi widget bị huỷ, kẻo nó còn emit
+        # signal vào một cửa sổ đã chết.
+        if self._so_ready_watcher is not None:
+            try:
+                self._so_ready_watcher.stop()
+            except Exception:
+                pass
+            self._so_ready_watcher = None
 
         # ── BƯỚC 2: Qt timers — phải dừng trên main thread ────────────────────
         self._status_timer.stop()

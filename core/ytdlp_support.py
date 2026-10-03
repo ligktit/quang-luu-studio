@@ -4,6 +4,7 @@ Shared yt-dlp helpers for YouTube requests that may require browser cookies.
 import json
 import logging
 import os
+import threading
 
 from core.config import AppConfig, DATA_DIR, FFMPEG_LOCATION, SETTINGS_FILE
 from core.utils import find_js_runtime
@@ -64,6 +65,17 @@ NO_COOKIE_PLAYER_CLIENTS = ("android", "android_vr")
 #   android    →  5 định dạng, 1 progressive, 360p (2,2 giây — nhanh nhất)
 # `tv` bị loại: trả thẳng "The page needs to be reloaded" / "DRM protected".
 POT_PLAYER_CLIENTS = ("web_safari", "mweb")
+
+# ⚠️ Đo 17/09/2026 (có PO Token bgutil 0.8.1, yt-dlp 2026.08.19, KHÔNG cookie),
+# tải 45 giây đầu của 7 video karaoke + 1 video thường:
+#   android,android_vr → 7/8  (QRwlhPUcc50 hỏng: "SABR-only", 403)
+#   mặc định           → 7/8  (hỏng đúng bài trên)
+#   web_safari,mweb    → 1/8  (403 dù yt-dlp CÓ gọi bgutil lấy GVS token)
+#   web_embedded       → 8/8, ~8–9 giây mỗi bài
+# Máy khách thấy "Đang dò vẫn quá lâu": cả thang cũ thử hết rồi rơi xuống lượt
+# cookie, vượt watchdog 90 giây mà không ra file. web_embedded hỏng với video tắt
+# nhúng nên KHÔNG thay được android — chỉ chen ngay sau nó.
+EMBEDDED_PLAYER_CLIENTS = ("web_embedded",)
 
 # Tên cũ, giữ lại cho mã ngoài còn tham chiếu.
 DEFAULT_PLAYER_CLIENTS = NO_COOKIE_PLAYER_CLIENTS
@@ -184,6 +196,49 @@ class _YtdlpLogger:
 _YTDLP_LOGGER = _YtdlpLogger()
 
 
+# ── Huỷ tải giữa chừng ─────────────────────────────────────────────────────────
+#
+# Watchdog dò tone hết giờ chỉ báo lỗi lên giao diện được — luồng worker thì vẫn
+# chạy tiếp thang thử (nhiều client × nhiều nguồn cookie × tải đoạn rồi tải cả
+# bài), có khi thêm vài phút, tranh mạng/CPU với lần dò kế tiếp. Luồng dò đăng ký
+# một hàm "đã huỷ chưa?" cho CHÍNH NÓ (thread-local, không cần đổi chữ ký của
+# ScoringEngine/extract_info_with_auth); mọi lượt tải trong luồng đó sẽ dừng ở
+# nấc thử kế tiếp và ở từng khối dữ liệu tải về.
+
+class DownloadCancelled(Exception):
+    """Phiên dò tone đã huỷ/hết giờ nên dừng tải yt-dlp."""
+
+
+_cancel_local = threading.local()
+
+
+def set_cancel_check(check):
+    """Đặt (hoặc bỏ, với None) hàm kiểm tra huỷ cho luồng HIỆN TẠI."""
+    _cancel_local.check = check
+
+
+def cancel_requested():
+    check = getattr(_cancel_local, "check", None)
+    if check is None:
+        return False
+    try:
+        return bool(check())
+    except Exception:
+        return False
+
+
+def _raise_if_cancelled(log_prefix):
+    if cancel_requested():
+        print(f"{log_prefix} Phien do da huy/het gio -> dung tai")
+        raise DownloadCancelled("phien do tone da huy")
+
+
+def _cancel_progress_hook(status):
+    """progress_hooks của yt-dlp: gọi sau mỗi khối tải về (downloader HTTP)."""
+    if cancel_requested():
+        raise DownloadCancelled("phien do tone da huy")
+
+
 def export_cookies_to_file(browser="chrome", profile=None, output_path=None, log_prefix="[COOKIE]"):
     """
     Export browser cookies to a Netscape-format .txt file.
@@ -238,15 +293,40 @@ def make_ydl_opts(**extra_opts):
         # Cap per-connection read/connect ops so a stalled CDN or auth wall does
         # not hang the detection thread indefinitely. The engine-level watchdog
         # provides the outer deadline.
-        "socket_timeout": 20,
-        "retries": 2,
-        "fragment_retries": 2,
+        #
+        # 10s / thử lại 1 lần (trước: 20s / 2 lần): một lượt tải khoẻ mạnh chỉ mất
+        # ~2s (docs/PLAN_CHONG_HONG_DO_TONE.md), nên 10s không nhận được byte nào
+        # đã là mạng hỏng. Mức cũ có thể bắt khách chờ 20s × 3 lần cho MỖI thao
+        # tác mạng chỉ để nhận lại cùng một lỗi. Hằng số này cũng quyết định
+        # -rw_timeout của ffmpeg bên dưới.
+        "socket_timeout": 10,
+        "retries": 1,
+        "fragment_retries": 1,
     }
     if FFMPEG_LOCATION:
         opts["ffmpeg_location"] = FFMPEG_LOCATION
+    # Mạng có IPv6 hỏng (máy khách 17/09/2026): trình duyệt tự lùi về IPv4 nên
+    # vẫn xem được YouTube, còn yt-dlp đợi IPv6 tới hết giờ → dò tone quá lâu.
+    # tools/chan_doan/SuaPOToken.bat bật khoá này khi đo thấy đúng ca đó.
+    if AppConfig.get("youtube_force_ipv4", False):
+        opts["source_address"] = "0.0.0.0"
     opts.update(extra_opts)
     # Sau update: người gọi vẫn có quyền tự đặt logger riêng nếu cần.
     opts.setdefault("logger", _YTDLP_LOGGER)
+    # Tải một ĐOẠN bài (download_ranges — dò tone luôn dùng) đi qua ffmpeg chứ
+    # không qua downloader HTTP của yt-dlp, nên socket_timeout KHÔNG áp dụng. ffmpeg
+    # mặc định chờ mạng VÔ HẠN: kết nối đứng giữa chừng (CDN treo, Wi-Fi rớt) là
+    # luồng dò tone treo mãi ở proc.wait(). -rw_timeout (micro giây) giới hạn mỗi
+    # lần đọc/ghi mạng bằng đúng socket_timeout.
+    if "external_downloader_args" not in opts:
+        rw_timeout_us = int(opts.get("socket_timeout") or 10) * 1_000_000
+        opts["external_downloader_args"] = {"ffmpeg_i": ["-rw_timeout", str(rw_timeout_us)]}
+    # Dừng tải khi phiên dò đã huỷ (xem set_cancel_check). Không thêm trùng khi
+    # opts đi qua make_ydl_opts hai lần (ScoringEngine rồi run_with_auth_fallback).
+    hooks = list(opts.get("progress_hooks") or [])
+    if _cancel_progress_hook not in hooks:
+        hooks.append(_cancel_progress_hook)
+    opts["progress_hooks"] = hooks
     _apply_js_runtimes(opts)
     _apply_pot_provider(opts)
     _apply_default_extractor_args(opts)
@@ -349,6 +429,16 @@ def _configured_player_clients():
         )
         return None
 
+    # Tương tự: tools/chan_doan/SuaPOToken.bat ép web_embedded cho các bản CHƯA có
+    # nấc EMBEDDED_PLAYER_CLIENTS trong thang (trước 17/09/2026). Bản này đã có
+    # nấc đó, nên bỏ khoá ép để thang tự thích nghi tiếp.
+    if AppConfig.get("youtube_player_clients_vanhanh_web_embedded", False):
+        log.info(
+            "[YTDLP] Bo qua youtube_player_clients cua ban va nhanh web_embedded - "
+            "ban nay da co nac web_embedded trong thang client"
+        )
+        return None
+
     value = AppConfig.get("youtube_player_clients", None)
     if isinstance(value, str):
         value = [part.strip() for part in value.split(",")]
@@ -409,6 +499,7 @@ def run_with_auth_fallback(url, ydl_opts=None, log_prefix="[YTDLP]", operation=N
     found, result = _run_attempts(yt_dlp, base_opts, attempts, operation, log_prefix, state)
     if found:
         return result
+    _raise_if_cancelled(log_prefix)
 
     # Cứu hộ: không đọc được cookie từ ĐĨA thì nhờ chính trình duyệt đang chạy
     # đưa cookie ra qua CDP. Chrome/Edge/Brave ≥ 127 mã hoá cookie bằng khoá cột
@@ -430,6 +521,7 @@ def run_with_auth_fallback(url, ydl_opts=None, log_prefix="[YTDLP]", operation=N
     # yt-dlp ĐỪNG loại các định dạng thiếu PO Token (`formats=missing_pot`). Tải
     # về vẫn có thể dính 403, nhưng ít nhất lấy được tiêu đề/thời lượng video —
     # đủ để app theo dõi thời điểm hết bài.
+    _raise_if_cancelled(log_prefix)
     if state["format_blocked"]:
         print(f"{log_prefix} Thu lai lan cuoi, khong loai dinh dang thieu PO Token...")
         found, result = _run_attempts(
@@ -484,6 +576,7 @@ def _run_attempts(yt_dlp, base_opts, attempts, operation, log_prefix, state):
     được thử.
     """
     for index, auth in enumerate(attempts):
+        _raise_if_cancelled(log_prefix)
         current_opts = dict(base_opts)
         _apply_auth(current_opts, auth)
         _apply_player_clients(current_opts, auth.get("player_clients"))
@@ -533,6 +626,8 @@ def _run_attempts(yt_dlp, base_opts, attempts, operation, log_prefix, state):
                 f"thu nguon khac..."
             )
             continue
+        except DownloadCancelled:
+            raise
         except Exception as exc:
             state["last_error"] = exc
             if auth.get("kind") != "none":
@@ -557,11 +652,12 @@ def _no_cookie_ladder(purpose):
     và format 18 đã có sẵn AAC — thừa sức cho việc phân tích cao độ.
     """
     android = list(NO_COOKIE_PLAYER_CLIENTS)
+    embedded = list(EMBEDDED_PLAYER_CLIENTS)
     if not pot_provider.is_available():
-        return [android, None]
+        return [android, embedded, None]
     if purpose == PURPOSE_VIDEO:
-        return [None, list(POT_PLAYER_CLIENTS), android]
-    return [android, None, list(POT_PLAYER_CLIENTS)]
+        return [None, embedded, list(POT_PLAYER_CLIENTS), android]
+    return [android, embedded, None, list(POT_PLAYER_CLIENTS)]
 
 
 def _expand_attempts(attempts, purpose=PURPOSE_AUDIO, base_opts=None):

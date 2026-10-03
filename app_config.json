@@ -27,6 +27,7 @@
         "fix_meo": 45,
         "be": 47,
         "tat_on": 48,
+        "ready_ping": 49,
         "mode_danca": 46,
         "mode_lofi": 37,
         "mode_remix": 38,
@@ -34,7 +35,8 @@
         "mute_music": 50,
         "mute_mic": 51,
         "mute_reverb": 52,
-        "mute_backing": 53
+        "mute_backing": 53,
+        "voice_fx": 54
     },
     "scale_values": {
         "major": 13,
@@ -86,6 +88,12 @@
             "on_value": 127,
             "off_value": 0
         }
+    },
+    "toggle_invert": {
+        "tone_auto": false,
+        "fix_meo": false,
+        "be": false,
+        "tat_on": false
     },
     "mute_multi_cc": {
         "mix_music": [],

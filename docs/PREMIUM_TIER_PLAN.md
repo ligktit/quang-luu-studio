@@ -67,6 +67,19 @@ Tự khôi phục **tone, scale, mức mixer, mode** đã dùng lần trước k
 
 **Verify:** Premium chỉnh tone/mixer → lưu preset → mở bài khác rồi quay lại → giá trị tự khôi phục (MIDI CC gửi đúng).
 
+**Cập nhật 2026-09-30 — preset v2 (thiết lập theo bài):**
+- Nút "Lưu bài" tự chụp TOÀN BỘ thiết lập khi lưu đúng bài đang phát: Tone Nhạc, Tone Giọng,
+  tone Auto-Tune (chỉ khi đang chốt tay — `tone_locked`), mixer (cả kênh tự thêm), MODE, nút
+  Auto-Tune/Fix Méo/Bè/Tắt Ồn. Danh sách thiết lập nằm ở `ui/song_settings.py` (`SONG_SETTINGS`);
+  thêm thiết lập mới = thêm một mục ở đó, `core/presets.py` giữ nguyên văn khóa lạ.
+- Khôi phục ở MỌI đường mở bài: engine báo `on_song_changed(url)` (watcher trình duyệt, Danh sách
+  bài hát, Setlist, ô tìm kiếm) → `MainDashboard._on_song_changed` tra bài theo video_id.
+- Sang bài mới: reset khoá tone chỉnh tay, Tone Nhạc, Tone Giọng, MODE, timeline bài cũ (mục
+  nào preset của bài sẽ đặt lại thì bỏ qua reset — `SongSetting.covers`).
+- Smart Recall MỞ CHO MỌI GÓI: bỏ `smart_recall` khỏi `PREMIUM_FEATURES` (thêm lại là khóa lại).
+- Tone Nhạc ≠ 0: engine cộng độ dịch (`tone_transpose`) khi gửi tone Auto-Tune; tone chốt tay
+  khoá cả engine (`key_locked`) để lượt dò nền không đè.
+
 ---
 
 ## Phase 3 — Bảng tiến bộ luyện hát (scoring history)

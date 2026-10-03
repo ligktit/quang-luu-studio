@@ -390,9 +390,14 @@ class SettingsDialog(QDialog):
         self._cb_launch_br = QCheckBox("Mở YouTube (trình duyệt) khi khởi động")
         self._cb_launch_br.setStyleSheet(self._checkbox_qss)
         self._cb_launch_br.setChecked(settings.get("auto_launch_browser", False))
-        self._cb_close_so = QCheckBox("Đóng Studio One khi thoát")
+        self._cb_close_so = QCheckBox("Đóng Studio One khi thoát (không lưu)")
         self._cb_close_so.setStyleSheet(self._checkbox_qss)
         self._cb_close_so.setChecked(settings.get("auto_close_studio_one", False))
+        self._cb_close_so.setToolTip(
+            "Thoát app thì đóng luôn Studio One và KHÔNG lưu bài — chỉnh sửa "
+            "trong phiên bị bỏ. Muốn giữ thì tự Ctrl+S trong Studio One trước "
+            "khi thoát app."
+        )
         self._cb_close_br = QCheckBox("Đóng trình duyệt khi thoát")
         self._cb_close_br.setStyleSheet(self._checkbox_qss)
         self._cb_close_br.setChecked(settings.get("auto_close_browser", False))
@@ -406,6 +411,11 @@ class SettingsDialog(QDialog):
         lay.addWidget(self._section_header(SVG_EYE_OPEN, "Màn hình karaoke nhúng"))
         self._build_karaoke_widgets(settings)
         lay.addWidget(self._section_card(self._build_karaoke_display))
+
+        # Giao diện — ẩn/hiện dải visualizer
+        lay.addWidget(self._section_header(SVG_EYE_OPEN, "Giao diện"))
+        self._build_appearance_widgets(settings)
+        lay.addWidget(self._section_card(self._build_appearance))
 
         # Cloud Sync (Premium)
         lay.addWidget(self._section_header(SVG_GLOBE, "Đồng bộ đám mây (Premium)"))
@@ -467,6 +477,41 @@ class SettingsDialog(QDialog):
         saved_idx = int(settings.get("display_monitor_index", 0))
         if 0 <= saved_idx < self._combo_monitor.count():
             self._combo_monitor.setCurrentIndex(saved_idx)
+
+    def _build_appearance_widgets(self, settings):
+        """Ô ẩn/hiện dải visualizer (thanh phổ nhảy theo nhạc ở đỉnh cửa sổ).
+
+        Dải này là tính năng Premium nên bản Standard không có gì để ẩn — ô vẫn
+        hiện nhưng bị khoá và nói thẳng lý do trên nhãn, giống cách ô "màn hình
+        karaoke nhúng" xử lý bản Light. Tooltip thôi thì không đủ: khách bấm mãi
+        không tick được rồi báo "app lỗi" chứ ít ai rê chuột chờ tooltip.
+        """
+        try:
+            from core import entitlements
+            is_premium = entitlements.is_premium()
+        except Exception:
+            is_premium = False
+
+        self._cb_show_viz = QCheckBox("Hiện dải visualizer (thanh phổ nhảy theo nhạc)")
+        self._cb_show_viz.setStyleSheet(self._checkbox_qss)
+        self._cb_show_viz.setChecked(bool(settings.get("show_visualizer", True)))
+        self._cb_show_viz.setEnabled(is_premium)
+        if is_premium:
+            self._cb_show_viz.setToolTip(
+                "Bỏ tích để ẩn dải visualizer ở đỉnh cửa sổ. Ẩn thì phần mềm gỡ"
+                " hẳn dải này và dừng luôn việc thu âm để vẽ, nhẹ máy hơn."
+            )
+        else:
+            self._cb_show_viz.setText(
+                "Hiện dải visualizer (thanh phổ nhảy theo nhạc)"
+                " — chỉ có ở gói Premium")
+            self._cb_show_viz.setToolTip(
+                "Gói Standard không có dải visualizer nên không có gì để ẩn.")
+
+    def _build_appearance(self, vl):
+        vl.setSpacing(8)
+        self._cb_show_viz.setMinimumHeight(34)
+        vl.addWidget(self._cb_show_viz)
 
     def _build_karaoke_display(self, vl):
         vl.setSpacing(8)
@@ -1673,6 +1718,8 @@ class SettingsDialog(QDialog):
         if hasattr(self, "_cb_embedded_player"):
             s["use_embedded_player"]    = self._cb_embedded_player.isChecked()
             s["display_monitor_index"]  = max(0, self._combo_monitor.currentIndex())
+        if hasattr(self, "_cb_show_viz"):
+            s["show_visualizer"] = self._cb_show_viz.isChecked()
         if hasattr(self, "_cb_auto_echo"):
             s["auto_echo_enabled"]      = self._cb_auto_echo.isChecked()
             s["auto_noise_enabled"]     = self._cb_auto_noise.isChecked()
@@ -1708,6 +1755,13 @@ class SettingsDialog(QDialog):
                 self._dashboard._apply_embedded_player_setting()
         except Exception as e:
             print(f"[SETTINGS] apply embedded player lỗi: {e}")
+
+        # Áp dụng ẩn/hiện dải visualizer ngay (tạo/gỡ hẳn widget)
+        try:
+            if hasattr(self._dashboard, "_apply_visualizer_setting"):
+                self._dashboard._apply_visualizer_setting()
+        except Exception as e:
+            print(f"[SETTINGS] apply visualizer lỗi: {e}")
 
         # Áp dụng Vang tự động ngay (bật/tắt vòng theo dõi nhạc)
         try:
