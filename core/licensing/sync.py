@@ -200,19 +200,48 @@ def _load_state() -> dict:
         return {}
 
 
-def _remember_pushed(kind: str, text: str) -> None:
-    """Ghi nhớ nội dung đã lên server (hoặc vừa lấy về) để lần sau khỏi đẩy lại."""
+def _write_state(state: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(_state_path()), exist_ok=True)
+        tmp = _state_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        os.replace(tmp, _state_path())
+    except Exception as e:
+        log.debug("Không lưu được sync_state: %s", e)
+
+
+def _remember_pushed(kind: str, text: str, version=None) -> None:
+    """Ghi nhớ nội dung đã lên server (hoặc vừa lấy về) + version server, để lần
+    sau khỏi đẩy lại và để nhận ra server bị lùi (khôi phục bản sao lưu cũ)."""
     with _state_lock:
         state = _load_state()
         state.setdefault("pushed", {})[kind] = _digest(text)
-        try:
-            os.makedirs(os.path.dirname(_state_path()), exist_ok=True)
-            tmp = _state_path() + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(state, f)
-            os.replace(tmp, _state_path())
-        except Exception as e:
-            log.debug("Không lưu được sync_state: %s", e)
+        if version is not None:
+            try:
+                state.setdefault("versions", {})[kind] = int(version)
+            except (TypeError, ValueError):
+                pass
+        _write_state(state)
+
+
+def _forget_pushed(kind: str) -> None:
+    """Server không còn (hoặc lùi) dữ liệu của kind này → lần push kế phải đẩy lại."""
+    with _state_lock:
+        state = _load_state()
+        (state.get("pushed") or {}).pop(kind, None)
+        (state.get("versions") or {}).pop(kind, None)
+        _write_state(state)
+
+
+def _has_pushed_state(kind: str) -> bool:
+    with _state_lock:
+        return kind in (_load_state().get("pushed") or {})
+
+
+def _remembered_version(kind: str):
+    with _state_lock:
+        return (_load_state().get("versions") or {}).get(kind)
 
 
 def _already_pushed(kind: str, text: str) -> bool:
@@ -288,7 +317,7 @@ def push(kind: str) -> dict:
     if status == 0:
         return {"ok": False, "error": "offline", "kind": kind}
     if status == 200 and body.get("ok"):
-        _remember_pushed(kind, text)
+        _remember_pushed(kind, text, body.get("version"))
         return {
             "ok": True, "kind": kind,
             "version": body.get("version"),
@@ -313,7 +342,24 @@ def pull(kind: str) -> dict:
     if status != 200 or not body.get("ok"):
         return {"ok": False, "error": body.get("message") or f"http_{status}", "kind": kind}
     if not body.get("exists"):
-        return {"ok": True, "kind": kind, "noop": "no_remote_data"}
+        # Server trống trong khi máy này từng đẩy → server mất dữ liệu. Quên hash
+        # để lần push kế (ngay trong lượt này, xem _sync_kind) đẩy lại.
+        had = _has_pushed_state(kind)
+        if had:
+            _forget_pushed(kind)
+        return {"ok": True, "kind": kind, "noop": "no_remote_data", "repush": had}
+
+    # Server trả version NHỎ HƠN version máy này đã đẩy → server được khôi phục
+    # từ bản sao lưu cũ. Local thắng: không cho bản cũ đè, và đẩy lại local.
+    mine = _remembered_version(kind)
+    try:
+        remote_version = int(body.get("version")) if body.get("version") is not None else None
+    except (TypeError, ValueError):
+        remote_version = None
+    if mine is not None and remote_version is not None and remote_version < mine:
+        _forget_pushed(kind)
+        return {"ok": True, "kind": kind, "noop": "server_rolled_back", "repush": True,
+                "remote_version": remote_version, "local_version": mine}
 
     remote_text = body.get("data") or ""
     if not remote_text:
@@ -339,7 +385,7 @@ def pull(kind: str) -> dict:
     # Bản vừa lấy về (không merge) chính là bản server đang giữ — nhớ lại để
     # lượt sau không đẩy ngược y nguyên nó lên.
     if not merged:
-        _remember_pushed(kind, out_text)
+        _remember_pushed(kind, out_text, body.get("version"))
 
     return {
         "ok": True, "kind": kind, "merged": merged,
@@ -349,7 +395,11 @@ def pull(kind: str) -> dict:
 
 def _sync_kind(kind: str) -> dict:
     try:
-        return {"push": push(kind), "pull": pull(kind)}
+        out = {"push": push(kind), "pull": pull(kind)}
+        # pull phát hiện server mất/lùi dữ liệu → đẩy lại ngay, không chờ lượt sau.
+        if out["pull"].get("repush"):
+            out["repush"] = push(kind)
+        return out
     except Exception as e:  # pragma: no cover
         log.warning("sync_all lỗi kind=%s: %s", kind, e)
         return {"error": str(e)}
@@ -389,7 +439,7 @@ def summarize(result: dict) -> str:
         if "error" in outcome:
             failed[kind] = str(outcome["error"])
             continue
-        for step in ("push", "pull"):
+        for step in ("push", "pull", "repush"):
             part = outcome.get(step) or {}
             if part.get("ok") is False:
                 failed[kind] = str(part.get("error") or "lỗi")

@@ -77,3 +77,9 @@ def test_worker_dung_sync_songs_va_tra_ca_hai_phan(qtbot):
 
     sync.assert_called_once_with([URL])
     assert got == [({URL: _entry("Am")}, pending, {"applied": 1})]
+
+
+def test_vong_nen_dang_keo_thi_bao_dung_thay_vi_khong_co_tone_moi():
+    dlg = _dialog_stub()
+    SongsListDialog._on_sync_done(dlg, {}, [], {"ok": False, "skipped": "busy"})
+    assert dlg._dashboard._show_message.call_args.args[0] == "Đang đồng bộ nền, thử lại sau."

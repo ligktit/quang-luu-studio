@@ -806,16 +806,40 @@ class SettingsDialog(QDialog):
                     "Đang tắt hoặc máy chưa kích hoạt — chưa đồng bộ được."
                 )
                 return
-            tone_share.clear_session_cache()
-            tone_share.flush_queue()
-            import threading
-            threading.Thread(target=tone_share.pull_overrides, daemon=True).start()
-            self._tone_share_status.setText(
-                "Đang gửi phần đóng góp còn tồn và nhận tone quản trị đặt. Mở Danh "
-                "sách bài hát rồi bấm “☁ Đồng bộ tone” để lấy tone cho cả danh sách."
-            )
         except Exception as e:
             self._tone_share_status.setText(f"Không đồng bộ được: {e}")
+            return
+
+        self._btn_tone_share_sync.setEnabled(False)
+        self._tone_share_status.setText("Đang gửi phần đóng góp còn tồn và nhận tone quản trị đặt…")
+
+        # QThread + Signal (cùng mẫu _on_cloud_sync): kết quả về đúng main thread.
+        from PySide6.QtCore import QThread, Signal
+
+        class _ToneShareSyncWorker(QThread):
+            done = Signal(str)
+
+            def run(self):
+                try:
+                    from core import tone_share
+                    tone_share.clear_session_cache()
+                    tone_share.flush_queue()
+                    self.done.emit(tone_share.summarize_overrides(tone_share.pull_overrides(wait=True)))
+                except Exception as e:
+                    self.done.emit(f"Không đồng bộ được: {e}")
+
+        def _done(msg):
+            self._btn_tone_share_sync.setEnabled(True)
+            self._tone_share_status.setText(
+                msg + " Mở Danh sách bài hát rồi bấm “☁ Đồng bộ tone” để lấy tone cho cả danh sách."
+                if msg.startswith("Đã nhận") else msg
+            )
+            self._tone_share_worker = None
+
+        worker = _ToneShareSyncWorker(self)
+        self._tone_share_worker = worker  # giữ tham chiếu: QThread bị GC giữa chừng là crash
+        worker.done.connect(_done)
+        worker.start()
 
     def _build_paths(self, vl):
         so_lbl = QLabel("Studio One (.song hoặc .exe):")

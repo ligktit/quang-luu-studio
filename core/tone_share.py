@@ -408,12 +408,19 @@ def _apply_override(item) -> str:
     return "applied"
 
 
-def pull_overrides() -> dict:
+# Nút bấm tay chờ vòng nền tối đa bấy nhiêu giây trước khi báo "đang bận".
+OVERRIDES_WAIT_SECONDS = 30
+
+
+def pull_overrides(wait=False) -> dict:
     """Kéo bản admin đặt từ cursor đã lưu, ghi vào tone_cache. Gọi từ luồng NỀN.
 
     Áp hết một trang rồi mới lưu next_cursor: lưu trước mà app tắt giữa chừng
     là mất trang đó. Mất mạng/server từ chối → dừng, giữ cursor của trang cuối
     đã áp xong; áp lại một trang là idempotent.
+
+    wait=True (đường bấm tay): chờ lượt nền đang chạy xong rồi kéo tiếp, thay
+    vì trả "busy" và để UI báo "Không có tone mới" sai ngay lúc vòng nền đang áp.
     """
     stats = {"ok": False, "fetched": 0, "applied": 0, "skipped_human": 0, "pages": 0}
     if not enabled():
@@ -421,7 +428,9 @@ def pull_overrides() -> dict:
     auth = _auth_fields()
     if auth is None:
         return dict(stats, skipped="not_activated")
-    if not _overrides_lock.acquire(blocking=False):
+    acquired = (_overrides_lock.acquire(timeout=OVERRIDES_WAIT_SECONDS) if wait
+                else _overrides_lock.acquire(blocking=False))
+    if not acquired:
         return dict(stats, skipped="busy")
     try:
         cursor = _load_cursor()
@@ -452,11 +461,34 @@ def pull_overrides() -> dict:
 
 
 def sync_songs(urls) -> tuple:
-    """Nút "☁ Đồng bộ tone": kéo bản admin đặt TRƯỚC, rồi tra cộng đồng cho các
-    bài còn thiếu. Trả (found_by_url, override_stats). Gọi từ luồng nền."""
-    stats = pull_overrides()
+    """Nút "☁ Đồng bộ tone": kéo bản admin đặt TRƯỚC (chờ vòng nền nếu đang
+    chạy), rồi tra cộng đồng cho các bài còn thiếu. Trả (found_by_url,
+    override_stats). Gọi từ luồng nền."""
+    stats = pull_overrides(wait=True)
     found = lookup_many(urls)
     return found, stats
+
+
+def summarize_overrides(stats) -> str:
+    """Một câu cho người dùng về lượt nhận tone quản trị đặt."""
+    stats = stats or {}
+    skipped = stats.get("skipped")
+    if skipped == "busy":
+        return "Đang đồng bộ nền, thử lại sau."
+    if skipped == "disabled":
+        return "Đồng bộ tone cộng đồng đang tắt."
+    if skipped == "not_activated":
+        return "Máy chưa kích hoạt."
+    if not stats.get("ok"):
+        return "Không kết nối được máy chủ — sẽ tự thử lại sau."
+    applied = int(stats.get("applied") or 0)
+    human = int(stats.get("skipped_human") or 0)
+    if not applied and not human:
+        return "Không có tone mới từ quản trị."
+    text = f"Đã nhận {applied} tone quản trị đặt"
+    if human:
+        text += f", bỏ qua {human} bài bạn đã sửa tay"
+    return text + "."
 
 
 # ── Hàng đợi (chịu được mất mạng) ──

@@ -160,6 +160,10 @@ class SongsListDialog(QDialog):
         self._sync_btn.setText("☁ Đồng bộ tone")
         stats = stats or {}
         admin_applied = int(stats.get("applied") or 0)
+        if stats.get("skipped") == "busy" and not found:
+            # Vòng nền đang áp bản admin — báo đúng chuyện, đừng nói "không có gì mới".
+            self._dashboard._show_message("Đang đồng bộ nền, thử lại sau.")
+            return
 
         applied = 0
         for song in pending:

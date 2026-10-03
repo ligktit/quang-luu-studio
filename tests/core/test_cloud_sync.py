@@ -32,13 +32,23 @@ def _write(kind, obj):
 
 
 def _fake_request(calls, delay=0.0, body=None):
+    """Server giả: PUT nhận blob, GET trả đúng blob vừa nhận (như server thật).
+    `body` ép mọi GET trả một thân cố định (vd. server trống)."""
+    stored = {}
+
     def _request(method, path, payload):
         if delay:
             time.sleep(delay)
         calls.append((method, path))
         if method == "PUT":
+            stored[path] = payload.get("data", "")
             return 200, {"ok": True, "version": 1}
-        return 200, body if body is not None else {"ok": True, "exists": False}
+        if body is not None:
+            return 200, body
+        kind_path = path.rsplit("/get", 1)[0]
+        if kind_path in stored:
+            return 200, {"ok": True, "exists": True, "version": 1, "data": stored[kind_path]}
+        return 200, {"ok": True, "exists": False}
     return _request
 
 
@@ -154,3 +164,50 @@ def test_tom_tat_khi_mot_phan_loi():
 def test_tom_tat_khong_premium_va_dang_chay():
     assert sync.summarize({"skipped": "not_premium"}) == "Chỉ dành cho gói Premium."
     assert sync.summarize({"skipped": "busy"}) == "Đang có lượt đồng bộ khác chạy — chờ xong rồi thử lại."
+
+
+# ── Server mất dữ liệu / khôi phục bản cũ → phải đẩy lại dù hash không đổi ──
+def test_server_khong_con_du_lieu_thi_sync_kind_day_lai_ngay(monkeypatch):
+    _write("tones", {"a": 1})
+    calls = []
+    monkeypatch.setattr(sync, "_request", _fake_request(calls))
+    sync.push("tones")                      # đã nhớ hash + version
+    assert len([c for c in calls if c[0] == "PUT"]) == 1
+
+    calls.clear()
+    monkeypatch.setattr(sync, "_request", _fake_request(calls, body={"ok": True, "exists": False}))
+    out = sync._sync_kind("tones")
+
+    assert out["pull"]["noop"] == "no_remote_data"
+    assert len([c for c in calls if c[0] == "PUT"]) == 1, "server trống → đẩy lại trong cùng lượt"
+    assert out["repush"]["ok"] is True and "noop" not in out["repush"]
+
+
+def test_server_lui_version_thi_giu_local_va_day_lai(monkeypatch):
+    _write("tones", {"a": "moi"})
+    calls = []
+
+    def _req_v5(method, path, payload):
+        calls.append((method, path))
+        if method == "PUT":
+            return 200, {"ok": True, "version": 5}
+        return 200, {"ok": True, "exists": False}
+    monkeypatch.setattr(sync, "_request", _req_v5)
+    sync.push("tones")
+
+    calls.clear()
+    old_remote = json.dumps({"a": "cu"})
+
+    def _req_rollback(method, path, payload):
+        calls.append((method, path))
+        if method == "PUT":
+            return 200, {"ok": True, "version": 6}
+        return 200, {"ok": True, "exists": True, "version": 1, "data": old_remote}
+    monkeypatch.setattr(sync, "_request", _req_rollback)
+    out = sync._sync_kind("tones")
+
+    with open(sync.KIND_FILES["tones"], encoding="utf-8") as f:
+        assert json.load(f) == {"a": "moi"}, "server lùi version thì local thắng, không bị bản cũ đè"
+    assert out["pull"]["noop"] == "server_rolled_back"
+    assert len([c for c in calls if c[0] == "PUT"]) == 1
+    assert out["repush"]["version"] == 6

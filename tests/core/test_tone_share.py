@@ -472,3 +472,40 @@ def test_sync_songs_keo_ban_admin_truoc_roi_tra_cuu_bai_thieu(monkeypatch, overr
     assert order == ["/api/v1/library/changes", "/api/v1/library/lookup"]
     assert found[URL]["primary_key"] == "Am"
     assert stats["applied"] == 1
+
+
+# ── Nút bấm tay chờ vòng nền thay vì "nuốt" lượt ──
+def test_pull_overrides_wait_true_cho_lock_thay_vi_bao_busy(monkeypatch, overrides_env):
+    import _thread
+    import time
+    monkeypatch.setattr(tone_share, "_post", _paged_post({
+        "": (200, {"ok": True, "items": [_change()], "next_cursor": "CUR-1", "has_more": False}),
+    }, []))
+    tone_share._overrides_lock.acquire()
+    # _thread thật: fixture _isolate đã thay threading.Thread bằng bản giả chạy tại chỗ.
+    _thread.start_new_thread(lambda: (time.sleep(0.3), tone_share._overrides_lock.release()), ())
+
+    assert tone_share.pull_overrides()["skipped"] == "busy"
+    stats = tone_share.pull_overrides(wait=True)
+    assert stats["ok"] is True and stats["applied"] == 1
+
+
+def test_sync_songs_cho_vong_nen(monkeypatch, overrides_env):
+    seen = {}
+    monkeypatch.setattr(tone_share, "pull_overrides",
+                        lambda wait=False: seen.setdefault("wait", wait) or {"ok": True, "applied": 0})
+    monkeypatch.setattr(tone_share, "lookup_many", lambda urls: {})
+    tone_share.sync_songs([URL])
+    assert seen["wait"] is True
+
+
+def test_summarize_overrides_cau_cho_nguoi_doc():
+    f = tone_share.summarize_overrides
+    assert f({"ok": True, "applied": 3, "skipped_human": 1}) == \
+        "Đã nhận 3 tone quản trị đặt, bỏ qua 1 bài bạn đã sửa tay."
+    assert f({"ok": True, "applied": 2, "skipped_human": 0}) == "Đã nhận 2 tone quản trị đặt."
+    assert f({"ok": True, "applied": 0, "skipped_human": 0}) == "Không có tone mới từ quản trị."
+    assert f({"ok": False, "skipped": "busy"}) == "Đang đồng bộ nền, thử lại sau."
+    assert f({"ok": False, "skipped": "disabled"}) == "Đồng bộ tone cộng đồng đang tắt."
+    assert f({"ok": False, "skipped": "not_activated"}) == "Máy chưa kích hoạt."
+    assert f({"ok": False, "applied": 0}) == "Không kết nối được máy chủ — sẽ tự thử lại sau."

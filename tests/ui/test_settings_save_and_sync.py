@@ -174,3 +174,23 @@ def test_bat_player_nhung_khong_join_watcher_tren_main_thread(qapp, mock_engine,
         dashboard._apply_embedded_player_setting()
 
     mock_engine.stop_youtube_watcher.assert_called_once_with(wait=False)
+
+
+# ── "Đồng bộ ngay" mục Thư viện tone phải báo kết quả về UI ──
+def test_dong_bo_ngay_thu_vien_tone_bao_ket_qua(qapp, mock_engine, qtbot):
+    dashboard = _make_dashboard(qtbot, premium=True)
+    dlg = _open_dialog(qtbot, dashboard)
+    btn = dlg._btn_tone_share_sync
+
+    with patch("core.tone_share.enabled", return_value=True), \
+         patch("core.tone_share.flush_queue"), \
+         patch("core.tone_share.clear_session_cache"), \
+         patch("core.tone_share.pull_overrides",
+               return_value={"ok": True, "applied": 3, "skipped_human": 1}) as pull:
+        btn.click()
+        assert btn.isEnabled() is False
+        qtbot.waitUntil(btn.isEnabled, timeout=3000)
+
+    pull.assert_called_once_with(wait=True)
+    assert dlg._tone_share_status.text().startswith(
+        "Đã nhận 3 tone quản trị đặt, bỏ qua 1 bài bạn đã sửa tay.")
