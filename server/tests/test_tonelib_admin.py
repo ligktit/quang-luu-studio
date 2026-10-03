@@ -65,3 +65,13 @@ def test_parse_time_khong_nhan_inf_nan_hay_so_mu():
         assert tonelib.parse_time(text) is None, text
     assert tonelib.parse_time("1.5") == 1.5
     assert tonelib.parse_time("2:30.5") == 150.5
+
+
+def test_decode_cursor_ts_naive_duoc_ep_ve_utc():
+    """Server luôn phát aware; ai sửa tay file trạng thái gửi naive thì Postgres
+    cast theo TimeZone phiên → lệch giờ. Ép UTC để so cùng một mốc."""
+    text = tonelib._b64(b'{"ts": "2026-10-03T10:00:00.123456", "id": 7}')
+    ts, tone_id = tonelib.decode_cursor(text)
+    assert tone_id == 7
+    assert ts.tzinfo is not None and ts.utcoffset().total_seconds() == 0
+    assert ts == datetime(2026, 10, 3, 10, 0, 0, 123456, tzinfo=timezone.utc)

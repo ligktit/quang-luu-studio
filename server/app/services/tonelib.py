@@ -12,7 +12,7 @@ import base64
 import hashlib
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 # song_key CHỈ nhận YouTube video_id 11 ký tự. Đường dẫn file local vừa là dữ
 # liệu cá nhân vừa không khớp được giữa các máy — chặn ngay ở cổng.
@@ -222,6 +222,10 @@ def decode_cursor(text) -> tuple | None:
         tone_id = int(data["id"])
     except (ValueError, TypeError, KeyError, AttributeError):
         return None
+    # Server luôn phát aware; chuỗi naive (file trạng thái bị sửa tay) mà để
+    # nguyên thì Postgres cast theo TimeZone phiên → lệch giờ. Mốc là UTC.
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
     return ts, tone_id
 
 

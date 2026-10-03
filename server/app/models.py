@@ -6,6 +6,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -223,7 +224,14 @@ class SharedTone(Base):
     liệu cá nhân vừa không khớp được giữa các máy nên không bao giờ lên đây.
     """
     __tablename__ = "shared_tones"
-    __table_args__ = (UniqueConstraint("song_key", "payload_hash", name="uq_shared_song_variant"),)
+    __table_args__ = (
+        UniqueConstraint("song_key", "payload_hash", name="uq_shared_song_variant"),
+        # Feed /api/v1/library/changes: WHERE pinned AND status='ok' ORDER BY last_seen, id.
+        # DB mới có qua create_all; DB đang chạy tạo tay một lần khi deploy:
+        #   CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_shared_tones_feed
+        #     ON shared_tones (pinned, status, last_seen, id);
+        Index("ix_shared_tones_feed", "pinned", "status", "last_seen", "id"),
+    )
 
     id:           Mapped[int] = mapped_column(Integer, primary_key=True)
     song_key:     Mapped[str] = mapped_column(String(24), index=True)

@@ -98,10 +98,11 @@ server/
   cần hỗ trợ nhất. Ràng theo `device_fingerprint` (biết mã ticket thôi không đọc được), chống lạm
   dụng bằng `RATE_LIMIT_SUPPORT` (mặc định 6/giờ).
 - `POST /library/lookup` · `/library/contribute` · `/library/report` — thư viện tone cộng đồng.
-- `POST /library/changes` — feed bản **ghim** cho máy khách theo cursor opaque (xem bên dưới).
   Cần license token nhưng **không giới hạn Premium** (khác `/sync`): thư viện sống bằng hiệu ứng
   mạng, chặn Standard đóng góp là tự bóp nguồn dữ liệu. Mỗi máy 1 phiếu/biến thể; bản `human`
   nhân hệ số 3, mỗi lượt báo sai trừ 2; `song_key` chỉ nhận video_id YouTube 11 ký tự.
+- `POST /library/changes` — feed bản **ghim** cho máy khách theo cursor opaque, cùng cổng xác
+  thực với `/library/*` (xem mục "Admin đặt tone → máy khách" bên dưới).
 
 ## Admin Web UI (`/admin`, đăng nhập mật khẩu)
 

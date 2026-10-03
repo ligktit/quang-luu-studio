@@ -161,3 +161,22 @@ def test_trang_thu_vien_hien_thong_bao_va_form(admin_client):
     assert res.status_code == 200
     assert "Xin chào" in res.text
     assert 'action="/admin/library/set"' in res.text
+
+
+def test_co_moc_thi_tone_chinh_lay_theo_moc_dau(admin_client):
+    """Admin gõ tone chính F#m nhưng mốc 0:00 là Bm → bài chạy Bm, cột tone khách
+    hiện Bm; tone chính phải theo mốc đầu, không theo ô gõ lệch."""
+    fp = "may-dat-07"
+    token = _token(admin_client, fp)
+    res = _set(admin_client, primary_key="F#m", timeline="0:00 Bm\n1:35 D")
+
+    found = _lookup(admin_client, token, fp)
+    assert found["primary_key"] == "Bm"
+    assert "Bm" in res.headers["location"]
+
+
+def test_khong_co_moc_thi_tone_chinh_theo_o_go(admin_client):
+    fp = "may-dat-08"
+    token = _token(admin_client, fp)
+    _set(admin_client, primary_key="F#m")
+    assert _lookup(admin_client, token, fp)["primary_key"] == "F#m"

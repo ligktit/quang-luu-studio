@@ -819,10 +819,14 @@ def library_set(
     if not entries:
         return _library_msg(song_key, "Mốc thời gian sai: mỗi dòng dạng “mm:ss Tone”, ví dụ “1:35 Bm”.")
 
-    primary_display = tonelib.key_display(*parsed_primary)
+    # Có mốc thì tone chính là mốc đầu: bài chạy theo mốc, cột tone ở máy khách
+    # cũng phải hiện đúng tone đang chạy. Ô "tone chính" chỉ quyết khi mốc trống.
+    if timeline.strip():
+        primary_display = entries[0]["key_display"]
+    else:
+        primary_display = tonelib.key_display(*parsed_primary)
     normalized = tonelib.normalize_timeline(entries)
     digest = tonelib.payload_hash(song_key, normalized)
-    now = datetime.now(timezone.utc)
 
     tone = db.scalar(
         select(SharedTone).where(
@@ -853,7 +857,9 @@ def library_set(
         sibling.pinned = False
     tone.pinned = True
     tone.status = "ok"
-    tone.last_seen = now
+    # Lấy giờ NGAY trước commit: feed phân trang theo last_seen, lấy sớm hơn là
+    # mở rộng cửa sổ máy khách đọc feed lọt giữa "giờ đã lấy" và "đã commit".
+    tone.last_seen = datetime.now(timezone.utc)
     db.commit()
     return _library_msg(song_key, f"Đã đặt tone {primary_display} cho {song_key}.")
 
