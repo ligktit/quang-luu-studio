@@ -187,7 +187,9 @@ def contribute(request: Request, payload: LibraryContributeRequest, db: Session 
             rejected += 1
             continue
 
-        source = item.source.lower() if item.source.lower() in tonelib.SOURCES else "auto"
+        # Chỉ auto|human từ client. "admin" do form /admin/library tạo — client
+        # gửi "admin" là tự phong, không được trọng số của dev.
+        source = item.source.lower() if item.source.lower() in tonelib.CLIENT_SOURCES else "auto"
         digest = tonelib.payload_hash(item.song_key, normalized)
 
         tone = db.scalar(

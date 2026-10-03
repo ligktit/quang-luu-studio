@@ -376,3 +376,14 @@ def test_phan_loai_tone():
     assert tonelib.parse_key("Ebm") == (3, "Minor")
     assert tonelib.parse_key("A Minor") == (9, "Minor")
     assert tonelib.parse_key("H") is None
+
+
+def test_client_tu_phong_admin_bi_ep_ve_auto(client):
+    """Nguồn 'admin' chỉ do form admin tạo; client gửi lên là tự phong, ép về auto."""
+    fp = "may-gia-admin"
+    token = _token(client, fp)
+    res = _contribute(client, token, fp, _timeline((0, "F#m")), source="admin")
+    assert res.json()["accepted"] == 1
+
+    result = _lookup(client, token, fp).json()["results"][SONG]
+    assert result["source"] == "auto"

@@ -8,15 +8,21 @@ quả có được coi là một hay không. Để client tự tính thì (a) cl
 công thức là cả thư viện vỡ thành nghìn mảnh, (b) một client sửa đổi có thể gửi
 hash trùng với biến thể đang thắng để "mượn" phiếu của nó.
 """
+import base64
 import hashlib
 import json
 import re
+from datetime import datetime
 
 # song_key CHỈ nhận YouTube video_id 11 ký tự. Đường dẫn file local vừa là dữ
 # liệu cá nhân vừa không khớp được giữa các máy — chặn ngay ở cổng.
 SONG_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
-SOURCES = ("auto", "human")
+# auto: máy dò | human: người dùng sửa tay | admin: dev đặt trên /admin/library.
+# CLIENT_SOURCES là tập client ĐƯỢC PHÉP gửi qua /contribute; "admin" chỉ do
+# form admin tạo — client gửi "admin" là tự phong, router ép về "auto".
+SOURCES = ("auto", "human", "admin")
+CLIENT_SOURCES = ("auto", "human")
 
 # Trần độ dài timeline. Một bài 10 phút chuyển tone mỗi 5 giây cũng chỉ ~120 mốc;
 # 300 là dư dả mà vẫn chặn được payload phá hoại.
@@ -24,7 +30,9 @@ MAX_ENTRIES = 300
 
 # Trọng số nguồn: một người nghe rồi sửa tay đáng tin hơn hẳn ba máy dò tự động
 # — máy dò sai theo cùng một kiểu thì càng nhiều máy càng sai giống nhau.
-SOURCE_WEIGHT = {"human": 3, "auto": 1}
+# admin = 10: bản dev đặt luôn được ghim nên trọng số chỉ để xếp hạng hiển thị
+# và phòng khi dev bỏ ghim mà vẫn muốn nó thắng.
+SOURCE_WEIGHT = {"admin": 10, "human": 3, "auto": 1}
 
 # Mỗi lượt báo sai trừ nặng hơn một phiếu thuận: hát sai tone tốn tiền của quán,
 # còn bỏ sót một bản đúng thì chỉ tốn một lần dò lại.
@@ -133,6 +141,88 @@ def parse_key(text):
         if root in names:
             return names.index(root), scale
     return None
+
+
+def key_display(index: int, scale: str) -> str:
+    """(6, 'Minor') → 'F#m' — cùng quy ước sharp của app (ToneDetector.MINOR_KEY_NAMES)."""
+    return NOTES_SHARP[int(index) % 12] + ("m" if scale == "Minor" else "")
+
+
+def parse_time(text) -> float | None:
+    """'1:35' → 95.0, '95' → 95.0, '1:02:03' → 3723.0. None nếu không đọc được/âm."""
+    parts = str(text or "").strip().split(":")
+    if not parts or len(parts) > 3:
+        return None
+    try:
+        nums = [float(p) for p in parts]
+    except ValueError:
+        return None
+    if any(n < 0 for n in nums):
+        return None
+    total = 0.0
+    for n in nums:
+        total = total * 60 + n
+    return total
+
+
+def parse_timeline_text(text: str, primary_key: str) -> list | None:
+    """Ô 'mốc thời gian' trên form admin → list entry chuẩn của thư viện.
+
+    Mỗi dòng: `<mm:ss|giây> <tone>`. Bỏ trống → một mốc 0s theo `primary_key`.
+    Một dòng sai là trả None cho CẢ ô: admin sửa lại, không ghi nửa vời.
+    """
+    lines = [ln.strip() for ln in str(text or "").splitlines() if ln.strip()]
+    if not lines:
+        parsed = parse_key(primary_key)
+        if not parsed:
+            return None
+        idx, scale = parsed
+        return [{"time": 0.0, "key_display": key_display(idx, scale),
+                 "key_index": idx, "scale": scale}]
+
+    entries = []
+    for line in lines:
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            return None
+        seconds = parse_time(parts[0])
+        parsed = parse_key(parts[1])
+        if seconds is None or not parsed:
+            return None
+        idx, scale = parsed
+        entries.append({"time": seconds, "key_display": key_display(idx, scale),
+                        "key_index": idx, "scale": scale})
+    entries.sort(key=lambda e: e["time"])
+    return entries
+
+
+# ── Cursor keyset cho /api/v1/library/changes ──
+# Opaque với client: base64url(JSON {"ts": isoformat, "id": int}). `ts` giữ chuỗi
+# ISO đúng như last_seen trong DB — đổi sang epoch float là lệch micro giây,
+# vế tie-break `last_seen = :ts` không bao giờ khớp nữa.
+def _b64(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def encode_cursor(last_seen: datetime, tone_id: int) -> str:
+    payload = json.dumps({"ts": last_seen.isoformat(), "id": int(tone_id)}, separators=(",", ":"))
+    return _b64(payload.encode("utf-8"))
+
+
+def decode_cursor(text) -> tuple | None:
+    """(last_seen, id) hoặc None nếu chuỗi hỏng — caller coi như cursor rỗng."""
+    if not text or not isinstance(text, str):
+        return None
+    try:
+        padded = text + "=" * (-len(text) % 4)
+        data = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+        if not isinstance(data, dict) or not isinstance(data.get("ts"), str):
+            return None
+        ts = datetime.fromisoformat(data["ts"])
+        tone_id = int(data["id"])
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+    return ts, tone_id
 
 
 def classify(truth, pred) -> str:
