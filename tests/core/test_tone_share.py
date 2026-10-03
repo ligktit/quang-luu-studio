@@ -282,3 +282,176 @@ def test_so_do_la_bi_kep_ve_mien_hop_le(monkeypatch):
     assert diag["tuning_cents"] == 100.0
     assert len(diag["mode"]) == 20
     assert diag["audio"] == ""
+
+
+# ── Bản admin đặt: pull_overrides ──
+ADMIN_KEY = "pMPvJE1wwnc"
+ADMIN_URL = f"https://www.youtube.com/watch?v={ADMIN_KEY}"
+
+
+def _change(key=ADMIN_KEY, primary="F#m"):
+    return {
+        "song_key": key, "title": "Lưng Cha Bụng Mẹ", "primary_key": primary,
+        "source": "admin", "pinned": True, "votes": 0, "payload_hash": f"hash-{key}",
+        "timeline": [{"time": 0, "key_display": primary, "key_index": 6, "scale": "Minor"}],
+    }
+
+
+@pytest.fixture
+def overrides_env(tmp_path, monkeypatch):
+    """Cô lập file cursor + ghi cache + thiết lập bài; trả dict ghi lại các lần ghi."""
+    saved, songs = [], []
+    monkeypatch.setattr(tone_share, "_overrides_state_path",
+                        lambda: str(tmp_path / "tone_overrides_state.json"))
+    monkeypatch.setattr(tone_share, "_save_local", lambda url, entry: saved.append((url, entry)))
+    monkeypatch.setattr(tone_share, "_update_saved_song_tone",
+                        lambda url, primary: songs.append((url, primary)))
+    monkeypatch.setattr("core.tone_cache.ManualToneTimeline.get_timeline_source",
+                        staticmethod(lambda url: None))
+    return {"saved": saved, "songs": songs}
+
+
+def _paged_post(pages, calls):
+    """pages: {cursor_nhận: (status, body)}. Ghi lại cursor từng lần gọi."""
+    def _post(path, payload):
+        assert path == "/api/v1/library/changes"
+        calls.append(payload.get("cursor", ""))
+        return pages[payload.get("cursor", "")]
+    return _post
+
+
+def test_pull_overrides_ghi_cache_origin_admin_va_luu_cursor(monkeypatch, overrides_env):
+    calls = []
+    monkeypatch.setattr(tone_share, "_post", _paged_post({
+        "": (200, {"ok": True, "items": [_change()], "next_cursor": "CUR-1", "has_more": False}),
+    }, calls))
+
+    stats = tone_share.pull_overrides()
+
+    assert stats["ok"] is True
+    assert stats["applied"] == 1 and stats["fetched"] == 1
+    (url, entry), = overrides_env["saved"]
+    assert url == ADMIN_URL
+    assert entry["origin"] == "admin"
+    assert entry["primary_key"] == "F#m"
+    assert entry["key_timeline"][0]["key_display"] == "F#m"
+    assert entry["payload_hash"] == f"hash-{ADMIN_KEY}"
+    assert overrides_env["songs"] == [(ADMIN_URL, "F#m")]
+    assert tone_share._load_cursor() == "CUR-1"
+    assert calls == [""]
+
+
+def test_pull_overrides_lan_sau_gui_cursor_da_luu(monkeypatch, overrides_env):
+    tone_share._save_cursor("CUR-1")
+    calls = []
+    monkeypatch.setattr(tone_share, "_post", _paged_post({
+        "CUR-1": (200, {"ok": True, "items": [], "next_cursor": "CUR-1", "has_more": False}),
+    }, calls))
+
+    stats = tone_share.pull_overrides()
+    assert calls == ["CUR-1"]
+    assert stats["applied"] == 0
+    assert tone_share._load_cursor() == "CUR-1"
+
+
+def test_pull_overrides_khong_de_chuoi_tone_khach_sua_tay(monkeypatch, overrides_env):
+    monkeypatch.setattr("core.tone_cache.ManualToneTimeline.get_timeline_source",
+                        staticmethod(lambda url: "human"))
+    monkeypatch.setattr(tone_share, "_post", _paged_post({
+        "": (200, {"ok": True, "items": [_change()], "next_cursor": "CUR-1", "has_more": False}),
+    }, []))
+
+    stats = tone_share.pull_overrides()
+
+    assert stats["skipped_human"] == 1 and stats["applied"] == 0
+    assert overrides_env["saved"] == []
+    assert overrides_env["songs"] == []
+    assert tone_share._load_cursor() == "CUR-1", "bỏ qua là quyết định cuối, không lấy lại bản đó"
+
+
+def test_pull_overrides_lap_trang_khi_has_more(monkeypatch, overrides_env):
+    calls = []
+    monkeypatch.setattr(tone_share, "_post", _paged_post({
+        "": (200, {"ok": True, "items": [_change("AAAAAAAAAAA")], "next_cursor": "CUR-1", "has_more": True}),
+        "CUR-1": (200, {"ok": True, "items": [_change("BBBBBBBBBBB")], "next_cursor": "CUR-2", "has_more": False}),
+    }, calls))
+
+    stats = tone_share.pull_overrides()
+
+    assert calls == ["", "CUR-1"]
+    assert stats["applied"] == 2 and stats["pages"] == 2
+    assert tone_share._load_cursor() == "CUR-2"
+
+
+def test_pull_overrides_mat_mang_o_trang_hai_giu_cursor_trang_mot(monkeypatch, overrides_env):
+    monkeypatch.setattr(tone_share, "_post", _paged_post({
+        "": (200, {"ok": True, "items": [_change("AAAAAAAAAAA")], "next_cursor": "CUR-1", "has_more": True}),
+        "CUR-1": (0, {}),
+    }, []))
+
+    stats = tone_share.pull_overrides()
+
+    assert stats["ok"] is False
+    assert stats["applied"] == 1
+    assert tone_share._load_cursor() == "CUR-1", "trang 1 đã áp xong thì giữ; trang 2 lấy lại lần sau"
+
+
+def test_pull_overrides_server_tu_choi_khong_doi_cursor(monkeypatch, overrides_env):
+    tone_share._save_cursor("CUR-0")
+    monkeypatch.setattr(tone_share, "_post", _paged_post({
+        "CUR-0": (403, {"ok": False, "message": "hết hạn"}),
+    }, []))
+
+    stats = tone_share.pull_overrides()
+    assert stats["ok"] is False
+    assert tone_share._load_cursor() == "CUR-0"
+
+
+def test_pull_overrides_dung_o_tran_trang(monkeypatch, overrides_env):
+    monkeypatch.setattr(tone_share, "CHANGES_MAX_PAGES", 3)
+    calls = []
+    monkeypatch.setattr(tone_share, "_post", lambda path, payload: (
+        calls.append(payload["cursor"]) or (200, {
+            "ok": True, "items": [_change()], "next_cursor": f"CUR-{len(calls)}", "has_more": True,
+        })))
+
+    stats = tone_share.pull_overrides()
+    assert stats["pages"] == 3 and len(calls) == 3
+    assert tone_share._load_cursor() == "CUR-3"
+
+
+def test_pull_overrides_bo_qua_item_hong(monkeypatch, overrides_env):
+    hong = {"song_key": "ngan", "timeline": []}
+    monkeypatch.setattr(tone_share, "_post", _paged_post({
+        "": (200, {"ok": True, "items": [hong, _change()], "next_cursor": "CUR-1", "has_more": False}),
+    }, []))
+
+    stats = tone_share.pull_overrides()
+    assert stats["applied"] == 1 and stats["fetched"] == 2
+    assert len(overrides_env["saved"]) == 1
+
+
+def test_pull_overrides_tat_trong_thiet_lap_thi_khong_goi_mang(monkeypatch, overrides_env):
+    monkeypatch.setattr(
+        "core.config.ConfigManager.load_settings",
+        staticmethod(lambda: {"tone_share": {"enabled": False}}),
+    )
+    called = []
+    monkeypatch.setattr(tone_share, "_post", _fake_post(200, {}, called))
+
+    stats = tone_share.pull_overrides()
+    assert stats == {"ok": False, "skipped": "disabled", "fetched": 0, "applied": 0,
+                     "skipped_human": 0, "pages": 0}
+    assert not called
+
+
+def test_pull_overrides_xoa_dem_phien_cua_bai_vua_nhan(monkeypatch, overrides_env):
+    tone_share._remember_miss(ADMIN_KEY)
+    monkeypatch.setattr(tone_share, "_post", _paged_post({
+        "": (200, {"ok": True, "items": [_change()], "next_cursor": "CUR-1", "has_more": False}),
+    }, []))
+
+    tone_share.pull_overrides()
+    assert tone_share._recently_missed(ADMIN_KEY) is False
+    with tone_share._cache_lock:
+        assert tone_share._hit_cache[ADMIN_KEY]["origin"] == "admin"

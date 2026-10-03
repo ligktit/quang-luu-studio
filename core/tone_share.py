@@ -31,6 +31,11 @@ _TIMEOUT = 10
 LOOKUP_BATCH = 200
 CONTRIBUTE_BATCH = 50
 
+# Feed bản admin đặt (/api/v1/library/changes): tối đa bấy nhiêu trang một lượt
+# để vòng bảo trì không kẹt vô hạn nếu server lỗi trả mãi has_more.
+CHANGES_MAX_PAGES = 20
+_overrides_lock = threading.Lock()
+
 # Bài server không có: nhớ trong RAM để mỗi lần mở lại không tốn thêm một vòng
 # mạng vô ích. Chỉ sống theo tiến trình — khởi động lại app là hỏi lại, chấp
 # nhận được vì thư viện chung dày lên theo ngày chứ không theo phút.
@@ -337,6 +342,113 @@ def report_wrong(url, payload_hash="") -> bool:
     _enqueue({"kind": "report", "song_key": key, "payload_hash": payload_hash or ""})
     flush_queue()
     return True
+
+
+# ── Bản admin đặt trên server → tone_cache local ──
+def _overrides_state_path():
+    from core.config import _get_data_dir
+    import os
+    return os.path.join(_get_data_dir(), "tone_overrides_state.json")
+
+
+def _load_cursor() -> str:
+    try:
+        with open(_overrides_state_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return str(data.get("cursor", "")) if isinstance(data, dict) else ""
+    except Exception:
+        return ""
+
+
+def _save_cursor(cursor: str) -> None:
+    try:
+        import os
+        path = _overrides_state_path()
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"cursor": str(cursor or "")}, f)
+        os.replace(tmp, path)
+    except Exception as e:
+        log.debug("Không lưu được cursor thư viện tone: %s", e)
+
+
+def _update_saved_song_tone(url, primary_key) -> None:
+    """Cột tone ở Danh sách bài hát (saved_songs.json) — chỉ để hiển thị khớp."""
+    try:
+        from core.songs import SongManager
+        song = SongManager.find_song_by_url(url)
+        if song and song.get("id") is not None and primary_key:
+            SongManager.update_song(song["id"], tone=primary_key)
+    except Exception as e:
+        log.debug("Không cập nhật tone bài đã lưu: %s", e)
+
+
+def _apply_override(item) -> str:
+    """Một bản admin đặt → tone_cache. Trả 'applied' | 'skipped_human' | 'ignored'.
+
+    Không đè chuỗi tone khách đã sửa tay (quyết định sản phẩm 2026-10-03):
+    admin đè máy dò và cộng đồng, còn tone khách tự chỉnh là của khách.
+    """
+    if not isinstance(item, dict):
+        return "ignored"
+    key = str(item.get("song_key") or "")
+    if len(key) != 11 or not item.get("timeline"):
+        return "ignored"
+    url = f"https://www.youtube.com/watch?v={key}"
+
+    from core.tone_cache import ManualToneTimeline
+    if ManualToneTimeline.get_timeline_source(url) == "human":
+        return "skipped_human"
+
+    entry = _to_cache_entry(item)
+    entry["origin"] = "admin"
+    _save_local(url, entry)
+    _remember_hit(key, entry)
+    _update_saved_song_tone(url, entry.get("primary_key", ""))
+    return "applied"
+
+
+def pull_overrides() -> dict:
+    """Kéo bản admin đặt từ cursor đã lưu, ghi vào tone_cache. Gọi từ luồng NỀN.
+
+    Áp hết một trang rồi mới lưu next_cursor: lưu trước mà app tắt giữa chừng
+    là mất trang đó. Mất mạng/server từ chối → dừng, giữ cursor của trang cuối
+    đã áp xong; áp lại một trang là idempotent.
+    """
+    stats = {"ok": False, "fetched": 0, "applied": 0, "skipped_human": 0, "pages": 0}
+    if not enabled():
+        return dict(stats, skipped="disabled")
+    auth = _auth_fields()
+    if auth is None:
+        return dict(stats, skipped="not_activated")
+    if not _overrides_lock.acquire(blocking=False):
+        return dict(stats, skipped="busy")
+    try:
+        cursor = _load_cursor()
+        while stats["pages"] < CHANGES_MAX_PAGES:
+            status, body = _post("/api/v1/library/changes", dict(auth, cursor=cursor))
+            if status != 200 or not body.get("ok"):
+                if status != 0:
+                    log.info("Feed thư viện tone thất bại (%s): %s", status, body.get("message", ""))
+                return stats
+            stats["pages"] += 1
+            for item in body.get("items") or []:
+                stats["fetched"] += 1
+                outcome = _apply_override(item)
+                if outcome == "applied":
+                    stats["applied"] += 1
+                elif outcome == "skipped_human":
+                    stats["skipped_human"] += 1
+            next_cursor = str(body.get("next_cursor") or cursor)
+            if next_cursor != cursor:
+                _save_cursor(next_cursor)
+                cursor = next_cursor
+            if not body.get("has_more"):
+                break
+        stats["ok"] = True
+        return stats
+    finally:
+        _overrides_lock.release()
 
 
 # ── Hàng đợi (chịu được mất mạng) ──
