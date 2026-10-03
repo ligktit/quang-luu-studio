@@ -56,3 +56,12 @@ def test_cursor_hong_tra_none():
     assert tonelib.decode_cursor("không phải base64!!") is None
     assert tonelib.decode_cursor(tonelib._b64(b'{"ts": 5, "id": "x"}')) is None
     assert tonelib.decode_cursor(tonelib._b64(b'[1,2]')) is None
+
+
+def test_parse_time_khong_nhan_inf_nan_hay_so_mu():
+    """'inf' làm normalize_timeline ném OverflowError (500 trên form); 'nan' đi
+    vào timeline ghim và phát tới mọi máy. Chỉ nhận chữ số (và một dấu chấm)."""
+    for text in ("inf", "nan", "1e3", "-inf", "1:nan", "0x10"):
+        assert tonelib.parse_time(text) is None, text
+    assert tonelib.parse_time("1.5") == 1.5
+    assert tonelib.parse_time("2:30.5") == 150.5

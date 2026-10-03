@@ -153,12 +153,12 @@ def parse_time(text) -> float | None:
     parts = str(text or "").strip().split(":")
     if not parts or len(parts) > 3:
         return None
-    try:
-        nums = [float(p) for p in parts]
-    except ValueError:
+    # Chỉ chữ số và tối đa một dấu chấm: float() còn nhận "inf"/"nan"/"1e3" —
+    # "inf" làm normalize_timeline ném OverflowError, "nan" đi vào timeline ghim
+    # rồi phát tới mọi máy khách.
+    if not all(re.fullmatch(r"\d+(\.\d+)?", p) for p in parts):
         return None
-    if any(n < 0 for n in nums):
-        return None
+    nums = [float(p) for p in parts]
     total = 0.0
     for n in nums:
         total = total * 60 + n

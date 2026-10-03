@@ -399,6 +399,21 @@ class TestYouTubeWatcher:
         assert engine._youtube_watcher_active is False
         assert engine._youtube_watcher_thread is None
 
+    def test_stop_wait_false_roi_start_lai_thi_luong_cu_tu_thoat(self, engine):
+        """Bật player nhúng rồi tắt ngay: stop(wait=False) + start lại. Luồng cũ
+        không được sống tiếp chỉ vì cờ chung vừa bật lại — hai watcher cùng
+        bắn URL/dò tone."""
+        engine.start_youtube_watcher(poll_interval=0.2)
+        old = engine._youtube_watcher_thread
+        engine.stop_youtube_watcher(wait=False)
+        engine.start_youtube_watcher(poll_interval=0.2)
+        new = engine._youtube_watcher_thread
+        assert new is not old and new.is_alive()
+
+        old.join(timeout=2.0)
+        assert not old.is_alive(), "luồng watcher cũ vẫn chạy song song với luồng mới"
+        engine.stop_youtube_watcher()
+
     def test_normalize_url_idempotent(self, engine):
         """E-24: _normalize_url called twice on same URL yields same result"""
         from core.engine._youtube import _normalize_url

@@ -145,3 +145,28 @@ def test_feed_can_may_da_kich_hoat(client):
     })
     assert res.status_code in (401, 403)
     assert res.json()["ok"] is False
+
+
+def test_xoa_ban_ghim_duy_nhat_roi_ghim_ban_khac(admin_client):
+    """Xoá bản ghim duy nhất → bài không còn bản thắng, feed sau cursor cũ rỗng.
+    Ghim bản khác → bản đó được bơm last_seen và xuất hiện sau cursor cũ."""
+    fp = "may-feed-08"
+    token = _token(admin_client, fp)
+    _set(admin_client, _song(1), "F#m")
+    cur = _changes(admin_client, token, fp)["next_cursor"]
+    with SessionLocal() as db:
+        admin_id = db.query(SharedTone).filter(SharedTone.song_key == _song(1)).one().id
+
+    admin_client.post(f"/admin/library/{admin_id}/delete")
+    assert _changes(admin_client, token, fp, cursor=cur)["items"] == []
+    with SessionLocal() as db:
+        assert db.query(SharedTone).filter(SharedTone.song_key == _song(1)).count() == 0
+
+    _contribute(admin_client, token, fp, _song(1), "Bm")
+    assert _changes(admin_client, token, fp, cursor=cur)["items"] == [], "bản máy dò thắng do phiếu không vào feed"
+    with SessionLocal() as db:
+        bm_id = db.query(SharedTone).filter(SharedTone.song_key == _song(1)).one().id
+    admin_client.post(f"/admin/library/{bm_id}/pin")
+
+    body = _changes(admin_client, token, fp, cursor=cur)
+    assert [(it["song_key"], it["primary_key"]) for it in body["items"]] == [(_song(1), "Bm")]

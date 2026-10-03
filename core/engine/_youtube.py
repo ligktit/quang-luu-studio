@@ -571,9 +571,13 @@ class _YouTubeMixin:
         if self._youtube_watcher_active:
             return
         self._youtube_watcher_active = True
+        # Số thế hệ: stop(wait=False) rồi start lại ngay thì luồng cũ đang ngủ
+        # thấy cờ chung bật lại và sống tiếp → hai watcher cùng bắn URL. Mỗi
+        # luồng chỉ chạy khi thế hệ của chính nó còn là thế hệ hiện hành.
+        self._youtube_watcher_gen = getattr(self, "_youtube_watcher_gen", 0) + 1
         self._youtube_watcher_thread = threading.Thread(
             target=self._youtube_watcher_loop,
-            args=(poll_interval,),
+            args=(poll_interval, self._youtube_watcher_gen),
             daemon=True,
         )
         self._youtube_watcher_thread.start()
@@ -591,12 +595,18 @@ class _YouTubeMixin:
             self._pending_url_queue.clear()
         print("[YT WATCHER] Đã dừng theo dõi trình duyệt.")
 
-    def _youtube_watcher_loop(self, poll_interval):
+    def _youtube_watcher_loop(self, poll_interval, gen=None):
         engine_ref = weakref.ref(self)
         mem        = MemoryProfiler("YT_WATCHER")
         poll_count = 0
+        if gen is None:
+            gen = getattr(self, "_youtube_watcher_gen", 0)
 
-        while self._youtube_watcher_active:
+        def _alive():
+            return (self._youtube_watcher_active
+                    and gen == getattr(self, "_youtube_watcher_gen", gen))
+
+        while _alive():
             try:
                 if self._tone_session.is_active:
                     current_interval = 5.0
@@ -678,7 +688,7 @@ class _YouTubeMixin:
             pass
 
             for _ in range(int(current_interval * 10)):
-                if not self._youtube_watcher_active:
+                if not _alive():
                     mem.summary()
                     return
                 time.sleep(0.1)
