@@ -15,16 +15,25 @@ Nguyên tắc:
   - Last-write-wins theo updated_at (mtime file local). Server giữ bản mới hơn.
   - Pull AN TOÀN: backup file local (.bak) trước khi ghi đè; với "songs" cố gắng
     MERGE theo song_match_key (giữ bài chỉ có ở local), các kind khác last-write-wins.
+  - Push CHỈ khi nội dung đổi: nhớ sha256 của lần đẩy thành công gần nhất
+    (sync_state.json trong DATA_DIR); nội dung y hệt thì không đi mạng.
+  - sync_all chạy 4 kind SONG SONG và KHÔNG chạy chồng: lượt nền 6 giờ và nút
+    "Đồng bộ ngay" trong Thiết lập dùng chung một khoá, lượt sau trả
+    {skipped:'busy'}. Trước đây 8 request tuần tự × timeout 10s = tới 80 giây
+    chờ khi mạng chập chờn, lại còn hai lượt giẫm nhau.
 
 KHÔNG sửa client.py — chỉ tái dùng các helper đọc cache của nó.
 """
+import hashlib
 import json
 import logging
 import os
 import shutil
+import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 from core.config import (
     MANUAL_TIMELINES_FILE,
@@ -171,6 +180,50 @@ def _atomic_write(path: str, text: str) -> None:
     os.replace(tmp, path)
 
 
+# ── Trạng thái đồng bộ (hash lần đẩy gần nhất) ──
+_state_lock = threading.Lock()
+# Khoá chống chạy chồng giữa lượt nền và lượt bấm tay.
+_SYNC_LOCK = threading.Lock()
+
+
+def _state_path() -> str:
+    from core.config import DATA_DIR
+    return os.path.join(DATA_DIR, "sync_state.json")
+
+
+def _load_state() -> dict:
+    try:
+        with open(_state_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _remember_pushed(kind: str, text: str) -> None:
+    """Ghi nhớ nội dung đã lên server (hoặc vừa lấy về) để lần sau khỏi đẩy lại."""
+    with _state_lock:
+        state = _load_state()
+        state.setdefault("pushed", {})[kind] = _digest(text)
+        try:
+            os.makedirs(os.path.dirname(_state_path()), exist_ok=True)
+            tmp = _state_path() + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(state, f)
+            os.replace(tmp, _state_path())
+        except Exception as e:
+            log.debug("Không lưu được sync_state: %s", e)
+
+
+def _already_pushed(kind: str, text: str) -> bool:
+    with _state_lock:
+        return (_load_state().get("pushed") or {}).get(kind) == _digest(text)
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
 def _merge_songs(local_text: str, remote_text: str) -> str:
     """Merge 2 list bài theo song_match_key(url). Giữ bài có ở cả hai; bản
     remote ưu tiên khi trùng key (last-write-wins ở cấp blob). Bài chỉ có local
@@ -224,6 +277,8 @@ def push(kind: str) -> dict:
     text, mtime = _read_local(path)
     if not text:
         return {"ok": True, "kind": kind, "noop": "no_local_data"}
+    if _already_pushed(kind, text):
+        return {"ok": True, "kind": kind, "noop": "unchanged"}
 
     status, body = _request("PUT", f"/api/v1/sync/{kind}", {
         **auth,
@@ -233,6 +288,7 @@ def push(kind: str) -> dict:
     if status == 0:
         return {"ok": False, "error": "offline", "kind": kind}
     if status == 200 and body.get("ok"):
+        _remember_pushed(kind, text)
         return {
             "ok": True, "kind": kind,
             "version": body.get("version"),
@@ -280,21 +336,69 @@ def pull(kind: str) -> dict:
         log.warning("Ghi %s thất bại: %s", path, e)
         return {"ok": False, "error": "write_failed", "kind": kind}
 
+    # Bản vừa lấy về (không merge) chính là bản server đang giữ — nhớ lại để
+    # lượt sau không đẩy ngược y nguyên nó lên.
+    if not merged:
+        _remember_pushed(kind, out_text)
+
     return {
         "ok": True, "kind": kind, "merged": merged,
         "version": body.get("version"),
     }
 
 
+def _sync_kind(kind: str) -> dict:
+    try:
+        return {"push": push(kind), "pull": pull(kind)}
+    except Exception as e:  # pragma: no cover
+        log.warning("sync_all lỗi kind=%s: %s", kind, e)
+        return {"error": str(e)}
+
+
 def sync_all() -> dict:
-    """Push rồi pull mọi kind. Fail-soft: lỗi 1 kind không chặn kind khác."""
+    """Push rồi pull mọi kind, các kind chạy song song. Fail-soft: lỗi 1 kind
+    không chặn kind khác. Đang có lượt khác chạy → {skipped:'busy'}."""
     if not _is_premium():
         return {"skipped": "not_premium"}
-    results: dict = {}
-    for kind in ALL_KINDS:
-        try:
-            results[kind] = {"push": push(kind), "pull": pull(kind)}
-        except Exception as e:  # pragma: no cover
-            log.warning("sync_all lỗi kind=%s: %s", kind, e)
-            results[kind] = {"error": str(e)}
-    return {"ok": True, "results": results}
+    if not _SYNC_LOCK.acquire(blocking=False):
+        return {"skipped": "busy"}
+    try:
+        kinds = list(ALL_KINDS)
+        with ThreadPoolExecutor(max_workers=len(kinds), thread_name_prefix="cloud-sync") as pool:
+            outcomes = list(pool.map(_sync_kind, kinds))
+        return {"ok": True, "results": dict(zip(kinds, outcomes))}
+    finally:
+        _SYNC_LOCK.release()
+
+
+def summarize(result: dict) -> str:
+    """Một câu cho người dùng đọc — không bao giờ hiện dict thô lên UI."""
+    if not isinstance(result, dict):
+        return "Đồng bộ thất bại."
+    skipped = result.get("skipped")
+    if skipped == "not_premium":
+        return "Chỉ dành cho gói Premium."
+    if skipped == "busy":
+        return "Đang có lượt đồng bộ khác chạy — chờ xong rồi thử lại."
+    results = result.get("results") or {}
+    if not results:
+        return "Đồng bộ thất bại."
+
+    failed = {}
+    for kind, outcome in results.items():
+        if "error" in outcome:
+            failed[kind] = str(outcome["error"])
+            continue
+        for step in ("push", "pull"):
+            part = outcome.get(step) or {}
+            if part.get("ok") is False:
+                failed[kind] = str(part.get("error") or "lỗi")
+                break
+
+    total = len(results)
+    if not failed:
+        return f"Đã đồng bộ xong ({total}/{total} mục)."
+    if len(failed) == total and all(err == "offline" for err in failed.values()):
+        return "Không kết nối được máy chủ — sẽ tự thử lại sau."
+    detail = ", ".join(f"{kind}: {err}" for kind, err in failed.items())
+    return f"Đồng bộ {total - len(failed)}/{total} mục, {len(failed)} lỗi ({detail})."

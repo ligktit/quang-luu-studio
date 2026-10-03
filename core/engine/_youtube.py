@@ -579,10 +579,13 @@ class _YouTubeMixin:
         self._youtube_watcher_thread.start()
         print("[YT WATCHER] Đã bắt đầu theo dõi trình duyệt...")
 
-    def stop_youtube_watcher(self):
+    def stop_youtube_watcher(self, wait=True):
+        """Dừng watcher. wait=False khi gọi từ main thread (lưu Thiết lập):
+        vòng lặp tự thoát ở nhịp poll kế, không cần chờ join 3s làm UI đứng."""
         self._youtube_watcher_active = False
         if self._youtube_watcher_thread:
-            self._youtube_watcher_thread.join(timeout=3.0)
+            if wait:
+                self._youtube_watcher_thread.join(timeout=3.0)
             self._youtube_watcher_thread = None
         with self._pending_url_lock:
             self._pending_url_queue.clear()

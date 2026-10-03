@@ -1352,8 +1352,9 @@ class MainDashboard(QMainWindow):
         if want and self._player_window is None:
             self._create_player_window()
             # Chế độ nhúng: dừng watcher trình duyệt ngoài, chỉ nối callback dò tone.
+            # wait=False: đang ở main thread (lưu Thiết lập) — join 3s là app đứng.
             try:
-                self.engine.stop_youtube_watcher()
+                self.engine.stop_youtube_watcher(wait=False)
             except Exception:
                 pass
             self._wire_auto_tone_callbacks()

@@ -379,6 +379,26 @@ class TestYouTubeWatcher:
         assert engine._youtube_watcher_active is False
         assert engine._youtube_watcher_thread is None
 
+    def test_stop_watcher_wait_false_khong_cho_thread(self, engine):
+        """Gọi từ main thread khi lưu Thiết lập: không được join 3s làm app đứng."""
+        import threading
+        import time
+
+        blocker = threading.Event()
+        engine._youtube_watcher_active = True
+        engine._youtube_watcher_thread = threading.Thread(
+            target=lambda: blocker.wait(2.0), daemon=True)
+        engine._youtube_watcher_thread.start()
+
+        started = time.perf_counter()
+        engine.stop_youtube_watcher(wait=False)
+        elapsed = time.perf_counter() - started
+        blocker.set()
+
+        assert elapsed < 0.5, f"stop_youtube_watcher(wait=False) vẫn chờ thread ({elapsed:.2f}s)"
+        assert engine._youtube_watcher_active is False
+        assert engine._youtube_watcher_thread is None
+
     def test_normalize_url_idempotent(self, engine):
         """E-24: _normalize_url called twice on same URL yields same result"""
         from core.engine._youtube import _normalize_url

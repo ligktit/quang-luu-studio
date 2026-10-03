@@ -539,24 +539,35 @@ class SettingsDialog(QDialog):
         self._cloud_sync_btn.setEnabled(False)
         self._cloud_sync_btn.setText("Đang đồng bộ...")
 
+        # QThread + Signal: kết quả về đúng main thread. Bản cũ dùng
+        # QTimer.singleShot từ threading.Thread — thread đó không có event loop
+        # nên timer không bao giờ nổ, nút kẹt "Đang đồng bộ..." vĩnh viễn.
+        from PySide6.QtCore import QThread, Signal
+
+        class _CloudSyncWorker(QThread):
+            done = Signal(str)
+
+            def run(self):
+                try:
+                    from core.licensing import sync as _sync
+                    self.done.emit(_sync.summarize(_sync.sync_all()))
+                except Exception as e:
+                    self.done.emit(f"Lỗi: {e}")
+
         def _done(msg):
             self._cloud_sync_btn.setEnabled(True)
             self._cloud_sync_btn.setText("Đồng bộ ngay")
             self._cloud_sync_btn.setToolTip(msg)
-
-        from PySide6.QtCore import QTimer
-
-        def _work():
             try:
-                from core.licensing import sync as _sync
-                res = _sync.sync_all()
-                summary = str(res.get("results", res))
-            except Exception as e:
-                summary = f"Lỗi: {e}"
-            QTimer.singleShot(0, lambda: _done(summary))
+                self._dashboard._show_message(msg, is_error=not msg.startswith("Đã đồng bộ"))
+            except Exception:
+                pass
+            self._cloud_sync_worker = None
 
-        import threading
-        threading.Thread(target=_work, daemon=True).start()
+        worker = _CloudSyncWorker(self)
+        self._cloud_sync_worker = worker  # giữ tham chiếu: QThread bị GC giữa chừng là crash
+        worker.done.connect(_done)
+        worker.start()
 
     def _build_audio_tab(self, settings):
         tab = QWidget()
@@ -1606,10 +1617,19 @@ class SettingsDialog(QDialog):
         try:
             tm = getattr(d, "_a11y_theme", None)
             if tm is not None:
-                tm.set_high_contrast(self._a11y_cb_high_contrast.isChecked())
-                tm.set_focus_ring_thick(self._a11y_cb_focus_ring.isChecked())
-                tm.set_font_scale(float(self._a11y_slider_font.value()) / 100.0)
-                tm.apply()
+                want = (
+                    bool(self._a11y_cb_high_contrast.isChecked()),
+                    bool(self._a11y_cb_focus_ring.isChecked()),
+                    round(float(self._a11y_slider_font.value()) / 100.0, 2),
+                )
+                # apply() đè QSS cho CẢ ứng dụng → Qt polish lại mọi widget, mất
+                # vài giây trên main thread. Chỉ làm khi thật sự có gì đổi; đây
+                # từng là lý do "Lưu thiết lập" làm app đứng ở mọi lần bấm.
+                if tuple(tm.visual_settings()) != want:
+                    tm.set_high_contrast(want[0])
+                    tm.set_focus_ring_thick(want[1])
+                    tm.set_font_scale(want[2])
+                    tm.apply()
         except Exception as e:
             print(f"[SETTINGS] apply theme lỗi: {e}")
 
@@ -1777,8 +1797,10 @@ class SettingsDialog(QDialog):
         except Exception as e:
             print(f"[SETTINGS] apply auto noise lỗi: {e}")
 
-        self._dashboard._show_message("Đã lưu thiết lập")
+        # Đóng TRƯỚC rồi mới báo: toast bám vào cửa sổ modal đang hoạt động, mà
+        # dialog này sắp biến mất — báo trước là khách không thấy gì.
         self.close()
+        self._dashboard._show_message("Đã lưu thiết lập")
 
     def _action_export_cookies(self):
         import threading

@@ -111,6 +111,12 @@ class ThemeManager:
 
     # ── Setters ──────────────────────────────────────────────
 
+    def visual_settings(self):
+        """(high_contrast, focus_ring_thick, font_scale) đang áp dụng — để nơi
+        gọi so trước khi apply(): đè QSS cho cả app tốn vài giây, không làm
+        khi chẳng có gì đổi."""
+        return (bool(self._high_contrast), bool(self._focus_ring_thick), float(self._font_scale))
+
     def set_high_contrast(self, value: bool):
         self._high_contrast = bool(value)
 
