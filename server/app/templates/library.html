@@ -14,6 +14,24 @@
   <a href="/admin/library/errors" style="margin-left:12px">Máy dò vs người sửa</a>
 </form>
 
+{% if msg %}<div class="card" style="border-left:4px solid var(--accent, #3b82f6)">{{ msg }}</div>{% endif %}
+
+<div class="card">
+  <b>Đặt tone cho bài (theo mã video)</b>
+  <div style="color:var(--muted);font-size:13px;margin:6px 0 10px">
+    Dùng khi máy dò sai cả mạng lưới và chưa ai sửa tay. Bản này tự <b>ghim</b> và
+    được phát tới mọi máy khách ở lần đồng bộ kế (không đè chuỗi tone khách đã sửa tay).
+    Mốc thời gian: mỗi dòng <code>mm:ss Tone</code>, ví dụ <code>1:35 Bm</code>; bỏ trống = một tone cả bài.
+  </div>
+  <form method="post" action="/admin/library/set" class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-start">
+    <input type="text" name="song_key" placeholder="Mã video (11 ký tự)" value="{{ q if q|length == 11 else '' }}" required style="width:170px">
+    <input type="text" name="title" placeholder="Tên bài (tuỳ chọn)" style="min-width:220px">
+    <input type="text" name="primary_key" placeholder="Tone chính, vd F#m" required style="width:140px">
+    <textarea name="timeline" placeholder="0:00 F#m&#10;1:35 Bm" rows="2" style="min-width:200px"></textarea>
+    <button>Đặt tone</button>
+  </form>
+</div>
+
 {% for song in groups %}
 <div class="card">
   <div style="margin-bottom:10px">
@@ -29,7 +47,7 @@
         {{ v.primary_key or '—' }}
         {% if v.id == song.best_id %}<span class="badge active">thắng</span>{% endif %}
       </td>
-      <td>{{ 'người sửa' if v.source == 'human' else 'máy dò' }}</td>
+      <td>{{ {'human': 'người sửa', 'admin': 'admin đặt'}.get(v.source, 'máy dò') }}</td>
       <td>{{ v.votes }}</td>
       <td>{{ v.reports }}</td>
       <td>{{ song.scores[v.id] }}</td>
@@ -54,6 +72,13 @@
     </tr>
     {% endfor %}
   </table>
+  <form method="post" action="/admin/library/set" class="row" style="margin-top:8px;gap:8px">
+    <input type="hidden" name="song_key" value="{{ song.song_key }}">
+    <input type="hidden" name="title" value="{{ song.title }}">
+    <input type="text" name="primary_key" placeholder="Đặt tone, vd F#m" required style="width:140px">
+    <input type="text" name="timeline" placeholder="mốc (tuỳ chọn): 1:35 Bm" style="min-width:200px">
+    <button class="ghost">Đặt tone cho bài này</button>
+  </form>
 </div>
 {% endfor %}
 {% if not groups %}<p style="color:var(--muted)">Thư viện chung chưa có dữ liệu nào.</p>{% endif %}

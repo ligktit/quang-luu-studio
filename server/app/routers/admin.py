@@ -2,6 +2,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -580,10 +581,28 @@ def _count_segments(timeline_json: str) -> int:
         return 0
 
 
+def _touch_winner(db: Session, song_key: str) -> None:
+    """Đặt last_seen = now cho bản THẮNG hiện tại của bài.
+
+    Feed /api/v1/library/changes phân trang theo (last_seen, id) của bản ghim.
+    Mọi hành động admin làm bản thắng đổi (đặt, ghim, ẩn, xoá) đều phải đi
+    qua đây — trong cùng giao dịch — để máy khách thấy được thay đổi.
+    """
+    variants = db.scalars(select(SharedTone).where(SharedTone.song_key == song_key)).all()
+    best = tonelib.best_variant(variants)
+    if best is not None:
+        best.last_seen = datetime.now(timezone.utc)
+
+
+def _library_msg(song_key: str, text: str) -> RedirectResponse:
+    return _redirect(f"/admin/library?q={quote(song_key)}&msg={quote(text)}")
+
+
 @router.get("/library", response_class=HTMLResponse)
 def library_page(
     request: Request,
     q: str = "",
+    msg: str = "",
     admin: str = Depends(current_admin),
     db: Session = Depends(get_db),
 ):
@@ -613,7 +632,7 @@ def library_page(
         groups.append(song)
 
     return templates.TemplateResponse(
-        request, "library.html", {"admin": admin, "groups": groups, "q": term}
+        request, "library.html", {"admin": admin, "groups": groups, "q": term, "msg": msg}
     )
 
 
@@ -774,6 +793,71 @@ def library_errors_json(admin: str = Depends(current_admin), db: Session = Depen
     })
 
 
+@router.post("/library/set")
+def library_set(
+    song_key: str = Form(""),
+    title: str = Form(""),
+    primary_key: str = Form(""),
+    timeline: str = Form(""),
+    admin: str = Depends(current_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin đặt tone cho một bài — không cần máy khách nào đóng góp trước.
+
+    Tạo (hoặc nâng) biến thể source="admin", ghim nó, bỏ ghim anh em, bơm
+    last_seen để feed /changes phát tới máy khách. Một trường sai là không
+    ghi gì: admin sửa lại chứ không để nửa vời vào thư viện chung.
+    """
+    song_key = (song_key or "").strip()
+    if not tonelib.valid_song_key(song_key):
+        return _library_msg(song_key[:24], "Mã video phải là 11 ký tự YouTube id.")
+
+    parsed_primary = tonelib.parse_key(primary_key)
+    if not parsed_primary:
+        return _library_msg(song_key, f"Không đọc được tone chính “{primary_key.strip()}”.")
+    entries = tonelib.parse_timeline_text(timeline, primary_key)
+    if not entries:
+        return _library_msg(song_key, "Mốc thời gian sai: mỗi dòng dạng “mm:ss Tone”, ví dụ “1:35 Bm”.")
+
+    primary_display = tonelib.key_display(*parsed_primary)
+    normalized = tonelib.normalize_timeline(entries)
+    digest = tonelib.payload_hash(song_key, normalized)
+    now = datetime.now(timezone.utc)
+
+    tone = db.scalar(
+        select(SharedTone).where(
+            SharedTone.song_key == song_key,
+            SharedTone.payload_hash == digest,
+        )
+    )
+    if tone is None:
+        tone = SharedTone(
+            song_key=song_key,
+            payload_hash=digest,
+            title=(title or "").strip()[:300],
+            primary_key=primary_display,
+            timeline=json.dumps(entries, ensure_ascii=False),
+            source="admin",
+            votes=0,
+            reports=0,
+        )
+        db.add(tone)
+        db.flush()
+    else:
+        tone.source = "admin"
+        tone.primary_key = primary_display
+        if title.strip():
+            tone.title = title.strip()[:300]
+
+    for sibling in db.scalars(select(SharedTone).where(SharedTone.song_key == song_key)).all():
+        sibling.pinned = False
+    tone.pinned = True
+    tone.status = "ok"
+    tone.last_seen = now
+    db.commit()
+    return _library_msg(song_key, f"Đã đặt tone {primary_display} cho {song_key}.")
+
+
 @router.post("/library/{tone_id}/pin")
 def library_pin(tone_id: int, admin: str = Depends(current_admin), db: Session = Depends(get_db)):
     tone = db.get(SharedTone, tone_id)
@@ -787,6 +871,7 @@ def library_pin(tone_id: int, admin: str = Depends(current_admin), db: Session =
             tone.pinned = True
         else:
             tone.pinned = False
+        _touch_winner(db, tone.song_key)
         db.commit()
     return _redirect("/admin/library")
 
@@ -796,6 +881,7 @@ def library_hide(tone_id: int, admin: str = Depends(current_admin), db: Session 
     tone = db.get(SharedTone, tone_id)
     if tone:
         tone.status = "ok" if tone.status == "hidden" else "hidden"
+        _touch_winner(db, tone.song_key)
         db.commit()
     return _redirect("/admin/library")
 
@@ -804,6 +890,9 @@ def library_hide(tone_id: int, admin: str = Depends(current_admin), db: Session 
 def library_delete(tone_id: int, admin: str = Depends(current_admin), db: Session = Depends(get_db)):
     tone = db.get(SharedTone, tone_id)
     if tone:
+        song_key = tone.song_key
         db.delete(tone)
+        db.flush()
+        _touch_winner(db, song_key)
         db.commit()
     return _redirect("/admin/library")
