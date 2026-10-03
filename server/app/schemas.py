@@ -234,6 +234,27 @@ class LibraryLookupResponse(BaseModel):
     message: str = ""
 
 
+class ToneChange(ToneResult):
+    """Một bản ghim trong feed /library/changes."""
+    pinned: bool = True
+
+
+class LibraryChangesRequest(BaseModel):
+    token:              str | None = None
+    code:               str | None = None
+    device_fingerprint: str = Field(min_length=8, max_length=128)
+    # Cursor opaque do server phát (tonelib.encode_cursor). Rỗng = lấy từ đầu.
+    cursor:             str = Field(default="", max_length=400)
+
+
+class LibraryChangesResponse(BaseModel):
+    ok:          bool = True
+    items:       list[ToneChange] = []
+    next_cursor: str = ""
+    has_more:    bool = False
+    message:     str = ""
+
+
 class LibraryContributeRequest(BaseModel):
     token:              str | None = None
     code:               str | None = None

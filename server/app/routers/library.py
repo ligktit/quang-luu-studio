@@ -13,25 +13,32 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
 from app.models import SharedTone, SharedToneVote, ToneDetection
 from app.schemas import (
+    LibraryChangesRequest,
+    LibraryChangesResponse,
     LibraryContributeRequest,
     LibraryContributeResponse,
     LibraryLookupRequest,
     LibraryLookupResponse,
     LibraryReportRequest,
     LibraryReportResponse,
+    ToneChange,
     ToneResult,
 )
 from app.security import limiter
 from app.services import licensing, tonelib
 
 router = APIRouter(prefix="/api/v1/library", tags=["library"])
+
+# Trang feed /changes. Server hỏi +1 để biết chắc còn hay hết, không đoán theo
+# "== page size". Test giảm xuống 2 bằng monkeypatch để ép ranh giới trang.
+CHANGES_PAGE_SIZE = 500
 
 
 def _error(model, message: str, http_status: int) -> JSONResponse:
@@ -68,6 +75,11 @@ def _to_result(tone: SharedTone) -> ToneResult:
     )
 
 
+def _to_change(tone: SharedTone) -> ToneChange:
+    base = _to_result(tone)
+    return ToneChange(**base.model_dump(), pinned=bool(tone.pinned))
+
+
 @router.post("/lookup", response_model=LibraryLookupResponse)
 @limiter.limit(settings.rate_limit_library)
 def lookup(request: Request, payload: LibraryLookupRequest, db: Session = Depends(get_db)):
@@ -91,6 +103,61 @@ def lookup(request: Request, payload: LibraryLookupRequest, db: Session = Depend
         if best is not None:
             results[song_key] = _to_result(best)
     return LibraryLookupResponse(ok=True, results=results)
+
+
+@router.post("/changes", response_model=LibraryChangesResponse)
+@limiter.limit(settings.rate_limit_library)
+def changes(request: Request, payload: LibraryChangesRequest, db: Session = Depends(get_db)):
+    """Bản GHIM thay đổi từ cursor trở đi — kênh để bản admin đặt tới máy khách.
+
+    Chỉ phát bản ghim (admin đặt, hoặc admin ghim bản người sửa): bản thắng do
+    phiếu là dữ liệu máy khách, không có người chịu trách nhiệm, không được đè
+    cache của máy khác.
+
+    Phân trang keyset theo (last_seen, id), KHÔNG theo mốc giờ: `since =
+    server_time` sót bản commit sau lúc truy vấn mà last_seen nhỏ hơn; `since =
+    last_seen bản cuối` cắt mất các bản cùng last_seen ở ranh giới trang.
+    Cursor hỏng → coi như rỗng: client ghi đè idempotent nên lấy lại từ đầu vô hại.
+
+    Lưu ý cho ai sửa /contribute sau này: nếu contribute bơm last_seen của bản
+    ghim, bản đó xuất hiện lại trong feed — vô hại nhưng tốn băng thông.
+    """
+    _code, message, status = _authorize(payload, db)
+    if message is not None:
+        return _error(LibraryChangesResponse, message, status)
+
+    query = select(SharedTone).where(
+        SharedTone.pinned.is_(True),
+        SharedTone.status == "ok",
+    )
+    cursor = tonelib.decode_cursor(payload.cursor)
+    if cursor is not None:
+        ts, last_id = cursor
+        query = query.where(
+            or_(
+                SharedTone.last_seen > ts,
+                and_(SharedTone.last_seen == ts, SharedTone.id > last_id),
+            )
+        )
+
+    rows = db.scalars(
+        query.order_by(SharedTone.last_seen.asc(), SharedTone.id.asc())
+        .limit(CHANGES_PAGE_SIZE + 1)
+    ).all()
+    has_more = len(rows) > CHANGES_PAGE_SIZE
+    rows = rows[:CHANGES_PAGE_SIZE]
+
+    if rows:
+        next_cursor = tonelib.encode_cursor(rows[-1].last_seen, rows[-1].id)
+    else:
+        next_cursor = payload.cursor if cursor is not None else ""
+
+    return LibraryChangesResponse(
+        ok=True,
+        items=[_to_change(t) for t in rows],
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
 
 
 def _record_vote(db: Session, tone: SharedTone, fingerprint: str, kind: str) -> bool:
