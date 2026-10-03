@@ -53,8 +53,11 @@ jobs:
           pip install psutil
           pip install pywin32
           pip install PySide6
-          # Test framework
-          pip install pytest pytest-mock pytest-cov
+          # Engine import pyautogui (core/engine/_lifecycle.py) và các module
+          # không cần phần cứng; thiếu là pytest lỗi ngay lúc collect.
+          pip install pyautogui pycaw websocket-client sounddevice static_ffmpeg
+          # Test framework (pytest-qt cho tests/ui — fixture qtbot)
+          pip install pytest pytest-mock pytest-cov pytest-qt
 
       - name: Run tests
         shell: pwsh
