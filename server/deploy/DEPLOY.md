@@ -84,6 +84,13 @@ Vào `https://license.quangluustudio.com/admin` để quản trị.
 
 ## 6. Cập nhật server
 
+> **Thực tế VPS hiện tại (2026-10-04):** `/opt/qls/server` KHÔNG phải git repo và máy
+> không có rsync. Cách đang dùng: tại máy dev
+> `git archive --format=tar.gz -o server_deploy.tgz HEAD server/app server/deploy server/tests server/Dockerfile server/docker-compose.yml server/requirements.txt`,
+> `scp` lên `/tmp`, trên VPS `cd /opt/qls && tar xzf /tmp/server_deploy.tgz && cd server && docker compose up -d --build`.
+> Sao lưu trước vào `backups/<stamp>/` (.env, pg_dump, tar app). Index/cột mới cho bảng
+> đã có phải tạo tay bằng `psql` vì không có migration.
+
 ```bash
 cd /opt/qls && git pull && cd server
 docker compose up -d --build

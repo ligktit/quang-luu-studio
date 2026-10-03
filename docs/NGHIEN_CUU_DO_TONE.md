@@ -347,6 +347,9 @@ kết bài đều chỉ đúng F#m ở bài này — đúng hướng "phân gi�
 **Đường sửa nhanh ngoài thuật toán (2026-10-03):** admin đặt tone trên
 `/admin/library`, máy khách nhận qua `tone_share.pull_overrides` (xem
 TONE_FLOWS.md). Ca thử đầu tiên: đặt `pMPvJE1wwnc` = F#m.
+**Server đã deploy 2026-10-04** (sao lưu: `/opt/qls/server/backups/20261004-022707-pre-admin-tone/`;
+đã tạo index `ix_shared_tones_feed`). Lưu ý VPS không có git/rsync: deploy bằng
+`git archive` + `tar` qua ssh, không phải `git pull` như DEPLOY.md mô tả.
 
 ## Script đo nháp
 Bộ thử tổng hợp đã chuyển vào `tools/danh_gia_do_tone.py`. Nguyên mẫu HMM
