@@ -12,7 +12,9 @@ pyaudiowpatch>=0.2.12
 sounddevice>=0.4
 # librosa 1.0 xoá librosa.beat.tempo và đổi API — pin <1.0 cho tới khi migrate xong
 librosa>=0.10,<1.0
-numpy>=1.24
+# numpy >= 2.3 làm numba 0.68 lỗi "cannot load module more than once per process"
+# trong numpy.fft (detect_timeline_advanced). 2.2.x đã kiểm chứng. Nới khi numba hỗ trợ.
+numpy>=1.24,<2.3
 scipy>=1.10
 # Điều khiển âm lượng thiết bị Windows (core/engine/_recording.py)
 pycaw>=20240210

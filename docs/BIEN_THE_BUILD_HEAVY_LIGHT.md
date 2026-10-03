@@ -1,5 +1,10 @@
 # Phân biệt bản NẶNG (Heavy) và bản NHẸ (Light) — cảnh báo
 
+> **⚠ Tạm dừng từ 2026-10-04 (v1.7.9):** chỉ phát hành MỘT bản cài, không kèm
+> QtWebEngine (tương đương bản Light cũ). Bước build Heavy đã gỡ khỏi
+> `.github/workflows/release.yml`; code màn hình nhúng và `capabilities.embedded_player_available()`
+> vẫn còn nguyên, bật lại bằng cách khôi phục bước build từ git log của workflow.
+
 > Cập nhật 26/08/2026. Liên quan: `core/capabilities.py`,
 > `core/updater/_version_check.py`, `tools/chan_doan/QLS_ChanDoan.ps1`.
 

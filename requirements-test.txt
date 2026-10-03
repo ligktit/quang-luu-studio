@@ -2,7 +2,7 @@
 # Dùng trong CI: pip install -r requirements-test.txt
 
 # Core logic
-numpy>=1.24
+numpy>=1.24,<2.3
 scipy>=1.10
 librosa>=0.10
 

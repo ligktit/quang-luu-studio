@@ -12,8 +12,7 @@ jobs:
   build:
     name: Build installer (Windows)
     runs-on: windows-latest
-    # Tải ~360MB tài nguyên, hai lượt PyInstaller, rồi hai lượt nén lzma2 solid
-    # (bản Heavy ~500MB) — 60 phút không đủ.
+    # Tải ~360MB tài nguyên, PyInstaller rồi nén lzma2 solid — 60 phút không đủ.
     timeout-minutes: 180
 
     env:
@@ -120,52 +119,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Select-String -Path QuangLuuStudio_Setup.iss -Pattern '#define MyAppVersion'
 
-      # ── 6a. Build exe bản HEAVY (có QtWebEngine) ───────────────────────────────
-      # PHẢI build cả hai biến thể. Release chỉ có mỗi bản Light thì
-      # core/updater/_version_check.py không tìm ra asset "heavy", rơi xuống
-      # nhánh dự phòng `setup_exes[0]` và LẶNG LẼ đẩy mọi khách đang dùng bản
-      # Heavy sang bản Light — mất luôn màn hình karaoke nhúng.
-      - name: Build executable (Heavy)
-        shell: pwsh
-        env:
-          QLS_WEBENGINE: "1"
-        run: |
-          if (Test-Path build) { Remove-Item build -Recurse -Force }
-          pyinstaller QuangLuuStudio.spec --noconfirm --distpath dist_heavy
-          if (-not (Test-Path "dist_heavy\QuangLuuStudio.exe")) {
-            Write-Host "ERROR: No exe found in dist_heavy\"
-            Get-ChildItem dist_heavy\
-            exit 1
-          }
-          # Kiểm chứng đây ĐÚNG là bản Heavy: thiếu QtWebEngine thì cái exe này
-          # chỉ là bản Light mang tên Heavy, khách cài vào mất màn hình nhúng mà
-          # không ai biết cho tới lúc họ báo lỗi.
-          #
-          # Spec build ONEFILE nên KHÔNG có DLL rời nào trong dist_heavy\ để mà
-          # tìm — mọi thứ nằm gọn trong QuangLuuStudio.exe. Bản kê nội dung là
-          # build\QuangLuuStudio\PKG-00.toc, và phải đọc NGAY đây: lượt Light
-          # ngay sau sẽ xoá build\.
-          $toc = "build\QuangLuuStudio\PKG-00.toc"
-          if (-not (Test-Path $toc)) {
-            Write-Host "ERROR: Khong thay $toc de kiem chung noi dung goi"
-            exit 1
-          }
-          # Bắt ĐÚNG file Qt6WebEngineCore.dll (~192MB) — đó mới là thứ quyết
-          # định màn hình nhúng chạy hay không. Đừng tìm chuỗi 'Qt6WebEngineCore'
-          # trống: TOC còn có PySide6\include\QtWebEngineCore, qml\QtWebEngine và
-          # mấy file .pyi — chúng có mặt ở CẢ bản Light nên khớp là báo động lầm.
-          if (-not (Select-String -Path $toc -SimpleMatch 'Qt6WebEngineCore.dll' -Quiet)) {
-            Write-Host "ERROR: Ban Heavy khong co Qt6WebEngineCore.dll (QLS_WEBENGINE khong toi duoc spec?)"
-            exit 1
-          }
-          $size = (Get-Item "dist_heavy\QuangLuuStudio.exe").Length
-          Write-Host "OK: Heavy build co QtWebEngine ($([math]::Round($size/1MB)) MB)"
-          "$size" | Out-File -FilePath heavy_size.txt -Encoding ascii
-
-      # ── 6b. Build exe bản LIGHT (mặc định) ─────────────────────────────────────
-      # Xoá build\ giữa hai lượt: PyInstaller dùng lại kết quả Analysis đã cache,
-      # không xoá thì bản Light kéo theo luôn QtWebEngine của lượt Heavy.
-      - name: Build executable (Light)
+      # ── 6. Build exe (MỘT bản duy nhất, không QtWebEngine) ────────────────────
+      # Từ 2026-10-04 tạm bỏ màn hình karaoke nhúng (bản Heavy) để chỉ còn một
+      # bản cài. Khách đang dùng bản Heavy sẽ nhận bản này qua nhánh dự phòng
+      # của core/updater/_version_check.py (release chỉ có một file .exe) và
+      # chuyển về mở nhạc bằng trình duyệt ngoài. Muốn khôi phục Heavy: xem
+      # git log của file này (commit trước 2026-10-04) và docs/BIEN_THE_BUILD_HEAVY_LIGHT.md.
+      - name: Build executable
         shell: pwsh
         run: |
           if (Test-Path build) { Remove-Item build -Recurse -Force }
@@ -186,28 +146,17 @@ jobs:
             Write-Host "ERROR: Khong thay $toc de kiem chung noi dung goi"
             exit 1
           }
-          # Cùng lý do với lượt Heavy: so ĐÚNG tên file .dll. Bản Light vẫn hợp lệ
-          # khi mang theo PySide6\include\QtWebEngineCore, qml\QtWebEngine và các
-          # file .pyi — chúng chỉ là khai báo/tài nguyên, không kéo nổi màn hình
-          # nhúng dậy nếu thiếu Qt6WebEngineCore.dll.
+          # So ĐÚNG tên file .dll. Gói vẫn hợp lệ khi mang theo
+          # PySide6\include\QtWebEngineCore, qml\QtWebEngine và các file .pyi —
+          # chúng chỉ là khai báo/tài nguyên, không kéo nổi màn hình nhúng dậy
+          # nếu thiếu Qt6WebEngineCore.dll.
           $hit = Select-String -Path $toc -SimpleMatch 'Qt6WebEngineCore.dll'
           if ($hit) {
-            Write-Host "ERROR: Ban Light lai co Qt6WebEngineCore.dll (build\ chua duoc xoa?)"
+            Write-Host "ERROR: Goi lai co Qt6WebEngineCore.dll - ban nay khong duoc kem QtWebEngine"
             $hit | Select-Object -First 5 | ForEach-Object { Write-Host "  $($_.Line.Trim())" }
             exit 1
           }
-          # Đối chiếu chéo hai bản. Cùng kích thước nghĩa là hai lượt build ra
-          # cùng một thứ — lúc đó tên file "Heavy"/"Light" chỉ là cái nhãn.
-          $light = (Get-Item "dist\QuangLuuStudio.exe").Length
-          $heavy = [long](Get-Content heavy_size.txt)
-          Write-Host "Heavy $([math]::Round($heavy/1MB)) MB | Light $([math]::Round($light/1MB)) MB"
-          # Ngưỡng để rộng tay: chỉ cần bắt ca "hai bản y hệt nhau". Riêng
-          # Qt6WebEngineCore.dll đã ~192MB, nên chênh lệch thật lớn hơn nhiều.
-          if (($heavy - $light) -lt 50MB) {
-            Write-Host "ERROR: Hai ban chenh nhau qua it - co ve la cung mot build"
-            exit 1
-          }
-          Write-Host "OK: Light build khong kem QtWebEngine"
+          Write-Host "OK: build khong kem QtWebEngine"
 
       # ── 7. Install Inno Setup ──────────────────────────────────────────────────
       # Tải thẳng https://jrsoftware.org/download.php/is.exe ra file KHÔNG chạy
@@ -229,25 +178,21 @@ jobs:
           }
           Write-Host "Inno Setup: $iscc"
 
-      # ── 8. Build installer (cả hai biến thể) ───────────────────────────────────
-      - name: Build installers
+      # ── 8. Build installer (một bản) ───────────────────────────────────────────
+      - name: Build installer
         shell: pwsh
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) {
             $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
           }
-          # Heavy: .iss đọc dist_heavy\ và thêm hậu tố _Heavy vào tên file.
-          & $iscc /DVariant=heavy QuangLuuStudio_Setup.iss
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # Light: mặc định, đọc dist\.
           & $iscc QuangLuuStudio_Setup.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Write-Host "Installers built:"
+          Write-Host "Installer built:"
           Get-ChildItem installer_output\
           $exes = @(Get-ChildItem installer_output\*.exe)
-          if ($exes.Count -ne 2) {
-            Write-Host "ERROR: Can dung 2 file cai (Heavy + Light), tim thay $($exes.Count)"
+          if ($exes.Count -ne 1) {
+            Write-Host "ERROR: Can dung 1 file cai, tim thay $($exes.Count)"
             exit 1
           }
 
@@ -272,10 +217,7 @@ jobs:
         shell: pwsh
         run: |
           $outFile = "installer_output\SHA256SUMS.txt"
-          # Heavy đứng TRƯỚC: client bản cũ (trước 1.6.1) chưa biết phân biệt biến
-          # thể, nó lấy file .exe đầu tiên trong danh sách.
-          $exes = @(Get-ChildItem installer_output\*.exe |
-                    Sort-Object { if ($_.Name -match 'Heavy') { 0 } else { 1 } })
+          $exes = @(Get-ChildItem installer_output\*.exe)
           $exes | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             "$hash  $($_.Name)"
@@ -342,7 +284,6 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            installer_output/Setup_QuangLuuStudio_Heavy_v*.exe
             installer_output/Setup_QuangLuuStudio_v*.exe
             installer_output/SHA256SUMS.txt
         env:
