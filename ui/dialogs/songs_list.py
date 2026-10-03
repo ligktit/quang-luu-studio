@@ -126,10 +126,7 @@ class SongsListDialog(QDialog):
                 continue
             pending.append(song)
 
-        if not pending:
-            self._dashboard._show_message("Mọi bài trong danh sách đều đã có tone.")
-            return
-
+        # pending rỗng vẫn chạy worker: bản admin đặt có thể đè tone máy dò đang có.
         self._sync_btn.setEnabled(False)
         self._sync_btn.setText("Đang lấy…")
         self._start_sync_worker(pending)
@@ -146,21 +143,23 @@ class SongsListDialog(QDialog):
             def run(self):
                 try:
                     from core import tone_share
-                    self.done.emit(tone_share.lookup_many(urls))
+                    self.done.emit(tone_share.sync_songs(urls))
                 except Exception as e:
                     print(f"[SYNC-TONE] lỗi: {e}")
-                    self.done.emit({})
+                    self.done.emit(({}, {}))
 
         worker = _SyncWorker(self)
         self._sync_worker = worker  # giữ tham chiếu: QThread bị GC giữa chừng là crash
-        worker.done.connect(lambda found: self._on_sync_done(found, pending))
+        worker.done.connect(lambda result: self._on_sync_done(result[0], pending, result[1]))
         worker.start()
 
-    def _on_sync_done(self, found, pending):
+    def _on_sync_done(self, found, pending, stats=None):
         import backend
 
         self._sync_btn.setEnabled(True)
         self._sync_btn.setText("☁ Đồng bộ tone")
+        stats = stats or {}
+        admin_applied = int(stats.get("applied") or 0)
 
         applied = 0
         for song in pending:
@@ -174,15 +173,19 @@ class SongsListDialog(QDialog):
                 backend.SongManager.update_song(song["id"], tone=primary)
                 applied += 1
 
-        if applied:
+        if applied or admin_applied:
             self._refresh_data()
             self._rebuild_list()
-            self._dashboard._show_message(
-                f"Đã lấy tone cho {applied}/{len(pending)} bài"
-            )
+            parts = []
+            if applied:
+                parts.append(f"lấy tone cho {applied}/{len(pending)} bài")
+            if admin_applied:
+                parts.append(f"nhận {admin_applied} tone do quản trị đặt")
+            self._dashboard._show_message("Đã " + ", ".join(parts))
         else:
             self._dashboard._show_message(
-                f"Chưa ai trong mạng lưới dò {len(pending)} bài này"
+                "Không có tone mới." if not pending
+                else f"Chưa ai trong mạng lưới dò {len(pending)} bài này"
             )
 
     def _build_filter_bar(self):

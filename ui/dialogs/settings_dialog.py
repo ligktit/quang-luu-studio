@@ -797,7 +797,8 @@ class SettingsDialog(QDialog):
         )
 
     def _on_tone_share_sync(self):
-        """Đẩy nốt phần còn kẹt trong hàng đợi và quên các lần tra hụt trước đó."""
+        """Đẩy nốt phần còn kẹt trong hàng đợi, quên các lần tra hụt, và kéo bản
+        admin đặt trên server. Phần đi mạng chạy nền."""
         try:
             from core import tone_share
             if not tone_share.enabled():
@@ -807,9 +808,11 @@ class SettingsDialog(QDialog):
                 return
             tone_share.clear_session_cache()
             tone_share.flush_queue()
+            import threading
+            threading.Thread(target=tone_share.pull_overrides, daemon=True).start()
             self._tone_share_status.setText(
-                "Đang gửi phần đóng góp còn tồn. Mở Danh sách bài hát rồi bấm "
-                "“☁ Đồng bộ tone” để lấy tone cho cả danh sách."
+                "Đang gửi phần đóng góp còn tồn và nhận tone quản trị đặt. Mở Danh "
+                "sách bài hát rồi bấm “☁ Đồng bộ tone” để lấy tone cho cả danh sách."
             )
         except Exception as e:
             self._tone_share_status.setText(f"Không đồng bộ được: {e}")

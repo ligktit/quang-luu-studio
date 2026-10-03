@@ -451,6 +451,14 @@ def pull_overrides() -> dict:
         _overrides_lock.release()
 
 
+def sync_songs(urls) -> tuple:
+    """Nút "☁ Đồng bộ tone": kéo bản admin đặt TRƯỚC, rồi tra cộng đồng cho các
+    bài còn thiếu. Trả (found_by_url, override_stats). Gọi từ luồng nền."""
+    stats = pull_overrides()
+    found = lookup_many(urls)
+    return found, stats
+
+
 # ── Hàng đợi (chịu được mất mạng) ──
 def _queue_path():
     from core.config import _get_data_dir

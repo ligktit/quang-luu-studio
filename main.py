@@ -362,12 +362,18 @@ def _background_maintenance(notifier=None):
         except Exception as e:
             log.debug("support poll skipped: %s", e)
 
-        # Thư viện tone cộng đồng: đẩy nốt các đóng góp còn kẹt vì mất mạng.
+        # Thư viện tone cộng đồng: đẩy nốt các đóng góp còn kẹt vì mất mạng, rồi
+        # kéo bản admin đặt trên server (đè máy dò/cộng đồng trong cache, không
+        # đè chuỗi tone khách sửa tay). Chạy ngay vòng đầu lúc khởi động.
         try:
             from core import tone_share
             tone_share.flush_queue()
+            res = tone_share.pull_overrides()
+            if res.get("applied"):
+                log.info("Nhận %d tone admin đặt (bỏ qua %d bài khách sửa tay)",
+                         res["applied"], res.get("skipped_human", 0))
         except Exception as e:
-            log.debug("tone share flush skipped: %s", e)
+            log.debug("tone share sync skipped: %s", e)
 
         # Cloud Sync nền (Premium). Fail-soft: lỗi mạng/không cấu hình → bỏ qua.
         try:

@@ -312,3 +312,21 @@ class TestFullScanUsesResolveChain:
         )
         assert done.wait(timeout=5)
         resolve.assert_not_called()
+
+
+def test_cache_admin_thang_tone_bai_da_luu_nhung_thua_chuoi_thu_cong(isolated_data, engine):
+    """R-15: bản admin đặt nằm ở nấc tone_cache → đè tone bài đã lưu, không đè sửa tay."""
+    _write_songs(isolated_data["songs"], [{"id": 1, "url": WATCH_URL, "tone": "Bm", "title": "A"}])
+    ToneCacheManager.save_tone(WATCH_URL, {
+        "primary_key": "F#m", "origin": "admin",
+        "key_timeline": [make_timeline_entry("F#m")],
+    })
+
+    source, data = engine._resolve_tone(WATCH_URL)
+    assert source == "cache"
+    assert data["primary_key"] == "F#m"
+
+    ManualToneTimeline.save_timeline(WATCH_URL, "A", [make_timeline_entry("Am")], source="human")
+    source, data = engine._resolve_tone(WATCH_URL)
+    assert source == "manual"
+    assert data["timeline"][0]["key_display"] == "Am"

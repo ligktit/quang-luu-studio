@@ -455,3 +455,20 @@ def test_pull_overrides_xoa_dem_phien_cua_bai_vua_nhan(monkeypatch, overrides_en
     assert tone_share._recently_missed(ADMIN_KEY) is False
     with tone_share._cache_lock:
         assert tone_share._hit_cache[ADMIN_KEY]["origin"] == "admin"
+
+
+def test_sync_songs_keo_ban_admin_truoc_roi_tra_cuu_bai_thieu(monkeypatch, overrides_env):
+    order = []
+
+    def _post(path, payload):
+        order.append(path)
+        if path == "/api/v1/library/changes":
+            return 200, {"ok": True, "items": [_change()], "next_cursor": "CUR-1", "has_more": False}
+        return 200, {"ok": True, "results": {KEY: _result("Am")}}
+    monkeypatch.setattr(tone_share, "_post", _post)
+
+    found, stats = tone_share.sync_songs([URL])
+
+    assert order == ["/api/v1/library/changes", "/api/v1/library/lookup"]
+    assert found[URL]["primary_key"] == "Am"
+    assert stats["applied"] == 1
