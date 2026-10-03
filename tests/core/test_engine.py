@@ -399,10 +399,18 @@ class TestYouTubeWatcher:
         assert engine._youtube_watcher_active is False
         assert engine._youtube_watcher_thread is None
 
-    def test_stop_wait_false_roi_start_lai_thi_luong_cu_tu_thoat(self, engine):
+    def test_stop_wait_false_roi_start_lai_thi_luong_cu_tu_thoat(self, engine, mocker):
         """Bật player nhúng rồi tắt ngay: stop(wait=False) + start lại. Luồng cũ
         không được sống tiếp chỉ vì cờ chung vừa bật lại — hai watcher cùng
-        bắn URL/dò tone."""
+        bắn URL/dò tone.
+
+        Mock hai bước quét cửa sổ thật (Win32 EnumWindows + UI Automation): trên
+        desktop đang chạy cả suite một lượt quét có thể quá 2s, làm join() hết
+        hạn trước khi luồng cũ tới chỗ kiểm thế hệ — test này chỉ đo vòng đời."""
+        mocker.patch("core.engine._youtube._YouTubeMixin._enum_all_visible_windows",
+                     staticmethod(lambda: []))
+        mocker.patch("core.engine._youtube._YouTubeMixin.detect_youtube_url_from_browser",
+                     staticmethod(lambda **kw: None))
         engine.start_youtube_watcher(poll_interval=0.2)
         old = engine._youtube_watcher_thread
         engine.stop_youtube_watcher(wait=False)
