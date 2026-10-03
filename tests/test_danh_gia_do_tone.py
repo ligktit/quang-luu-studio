@@ -140,6 +140,19 @@ class TestLoadDataset:
         assert items[0]["timeline"] == [(0.0, (6, "Minor"))]
 
 
+    def test_file_dap_an_kiem_chung_trong_repo_doc_duoc(self):
+        """tools/dap_an_tone_kiem_chung.json: bài đã kiểm chứng tay, phải luôn hợp lệ."""
+        p = os.path.join(os.path.dirname(_PATH), "dap_an_tone_kiem_chung.json")
+        with open(p, encoding="utf-8") as f:
+            raw = json.load(f)
+        items = dg.load_dataset(p)
+        assert len(items) == len(raw), "có mục không đọc được tone hoặc thiếu url/path"
+        assert all(it["url"] or it["path"] for it in items)
+        assert all(it["timeline"] for it in items)
+        ids = [it["id"] for it in items]
+        assert len(ids) == len(set(ids)), "trùng id"
+
+
 def test_summarize_tinh_dung_ba_con_so(capsys):
     rows = [{"cls": dg.DUNG}, {"cls": dg.SONG_SONG}, {"cls": dg.QUANG5}, {"cls": dg.KHAC}]
     s = dg.summarize(rows, "thử")

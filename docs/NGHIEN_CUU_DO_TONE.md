@@ -203,6 +203,9 @@ Thư viện): bản thắng của mỗi bài, chỉ lấy bản người sửa t
 # bộ đáp án thật: file tải từ admin, hoặc data\manual_timelines.json
 .venv\Scripts\python.exe tools\danh_gia_do_tone.py chay dap_an_tone.json --bao-cao kq.csv
 .venv\Scripts\python.exe tools\danh_gia_do_tone.py chay dap_an_tone.json --che-do toan-bai
+
+# bộ đáp án kiểm chứng tay, version trong repo (JSON tự soạn)
+.venv\Scripts\python.exe tools\danh_gia_do_tone.py chay tools\dap_an_tone_kiem_chung.json
 ```
 Audio tải về giữ trong `.cache/danh_gia_tone/` (đã gitignore) — lần chạy sau
 không tải lại. Chế độ `toan-bai` báo thêm % thời lượng khớp và số bài báo
@@ -311,8 +314,35 @@ Cài đặt:
 **Việc tiếp theo:**
 1. Nghe lại 2 nhãn đáng ngờ (Áo Xanh, Giọng Nghệ tìm về) — sửa trong app nếu sai.
 2. Mở rộng bộ đáp án (ghim thêm bài đã kiểm chứng) — 12 bài quá ít để chốt tham số.
+   → bắt đầu tại `tools/dap_an_tone_kiem_chung.json` (xem mục 2026-10-03).
 3. GĐ1: độ tin cậy mới + ngưỡng cảnh báo; phân giải trưởng/thứ song song
    (bass/đoạn kết); xem xét profile cho nhạc ngũ cung.
+
+### 2026-10-03 — Bộ đáp án kiểm chứng tay trong repo + ca nhầm quãng 5 đầu tiên
+
+Bộ đáp án trên server chỉ lớn khi khách sửa tay; thêm một file version trong
+repo cho bài đã kiểm chứng độc lập: `tools/dap_an_tone_kiem_chung.json` (định
+dạng JSON tự soạn của công cụ chấm, mỗi mục có `kiem_chung` ghi căn cứ).
+Test `test_file_dap_an_kiem_chung_trong_repo_doc_duoc` giữ file luôn đọc được.
+
+**Bài 1 — Lưng Cha Bụng Mẹ (Thiên Chí, karaoke, pMPvJE1wwnc): đáp án F#m, máy
+dò ra Bm ở cả hai chế độ** (nhanh: conf 0,74 → tự mở rộng 120s vẫn Bm; toàn bài:
+một vùng Bm). Chấm: nhầm quãng 5 (Bm = bậc iv của F#m), MIREX 50.
+
+Căn cứ đáp án: hopamviet.vn / hopamchuan.com ghi tone gốc F#m, hợp âm (dịch
+về F#m) F#m–D–E–Bm–C#m. Đo trên audio khớp hoàn toàn: G# 7,7% vs G 3,4% (Bm cần
+G, F#m cần G#); bass F# 56s, C# 52s, A 15s; kết bài C#m → F#m.
+
+Vì sao sai **[ĐO]**: hai tone chung 6/7 nốt. Hợp âm bVII (E) dùng liên tục
+nên E mạnh (14,2%); profile Aarden minor (trọng số 50%) cho bậc 4 (14,4) nặng
+gấp đôi bậc b7 (7,4) → đọc E là bậc 4 của Bm chứ không phải b7 của F#m. Aarden
+Bm 0,88 > F#m 0,78 dù KS nói ngược (F#m 0,68 > Bm 0,54). Ở lượt 60s, F#m đứng
+hạng 2, kém 0,036. Dò toàn bài: từng đoạn ra F#m/C#m/A/Bm xen kẽ, `_regionalize`
+lấy Bm vì tương quan cao nhất, không phải vì là chủ âm.
+
+Gợi ý cho GĐ1 (chưa làm): tín hiệu bass (nốt gốc chiếm thời lượng) và hợp âm
+kết bài đều chỉ đúng F#m ở bài này — đúng hướng "phân giải bằng bass/đoạn kết"
+đã nêu, và nên áp cho cả cặp quãng 5 chứ không riêng trưởng/thứ song song.
 
 ## Script đo nháp
 Bộ thử tổng hợp đã chuyển vào `tools/danh_gia_do_tone.py`. Nguyên mẫu HMM
