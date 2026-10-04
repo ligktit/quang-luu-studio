@@ -110,3 +110,17 @@ def test_settings_dialog_luu_daw_kind(qapp, mock_engine, qtbot):
     assert dlg._cb_launch_so.text() == "Mở Cubase khi khởi động"
     _save_without_side_effects(dlg)
     assert dashboard.settings["daw_kind"] == "cubase"
+
+
+def test_doi_daw_lam_moi_scale_values(qapp, mock_engine, qtbot):
+    import frontend_qt
+    old = frontend_qt.SCALE_VALUES
+    dashboard = _make_dashboard(qtbot, settings={"daw_kind": "studio_one"})
+    try:
+        dlg = _open_dialog(qtbot, dashboard)
+        dlg._cmb_daw.setCurrentIndex(dlg._cmb_daw.findData("cubase"))
+        _save_without_side_effects(dlg)
+        assert frontend_qt.SCALE_VALUES == {"major": 43, "minor": 85}
+    finally:
+        frontend_qt.SCALE_VALUES = old
+        daw.bind(None)

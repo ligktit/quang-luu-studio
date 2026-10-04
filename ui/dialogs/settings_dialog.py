@@ -1780,7 +1780,13 @@ class SettingsDialog(QDialog):
             s["studio_one_path"] = new_so
         if new_br:
             s["browser_path"] = new_br
+        from core import daw
+        old_daw = daw.kind_of(s)
         s["daw_kind"] = self._collect_daw_kind()
+        daw_changed = s["daw_kind"] != old_daw
+        if daw_changed:
+            import frontend_qt
+            frontend_qt.SCALE_VALUES = backend.AppConfig.get_scale_values()
         s["auto_launch_studio_one"] = self._cb_launch_so.isChecked()
         s["auto_launch_browser"]    = self._cb_launch_br.isChecked()
         s["auto_close_studio_one"]  = self._cb_close_so.isChecked()
@@ -1852,7 +1858,11 @@ class SettingsDialog(QDialog):
         # Đóng TRƯỚC rồi mới báo: toast bám vào cửa sổ modal đang hoạt động, mà
         # dialog này sắp biến mất — báo trước là khách không thấy gì.
         self.close()
-        self._dashboard._show_message("Đã lưu thiết lập")
+        if daw_changed:
+            self._dashboard._show_message(
+                f"Đã chuyển sang {daw.active().display_name} — nên mở lại app để mọi nhãn cập nhật")
+        else:
+            self._dashboard._show_message("Đã lưu thiết lập")
 
     def _action_export_cookies(self):
         import threading
