@@ -17,6 +17,14 @@ A11Y_CFG = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _khong_ghi_settings_that():
+    """Dashboard ghi settings lúc đóng/đổi cấu hình; chặn ghi vào settings.json thật
+    suốt cả test (kể cả lúc qtbot dọn widget)."""
+    with patch("frontend_qt.backend.ConfigManager.save_settings"):
+        yield
+
+
 @pytest.fixture(scope="session")
 def qapp():
     from PySide6.QtWidgets import QApplication
@@ -102,14 +110,17 @@ def test_auto_launch_dung_duoi_cpr_khi_cubase():
 
 def test_settings_dialog_luu_daw_kind(qapp, mock_engine, qtbot):
     dashboard = _make_dashboard(qtbot, settings={"daw_kind": "studio_one"})
-    dlg = _open_dialog(qtbot, dashboard)
-    idx = dlg._cmb_daw.findData("cubase")
-    assert idx >= 0
-    dlg._cmb_daw.setCurrentIndex(idx)
-    assert dlg._collect_daw_kind() == "cubase"
-    assert dlg._cb_launch_so.text() == "Mở Cubase khi khởi động"
-    _save_without_side_effects(dlg)
-    assert dashboard.settings["daw_kind"] == "cubase"
+    try:
+        dlg = _open_dialog(qtbot, dashboard)
+        idx = dlg._cmb_daw.findData("cubase")
+        assert idx >= 0
+        dlg._cmb_daw.setCurrentIndex(idx)
+        assert dlg._collect_daw_kind() == "cubase"
+        assert dlg._cb_launch_so.text() == "Mở Cubase khi khởi động"
+        _save_without_side_effects(dlg)
+        assert dashboard.settings["daw_kind"] == "cubase"
+    finally:
+        daw.bind(None)
 
 
 def test_doi_daw_lam_moi_scale_values(qapp, mock_engine, qtbot):
