@@ -105,6 +105,20 @@ khác nước cuối khi hụt nút — xem bên dưới.
 
 Tắt tính năng này bằng cách bỏ tích **"Phục hồi bản mẫu .song mỗi lần khởi động"**.
 
+### Dùng với Cubase
+
+App điều khiển được Studio One hoặc Cubase. Khi máy dùng Cubase, kỹ thuật viên làm:
+
+1. Vào **Cài đặt → Phần mềm thu âm (DAW) → Cubase**.
+2. Đường dẫn bản mẫu trỏ tới file `.cpr` của bài mẫu: thứ tự track **Nhac / Mic / Vang / Be**,
+   plugin pitch (Pitch Correct) đặt ở **insert đầu tiên của kênh Mic**.
+3. Chạy `setup_all.bat` để chép script MIDI Remote `QuangLuu_QuangLuuMIDI.js` vào
+   `Documents\Steinberg\Cubase\MIDI Remote\Driver Scripts\Local\QuangLuu\QuangLuuMIDI\`.
+4. Trong Cubase, **tắt** *Release Driver when Application is in Background*
+   (Studio → Studio Setup → Audio System).
+5. Bản mẫu chốt là `template.cpr` (cơ chế phục hồi bản mẫu ở trên áp dụng cho file `.cpr`).
+6. Sau khi đổi DAW, **mở lại app** để mọi nhãn cập nhật theo DAW mới.
+
 ## 5. Đóng Studio One an toàn
 
 Bật ở **Thiết lập → Khởi động / Tắt tự động → "Đóng Studio One khi thoát"**.
