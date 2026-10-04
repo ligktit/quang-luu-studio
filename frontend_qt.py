@@ -130,9 +130,16 @@ class MainDashboard(QMainWindow):
     def __init__(self, settings=None):
         self._ensure_app()
         super().__init__()
+        self.settings = settings or {}
+        # Hồ sơ DAW gắn TRƯỚC khi dựng engine: không gì trong lúc dựng engine được
+        # đọc settings.json từ đĩa để đoán DAW.
+        try:
+            from core import daw
+            daw.bind(self.settings)
+        except Exception as e:
+            print(f"[DAW] bind lỗi: {e}")
         # Backend
         self.engine = backend.SystemEngine(settings)
-        self.settings = settings or {}
 
         # Khoá kỹ thuật đọc/ghi trên chính dict settings này — phải gắn TRƯỚC khi
         # dựng header, vì header hỏi kiosk.is_locked() để quyết định hiện nút mắt.
@@ -141,11 +148,6 @@ class MainDashboard(QMainWindow):
             kiosk.bind(self.settings)
         except Exception as e:
             print(f"[KIOSK] bind lỗi: {e}")
-        try:
-            from core import daw
-            daw.bind(self.settings)
-        except Exception as e:
-            print(f"[DAW] bind lỗi: {e}")
         self._so_hide_guard = None
         self._so_shutdown_done = False
         self._so_ready_watcher = None
