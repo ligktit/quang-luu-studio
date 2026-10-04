@@ -24,11 +24,17 @@ class _LifecycleMixin:
         ".multiinstrument", ".pedalboard", ".channel", ".macro", ".fxchain",
     )
 
+    @staticmethod
+    def project_extensions():
+        from core import daw
+        return tuple(daw.active().project_extensions)
+
     def send_hotkey(self, keys):
         def run():
             hwnd = None
             def cb(h, _):
-                if win32gui.IsWindowVisible(h) and "Studio One" in win32gui.GetWindowText(h):
+                from core import so_windows
+                if win32gui.IsWindowVisible(h) and so_windows.title_is_main(win32gui.GetWindowText(h)):
                     nonlocal hwnd; hwnd = h
             win32gui.EnumWindows(cb, None)
             if hwnd:
@@ -95,15 +101,18 @@ class _LifecycleMixin:
         else:
             if not os.path.exists(path):
                 return
-            if path.lower().endswith(self.STUDIO_ONE_EXTENSIONS):
+            lower = path.lower()
+            if lower.endswith(self.project_extensions()):
                 try:
                     os.startfile(path)
                 except Exception:
                     pass
-            else:
-                running = any("Studio One" in p.info['name'] for p in psutil.process_iter(['name']))
-                if not running:
+            elif lower.endswith(".exe"):
+                from core import so_windows
+                if not so_windows.is_running():
                     threading.Thread(target=lambda: subprocess.Popen(path), daemon=True).start()
+            else:
+                print(f"[DAW] Bỏ qua đường dẫn không phải file bài của DAW đang chọn: {path}")
 
     def close_studio_one_safely(self, timeout_sec: float = 30.0, save: bool = True,
                                 force_kill: bool = False, on_progress=None,
@@ -142,10 +151,11 @@ class _LifecycleMixin:
         "closed" | "not_running" | "timeout" | "force_killed" | "aborted" |
         "no_save_button".
         """
-        from core import so_windows
+        from core import daw, so_windows
+        name = daw.active().display_name
 
         def _p(msg):
-            print(f"[STUDIO ONE] {msg}")
+            print(f"[DAW] {msg}")
             if on_progress:
                 try:
                     on_progress(msg)
@@ -181,7 +191,7 @@ class _LifecycleMixin:
         if _aborted():
             return {"status": "aborted", "saved": saved}
 
-        _p("Đang đóng Studio One...")
+        _p(f"Đang đóng {name}...")
         # Chụp lại toàn bộ cửa sổ TRƯỚC khi xin đóng: cái nào mọc lên sau mới là
         # hộp thoại hỏi lưu. Lọc theo cách này thì cửa sổ plugin đang mở sẵn không
         # bị nhận nhầm rồi ăn Enter oan.
@@ -200,7 +210,7 @@ class _LifecycleMixin:
             if _aborted():
                 return {"status": "aborted", "saved": saved}
             if not so_windows.studio_one_pids():
-                _p("Studio One đã thoát sạch")
+                _p(f"{name} đã thoát sạch")
                 return {"status": "closed", "saved": saved}
 
             # Hộp thoại = cửa sổ của Studio One đang hiện và mới mọc lên sau WM_CLOSE.
@@ -230,15 +240,15 @@ class _LifecycleMixin:
                             # Đã chốt bản mẫu → bản lưu ra sẽ bị chép đè ở lần
                             # khởi động sau, nên lưu là vô hại. Chọn đóng sạch
                             # thay vì để Studio One kẹt lại với hộp thoại.
-                            _p("Có bản mẫu — lưu rồi đóng để Studio One thoát sạch")
+                            _p(f"Có bản mẫu — lưu rồi đóng để {name} thoát sạch")
                             saved = True
                         else:
                             if force_kill:
-                                _p("Tắt cứng Studio One (không lưu gì cả)")
+                                _p(f"Tắt cứng {name} (không lưu gì cả)")
                                 self._force_kill_studio_one()
                                 return {"status": "force_killed", "saved": False}
                             so_windows.cancel_dialog(hwnd)
-                            _p("Đã huỷ đóng Studio One để không lưu nhầm")
+                            _p(f"Đã huỷ đóng {name} để không lưu nhầm")
                             return {"status": "no_save_button", "saved": False}
 
                     if so_windows.force_foreground(hwnd):
@@ -246,7 +256,7 @@ class _LifecycleMixin:
                         try:
                             pyautogui.press("enter")
                         except Exception as e:
-                            print(f"[STUDIO ONE] Không gửi được Enter: {e}")
+                            print(f"[DAW] Không gửi được Enter: {e}")
                     else:
                         # Không giành được foreground — bắn phím thẳng vào cửa sổ.
                         VK_RETURN = 0x0D
@@ -262,22 +272,23 @@ class _LifecycleMixin:
             time.sleep(0.4)
 
         if force_kill:
-            _p("Quá hạn chờ — buộc phải tắt cứng (lần sau Studio One sẽ đòi phục hồi)")
+            _p(f"Quá hạn chờ — buộc phải tắt cứng (lần sau {name} sẽ đòi phục hồi)")
             self._force_kill_studio_one()
             return {"status": "force_killed", "saved": saved}
 
-        _p("Studio One chưa đóng xong — để nguyên cho an toàn, vui lòng đóng tay")
+        _p(f"{name} chưa đóng xong — để nguyên cho an toàn, vui lòng đóng tay")
         return {"status": "timeout", "saved": saved}
 
     def _studio_one_save(self, hwnd, on_progress=None) -> bool:
         """Giành foreground rồi gửi Ctrl+S. Trả True nếu đã gửi được phím lưu."""
-        from core import so_windows
+        from core import daw, so_windows
+        name = daw.active().display_name
 
         def _p(msg):
             if on_progress:
                 on_progress(msg)
             else:
-                print(f"[STUDIO ONE] {msg}")
+                print(f"[DAW] {msg}")
 
         mods = so_windows.win32_modules()
         if not mods:
@@ -292,7 +303,7 @@ class _LifecycleMixin:
         except Exception:
             pass
 
-        _p("Đang lưu bài trong Studio One...")
+        _p(f"Đang lưu bài trong {name}...")
         if not so_windows.force_foreground(hwnd):
             _p("Không giành được focus — bỏ qua bước lưu")
             return False
@@ -348,18 +359,19 @@ class _LifecycleMixin:
                                             force_kill=False)
 
     def _force_kill_studio_one(self):
-        NAMES = [
-            "Studio One.exe", "Studio One 7.exe", "Studio One 6.exe",
-            "Studio One 5.exe", "Studio One Prime.exe",
-        ]
-        killed = False
-        for name in NAMES:
-            if os.system(f'taskkill /F /IM "{name}" /T >nul 2>&1') == 0:
-                killed = True
+        """Tắt cứng mọi process của DAW đang chọn (theo PID, không theo tên exe)."""
+        from core import so_windows
+        killed = 0
+        for pid in so_windows.studio_one_pids():
+            try:
+                psutil.Process(pid).kill()
+                killed += 1
+            except Exception as e:
+                print(f"[DAW] Không kill được PID {pid}: {e}")
         if killed:
-            print("[STUDIO ONE] Force kill hoàn tất")
+            print(f"[DAW] Force kill {killed} process")
         else:
-            print("[STUDIO ONE] Không tìm thấy process để kill")
+            print("[DAW] Không tìm thấy process để kill")
 
     def kill_app(self):
         """Deprecated alias."""
