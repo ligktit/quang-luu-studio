@@ -54,6 +54,7 @@ def test_mo_exe_chi_khi_daw_chua_chay():
 def test_force_kill_theo_pid_cua_daw():
     daw.bind({"daw_kind": "cubase"})
     proc = MagicMock()
+    proc.children.return_value = []
     fake_psutil = MagicMock()
     fake_psutil.Process.return_value = proc
     with patch("core.so_windows.studio_one_pids", return_value={4132}), \
@@ -69,3 +70,38 @@ def test_studio_one_van_dung_duoi_song():
          patch("os.startfile", create=True) as startfile:
         _engine().launch_app(r"D:\bai\mau.songversion")
     startfile.assert_called_once()
+
+
+def test_dong_gui_wm_close_vao_cua_so_thoat_cua_daw():
+    # Cubase: WM_CLOSE vào cửa sổ project chỉ đóng bài → phải gửi vào quit_windows().
+    daw.bind({"daw_kind": "cubase"})
+    win32gui = MagicMock()
+    win32con = MagicMock(WM_CLOSE=0x0010)
+    pids = iter([{1}, set()])
+    with patch("core.so_windows.studio_one_pids", side_effect=lambda: next(pids, set())), \
+         patch("core.so_windows.win32_modules", return_value=(win32gui, win32con, MagicMock())), \
+         patch("core.so_windows.main_windows", return_value=[11]), \
+         patch("core.so_windows.quit_windows", return_value=[77]), \
+         patch("core.so_windows.all_windows", return_value=[]), \
+         patch("time.sleep"):
+        result = _engine().close_studio_one_safely(timeout_sec=5, save=False)
+    assert result["status"] == "closed"
+    win32gui.PostMessage.assert_any_call(77, 0x0010, 0, 0)
+    assert all(c.args[0] != 11 for c in win32gui.PostMessage.call_args_list)
+
+
+def test_force_kill_giet_ca_process_con_truoc():
+    daw.bind({"daw_kind": "cubase"})
+    order = []
+    child = MagicMock()
+    child.kill.side_effect = lambda: order.append("child")
+    proc = MagicMock()
+    proc.children.return_value = [child]
+    proc.kill.side_effect = lambda: order.append("parent")
+    fake_psutil = MagicMock()
+    fake_psutil.Process.return_value = proc
+    with patch("core.so_windows.studio_one_pids", return_value={4132}), \
+         patch("core.engine._lifecycle.psutil", fake_psutil):
+        _engine()._force_kill_studio_one()
+    proc.children.assert_called_once_with(recursive=True)
+    assert order == ["child", "parent"]

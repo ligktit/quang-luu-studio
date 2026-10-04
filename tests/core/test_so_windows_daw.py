@@ -72,3 +72,35 @@ def test_hop_thoai_cubase_bam_nut_dont_save():
     with patch.object(so_windows, "win32_modules", return_value=(win32gui, MagicMock(), None)):
         assert so_windows.click_no_save(77) is True
     win32gui.PostMessage.assert_called_once_with(202, so_windows.BM_CLICK, 0, 0)
+
+
+def _fake_gui(classes, titles):
+    win32gui = MagicMock()
+    win32gui.GetClassName.side_effect = lambda h: classes[h]
+    win32gui.GetWindowText.side_effect = lambda h: titles[h]
+    return win32gui
+
+
+def test_quit_windows_cubase_la_cua_so_smtgmain():
+    # Đóng cửa sổ project chỉ đóng bài, Cubase vẫn chạy ở Steinberg Hub;
+    # thoát hẳn phải gửi WM_CLOSE vào cửa sổ ứng dụng (class SmtgMain, "Cubase Pro").
+    daw.bind({"daw_kind": "cubase"})
+    win32gui = _fake_gui({11: "SteinbergWindowClass뻀䟎", 12: "SmtgMain Cubase13"},
+                         {11: "Cubase Pro Project - mau", 12: "Cubase Pro"})
+    with patch.object(so_windows, "win32_modules", return_value=(win32gui, MagicMock(), MagicMock())):
+        assert so_windows.quit_windows([11, 12]) == [12]
+
+
+def test_quit_windows_cubase_khong_thay_smtgmain_thi_ve_cua_so_chinh():
+    daw.bind({"daw_kind": "cubase"})
+    win32gui = _fake_gui({11: "SteinbergWindowClass"}, {11: "Cubase Pro Project - mau"})
+    with patch.object(so_windows, "win32_modules", return_value=(win32gui, MagicMock(), MagicMock())):
+        assert so_windows.quit_windows([11]) == [11]
+
+
+def test_quit_windows_studio_one_giu_nhu_main_windows():
+    daw.bind({})
+    win32gui = _fake_gui({21: "PreSonusWindow", 22: "PreSonusDialog"},
+                         {21: "Studio One 7 - BaiMau", 22: "Plugin"})
+    with patch.object(so_windows, "win32_modules", return_value=(win32gui, MagicMock(), MagicMock())):
+        assert so_windows.quit_windows([21, 22]) == so_windows.main_windows([21, 22]) == [21]

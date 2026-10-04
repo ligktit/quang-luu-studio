@@ -126,7 +126,7 @@ class _LifecycleMixin:
         Trình tự:
           1. Ctrl+S trước (chỉ khi save=True) — bài đã lưu thì lúc đóng Studio One
              không hỏi gì cả, tức là không còn hộp thoại nào để đoán mò.
-          2. WM_CLOSE tới cửa sổ chính.
+          2. WM_CLOSE tới cửa sổ thoát của DAW (so_windows.quit_windows: Studio One = cửa sổ chính, Cubase = SmtgMain).
           3. Còn hộp thoại nào bật lên thì giành foreground thật (AttachThreadInput)
              rồi Enter — nút mặc định của Studio One là "Save".
           4. Chờ process biến mất.
@@ -196,7 +196,10 @@ class _LifecycleMixin:
         # hộp thoại hỏi lưu. Lọc theo cách này thì cửa sổ plugin đang mở sẵn không
         # bị nhận nhầm rồi ăn Enter oan.
         known = set(so_windows.all_windows())
-        for hwnd in (mains or known):
+        # Cửa sổ nhận WM_CLOSE: Studio One = cửa sổ chính; Cubase = cửa sổ ứng
+        # dụng (SmtgMain) — WM_CLOSE vào cửa sổ project chỉ đóng bài.
+        quits = so_windows.quit_windows()
+        for hwnd in (quits or known):
             try:
                 win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
             except Exception:
@@ -364,7 +367,18 @@ class _LifecycleMixin:
         killed = 0
         for pid in so_windows.studio_one_pids():
             try:
-                psutil.Process(pid).kill()
+                proc = psutil.Process(pid)
+                # Giết cây con trước (helper/plugin host) để không còn process mồ côi.
+                try:
+                    children = proc.children(recursive=True)
+                except Exception:
+                    children = []
+                for child in children:
+                    try:
+                        child.kill()
+                    except Exception:
+                        pass
+                proc.kill()
                 killed += 1
             except Exception as e:
                 print(f"[DAW] Không kill được PID {pid}: {e}")

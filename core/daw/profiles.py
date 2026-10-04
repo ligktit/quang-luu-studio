@@ -22,6 +22,10 @@ class DawProfile:
     fader_unity_cc: int              # giá trị CC ứng với fader 0 dB
     calibration: dict = field(default_factory=dict)
     remote_install_hint: str = ""
+    # Class cửa sổ phải nhận WM_CLOSE để THOÁT hẳn DAW ("" = dùng cửa sổ chính).
+    # Cubase: WM_CLOSE vào cửa sổ project chỉ đóng bài, app vẫn ở Steinberg Hub;
+    # cửa sổ ứng dụng là class "SmtgMain Cubase13", tiêu đề "Cubase Pro" (đo 13.0.10).
+    quit_window_class_prefix: str = ""
 
 
 STUDIO_ONE = DawProfile(
@@ -61,6 +65,7 @@ CUBASE = DawProfile(
         "scale_midi_map": {"Major": 43, "Minor": 85},
         "scale_values": {"major": 43, "minor": 85},
     },
+    quit_window_class_prefix="SmtgMain",
     remote_install_hint="Script MIDI Remote tự nhận khi có cổng QuangLuuMIDI + QLS_PhanHoi (chạy setup_all.bat)",
 )
 

@@ -129,6 +129,25 @@ def main_windows(hwnds=None):
     return out
 
 
+def quit_windows(hwnds=None):
+    """Cửa sổ cần gửi WM_CLOSE để DAW thoát hẳn.
+
+    Studio One: chính là main_windows(). Cubase: cửa sổ ứng dụng có class bắt đầu
+    bằng `quit_window_class_prefix` (SmtgMain) — đóng cửa sổ project chỉ đóng bài.
+    Không thấy cửa sổ nào khớp class thì quay về main_windows().
+    """
+    prefix = _profile().quit_window_class_prefix
+    if not prefix:
+        return main_windows(hwnds)
+    mods = win32_modules()
+    if not mods:
+        return []
+    win32gui = mods[0]
+    candidates = all_windows() if hwnds is None else hwnds
+    out = [h for h in candidates if _class_of(win32gui, h).startswith(prefix)]
+    return out or main_windows(hwnds)
+
+
 def any_visible() -> bool:
     mods = win32_modules()
     if not mods:

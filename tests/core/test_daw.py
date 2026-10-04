@@ -28,6 +28,7 @@ def test_chon_cubase():
     assert p.fader_unity_cc == 100
     assert p.calibration["scale_midi_map"] == {"Major": 43, "Minor": 85}
     assert p.calibration["scale_values"] == {"major": 43, "minor": 85}
+    assert p.quit_window_class_prefix == "SmtgMain"
 
 
 def test_studio_one_giu_nguyen_hang_cu():
@@ -38,6 +39,7 @@ def test_studio_one_giu_nguyen_hang_cu():
     assert ".songversion" in p.project_extensions
     assert p.fader_unity_cc == 76
     assert p.calibration == {}
+    assert p.quit_window_class_prefix == ""
 
 
 def test_bind_dung_settings_song():
