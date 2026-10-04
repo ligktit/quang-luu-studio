@@ -47,3 +47,20 @@ def test_ban_mau_hai_daw_khong_de_nhau(tmp_path):
     assert so_template.snapshot(str(cpr))["ok"]
     daw.bind({})
     assert so_template.has_template() is True
+
+
+def test_info_theo_dung_daw(tmp_path):
+    song = tmp_path / "a.song"; song.write_bytes(b"S1")
+    cpr = tmp_path / "b.cpr"; cpr.write_bytes(b"CB")
+    daw.bind({})
+    assert so_template.snapshot(str(song))["ok"]
+    daw.bind({"daw_kind": "cubase"})
+    assert so_template.snapshot(str(cpr))["ok"]
+    assert so_template.info()["source"].endswith("b.cpr")
+    daw.bind({})
+    assert so_template.info()["source"].endswith("a.song")
+    daw.bind({"daw_kind": "cubase"})
+    so_template.clear()
+    assert so_template.has_template() is False
+    daw.bind({})
+    assert so_template.has_template() is True

@@ -60,6 +60,13 @@ def replaced_file(profile=None) -> str:
     return os.path.join(TEMPLATE_DIR, "replaced" + p.template_extension)
 
 
+def meta_file(profile=None) -> str:
+    p = _profile(profile)
+    if p.kind == "studio_one":
+        return TEMPLATE_META
+    return os.path.join(TEMPLATE_DIR, "template" + p.template_extension + ".json")
+
+
 def is_song_file(path) -> bool:
     """Đường dẫn có phải file bài của DAW đang chọn không (.song / .cpr)."""
     from core import daw
@@ -84,7 +91,7 @@ def info():
         return None
     meta = {}
     try:
-        with open(TEMPLATE_META, "r", encoding="utf-8") as f:
+        with open(meta_file(), "r", encoding="utf-8") as f:
             meta = json.load(f)
     except Exception:
         pass
@@ -115,7 +122,7 @@ def snapshot(song_path):
             "size": os.path.getsize(template_file()),
             "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
-        with open(TEMPLATE_META, "w", encoding="utf-8") as f:
+        with open(meta_file(), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
         log.info("Đã chốt bản mẫu .song từ %s (sha %s...)", song_path, digest[:12])
         return {"ok": True, "error": None, "sha256": digest}
@@ -174,7 +181,7 @@ def restore(song_path, so_running=None):
 
 def clear():
     """Xoá bản mẫu đã chốt."""
-    for path in (template_file(), TEMPLATE_META):
+    for path in (template_file(), meta_file()):
         try:
             if os.path.isfile(path):
                 os.remove(path)
