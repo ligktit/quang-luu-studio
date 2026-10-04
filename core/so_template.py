@@ -15,11 +15,13 @@ Studio One được mở. Nhờ vậy:
     lưu cũng vô hại vì bản mẫu chép đè ngay lần khởi động sau.
 
 Vị trí lưu: %APPDATA%\\QuangLuuStudio\\so_template\\
-  template.song        — bản mẫu kỹ thuật viên đã chốt
+  template.song        — bản mẫu kỹ thuật viên đã chốt (Cubase: template.cpr)
   template.json        — thông tin bản mẫu (nguồn, sha256, thời điểm chốt)
   replaced.song        — bản vừa bị chép đè (phao cứu sinh nếu KTV quên chốt)
+                         (Cubase: replaced.cpr)
 
-Chỉ xử lý **file .song**. Nếu đường dẫn Studio One trỏ tới .exe thì tính năng
+Chỉ xử lý **file bài của DAW đang chọn** (đuôi file theo hồ sơ DAW: .song cho
+Studio One, .cpr cho Cubase; mỗi DAW có bản mẫu riêng). Nếu đường dẫn Studio One trỏ tới .exe thì tính năng
 này không áp dụng (không có file bài để phục hồi).
 """
 import hashlib
@@ -39,8 +41,29 @@ TEMPLATE_META = os.path.join(TEMPLATE_DIR, "template.json")
 REPLACED_FILE = os.path.join(TEMPLATE_DIR, "replaced.song")
 
 
+def _profile(profile=None):
+    from core import daw
+    return profile or daw.active()
+
+
+def template_file(profile=None) -> str:
+    p = _profile(profile)
+    if p.kind == "studio_one":
+        return TEMPLATE_FILE
+    return os.path.join(TEMPLATE_DIR, "template" + p.template_extension)
+
+
+def replaced_file(profile=None) -> str:
+    p = _profile(profile)
+    if p.kind == "studio_one":
+        return REPLACED_FILE
+    return os.path.join(TEMPLATE_DIR, "replaced" + p.template_extension)
+
+
 def is_song_file(path) -> bool:
-    return bool(path) and str(path).lower().endswith(".song")
+    """Đường dẫn có phải file bài của DAW đang chọn không (.song / .cpr)."""
+    from core import daw
+    return daw.is_project_file(path)
 
 
 def _sha256(path) -> str:
@@ -52,7 +75,7 @@ def _sha256(path) -> str:
 
 
 def has_template() -> bool:
-    return os.path.isfile(TEMPLATE_FILE)
+    return os.path.isfile(template_file())
 
 
 def info():
@@ -65,7 +88,7 @@ def info():
             meta = json.load(f)
     except Exception:
         pass
-    meta.setdefault("size", os.path.getsize(TEMPLATE_FILE))
+    meta.setdefault("size", os.path.getsize(template_file()))
     return meta
 
 
@@ -75,21 +98,21 @@ def snapshot(song_path):
     Trả dict {"ok": bool, "error": str|None, "sha256": str|None}.
     """
     if not is_song_file(song_path):
-        return {"ok": False, "error": "Đường dẫn Studio One không phải file .song",
+        return {"ok": False, "error": f"Đường dẫn không phải file bài {_profile().template_extension}",
                 "sha256": None}
     if not os.path.isfile(song_path):
         return {"ok": False, "error": f"Không tìm thấy file: {song_path}", "sha256": None}
 
     try:
         os.makedirs(TEMPLATE_DIR, exist_ok=True)
-        tmp = TEMPLATE_FILE + ".tmp"
+        tmp = template_file() + ".tmp"
         shutil.copy2(song_path, tmp)
-        os.replace(tmp, TEMPLATE_FILE)
-        digest = _sha256(TEMPLATE_FILE)
+        os.replace(tmp, template_file())
+        digest = _sha256(template_file())
         meta = {
             "source": os.path.abspath(song_path),
             "sha256": digest,
-            "size": os.path.getsize(TEMPLATE_FILE),
+            "size": os.path.getsize(template_file()),
             "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         with open(TEMPLATE_META, "w", encoding="utf-8") as f:
@@ -113,7 +136,7 @@ def restore(song_path, so_running=None):
     if not has_template():
         return {"restored": False, "reason": "chưa chốt bản mẫu"}
     if not is_song_file(song_path):
-        return {"restored": False, "reason": "đường dẫn không phải file .song"}
+        return {"restored": False, "reason": f"đường dẫn không phải file bài {_profile().template_extension}"}
 
     if so_running is None:
         try:
@@ -122,11 +145,11 @@ def restore(song_path, so_running=None):
         except Exception:
             so_running = False
     if so_running:
-        log.info("Studio One đang chạy — bỏ qua phục hồi bản mẫu")
-        return {"restored": False, "reason": "Studio One đang chạy"}
+        log.info("%s đang chạy — bỏ qua phục hồi bản mẫu", _profile().display_name)
+        return {"restored": False, "reason": f"{_profile().display_name} đang chạy"}
 
     try:
-        if os.path.isfile(song_path) and _sha256(song_path) == _sha256(TEMPLATE_FILE):
+        if os.path.isfile(song_path) and _sha256(song_path) == _sha256(template_file()):
             return {"restored": False, "reason": "đã trùng bản mẫu"}
     except Exception as e:
         log.debug("So sánh bản mẫu lỗi: %s", e)
@@ -136,11 +159,11 @@ def restore(song_path, so_running=None):
         # Giữ lại bản vừa bị đè: nếu KTV chỉnh xong mà quên chốt, còn đường lấy về.
         if os.path.isfile(song_path):
             try:
-                shutil.copy2(song_path, REPLACED_FILE)
+                shutil.copy2(song_path, replaced_file())
             except Exception as e:
                 log.debug("Không sao lưu được bản bị đè: %s", e)
         tmp = song_path + ".qls_tmp"
-        shutil.copy2(TEMPLATE_FILE, tmp)
+        shutil.copy2(template_file(), tmp)
         os.replace(tmp, song_path)
         log.info("Đã phục hồi bản mẫu .song → %s", song_path)
         return {"restored": True, "reason": "đã phục hồi bản mẫu"}
@@ -151,7 +174,7 @@ def restore(song_path, so_running=None):
 
 def clear():
     """Xoá bản mẫu đã chốt."""
-    for path in (TEMPLATE_FILE, TEMPLATE_META):
+    for path in (template_file(), TEMPLATE_META):
         try:
             if os.path.isfile(path):
                 os.remove(path)
