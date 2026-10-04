@@ -892,6 +892,29 @@ Safe "Studio One đã cài" {
     }
 }
 
+Safe "Cubase đã cài" {
+    $found = @(Get-ChildItem -LiteralPath (Join-Path $env:ProgramFiles "Steinberg") -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "Cubase*" })
+    if ($found.Count -eq 0) { Chk "Cubase đã cài" "INFO" "không thấy (chỉ cần khi dùng Cubase)"; return }
+    Chk "Cubase đã cài" "OK" (($found | ForEach-Object { $_.Name }) -join ", ")
+    $dst = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "Steinberg\Cubase\MIDI Remote\Driver Scripts\Local\QuangLuu\QuangLuuMIDI\QuangLuu_QuangLuuMIDI.js"
+    if (-not (Test-Path -LiteralPath $dst)) {
+        Chk "Script MIDI Remote Cubase" "FAIL" "chưa chép" "Cubase không nhận nút bấm từ app. Chạy setup_all.bat rồi mở lại Cubase."
+    } else {
+        $src = Join-Path $script:AppRoot "cubase\QuangLuu_QuangLuuMIDI.js"
+        if ((Test-Path -LiteralPath $src) -and ((Get-FileHash $src).Hash -ne (Get-FileHash $dst).Hash)) {
+            Chk "Script MIDI Remote Cubase" "WARN" "khác bản đi kèm app" "Chạy setup_all.bat rồi Reload Scripts trong Cubase."
+        } else { Chk "Script MIDI Remote Cubase" "OK" "đã chép, đúng bản" }
+    }
+    foreach ($pd in Get-ChildItem -LiteralPath (Join-Path $env:APPDATA "Steinberg") -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "Cubase*" }) {
+        $def = Join-Path $pd.FullName "Defaults.xml"
+        if (-not (Test-Path -LiteralPath $def)) { continue }
+        $m = Select-String -LiteralPath $def -Pattern 'name="ReleaseHardware" value="(\d)"' | Select-Object -First 1
+        if ($m -and $m.Matches[0].Groups[1].Value -eq "1") {
+            Chk ("Release Driver (" + $pd.Name + ")") "FAIL" "đang BẬT" "App ẩn cửa sổ Cubase nên Cubase luôn ở nền → bật cờ này là mất tiếng. Studio Setup → Audio System → tắt 'Release Driver when Application is in Background'."
+        } elseif ($m) { Chk ("Release Driver (" + $pd.Name + ")") "OK" "đang tắt" }
+    }
+}
+
 Safe "Bản mô tả điều khiển (Surface) trong Studio One" {
     $presAppData = Join-Path $env:APPDATA "PreSonus"
     if (-not (Test-Path -LiteralPath $presAppData)) {

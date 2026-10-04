@@ -100,6 +100,32 @@ echo de nhan dien QuangLuuMIDI Surface.
 echo.
 
 REM ============================================
+REM  BƯỚC 2b: Script MIDI Remote cho Cubase (12+)
+REM ============================================
+echo ----------------------------------------
+echo  Buoc 2b: Script MIDI Remote cho Cubase
+echo ----------------------------------------
+set "CB_FOUND="
+for /d %%D in ("%ProgramFiles%\Steinberg\Cubase*") do set "CB_FOUND=%%~fD"
+if "!CB_FOUND!"=="" (
+    echo [INFO] Khong thay Cubase trong Program Files - bo qua ^(chi can khi dung Cubase^).
+    goto :skip_cubase
+)
+echo [OK] Tim thay !CB_FOUND!
+set "CB_DST=%USERPROFILE%\Documents\Steinberg\Cubase\MIDI Remote\Driver Scripts\Local\QuangLuu\QuangLuuMIDI"
+if not exist "!CB_DST!" mkdir "!CB_DST!"
+copy /Y "%~dp0cubase\QuangLuu_QuangLuuMIDI.js" "!CB_DST!\" >nul
+if exist "!CB_DST!\QuangLuu_QuangLuuMIDI.js" (
+    echo [OK] Da chep QuangLuu_QuangLuuMIDI.js
+    echo [QUAN TRONG] Mo lai Cubase ^(hoac MIDI Remote ^> Reload Scripts^). Cubase tu nhan khi co du 2 cong MIDI.
+    echo [LUU Y] Studio ^> Studio Setup ^> Audio System: TAT "Release Driver when Application is in Background".
+) else (
+    echo [ERROR] Copy script Cubase that bai!
+)
+:skip_cubase
+echo.
+
+REM ============================================
 REM  BƯỚC 3: Cài đặt FFmpeg (cho YouTube)
 REM ============================================
 echo ----------------------------------------

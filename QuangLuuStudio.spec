@@ -28,6 +28,7 @@ datas = [
     ('tools', 'tools'),           # <-- Sửa lỗi shortcut & CDP
     ('sfx', 'sfx'),
     ('studio_one', 'studio_one'),
+    ('cubase', 'cubase'),
     ('Be_Vietnam_Pro', 'Be_Vietnam_Pro'),
     ('ui/styles', 'ui/styles'),   # QSS stylesheet
     ('ui/assets', 'ui/assets'),   # youtube_player.html (màn hình karaoke nhúng)

@@ -111,6 +111,8 @@ Source: "app_config.json"; DestDir: "{app}"; Flags: onlyifdoesntexist
 ; Studio One Surface files
 Source: "studio_one\QuangLuuMIDI.surface.xml"; DestDir: "{app}\studio_one"; Flags: ignoreversion
 Source: "studio_one\deviceinfo.xml"; DestDir: "{app}\studio_one"; Flags: ignoreversion
+; Cubase MIDI Remote script (chép vào Documents\Steinberg\... bởi setup_all.bat)
+Source: "cubase\QuangLuu_QuangLuuMIDI.js"; DestDir: "{app}\cubase"; Flags: ignoreversion
 
 ; SFX (sound effects)
 Source: "sfx\*"; DestDir: "{app}\sfx"; Flags: ignoreversion recursesubdirs
@@ -158,7 +160,7 @@ Name: "{autoprograms}\{#MyAppName} Recordings"; Filename: "{userdocs}\{#MyAppDat
 
 [Run]
 ; Cài đặt loopMIDI + Surface sau khi cài đặt
-Filename: "{app}\setup_all.bat"; Description: "Cài đặt loopMIDI, cổng MIDI và Surface cho Studio One"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\setup_all.bat"; Description: "Cài đặt loopMIDI, cổng MIDI và phần nhận MIDI cho Studio One / Cubase"; Flags: nowait postinstall skipifsilent
 ; Chạy ứng dụng sau khi cài đặt (tùy chọn)
 Filename: "{app}\{#MyAppExeName}"; Description: "Chạy {#MyAppName} ngay bây giờ"; Flags: nowait postinstall skipifsilent unchecked
 
