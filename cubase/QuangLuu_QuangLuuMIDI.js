@@ -126,12 +126,13 @@ for (var i = 0; i < SO_KENH_THEO_DOI; i++) {
         var ch = bankZone.makeMixerBankChannel()
         kenh.push(ch)
 
-        // Fader: kenh 0..3 nhan CC that cua app, kenh con lai dung CC gia (100+idx) chi de co binding.
-        var fcc = faderCCTheoKenh.hasOwnProperty(idx) ? faderCCTheoKenh[idx] : 116 + idx
+        // Fader: kenh 0..3 nhan CC that cua app; kenh 4..7 dung CC gia chi de co binding:
+        // fader 112..115, mute 116..119 (duoi 120 - CC 120..127 la Channel Mode, khong trung CC app dung).
+        var fcc = faderCCTheoKenh.hasOwnProperty(idx) ? faderCCTheoKenh[idx] : 112 + (idx - 4)
         var kFader = knobCC(fcc)
         page.makeValueBinding(kFader.mSurfaceValue, ch.mValue.mVolume)
 
-        var mcc = muteCCTheoKenh.hasOwnProperty(idx) ? muteCCTheoKenh[idx] : 120 + idx
+        var mcc = muteCCTheoKenh.hasOwnProperty(idx) ? muteCCTheoKenh[idx] : 116 + (idx - 4)
         var bMute = buttonCC(mcc)
         page.makeValueBinding(bMute.mSurfaceValue, ch.mValue.mMute)
 
