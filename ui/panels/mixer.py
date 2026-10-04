@@ -57,6 +57,16 @@ def _make_mute_callback(dashboard, cc_key, mute_cc_map, val_range=(0, 100)):
     return toggle
 
 
+def db_to_midi(db, min_v, unity):
+    """dB (min_v..0..+10) → CC. 0 dB = `unity` (Studio One 76, Cubase 100), hai đoạn tuyến tính."""
+    db = float(db)
+    if db <= min_v:
+        return 0
+    if db <= 0:
+        return max(0, min(127, int(round(unity + db * (unity / abs(min_v))))))
+    return max(0, min(127, int(round(unity + db * ((127 - unity) / 10.0)))))
+
+
 def _make_value_changed_callback(dashboard, cc_key, range_tuple, unit):
     min_v, max_v = range_tuple
     def cb(raw_value):
@@ -64,18 +74,9 @@ def _make_value_changed_callback(dashboard, cc_key, range_tuple, unit):
         if cc_num is None:
             return
         if cc_key in ["mix_mic", "mix_reverb"]:
-            # UI -10..+10 là dB thật. Calibrate với Studio One:
-            #   -10 dB (đáy / -∞) -> MIDI 0   (0.0%)
-            #     0 dB (giữa / 0dB) -> MIDI 76  (59.8% - Unity 0 dB)
-            #   +10 dB (đỉnh / +10dB) -> MIDI 127 (100.0% - Giá trị tối đa)
-            db = float(raw_value)
-            if db <= min_v:
-                midi = 0
-            elif db <= 0:
-                midi = int(round(76 + db * 7.6))
-            else:
-                midi = int(round(76 + db * 5.1))
-            midi = max(0, min(127, midi))
+            # 0 dB -> fader_unity_cc của DAW: Studio One 76, Cubase 100 (đo 2026-10-04)
+            from core import daw
+            midi = db_to_midi(raw_value, min_v, daw.active().fader_unity_cc)
         else:
             # voice_fx, mix_music và slider custom: tuyến tính min..max -> 0..127
             normalized = (raw_value - min_v) / (max_v - min_v) if max_v > min_v else 0
