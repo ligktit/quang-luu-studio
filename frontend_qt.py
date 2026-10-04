@@ -141,6 +141,11 @@ class MainDashboard(QMainWindow):
             kiosk.bind(self.settings)
         except Exception as e:
             print(f"[KIOSK] bind lỗi: {e}")
+        try:
+            from core import daw
+            daw.bind(self.settings)
+        except Exception as e:
+            print(f"[DAW] bind lỗi: {e}")
         self._so_hide_guard = None
         self._so_shutdown_done = False
         self._so_ready_watcher = None
@@ -463,7 +468,8 @@ class MainDashboard(QMainWindow):
         from core import kiosk
         if kiosk.session_active():
             return
-        self._lock_studio_one("Hết phiên kỹ thuật — đã khoá lại Studio One")
+        from core import daw
+        self._lock_studio_one(f"Hết phiên kỹ thuật — đã khoá lại {daw.active().display_name}")
 
     def _lock_studio_one(self, message):
         from core import kiosk, so_windows
@@ -485,7 +491,8 @@ class MainDashboard(QMainWindow):
             return
 
         if kiosk.session_active():
-            self._lock_studio_one("Đã khoá lại — Studio One ẩn khỏi khách")
+            from core import daw
+            self._lock_studio_one(f"Đã khoá lại — {daw.active().display_name} ẩn khỏi khách")
             return
 
         if not kiosk.has_pin():
@@ -506,11 +513,12 @@ class MainDashboard(QMainWindow):
         if self._eye_btn is not None:
             from ui.components.svg_icons import SVG_EYE_OPEN
             self._eye_btn.setSvg(SVG_EYE_OPEN)
+        from core import daw
         if shown or so_windows.is_running():
             self._show_message(f"Mở khoá kỹ thuật {kiosk.session_minutes()} phút")
         else:
             self._show_message(
-                f"Mở khoá kỹ thuật {kiosk.session_minutes()} phút — Studio One chưa chạy")
+                f"Mở khoá kỹ thuật {kiosk.session_minutes()} phút — {daw.active().display_name} chưa chạy")
 
     def refresh_ui(self):
         # Gỡ dải visualizer TRƯỚC khi dọn layout: xoá widget qua layout thôi thì
@@ -1202,7 +1210,7 @@ class MainDashboard(QMainWindow):
 
     def _auto_launch_apps(self):
         """Tự động mở Studio One và/hoặc YouTube browser khi khởi động (theo settings)."""
-        from core import kiosk, so_windows
+        from core import daw, kiosk, so_windows
 
         studio_one_path = self.settings.get("studio_one_path", "")
 
@@ -1224,7 +1232,7 @@ class MainDashboard(QMainWindow):
 
                 result = so_template.restore(studio_one_path)
                 if result["restored"]:
-                    print("[KIOSK] Đã phục hồi bản mẫu Studio One")
+                    print(f"[KIOSK] Đã phục hồi bản mẫu {daw.active().display_name}")
                 elif so_template.has_template() and so_template.is_song_file(studio_one_path):
                     print(f"[KIOSK] CHƯA phục hồi bản mẫu: {result['reason']}")
             except Exception as e:
@@ -3120,12 +3128,12 @@ class MainDashboard(QMainWindow):
 
     def _on_toggle_studio_one(self):
         """Ẩn/Hiện Studio One + tất cả plugin windows (theo PID, không theo title)."""
-        from core import kiosk, so_windows
+        from core import daw, kiosk, so_windows
 
         # Chốt chặn cuối: nút mắt đã bị ẩn khi khoá, nhưng lệnh này còn tới được
         # từ MIDI/giọng nói/nút custom nên phải chặn ngay tại đây.
         if kiosk.is_locked():
-            self._show_message("Studio One đang khoá — cần mở khoá kỹ thuật", is_error=True)
+            self._show_message(f"{daw.active().display_name} đang khoá — cần mở khoá kỹ thuật", is_error=True)
             return
 
         if so_windows.win32_modules() is None:
@@ -3133,19 +3141,19 @@ class MainDashboard(QMainWindow):
             return
 
         if not so_windows.studio_one_pids():
-            self._show_message("Không tìm thấy Studio One đang chạy", is_error=True)
+            self._show_message(f"Không tìm thấy {daw.active().display_name} đang chạy", is_error=True)
             return
 
         if not so_windows.all_windows():
-            self._show_message("Studio One đang chạy nhưng không có cửa sổ nào", is_error=True)
+            self._show_message(f"{daw.active().display_name} đang chạy nhưng không có cửa sổ nào", is_error=True)
             return
 
         if so_windows.any_visible():
             so_windows.hide_all()
-            self._show_message("Đã ẩn Studio One")
+            self._show_message(f"Đã ẩn {daw.active().display_name}")
         else:
             so_windows.show_all()
-            self._show_message("Đã hiện Studio One")
+            self._show_message(f"Đã hiện {daw.active().display_name}")
 
     def _on_toggle_asiolink(self):
         """Ẩn/Hiện cửa sổ ASIOLINK (ASIO4ALL, ASIOVADPRO, ASIOLink Pro, v.v.)"""
@@ -4027,7 +4035,8 @@ class MainDashboard(QMainWindow):
         ghi đè bản khách đã chỉnh lên bài gốc.
         """
         from ui.dialogs.shutdown_dialog import StudioOneShutdownDialog
-        print("[KIOSK] Studio One còn chạy từ phiên trước — đóng lại để phục hồi bản mẫu")
+        from core import daw
+        print(f"[KIOSK] {daw.active().display_name} còn chạy từ phiên trước — đóng lại để phục hồi bản mẫu")
         try:
             dlg = StudioOneShutdownDialog(
                 self.engine,
@@ -4035,7 +4044,7 @@ class MainDashboard(QMainWindow):
                 force_kill=bool(self.settings.get("force_kill_studio_one", False)),
                 save=False,
                 title="Đang chuẩn bị bản mẫu",
-                hint=("Studio One còn mở từ phiên trước. Đang đóng lại (không lưu) "
+                hint=(f"{daw.active().display_name} còn mở từ phiên trước. Đang đóng lại (không lưu) "
                       "để chép bản mẫu đã chốt, rồi mở lên lại."),
                 skip_text="Bỏ qua, dùng bản hiện tại",
                 skip_tip="Giữ nguyên bài đang mở, không phục hồi bản mẫu phiên này",
@@ -4045,7 +4054,7 @@ class MainDashboard(QMainWindow):
             status = (dlg.result_data or {}).get("status")
             if status in ("closed", "not_running"):
                 return True
-            print(f"[KIOSK] Không đóng được Studio One ({status}) — bỏ qua phục hồi bản mẫu")
+            print(f"[KIOSK] Không đóng được {daw.active().display_name} ({status}) — bỏ qua phục hồi bản mẫu")
         except Exception as e:
             print(f"[KIOSK] đóng Studio One để phục hồi lỗi: {e}")
         return False
@@ -4074,6 +4083,7 @@ class MainDashboard(QMainWindow):
         thoát sạch còn hơn để nó kẹt với hộp thoại.
         """
         from ui.dialogs.shutdown_dialog import StudioOneShutdownDialog
+        from core import daw
         try:
             dlg = StudioOneShutdownDialog(
                 self.engine,
@@ -4081,8 +4091,8 @@ class MainDashboard(QMainWindow):
                 force_kill=bool(self.settings.get("force_kill_studio_one", False)),
                 save=False,
                 fallback_save=self._has_song_template(),
-                hint=("Đang đóng Studio One mà không lưu. Đừng tắt máy lúc này — "
-                      "tắt ngang sẽ khiến lần mở sau Studio One đòi phục hồi phiên."),
+                hint=(f"Đang đóng {daw.active().display_name} mà không lưu. Đừng tắt máy lúc này — "
+                      f"tắt ngang sẽ khiến lần mở sau {daw.active().display_name} đòi phục hồi phiên."),
                 parent=self,
             )
             dlg.exec()
@@ -4592,9 +4602,16 @@ class SetupView(QDialog):
         layout.setContentsMargins(30, 24, 30, 20)
 
         # Step 1: Studio One path
-        step1_lbl = QLabel("🔹 Bước 1:  Đường dẫn Studio One")
+        from core import daw as _daw
+        step1_lbl = QLabel("🔹 Bước 1:  Phần mềm thu âm (DAW) và đường dẫn bài mẫu")
         step1_lbl.setStyleSheet(f"color: {C['teal']}; font-size: 13px; font-weight: 700; font-family: {FONT}; background: transparent; border: none;")
         layout.addWidget(step1_lbl)
+
+        self.daw_combo = QComboBox()
+        for p in _daw.PROFILES.values():
+            self.daw_combo.addItem(p.display_name, p.kind)
+        self.daw_combo.setCurrentIndex(max(0, self.daw_combo.findData(_daw.kind_of(existing))))
+        layout.addWidget(self.daw_combo)
 
         row1 = QHBoxLayout()
         row1.setSpacing(6)
@@ -4664,10 +4681,11 @@ class SetupView(QDialog):
         """
 
     def _browse_studio_one(self):
+        from core import daw
+        profile = daw.PROFILES[self.daw_combo.currentData()]
         path, _ = QFileDialog.getOpenFileName(
-            self, "Chọn file Studio One hoặc chương trình", "",
-            "Studio One Files (*.song *.exe);;Song Files (*.song);;Executable (*.exe);;All Files (*.*)"
-        )
+            self, f"Chọn file bài mẫu hoặc chương trình {profile.display_name}", "",
+            profile.file_dialog_filter)
         if path:
             self.studio_one_input.setText(path)
 
@@ -4680,6 +4698,7 @@ class SetupView(QDialog):
         settings = {
             "studio_one_path": self.studio_one_input.text().strip(),
             "browser_path": self.browser_input.text().strip(),
+            "daw_kind": self.daw_combo.currentData(),
         }
         backend.ConfigManager.save_settings(settings)
         self._saved = True

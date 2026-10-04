@@ -376,35 +376,36 @@ class SettingsDialog(QDialog):
 
         # Paths
         lay.addWidget(self._section_header(SVG_FOLDER, "Đường dẫn ứng dụng"))
+        from core import daw as _daw
+        self._cmb_daw = QComboBox()
+        for p in _daw.PROFILES.values():
+            self._cmb_daw.addItem(p.display_name, p.kind)
+        self._cmb_daw.setCurrentIndex(max(0, self._cmb_daw.findData(_daw.kind_of(settings))))
         self._inp_so = QLineEdit(settings.get("studio_one_path", ""))
-        self._inp_so.setPlaceholderText("VD: D:/Songs/BaiHat.song hoặc C:/.../Studio One 7.exe")
         self._inp_br = QLineEdit(settings.get("browser_path", ""))
         self._inp_br.setPlaceholderText("VD: C:/Program Files/Google/Chrome/chrome.exe")
         lay.addWidget(self._section_card(self._build_paths))
 
         # Launch options
         lay.addWidget(self._section_header(SVG_POWER, "Khởi động / Tắt tự động"))
-        self._cb_launch_so = QCheckBox("Mở Studio One khi khởi động")
+        self._cb_launch_so = QCheckBox("Mở DAW khi khởi động")
         self._cb_launch_so.setStyleSheet(self._checkbox_qss)
         self._cb_launch_so.setChecked(settings.get("auto_launch_studio_one", False))
         self._cb_launch_br = QCheckBox("Mở YouTube (trình duyệt) khi khởi động")
         self._cb_launch_br.setStyleSheet(self._checkbox_qss)
         self._cb_launch_br.setChecked(settings.get("auto_launch_browser", False))
-        self._cb_close_so = QCheckBox("Đóng Studio One khi thoát (không lưu)")
+        self._cb_close_so = QCheckBox("Đóng DAW khi thoát (không lưu)")
         self._cb_close_so.setStyleSheet(self._checkbox_qss)
         self._cb_close_so.setChecked(settings.get("auto_close_studio_one", False))
-        self._cb_close_so.setToolTip(
-            "Thoát app thì đóng luôn Studio One và KHÔNG lưu bài — chỉnh sửa "
-            "trong phiên bị bỏ. Muốn giữ thì tự Ctrl+S trong Studio One trước "
-            "khi thoát app."
-        )
+        self._cmb_daw.currentIndexChanged.connect(self._on_daw_changed)
+        self._on_daw_changed()
         self._cb_close_br = QCheckBox("Đóng trình duyệt khi thoát")
         self._cb_close_br.setStyleSheet(self._checkbox_qss)
         self._cb_close_br.setChecked(settings.get("auto_close_browser", False))
         lay.addWidget(self._section_card(self._build_autolaunch))
 
         # Chế độ khách — khoá Studio One khỏi tay khách hàng
-        lay.addWidget(self._section_header(SVG_LOCK, "Chế độ khách — khoá Studio One"))
+        lay.addWidget(self._section_header(SVG_LOCK, f"Chế độ khách — khoá {_daw.active().display_name}"))
         lay.addWidget(self._section_card(self._build_kiosk))
 
         # Màn hình karaoke nhúng (chỉ bản Heavy có QtWebEngine)
@@ -841,10 +842,31 @@ class SettingsDialog(QDialog):
         worker.done.connect(_done)
         worker.start()
 
+    def _collect_daw_kind(self) -> str:
+        return self._cmb_daw.currentData() or "studio_one"
+
+    def _on_daw_changed(self, _idx=None):
+        from core import daw
+        p = daw.PROFILES[self._collect_daw_kind()]
+        ext = p.template_extension
+        if hasattr(self, "_so_lbl"):
+            self._so_lbl.setText(f"{p.display_name} ({ext} hoặc .exe):")
+        self._inp_so.setPlaceholderText(f"VD: D:/Songs/BaiMau{ext} hoặc C:/.../{p.display_name}.exe")
+        self._cb_launch_so.setText(f"Mở {p.display_name} khi khởi động")
+        self._cb_close_so.setText(f"Đóng {p.display_name} khi thoát (không lưu)")
+        self._cb_close_so.setToolTip(
+            f"Thoát app thì đóng luôn {p.display_name} và KHÔNG lưu bài — chỉnh sửa "
+            f"trong phiên bị bỏ. Muốn giữ thì tự Ctrl+S trong {p.display_name} trước khi thoát app.")
+
     def _build_paths(self, vl):
-        so_lbl = QLabel("Studio One (.song hoặc .exe):")
-        so_lbl.setStyleSheet(self._field_label_qss())
-        vl.addWidget(so_lbl)
+        daw_lbl = QLabel("Phần mềm thu âm (DAW):")
+        daw_lbl.setStyleSheet(self._field_label_qss())
+        vl.addWidget(daw_lbl)
+        self._cmb_daw.setMinimumHeight(42)
+        vl.addWidget(self._cmb_daw)
+        self._so_lbl = QLabel("")
+        self._so_lbl.setStyleSheet(self._field_label_qss())
+        vl.addWidget(self._so_lbl)
         row_so = QHBoxLayout()
         row_so.setSpacing(8)
         self._inp_so.setStyleSheet(self._input_qss)
@@ -886,7 +908,7 @@ class SettingsDialog(QDialog):
         Trạng thái khoá không được phép nằm lửng lơ giữa RAM và đĩa — bấm bật là
         khoá, đóng app đột ngột cũng vẫn khoá.
         """
-        from core import kiosk
+        from core import daw as _daw, kiosk
 
         vl.setSpacing(8)
 
@@ -894,13 +916,13 @@ class SettingsDialog(QDialog):
         self._kiosk_status.setWordWrap(True)
         vl.addWidget(self._kiosk_status)
 
-        self._cb_kiosk = QCheckBox("Bật chế độ khách (ẩn hẳn Studio One khỏi giao diện)")
+        self._cb_kiosk = QCheckBox(f"Bật chế độ khách (ẩn hẳn {_daw.active().display_name} khỏi giao diện)")
         self._cb_kiosk.setStyleSheet(self._checkbox_qss)
         self._cb_kiosk.setMinimumHeight(34)
         self._cb_kiosk.clicked.connect(self._on_kiosk_toggled)
         vl.addWidget(self._cb_kiosk)
 
-        self._cb_keep_hidden = QCheckBox("Ẩn lại cả khi khách tự mở Studio One (quét nền)")
+        self._cb_keep_hidden = QCheckBox(f"Ẩn lại cả khi khách tự mở {_daw.active().display_name} (quét nền)")
         self._cb_keep_hidden.setStyleSheet(self._checkbox_qss)
         self._cb_keep_hidden.setMinimumHeight(34)
         self._cb_keep_hidden.clicked.connect(
@@ -974,15 +996,16 @@ class SettingsDialog(QDialog):
         self._refresh_kiosk_ui()
 
     def _refresh_kiosk_ui(self):
-        from core import kiosk, so_template
+        from core import daw, kiosk, so_template
 
+        name = daw.active().display_name
         locked = kiosk.is_locked()
         enabled = kiosk.is_enabled()
 
         if not enabled:
-            text, color = "Đang TẮT — khách vẫn thấy và mở được Studio One.", C["text_muted"]
+            text, color = f"Đang TẮT — khách vẫn thấy và mở được {name}.", C["text_muted"]
         elif locked:
-            text, color = ("Đang KHOÁ — Studio One bị ẩn khỏi khách. Mở khoá để"
+            text, color = (f"Đang KHOÁ — {name} bị ẩn khỏi khách. Mở khoá để"
                            " chỉnh mục này.", C["orange"])
         else:
             mins_left = (kiosk.session_remaining() + 59) // 60
@@ -1011,8 +1034,8 @@ class SettingsDialog(QDialog):
                 f" ({info.get('size', 0) // 1024} KB) — nguồn: {info.get('source', '?')}")
         else:
             self._kiosk_tpl_lbl.setText(
-                "Chưa chốt bản mẫu. Tinh chỉnh xong trong Studio One, lưu bài, đóng"
-                " Studio One rồi bấm \"Chốt bản mẫu .song\".")
+                f"Chưa chốt bản mẫu. Tinh chỉnh xong trong {name}, lưu bài, đóng"
+                f" {name} rồi bấm \"Chốt bản mẫu {daw.active().template_extension}\".")
 
     def _kiosk_apply(self, fn, value):
         try:
@@ -1073,15 +1096,16 @@ class SettingsDialog(QDialog):
             self._refresh_kiosk_ui()
 
     def _on_kiosk_snapshot(self):
-        from core import so_template, so_windows
+        from core import daw, so_template, so_windows
+        name = daw.active().display_name
         path = self._inp_so.text().strip() or self._dashboard.settings.get("studio_one_path", "")
         if so_windows.is_running():
             self._dashboard._show_message(
-                "Hãy đóng Studio One trước khi chốt bản mẫu", is_error=True)
+                f"Hãy đóng {name} trước khi chốt bản mẫu", is_error=True)
             return
         result = so_template.snapshot(path)
         if result["ok"]:
-            self._dashboard._show_message("Đã chốt bản mẫu Studio One")
+            self._dashboard._show_message(f"Đã chốt bản mẫu {name}")
         else:
             self._dashboard._show_message(f"Chốt bản mẫu lỗi: {result['error']}", is_error=True)
         self._refresh_kiosk_ui()
@@ -1125,8 +1149,8 @@ class SettingsDialog(QDialog):
                 lb_sel = idx + 1
         combo_lb.setCurrentIndex(lb_sel)
 
-        combo_mic.addItem("Tắt (Studio One đã mix giọng vào Loopback)", -2)
-        combo_mic.addItem("Bật Mic (chỉ dùng khi KHÔNG qua Studio One)", -1)
+        combo_mic.addItem("Tắt (DAW đã mix giọng vào Loopback)", -2)
+        combo_mic.addItem("Bật Mic (chỉ dùng khi KHÔNG qua DAW)", -1)
         mic_sel = 0
         for idx, (label, dev_idx) in enumerate(all_input_devices):
             combo_mic.addItem(label, dev_idx)
@@ -1154,7 +1178,7 @@ class SettingsDialog(QDialog):
         vl.addWidget(mic_lbl)
         vl.addWidget(self._combo_mic)
         mic_hint = QLabel(
-            "Lưu ý: Khi dùng Studio One, Loopback đã chứa giọng hát đã xử lý (Auto-Tune + Reverb).\n"
+            "Lưu ý: Khi dùng DAW, Loopback đã chứa giọng hát đã xử lý (Auto-Tune + Reverb).\n"
             "Bật thêm Mic sẽ khiến giọng bị lặp đôi. Chỉ bật khi ghi âm thô không qua DAW."
         )
         mic_hint.setStyleSheet(self._field_label_qss(size=10, color=C["orange"], weight=600, italic=True))
@@ -1726,10 +1750,10 @@ class SettingsDialog(QDialog):
     # ── Actions ───────────────────────────────────────────────
 
     def _browse_so(self):
+        from core import daw
+        p = daw.PROFILES[self._collect_daw_kind()]
         path, _ = QFileDialog.getOpenFileName(
-            self, "Chọn file Studio One hoặc chương trình", "",
-            "Studio One Files (*.song *.exe);;Song Files (*.song);;Executable (*.exe);;All Files (*.*)"
-        )
+            self, f"Chọn file bài mẫu hoặc chương trình {p.display_name}", "", p.file_dialog_filter)
         if path:
             self._inp_so.setText(path)
 
@@ -1756,6 +1780,7 @@ class SettingsDialog(QDialog):
             s["studio_one_path"] = new_so
         if new_br:
             s["browser_path"] = new_br
+        s["daw_kind"] = self._collect_daw_kind()
         s["auto_launch_studio_one"] = self._cb_launch_so.isChecked()
         s["auto_launch_browser"]    = self._cb_launch_br.isChecked()
         s["auto_close_studio_one"]  = self._cb_close_so.isChecked()

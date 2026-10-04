@@ -30,7 +30,9 @@ def build_header(dashboard) -> PaintedHeaderBar:
         print(f"[PREMIUM-TAG] init lỗi: {e}")
 
     dashboard._midi_dot = PaintedMidiDot()
-    dashboard._midi_dot.setToolTip("Kết nối MIDI với Studio One")
+    from core import daw
+    name = daw.active().display_name
+    dashboard._midi_dot.setToolTip(f"Kết nối MIDI với {name}")
     dashboard._midi_dot.setAccessibleName("Đèn báo MIDI")
     dashboard._midi_dot.setAccessibleDescription("Xanh: đã kết nối. Đỏ: mất kết nối.")
     layout.addWidget(dashboard._midi_dot)
@@ -160,8 +162,8 @@ def build_header(dashboard) -> PaintedHeaderBar:
         "", color=C["card_hover"], height=28, radius=6,
         font_size=10, svg_content=SVG_EYE_OPEN, svg_size=16, fixed_width=30,
     )
-    dashboard._eye_btn.setToolTip("Ẩn/Hiện Studio One + Plugin")
-    dashboard._eye_btn.setAccessibleName("Ẩn hiện Studio One")
+    dashboard._eye_btn.setToolTip(f"Ẩn/Hiện {name} + Plugin")
+    dashboard._eye_btn.setAccessibleName(f"Ẩn hiện {name}")
     dashboard._eye_btn.setCursor(Qt.PointingHandCursor)
     dashboard._eye_btn.clicked.connect(dashboard._on_eye_toggle_studio_one)
     layout.addWidget(dashboard._eye_btn)

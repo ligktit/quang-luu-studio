@@ -58,7 +58,9 @@ class StudioOneShutdownDialog(QDialog):
                  save=True, title=None, hint=None, fallback_save=False,
                  skip_text=None, skip_tip=None):
         super().__init__(parent)
-        self.setWindowTitle(title or "Đang đóng Studio One")
+        from core import daw
+        name = daw.active().display_name
+        self.setWindowTitle(title or f"Đang đóng {name}")
         self.setModal(True)
         self.setFixedWidth(430)
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
@@ -71,7 +73,7 @@ class StudioOneShutdownDialog(QDialog):
         lay.setContentsMargins(24, 20, 24, 18)
         lay.setSpacing(12)
 
-        heading = QLabel(title or "Đang đóng Studio One an toàn")
+        heading = QLabel(title or f"Đang đóng {name} an toàn")
         heading.setStyleSheet(
             f"font-size: 17px; font-weight: 900; color: {C['text']};"
             f" font-family: {FONT}; background: transparent;"
@@ -79,8 +81,8 @@ class StudioOneShutdownDialog(QDialog):
         lay.addWidget(heading)
 
         hint_lbl = QLabel(hint or (
-            "Đang chờ Studio One tự thoát. Đừng tắt máy lúc này — "
-            "tắt ngang sẽ khiến lần mở sau Studio One đòi phục hồi phiên."
+            f"Đang chờ {name} tự thoát. Đừng tắt máy lúc này — "
+            f"tắt ngang sẽ khiến lần mở sau {name} đòi phục hồi phiên."
         ))
         hint_lbl.setWordWrap(True)
         hint_lbl.setStyleSheet(
@@ -119,7 +121,7 @@ class StudioOneShutdownDialog(QDialog):
             }}
             QPushButton:hover {{ background-color: {lighten(C['card_hover'], 0.12)}; }}
         """)
-        skip.setToolTip(skip_tip or "Để Studio One chạy tiếp và thoát app ngay")
+        skip.setToolTip(skip_tip or f"Để {name} chạy tiếp và thoát app ngay")
         skip.clicked.connect(self._on_skip)
         row.addWidget(skip)
         lay.addLayout(row)

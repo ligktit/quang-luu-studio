@@ -130,10 +130,12 @@ class TechUnlockDialog(_BaseTechDialog):
     """
 
     def __init__(self, parent=None):
+        from core import daw
+        name = daw.active().display_name
         super().__init__(
             parent,
             "Mở khoá kỹ thuật",
-            "Nhập mã PIN kỹ thuật để hiện lại Studio One. "
+            f"Nhập mã PIN kỹ thuật để hiện lại {name}. "
             f"Phiên tự khoá lại sau {kiosk.session_minutes()} phút hoặc khi đóng app.",
         )
         self._pin = self._new_pin_input("Mã PIN")
