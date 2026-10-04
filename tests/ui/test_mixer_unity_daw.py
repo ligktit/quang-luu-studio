@@ -7,6 +7,9 @@ def test_studio_one_0db_la_76():
     assert db_to_midi(0.0, -10.0, daw.STUDIO_ONE.fader_unity_cc) == 76
     assert db_to_midi(-10.0, -10.0, 76) == 0
     assert db_to_midi(10.0, -10.0, 76) == 127
+    # Ghim điểm giữa của Studio One — giá trị cũ không được đổi.
+    assert db_to_midi(-5.0, -10.0, 76) == 38
+    assert db_to_midi(5.0, -10.0, 76) == 102
 
 
 def test_cubase_0db_la_100():
