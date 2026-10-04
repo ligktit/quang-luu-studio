@@ -929,7 +929,7 @@ class SettingsDialog(QDialog):
             lambda: self._kiosk_apply(kiosk.set_keep_hidden, self._cb_keep_hidden.isChecked()))
         vl.addWidget(self._cb_keep_hidden)
 
-        self._cb_restore_tpl = QCheckBox("Phục hồi bản mẫu .song mỗi lần khởi động")
+        self._cb_restore_tpl = QCheckBox(f"Phục hồi bản mẫu {_daw.active().template_extension} mỗi lần khởi động")
         self._cb_restore_tpl.setStyleSheet(self._checkbox_qss)
         self._cb_restore_tpl.setMinimumHeight(34)
         self._cb_restore_tpl.clicked.connect(
@@ -975,12 +975,12 @@ class SettingsDialog(QDialog):
         self._btn_kiosk_pin.clicked.connect(self._on_kiosk_set_pin)
         row_btn.addWidget(self._btn_kiosk_pin)
 
-        self._btn_kiosk_snapshot = QPushButton("Chốt bản mẫu .song")
+        self._btn_kiosk_snapshot = QPushButton(f"Chốt bản mẫu {_daw.active().template_extension}")
         self._btn_kiosk_snapshot.setCursor(Qt.PointingHandCursor)
         self._btn_kiosk_snapshot.setFixedHeight(38)
         self._btn_kiosk_snapshot.setStyleSheet(
             pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 12, 14))
-        self._btn_kiosk_snapshot.setToolTip("Chốt file .song hiện tại làm bản gốc")
+        self._btn_kiosk_snapshot.setToolTip(f"Chốt file {_daw.active().template_extension} hiện tại làm bản gốc")
         self._btn_kiosk_snapshot.clicked.connect(self._on_kiosk_snapshot)
         row_btn.addWidget(self._btn_kiosk_snapshot)
         row_btn.addStretch()
@@ -1776,11 +1776,21 @@ class SettingsDialog(QDialog):
         s = self._dashboard.settings
         new_so = self._inp_so.text().strip()
         new_br = self._inp_br.text().strip()
+        from core import daw
+        prof = daw.PROFILES[self._collect_daw_kind()]
+        ok_exts = tuple(e.lower() for e in prof.project_extensions) + (
+            prof.template_extension.lower(), ".exe")
+        if new_so and not new_so.lower().endswith(ok_exts):
+            # Đuôi file không khớp DAW đang chọn (vd chọn Cubase nhưng còn .song)
+            # → không lưu gì, tránh app lặng lẽ mở/phục hồi sai file.
+            self._dashboard._show_message(
+                f"Đường dẫn phải là file {prof.template_extension} của "
+                f"{prof.display_name} hoặc .exe", is_error=True)
+            return
         if new_so:
             s["studio_one_path"] = new_so
         if new_br:
             s["browser_path"] = new_br
-        from core import daw
         old_daw = daw.kind_of(s)
         s["daw_kind"] = self._collect_daw_kind()
         daw_changed = s["daw_kind"] != old_daw

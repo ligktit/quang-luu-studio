@@ -82,12 +82,6 @@ def _save_without_side_effects(dlg):
         dlg._save()
 
 
-# ── Đồng bộ đám mây ──
-def test_dong_bo_dam_may_tra_nut_ve_binh_thuong_khi_xong(qapp, mock_engine, qtbot):
-    dashboard = _make_dashboard(qtbot, premium=True)
-    dlg = _open_dialog(qtbot, dashboard, premium=True)
-
-
 def test_auto_launch_dung_duoi_cpr_khi_cubase():
     self = MagicMock()
     self.settings = {"daw_kind": "cubase", "studio_one_path": r"D:\QLS\mau.cpr",
@@ -134,4 +128,46 @@ def test_doi_daw_lam_moi_scale_values(qapp, mock_engine, qtbot):
         assert frontend_qt.SCALE_VALUES == {"major": 43, "minor": 85}
     finally:
         frontend_qt.SCALE_VALUES = old
+        daw.bind(None)
+
+
+def test_khong_luu_khi_duoi_file_khong_khop_daw(qapp, mock_engine, qtbot):
+    # Chọn Cubase nhưng vẫn để đường dẫn .song → không lưu, báo lỗi rõ ràng.
+    dashboard = _make_dashboard(qtbot, settings={"daw_kind": "studio_one"})
+    try:
+        dlg = _open_dialog(qtbot, dashboard)
+        dlg._cmb_daw.setCurrentIndex(dlg._cmb_daw.findData("cubase"))
+        dlg._inp_so.setText(r"D:\bai\mau.song")
+        with patch.object(dashboard, "_show_message") as show:
+            _save_without_side_effects(dlg)
+        assert dashboard.settings.get("daw_kind") != "cubase"
+        assert dashboard.settings.get("studio_one_path") != r"D:\bai\mau.song"
+        assert any(c.kwargs.get("is_error") is True for c in show.call_args_list)
+    finally:
+        daw.bind(None)
+
+
+def test_luu_duoc_exe_hoac_dung_duoi_khi_cubase(qapp, mock_engine, qtbot):
+    dashboard = _make_dashboard(qtbot, settings={"daw_kind": "studio_one"})
+    try:
+        dlg = _open_dialog(qtbot, dashboard)
+        dlg._cmb_daw.setCurrentIndex(dlg._cmb_daw.findData("cubase"))
+        dlg._inp_so.setText(r"D:\bai\Mau.CPR")
+        _save_without_side_effects(dlg)
+        assert dashboard.settings["daw_kind"] == "cubase"
+        assert dashboard.settings["studio_one_path"] == r"D:\bai\Mau.CPR"
+    finally:
+        daw.bind(None)
+
+
+def test_nut_chot_ban_mau_theo_duoi_cubase(qapp, mock_engine, qtbot):
+    dashboard = _make_dashboard(qtbot, settings={"daw_kind": "cubase"})
+    try:
+        daw.bind(dashboard.settings)
+        dlg = _open_dialog(qtbot, dashboard)
+        assert ".cpr" in dlg._btn_kiosk_snapshot.text()
+        assert ".cpr" in dlg._btn_kiosk_snapshot.toolTip()
+        assert ".cpr" in dlg._cb_restore_tpl.text()
+        assert ".song" not in dlg._btn_kiosk_snapshot.text()
+    finally:
         daw.bind(None)
