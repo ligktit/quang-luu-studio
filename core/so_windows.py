@@ -16,8 +16,25 @@ import time
 
 log = logging.getLogger(__name__)
 
+# Từ khoá nhận diện lấy theo hồ sơ DAW đang chọn (core.daw). Hai tên cũ giữ lại
+# cho code/test cũ còn tham chiếu — chúng chỉ là giá trị của Studio One.
 PROCESS_KEYWORDS = ("studio one",)
 MAIN_TITLE_KEYWORD = "studio one"
+
+
+def _profile():
+    from core import daw
+    return daw.active()
+
+
+def process_keywords() -> tuple:
+    return tuple(_profile().process_keywords)
+
+
+def title_is_main(title) -> bool:
+    """Tiêu đề này có phải cửa sổ chính của DAW không (mọi từ bắt buộc đều có)."""
+    t = (title or "").lower()
+    return all(word in t for word in _profile().main_title_requires)
 
 SW_HIDE = 0
 SW_SHOW = 5
@@ -44,14 +61,18 @@ def studio_one_pids():
     except ImportError:
         return set()
     pids = set()
+    keywords = process_keywords()
     for proc in psutil.process_iter(["pid", "name"]):
         try:
             name = (proc.info.get("name") or "").lower()
-            if any(kw in name for kw in PROCESS_KEYWORDS):
+            if any(kw in name for kw in keywords):
                 pids.add(proc.info["pid"])
         except Exception:
             continue
     return pids
+
+
+daw_pids = studio_one_pids
 
 
 def is_running() -> bool:
@@ -89,7 +110,7 @@ def all_windows():
 
 
 def main_windows(hwnds=None):
-    """Các cửa sổ chính — tiêu đề có chứa "Studio One" (kể cả đang ẩn).
+    """Các cửa sổ chính — tiêu đề đạt mọi từ khoá của DAW đang chọn (kể cả đang ẩn).
 
     Hộp thoại con của Studio One thường KHÔNG mang tên này, nên dùng để phân biệt
     "cửa sổ chính" với "hộp thoại vừa bật lên".
@@ -101,7 +122,7 @@ def main_windows(hwnds=None):
     out = []
     for hwnd in (all_windows() if hwnds is None else hwnds):
         try:
-            if MAIN_TITLE_KEYWORD in (win32gui.GetWindowText(hwnd) or "").lower():
+            if title_is_main(win32gui.GetWindowText(hwnd)):
                 out.append(hwnd)
         except Exception:
             continue
@@ -143,7 +164,7 @@ def hide_all() -> int:
         except Exception:
             continue
     if count:
-        log.info("Đã ẩn %d cửa sổ Studio One", count)
+        log.info("Đã ẩn %d cửa sổ %s", count, _profile().display_name)
     return count
 
 
@@ -167,7 +188,7 @@ def show_all(focus_main=True) -> int:
             if force_foreground(hwnd):
                 break
     if count:
-        log.info("Đã hiện %d cửa sổ Studio One", count)
+        log.info("Đã hiện %d cửa sổ %s", count, _profile().display_name)
     return count
 
 
@@ -449,11 +470,11 @@ class HideGuard:
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="so-hide-guard")
         self._thread.start()
-        log.info("Bật watchdog giữ ẩn Studio One")
+        log.info("Bật watchdog giữ ẩn %s", _profile().display_name)
 
     def stop(self):
         self._stop.set()
-        log.info("Tắt watchdog giữ ẩn Studio One")
+        log.info("Tắt watchdog giữ ẩn %s", _profile().display_name)
 
     def is_running(self) -> bool:
         return bool(self._thread and self._thread.is_alive() and not self._stop.is_set())
@@ -563,7 +584,7 @@ class ReadyWatcher:
         self._thread = threading.Thread(target=self._loop, daemon=True,
                                         name="so-ready-watcher")
         self._thread.start()
-        log.info("Bật vòng chờ Studio One sẵn sàng nhận MIDI")
+        log.info("Bật vòng chờ %s sẵn sàng nhận MIDI", _profile().display_name)
 
     def stop(self):
         self._stop.set()
