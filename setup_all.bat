@@ -112,7 +112,11 @@ if "!CB_FOUND!"=="" (
     goto :skip_cubase
 )
 echo [OK] Tim thay !CB_FOUND!
-set "CB_DST=%USERPROFILE%\Documents\Steinberg\Cubase\MIDI Remote\Driver Scripts\Local\QuangLuu\QuangLuuMIDI"
+REM Thu muc Documents THAT (OneDrive co the doi cho) - Cubase quet o day.
+set "QLS_DOCS="
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "[Environment]::GetFolderPath([Environment+SpecialFolder]::MyDocuments)"`) do set "QLS_DOCS=%%P"
+if "!QLS_DOCS!"=="" set "QLS_DOCS=%USERPROFILE%\Documents"
+set "CB_DST=!QLS_DOCS!\Steinberg\Cubase\MIDI Remote\Driver Scripts\Local\QuangLuu\QuangLuuMIDI"
 if not exist "!CB_DST!" mkdir "!CB_DST!"
 copy /Y "%~dp0cubase\QuangLuu_QuangLuuMIDI.js" "!CB_DST!\" >nul
 if exist "!CB_DST!\QuangLuu_QuangLuuMIDI.js" (

@@ -244,7 +244,7 @@ Chạy thử đầu-cuối trên máy dev: **chưa thực hiện** (sẽ cập n
 ### Ngoài phạm vi
 
 - Override cân chỉnh theo DAW (hiện override người dùng dùng chung cho mọi DAW).
-- Thư mục Documents khi có OneDrive redirect: `setup_all.bat` dùng `%USERPROFILE%\Documents`, chẩn đoán dùng `GetFolderPath(MyDocuments)` — cần thống nhất.
+- ~~Thư mục Documents khi có OneDrive redirect~~ — đã xử lý: `setup_all.bat` và chẩn đoán cùng dùng `GetFolderPath(MyDocuments)`.
 
 ## Nguồn
 
