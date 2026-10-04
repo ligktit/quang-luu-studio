@@ -678,6 +678,20 @@ Safe "Cài đặt quan trọng trong settings.json" {
         Chk "Đường dẫn Studio One" "WARN" "chưa đặt" "Vào Cài đặt → chọn file bài mẫu .song (hoặc Studio One.exe) để app tự mở."
     }
 
+    # DAW đang chọn phải khớp đuôi file (VD chọn Cubase mà vẫn để .song → app mở sai)
+    $dk = [string](Prop $s "daw_kind" "studio_one")
+    if ($dk -ne "cubase") { $dk = "studio_one" }
+    if ($sop) {
+        $ext = [System.IO.Path]::GetExtension($sop).ToLower()
+        if ($dk -eq "cubase") { $okExt = @(".cpr") }
+        else { $okExt = @(".song", ".songversion", ".soundset", ".instrument", ".multiinstrument", ".pedalboard", ".channel", ".macro", ".fxchain") }
+        if ($ext -eq ".exe" -or $okExt -contains $ext) {
+            Chk "DAW và đuôi file" "OK" ($dk + " / " + $ext)
+        } else {
+            Chk "DAW và đuôi file" "FAIL" ("DAW = " + $dk + " nhưng file là " + $ext) "Cài đặt → Phần mềm thu âm (DAW) chọn đúng, hoặc chọn lại file bài mẫu"
+        }
+    }
+
     # Trình duyệt
     $bp = [string](Prop $s "browser_path" "")
     if ($bp) {
@@ -896,12 +910,15 @@ Safe "Cubase đã cài" {
     $found = @(Get-ChildItem -LiteralPath (Join-Path $env:ProgramFiles "Steinberg") -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "Cubase*" })
     if ($found.Count -eq 0) { Chk "Cubase đã cài" "INFO" "không thấy (chỉ cần khi dùng Cubase)"; return }
     Chk "Cubase đã cài" "OK" (($found | ForEach-Object { $_.Name }) -join ", ")
-    $dst = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "Steinberg\Cubase\MIDI Remote\Driver Scripts\Local\QuangLuu\QuangLuuMIDI\QuangLuu_QuangLuuMIDI.js"
-    if (-not (Test-Path -LiteralPath $dst)) {
+    $dst = JP ([Environment]::GetFolderPath("MyDocuments")) "Steinberg\Cubase\MIDI Remote\Driver Scripts\Local\QuangLuu\QuangLuuMIDI\QuangLuu_QuangLuuMIDI.js"
+    if (-not $dst -or -not (Test-Path -LiteralPath $dst)) {
         Chk "Script MIDI Remote Cubase" "FAIL" "chưa chép" "Cubase không nhận nút bấm từ app. Chạy setup_all.bat rồi mở lại Cubase."
     } else {
-        $src = Join-Path $script:AppRoot "cubase\QuangLuu_QuangLuuMIDI.js"
-        if ((Test-Path -LiteralPath $src) -and ((Get-FileHash $src).Hash -ne (Get-FileHash $dst).Hash)) {
+        # JP: AppRoot rỗng (không tìm thấy thư mục app) không được làm sập cả mục này
+        $src = JP $script:AppRoot "cubase\QuangLuu_QuangLuuMIDI.js"
+        if (-not $src -or -not (Test-Path -LiteralPath $src)) {
+            Chk "Script MIDI Remote Cubase" "WARN" "đã chép, không so sánh được bản đi kèm" "Không thấy thư mục app hoặc file cubase\QuangLuu_QuangLuuMIDI.js đi kèm."
+        } elseif ((Get-FileHash $src).Hash -ne (Get-FileHash $dst).Hash) {
             Chk "Script MIDI Remote Cubase" "WARN" "khác bản đi kèm app" "Chạy setup_all.bat rồi Reload Scripts trong Cubase."
         } else { Chk "Script MIDI Remote Cubase" "OK" "đã chép, đúng bản" }
     }
