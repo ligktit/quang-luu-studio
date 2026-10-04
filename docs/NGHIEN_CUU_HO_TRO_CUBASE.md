@@ -239,7 +239,11 @@ Kế hoạch: [`docs/superpowers/plans/2026-10-04-ho-tro-cubase.md`](superpowers
 
 Test: `tests/conftest.py` bind hồ sơ Studio One rỗng trước mỗi test để không đọc `settings.json` thật.
 
-Chạy thử đầu-cuối trên máy dev: **chưa thực hiện** (sẽ cập nhật).
+- Chạy thử đầu-cuối trên máy dev (Cubase Pro 13.0.10, `D:\QLS\mau.cpr`, 2026-10-04 19:30, sau đợt sửa cuối 4765ae2): **đạt**.
+  - App mở khi Cubase đã chạy → thoát app: hộp "Đang đóng Cubase", nhận diện hộp thoại Save (`Cubase Pro`), bấm "Không lưu", process thoát sau ~6 s (WM_CLOSE vào cửa sổ `SmtgMain`, không kẹt ở Hub).
+  - App mở khi Cubase đang tắt → tự mở thẳng `mau.cpr` (không Hub); script báo plugin Pitch Correct; đồng bộ MIDI tới Cubase: fader Mic/Vang 0 dB → CC 100, Nhạc → CC 88, mute về 0, Auto-Tune → PitchCorrect 100, Scale Major (CC 43), Key C.
+  - Kiểm riêng script: CC 33 = 23 → Key "D", CC 35 = 43 → Scale "Major" (SysEx `disp|6|D|`, `disp|7|Major|`).
+  - Chưa kiểm bằng chuột: nút mắt ẩn/hiện và kéo fader trên giao diện (màn hình người dùng đang bận); logic ẩn/hiện theo PID không đổi so với Studio One.
 
 ### Ngoài phạm vi
 
