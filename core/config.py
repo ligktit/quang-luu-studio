@@ -350,10 +350,36 @@ class AppConfig:
         """Lấy MIDI CC mapping dict"""
         return cls.load().get("midi_cc", _DEFAULT_APP_CONFIG["midi_cc"])
 
+    @staticmethod
+    def _user_calibration_keys():
+        """Các key cân chỉnh người dùng đã tự lưu (file overrides). Rỗng nếu chưa có."""
+        try:
+            if os.path.exists(CALIBRATION_OVERRIDES_FILE):
+                with open(CALIBRATION_OVERRIDES_FILE, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    return set(loaded.keys())
+        except Exception:
+            pass
+        return set()
+
+    @classmethod
+    def _daw_calibrated(cls, key, fallback):
+        """Ưu tiên: override người dùng > mặc định của DAW đang chọn > app_config."""
+        if key in cls._user_calibration_keys():
+            return fallback
+        try:
+            from core import daw  # import trễ: core.daw import core.config
+            value = daw.active().calibration.get(key)
+        except Exception:
+            value = None
+        return dict(value) if isinstance(value, dict) else fallback
+
     @classmethod
     def get_scale_values(cls):
-        """Lấy scale values dict"""
-        return cls.load().get("scale_values", _DEFAULT_APP_CONFIG["scale_values"])
+        """Lấy scale values dict (override người dùng > hồ sơ DAW > app_config)"""
+        base = cls.load().get("scale_values", _DEFAULT_APP_CONFIG["scale_values"])
+        return cls._daw_calibrated("scale_values", base)
 
     @classmethod
     def get_key_midi_map(cls):
@@ -363,7 +389,8 @@ class AppConfig:
     @classmethod
     def get_scale_midi_map(cls):
         """Lấy Scale → MIDI CC value mapping (cho Auto-Tune plugin)"""
-        return cls.load().get("scale_midi_map", _DEFAULT_APP_CONFIG["scale_midi_map"])
+        base = cls.load().get("scale_midi_map", _DEFAULT_APP_CONFIG["scale_midi_map"])
+        return cls._daw_calibrated("scale_midi_map", base)
 
     @classmethod
     def get_mode_midi_map(cls):
