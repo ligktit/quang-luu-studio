@@ -111,9 +111,19 @@ App đặt tham số `i` bằng **CC 80+i** (0–127 ≈ 0–1). Quét để l�
 (86 = tham số 6, 87 = tham số 7 …). Kết quả là các khoảng CC → giá trị hiển thị, ví dụ với Steinberg Pitch Correct
 (Cubase 13.0.10): Key `C 0–5, C# 6–17, D 18–28 … B 122–127`; Scale `Chromatic 0–21, Major 22–63, Minor 64–105, Custom 106–127`.
 
+Antares **Auto-Tune Pro 11** (VST3, máy khách 2026-10-06): tham số 0 Correction Mode, 1 Scale (bảng cổ điển, KHÔNG
+phải Scale trên GUI), **2 Key**, 3 Detune, 4 Retune Speed, 5–7 Vibrato, 8 Re-Track ARA, 9 Tracking, 10 Input Type,
+11 Use Classic Mode DSP, **162 "Modern Scale"** (= dropdown Scale của GUI). Key: cùng dải như Pitch Correct
+(C 0–5 … B 122–127). Modern Scale: Chromatic 0–5, **Major 6–13, Minor 14–22**, Harmonic Minor 23–31 → app bắt
+Major = 10, Minor = 18 bằng Cân chỉnh Auto-Tune. Script tự chọn hồ sơ theo tên tham số "Key" (`HO_SO_PLUGIN`).
+Không có Python trên máy khách thì đọc bằng Script Console (lọc Log Messages, kéo thanh cuộn xuống cuối).
+
 ## Giới hạn API Cubase 13.0.10
 
 `Documents\Steinberg\Cubase\MIDI Remote\Driver Scripts\.api\v1\midiremote_api_v1.d.ts` của bản này **không có**
 `makeDirectAccess` / `accessSlotAtIndex` / `setProcessValue` trên HostValue. Chỉ có `makeInsertEffectViewer().excludeEmptySlots()`
 + `mParameterBankZone.makeParameterValue()` (tham số theo thứ tự) và `makeValueBinding`. Script vì vậy gán theo **chỉ số tham số**,
 app tự tìm chỉ số của "Key"/"Scale" từ SysEx loại 1.
+
+Kênh NHAC (`viewerNhac`, log `nhac param[i]`/`nhac disp[i]`): Waves SoundShifter Pitch Stereo có 10 tham số, bank lặp chu kỳ 10;
+**tham số 4 "PitchSemitones"** nhận 0–127 = −12…+12 bán cung (1:1 với Tone Giọng của app, đo 2026-10-07).

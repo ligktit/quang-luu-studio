@@ -6,6 +6,9 @@ chỉ hỏi `core.daw.active()`. Thêm DAW mới = thêm một DawProfile, khôn
 Số đo Cubase lấy từ docs/NGHIEN_CUU_HO_TRO_CUBASE.md mục 7 (Cubase Pro 13.0.10):
 fader 0 dB = CC 100; Pitch Correct: Scale Major 22–63 (tâm 43), Minor 64–105 (tâm 85);
 Key trùng key_midi_map hiện có nên không ghi đè.
+Plugin khác thì bảng Scale khác: Antares Auto-Tune Pro 11 trên Cubase (máy khách 2026-10-06)
+tham số 162 "Modern Scale": Major 6–13 / Minor 14–22 → khách bắt Major=10, Minor=18 bằng Cân chỉnh Auto-Tune (override người dùng
+thắng hồ sơ này). Script MIDI Remote tự chọn chỉ số Key/Scale theo plugin (HO_SO_PLUGIN).
 """
 from dataclasses import dataclass, field
 

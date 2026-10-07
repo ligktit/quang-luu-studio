@@ -244,11 +244,49 @@ Test: `tests/conftest.py` bind hồ sơ Studio One rỗng trước mỗi test đ
   - App mở khi Cubase đang tắt → tự mở thẳng `mau.cpr` (không Hub); script báo plugin Pitch Correct; đồng bộ MIDI tới Cubase: fader Mic/Vang 0 dB → CC 100, Nhạc → CC 88, mute về 0, Auto-Tune → PitchCorrect 100, Scale Major (CC 43), Key C.
   - Kiểm riêng script: CC 33 = 23 → Key "D", CC 35 = 43 → Scale "Major" (SysEx `disp|6|D|`, `disp|7|Major|`).
   - Chưa kiểm bằng chuột: nút mắt ẩn/hiện và kéo fader trên giao diện (màn hình người dùng đang bận); logic ẩn/hiện theo PID không đổi so với Studio One.
+- Chạy lại 2026-10-05 (trước khi build bản test 1.8.0, script trong Documents là bản sau fa30903): **đạt**.
+  - App mở Cubase từ `mau.cpr`, script active sau ~4,5 s; app bắn đồng bộ ở 4 mốc (+3/10/25/50 s), Cubase phản hồi đủ: Scale Major, PitchCorrect 100, Key C, fader Nhạc 88, Mic/Vang 100, mute Vang 0. Thoát app → "Không lưu" → Cubase thoát sau ~6 s.
+  - Gửi CC thẳng bằng mido vào script (CC 35/40/33/20/50) đều có phản hồi; mở cổng MIDI Out trước hay sau khi Cubase chạy đều như nhau. CC tới **trước** khi page MIDI Remote active bị bỏ (không "nhớ"), gửi lại cùng giá trị sau đó vẫn áp dụng — nên lịch bắn lại +3/10/25/50 s là đủ.
+  - Bẫy khi đo: `nghe_phan_hoi.py` chuyển hướng ra file thì stdout bị đệm 8 KB, đọc giữa chừng tưởng Cubase im lặng; đọc sau khi script kết thúc hoặc chạy `python -u`.
 
 ### Ngoài phạm vi
 
 - Override cân chỉnh theo DAW (hiện override người dùng dùng chung cho mọi DAW).
 - ~~Thư mục Documents khi có OneDrive redirect~~ — đã xử lý: `setup_all.bat` và chẩn đoán cùng dùng `GetFolderPath(MyDocuments)`.
+
+## 9. Máy khách thật: Cubase Pro + Antares Auto-Tune Pro (2026-10-06, qua UltraViewer)
+
+Máy khách (DESKTOP-U46KFB8): Cubase Pro, bài `C:\Users\caoqu\Desktop\TD cubase.cpr`, app 1.8.0 đã cài,
+loopMIDI + script đã có (`setup_all.bat` đã chạy). Track: 0 NHAC (insert 1 Waves SoundShifter Pitch),
+1 GIONG (insert 1 **Auto-Tune Pro 11.0.0 VST3**, sau đó UADLA/Q8/CLA-3A/RVox/NS1…), rồi FX channel
+2 "Vang dai", 3 "Delay", 4 "Vang ngan" (bank zone đếm cả FX channel → CC Vang/Bè của app trỏ vào
+"Vang dai"/"Delay").
+
+| Đo | Kết quả |
+|---|---|
+| Thứ tự tham số Auto-Tune Pro (Script Console, `param|i|ten`) | **0 Correction Mode, 1 Scale (bảng cổ điển), 2 Key**, 3 Detune, 4 Retune Speed, 5 Vibrato Shape, 6 Vibrato Pitch, 7 Vibrato Rate, 8 Re-Track ARA, 9 Tracking, 10 Input Type, 11 Use Classic Mode DSP, 16 Graph Tool, 24 Tie Waveform…, 28 Track Pitch, 31 Object Retune Speed, 78 Time Display, 149 HP Voice 2…, 154 HP Pan/Width, **162 "Modern Scale"** (= Scale trên GUI), 165 HP Equalizer Type, 173–174 HP Gate, 179 Transpose In Scale, 181 Scale Transpose, 194 Tracking, 195 Input Type; không có tham số Bypass/On. Generic Editor của Cubase **không** hiện "Correction Mode" nên chỉ số trên đó lệch 1 — phải tin Script Console/SysEx. |
+| Tham số 1 "Scale" ≠ Scale trên GUI | Gửi CC vào tham số 1 đổi giá trị host (Major/Minor/Chromatic/Ling Lun/Scholar's/Greek…) nhưng GUI chế độ Modern và lưới nốt **không đổi**; chọn "Harmonic Minor" trên GUI thì tham số 1 vẫn "Minor". Tham số 162 "Modern Scale" mới là dropdown Scale của GUI (Chromatic/Major/Minor/Harmonic Minor/Jazz Melodic Minor/Dorian/…/Diminished). Script bind scale_type → 162. |
+| Bảng Key (CC 33) | C 0–5, C# 6–17, D 18–29, D# 30–41, E 42–51, F 52–64, F# 65–76, G 77–86, G# 87–99, A 100–110, A# 111–121, B 122–127 → `key_midi_map` mặc định của app nằm trọn trong từng dải, không cần bắt lại. |
+| Bảng Scale (CC 35 → tham số 162 Modern Scale) | Chromatic 0–5, **Major 6–13, Minor 14–22**, Harmonic Minor 23–31 … → đã bắt **Major = 10, Minor = 18** bằng Cân chỉnh Auto-Tune trong app (override người dùng trên máy khách). (Bảng cổ điển ở tham số 1: Major 0–2, Minor 3–7, Chromatic 8–11 — không dùng.) |
+| Sub page MIDI Remote | `subPage.mAction.mActivate.trigger(activeMapping)` gọi từ callback (title/identity) **không đổi binding** → bỏ sub page. Script dùng `makeCustomValueVariable` cho từng hồ sơ plugin, knob CC chỉ `setProcessValue` sang biến của hồ sơ đang chọn. |
+| `mOnChangePluginIdentity` | Không chạy khi Reload Scripts (đã biết). Chọn hồ sơ theo tên tham số `"Key"` ở chỉ số i (`mOnTitleChange`) chạy cả khi reload lẫn khi nạp bài. |
+| tone_auto (CC 40) với Auto-Tune Pro | Gắn `insertViewer.mOn` (bật/tắt insert slot) vì plugin không lộ tham số bypass. Chưa kiểm bằng mắt trên máy khách. |
+| Tone Giọng (CC 11) → Waves SoundShifter Pitch Stereo trên NHAC (2026-10-07) | Viewer insert kênh NHAC: SoundShifter chỉ có 10 tham số, bank lặp chu kỳ 10; **tham số 4 "PitchSemitones"**. App gửi 0–127 = −12…+12 bán cung → plugin hiện đúng −12…+12 (1:1, đã kiểm +1…+4, −1…−3, ±12). Script: `HO_SO_NHAC` SoundShifter tone_voice = 4; tone_music (CC 10) chưa gắn (−1). |
+| Fader/mute Vang → nhóm 3 FX (Vang dai / Delay / Vang ngan) (2026-10-07) | Script gom kênh theo **tên** (`nhomTheoTen`: nhac/beat/music, mic/giong/voc, vang/delay/reverb/echo, be/backing; không khớp thì theo chỉ số 0–3). Nhóm 1 kênh: fader app = fader kênh. Nhóm nhiều kênh: fader app = **kênh đầu nhóm** (tuyệt đối), kênh sau giữ chênh lệch vị trí fader so với kênh đầu như đang có trong Cubase (`doLech`, đo lại mỗi khi kéo tay trong Cubase); mute app = mute cả nhóm. Kiểm: mute Vang bật/tắt cả 3; app +2 dB → cả 3 kênh 1.43 dB; Delay gõ tay −6 dB rồi app −4 dB → Vang dai/Vang ngan −9.29, Delay −22.8 (chênh lệch giữ theo vị trí fader, không phải theo dB). Thiết kế cũ "lấy mốc tại CC đầu tiên" sai khi app đã ở −∞ trước khi script nạp (mọi CC sau trùng mốc) — đã bỏ. |
+| Đầu-cuối | App chọn Key D → Cubase "Last Touched: Key (Auto-Tune Pro) = D"; Key A → "A"; sau khi bind 162 và cân chỉnh 10/18, Major/Minor từ app → "Modern Scale = Major/Minor" và GUI đổi theo. Vibrato Pitch/Detune không đổi. |
+
+Thao tác qua UltraViewer (từ máy dev, `cb.py` pyautogui vào cửa sổ UltraViewer): chuột/click/kéo OK, cuộn chuột
+không tác dụng, `Ctrl+chữ` thỉnh thoảng rơi modifier thành gõ chữ (dính `a` đầu file → `ReferenceError`
+`identifier 'a' undefined (line 1)`), F12/Ctrl+Shift+S không tới nơi → dùng menu Notepad bằng chuột.
+Clipboard đồng bộ hai chiều (clip.exe trên máy dev → dán Notepad máy khách). Đường dẫn `%USERPROFILE%\Documents`
+sai trên máy khách (Documents chuyển hướng) → mở bằng `shell:Personal\Steinberg\Cubase\MIDI Remote\Driver Scripts\Local\QuangLuu\QuangLuuMIDI`.
+Script Console: danh sách không cuộn bằng phím, kéo thanh cuộn được; lọc "Log Messages" rồi kéo xuống cuối. Script hiện theo dõi 200 tham số (48 đầu qua CC 80–127 kênh 0, còn lại CC giả kênh 1–2) và log `disp[i]` mỗi khi giá trị hiển thị đổi: mở/đóng cửa sổ plugin làm Cubase báo lại toàn bộ (~400 dòng), nên xoá log rồi đổi tham số trên GUI, dòng cần tìm nằm ngay đầu.
+
+Còn lại trên máy khách: Tone Nhạc (CC 10) chưa gắn vào đâu (khách chỉ yêu cầu Tone Giọng); app đã về một phiên bản.
+Thang dB của app (Mic/Vang) chỉ khớp Cubase tại 0 dB: app −4 dB → Cubase −9.29 dB, +2 dB → 1.43 dB (`db_to_midi` tuyến tính theo CC, Cubase fader law không tuyến tính) — nếu khách cần số dB đúng thì phải đo đường cong fader Cubase.
+Cửa sổ app Quang Lưu Studio luôn nổi trên Cubase: khi mở Script Console phải thu nhỏ app, nếu không nút Reload/Clear bị che và click rơi vào app.
+Lưu ý thao tác: khi khách bật bộ gõ tiếng Việt (Telex), `type` qua UltraViewer bị đổi dấu → dán mọi đường dẫn/tên file qua clipboard;
+nút X của cửa sổ MIDI Remote nổi trùng vị trí nút X của Cubase → luôn dùng nút ↙ (trả về lower zone) thay vì X.
 
 ## Nguồn
 
