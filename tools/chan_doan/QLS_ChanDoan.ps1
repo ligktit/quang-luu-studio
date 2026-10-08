@@ -921,6 +921,16 @@ Safe "Cubase đã cài" {
         } elseif ((Get-FileHash $src).Hash -ne (Get-FileHash $dst).Hash) {
             Chk "Script MIDI Remote Cubase" "WARN" "khác bản đi kèm app" "Chạy setup_all.bat rồi Reload Scripts trong Cubase."
         } else { Chk "Script MIDI Remote Cubase" "OK" "đã chép, đúng bản" }
+        # Số phiên bản ghi trong script (var QLS_SCRIPT_VERSION = 'YYYY-MM-DD'); bản trước 2026-10-08 không có dòng này.
+        $verOf = {
+            param($f)
+            $m = Select-String -LiteralPath $f -Pattern "var QLS_SCRIPT_VERSION = '([^']+)'" | Select-Object -First 1
+            if ($m) { $m.Matches[0].Groups[1].Value } else { "cũ, chưa có số phiên bản" }
+        }
+        $vMay = & $verOf $dst
+        $vApp = if ($src -and (Test-Path -LiteralPath $src)) { & $verOf $src } else { "?" }
+        if ($vMay -eq $vApp) { Chk "Phiên bản script Cubase" "OK" $vMay }
+        else { Chk "Phiên bản script Cubase" "WARN" ("trên máy: " + $vMay + " / đi kèm app: " + $vApp) "Chạy setup_all.bat (tự sao lưu bản cũ ra .bak) rồi Reload Scripts trong Cubase." }
     }
     foreach ($pd in Get-ChildItem -LiteralPath (Join-Path $env:APPDATA "Steinberg") -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "Cubase*" }) {
         $def = Join-Path $pd.FullName "Defaults.xml"
@@ -930,6 +940,25 @@ Safe "Cubase đã cài" {
             Chk ("Release Driver (" + $pd.Name + ")") "FAIL" "đang BẬT" "App ẩn cửa sổ Cubase nên Cubase luôn ở nền → bật cờ này là mất tiếng. Studio Setup → Audio System → tắt 'Release Driver when Application is in Background'."
         } elseif ($m) { Chk ("Release Driver (" + $pd.Name + ")") "OK" "đang tắt" }
     }
+}
+
+# Máy 3 (2026-10-08): tệp cân chỉnh ghi kèm BOM UTF-8 → app bỏ qua im lặng, Scale gửi sai suốt. Từ script Cubase
+# 2026-10-08 Auto-Tune Pro không cần tệp này nữa (script tự quy đổi), nhưng máy nào còn tệp thì phải là tệp hợp lệ.
+Safe "Tệp cân chỉnh Auto-Tune (calibration_overrides.json)" {
+    $f = Join-Path $DATA_DIR "calibration_overrides.json"
+    if (-not (Test-Path -LiteralPath $f)) {
+        Chk "calibration_overrides.json" "INFO" "không có — bình thường; với Cubase + Auto-Tune Pro script tự quy đổi Scale"
+        return
+    }
+    $bytes = [IO.File]::ReadAllBytes($f)
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        Chk "calibration_overrides.json" "FAIL" "có BOM UTF-8 → app bỏ qua CẢ tệp, cân chỉnh không có tác dụng" "Ghi lại không BOM: PowerShell [IO.File]::WriteAllText(path, text, (New-Object Text.UTF8Encoding $false)), rồi mở lại app."
+        return
+    }
+    try { $j = [IO.File]::ReadAllText($f) | ConvertFrom-Json } catch { Chk "calibration_overrides.json" "FAIL" "JSON hỏng" "Xoá tệp hoặc sửa lại; app chỉ đọc lúc khởi động."; return }
+    $sm = Prop $j "scale_midi_map" $null
+    if ($sm) { Chk "calibration_overrides.json" "OK" ("hợp lệ; Scale Major=" + (Prop $sm "Major" "?") + " Minor=" + (Prop $sm "Minor" "?")) }
+    else { Chk "calibration_overrides.json" "OK" "hợp lệ (không ghi đè Scale)" }
 }
 
 Safe "Bản mô tả điều khiển (Surface) trong Studio One" {

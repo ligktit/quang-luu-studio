@@ -8,7 +8,12 @@ from PySide6.QtCore import Qt
 
 from ui.design_tokens import C, SP, FONT, FONT_MONO, lighten
 from ui.components.painter_button import PainterButton
+from ui.components.mode_button import ModeToggleButton
 from ui.components.painter_panel import GlassPanel
+
+# Nút có sẵn kiểu bật/tắt (giữ trạng thái, có setActive). Nút còn lại trong
+# panel (Dò Lại, Chế độ Nhanh/Full…) bấm một lần, không có "đang bật".
+_TOGGLE_ACTIONS = {"tone_auto", "fix_meo", "be", "tat_on"}
 
 
 def _build_search_bar(dashboard) -> QWidget:
@@ -203,7 +208,15 @@ def build_panel_tools(dashboard) -> GlassPanel:
         func_btns.append((text, c_val, cb, desc, t_cfg))
         
     for i, (text, color, cb, desc, t_cfg) in enumerate(func_btns):
-        btn = PainterButton(text, color=color, height=26, radius=8, font_size=9)
+        # Nút bật/tắt vẽ như nút MODE: tắt = viền mỏng, bật = đổ đầy + phát
+        # sáng (ui/components/mode_button.py). PainterButton tô đầy cả khi tắt,
+        # "đang bật" chỉ là chấm 4px ở góc — đang hát không liếc ra được.
+        is_toggle = (t_cfg.get("action") in _TOGGLE_ACTIONS
+                     or (isinstance(t_cfg.get("cc"), int) and t_cfg.get("is_toggle", False)))
+        if is_toggle:
+            btn = ModeToggleButton(text, color=color, height=28, radius=8, font_size=9)
+        else:
+            btn = PainterButton(text, color=color, height=26, radius=8, font_size=9)
         btn.setToolTip(desc)
         btn.setAccessibleName(text)
         btn.clicked.connect(cb)

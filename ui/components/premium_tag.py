@@ -52,6 +52,17 @@ class PremiumTag(QWidget):
         self._text = t
         self.update()
 
+    def set_animated(self, on: bool):
+        """Thiết lập "Tắt hiệu ứng bắt mắt": dừng sheen + sparkle, vẽ tĩnh."""
+        if on:
+            if not self._timer.isActive():
+                self._timer.start(33)
+            return
+        self._timer.stop()
+        self._phase = 0.0
+        self._sheen = -0.3   # ngoài dải vẽ → không có vệt sáng
+        self.update()
+
     def _tick(self):
         self._phase += 0.08
         # Sheen quét rồi nghỉ một nhịp (tạo "chớp" định kỳ)

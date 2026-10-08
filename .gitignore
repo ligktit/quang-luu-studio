@@ -126,3 +126,7 @@ numba_cache/
 
 # Audio tai ve de cham diem do tone (tools/danh_gia_do_tone.py)
 .cache/
+
+# Runtime state (DATA_DIR) lỡ ghi ra repo khi chạy test
+sync_state.json
+tone_overrides_state.json

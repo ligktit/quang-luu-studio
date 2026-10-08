@@ -95,6 +95,7 @@ class _RecordingMixin:
         if cb is not None:
             try:
                 cb(volume_percent)
+                self._release_pycaw_fallback()
                 return True
             except Exception as e:
                 print(f"[VOL] embedded player lỗi: {e}")
@@ -102,9 +103,15 @@ class _RecordingMixin:
         # Ưu tiên 1: CDP (Điều khiển trực tiếp thanh volume trên YouTube)
         if hasattr(self, 'cdp_monitor') and self.cdp_monitor.is_connected:
             if self.cdp_monitor.set_player_volume(volume_percent):
+                self._release_pycaw_fallback()
                 return True
 
         # Ưu tiên 2: pycaw (Điều khiển volume toàn bộ trình duyệt - fallback)
+        # Chỉ là tạm thời khi chưa có CDP (lúc khởi động `_sync_midi_states`
+        # đẩy mức thanh Nhạc sang đây). Mức này nằm trong Volume Mixer của
+        # Windows và được Windows nhớ theo app, nên khi CDP/player nhúng tiếp
+        # quản ở trên phải trả lại ngay — không thì trình duyệt kẹt ở mức thấp
+        # trong khi thanh trượt chỉ còn chỉnh player YouTube.
         try:
             from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
         except ImportError:
@@ -126,6 +133,11 @@ class _RecordingMixin:
         except Exception:
             pass
         return found
+
+    def _release_pycaw_fallback(self):
+        """Trả session trình duyệt về mức gốc nếu nhánh pycaw từng hạ nó."""
+        if self._original_browser_volume is not None:
+            self.restore_browser_volume()
 
     def restore_browser_volume(self):
         if self._original_browser_volume is None:

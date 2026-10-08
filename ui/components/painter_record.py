@@ -36,6 +36,7 @@ class PainterRecordButton(QWidget):
         self._pulse_timer = QTimer(self)
         self._pulse_timer.timeout.connect(self._pulse_tick)
         self._pulse_phase = 0.0
+        self._pulse_enabled = True   # False = quầng đỏ đứng yên khi đang ghi
 
         self.setFixedSize(148, 34)
         self.setCursor(Qt.PointingHandCursor)
@@ -45,11 +46,25 @@ class PainterRecordButton(QWidget):
         self._recording = recording
         if recording:
             self._pulse_phase = 0.0
-            self._pulse_timer.start(40)  # ~25 fps
+            self._sync_pulse()
         else:
             self._pulse_timer.stop()
             self._glow_opacity = 0.0
         self.update()
+
+    def set_pulse_enabled(self, on: bool):
+        """Thiết lập "Tắt hiệu ứng bắt mắt": đang ghi vẫn sáng, nhưng không nhấp nháy."""
+        self._pulse_enabled = bool(on)
+        if self._recording:
+            self._sync_pulse()
+            self.update()
+
+    def _sync_pulse(self):
+        if self._pulse_enabled:
+            self._pulse_timer.start(40)  # ~25 fps
+        else:
+            self._pulse_timer.stop()
+            self._glow_opacity = 0.45    # giữa dải 0.0..0.6 của nhịp nhấp nháy
 
     def setText(self, text):
         """Backward compat — ignore, we draw our own text."""

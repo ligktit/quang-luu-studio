@@ -113,11 +113,11 @@ bài (dữ liệu tiêu đề đã được `ThamDoStudioOne.ps1` ghi lại sẵ
 - UI: `tests/ui/test_midi_resync_on_so_ready.py` — chỉ đồng bộ khi có pong; lùi về lịch giờ khi tắt.
 - Máy thật: lặp lại kịch bản A/B/C của `HUONG_DAN.md` với app thật, đối chiếu log `[MIDI SYNC]`.
 
-## 8. Mở rộng: nút và dải "ĐANG BẬT" hiển thị đúng trạng thái THẬT trong Studio One
+## 8. Mở rộng: nút hiển thị đúng trạng thái THẬT trong Studio One
 
 ### Hiện trạng (đã xác nhận trong code, 2026-09-27)
 
-Nút MODE / Auto-Tune / Fix Méo / Bè / Tắt Ồn / Mute và dải "ĐANG BẬT" chỉ phản ánh **lệnh app
+Nút MODE / Auto-Tune / Fix Méo / Bè / Tắt Ồn / Mute chỉ phản ánh **lệnh app
 đã gửi**, không phải trạng thái trong Studio One:
 
 - `start_listening()` không nơi nào gọi → `_on_midi_cc_received` (`frontend_qt.py:930`), dù đã
@@ -137,7 +137,7 @@ Quyết định sản phẩm liên quan: **không** hiện cảnh báo "chưa ch
 - App nghe `QLS_PhanHoi` (dùng chung listener của hỏi–đáp ở mục 5), CC của 12 nút đi vào
   `_on_midi_cc_received` (đã có sẵn logic cập nhật nút theo CC); CC 49 đi vào máy trạng thái ping.
 - Mỗi nút có hai trạng thái: **muốn** (người dùng bấm) và **đã xác nhận** (Studio One trả về).
-  Đèn nút + dải "ĐANG BẬT" theo trạng thái **đã xác nhận**. Không có phản hồi trong ~1s → gửi lại
+  Đèn nút theo trạng thái **đã xác nhận**. Không có phản hồi trong ~1s → gửi lại
   ngầm vài lần; vẫn không có → giữ theo trạng thái muốn (hành vi như hiện nay), ghi log.
 - Studio One tự báo khi bấm trong DAW → cập nhật nút trong app (đồng bộ ngược).
 - Không mở được `QLS_PhanHoi` (máy cũ chưa có cổng) → giữ nguyên hành vi hiện tại.

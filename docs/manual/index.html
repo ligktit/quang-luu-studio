@@ -89,7 +89,7 @@
 <div class="layout">
 <nav class="toc">
   <div class="brand"><span class="dot"></span> Quang Lưu Studio</div>
-  <div class="ver">Hướng dẫn sử dụng · v1.7.9</div>
+  <div class="ver">Hướng dẫn sử dụng · v1.8.0</div>
   <h2>Bắt đầu</h2>
   <a href="#gioi-thieu">1. Giới thiệu</a>
   <a href="#cai-dat">2. Cài đặt & kích hoạt</a>
@@ -117,7 +117,7 @@
 
 <main>
   <h1>Quang Lưu Studio</h1>
-  <div class="subtitle">Hướng dẫn sử dụng đầy đủ — dành cho ca sĩ &amp; kỹ thuật viên phòng thu · Phiên bản 1.7.9</div>
+  <div class="subtitle">Hướng dẫn sử dụng đầy đủ — dành cho ca sĩ &amp; kỹ thuật viên phòng thu · Phiên bản 1.8.0</div>
 
   <!-- 1 -->
   <section id="gioi-thieu">
@@ -155,7 +155,8 @@
       <li><b>Studio One</b> — trỏ tới file <code>.song</code> mẫu hoặc file <code>Studio One.exe</code>.</li>
       <li><b>Trình duyệt (YouTube)</b> — trỏ tới <code>chrome.exe</code> (hoặc trình duyệt bạn dùng để mở YouTube).</li>
       <li><b>Khởi động / Tắt tự động</b> — tích chọn để tự mở Studio One và YouTube khi mở app, tự đóng khi thoát.</li>
-      <li><b>Phần mềm thu âm (DAW)</b> — app hỗ trợ <b>Studio One</b> hoặc <b>Cubase</b>, chọn ở mục <i>Phần mềm thu âm (DAW)</i> trong Cài đặt; với Cubase, file mẫu là <code>.cpr</code>.</li>
+      <li><b>Phần mềm thu âm (DAW)</b> — app hỗ trợ <b>Studio One</b> hoặc <b>Cubase</b>, chọn ở mục <i>Phần mềm thu âm (DAW)</i> trong Cài đặt; với Cubase, file mẫu là <code>.cpr</code>. Máy chỉ có Cubase thì bộ cài đã chọn sẵn.</li>
+      <li><b>Riêng Cubase</b> — bài mẫu <code>.cpr</code> cần track 1 = <b>NHAC</b>, track 2 = <b>MIC</b> (Auto-Tune Pro hoặc Pitch Correct ở insert 1), kênh vang đặt tên có chữ <i>Vang/Delay/Reverb</i>; trong Cubase tắt <i>Release Driver when Application is in Background</i> (Studio Setup → Audio System). Không cần cân chỉnh Auto-Tune: script tự đổi Scale theo plugin. Chi tiết: <code>cubase\HUONG_DAN_CAI_DAT_CUBASE.md</code> trong thư mục cài.</li>
     </ul>
     <p>Bấm <b>💾 Lưu thiết lập</b> để hoàn tất.</p>
   </section>
@@ -241,7 +242,6 @@
   <section id="mode">
     <h2>8. MODE &amp; SFX</h2>
     <p>Khu <b>MODE</b> chọn thể loại trình diễn — mỗi nút áp một bộ thiết lập hiệu ứng tương ứng trên Studio One. Các nút <b>độc lập với nhau</b>: bấm để bật (nút sáng đèn), bấm lần nữa để tắt, và có thể bật nhiều mode cùng lúc (ví dụ Lofi + Remix). Bật mode này <b>không</b> tự tắt mode kia.</p>
-    <p>Ngay dưới dải nhạc ở đỉnh cửa sổ có hàng <b>ĐANG BẬT</b> — điểm danh mọi thứ đang bật: các mode (Dân Ca, Lofi, Remix, Đa Thể Loại) và các nút hiệu ứng (Auto-Tune, Fix Méo, Bè, Tắt Ồn, Tắt Vang), mỗi thứ một chấm màu đúng bằng màu nút của nó. Đang hát chỉ cần liếc một hàng này là biết máy đang chạy gì, không phải dò từng nút. Chưa bật gì thì cả hàng <b>tự ẩn đi</b> cho gọn màn hình, bật lại thứ gì là hàng hiện ngay. Hàng này có ở <b>mọi gói</b> và không tắt được — khác dải nhạc (chỉ Premium, tắt được trong Thiết lập).</p>
     <div class="grid">
       <div class="card"><div class="t"><span class="pill" style="background:var(--pink)"></span>Dân Ca</div></div>
       <div class="card"><div class="t"><span class="pill" style="background:var(--teal)"></span>Lofi</div></div>
@@ -328,6 +328,9 @@
     </ul>
     <p>Cả hai đều <b>bật nhanh, tắt chậm</b> nên nhạc khựng một nhịp hay tua bài sẽ không làm lật qua lật lại. Đang chạy tự động bạn vẫn bấm tay nút <b>Tắt Ồn</b> hoặc chỉnh Vang như thường; tắt tính năng đi thì app giữ nguyên trạng thái bạn đang nghe, không tự đụng vào nữa.</p>
 
+    <h4>Tắt hiệu ứng bắt mắt</h4>
+    <p>Thấy màn hình rối mắt khi đang hát? Vào <b>tab Hệ thống → Giao diện</b>, tích <b>"Tắt hiệu ứng bắt mắt"</b>. Một ô tắt hết mọi thứ chuyển động: dải visualizer, nút lấp lánh theo nhạc, huy hiệu Premium quét sáng, viền ô tone nháy khi đổi tone, nút Ghi âm và nút SFX nhấp nháy. Trạng thái vẫn hiện bình thường (đang ghi thì nút vẫn đỏ, thiếu file thì nút SFX vẫn viền đỏ) — chỉ không còn chớp nháy. Có ở <b>mọi gói</b>, áp dụng ngay khi lưu, không cần khởi động lại.</p>
+    <div class="note">Đã tích ô này thì ô <b>"Hiện dải visualizer"</b> bên dưới bị khoá — dải đã bị tắt chung rồi.</div>
     <h4>Ẩn dải visualizer <span class="badge">Premium</span></h4>
     <p>Dải thanh phổ nhảy theo nhạc ở đỉnh cửa sổ có thể ẩn đi: <b>tab Hệ thống → Giao diện</b>, bỏ tích <b>"Hiện dải visualizer"</b>. Ẩn xong màn hình gọn hơn và <b>nhẹ máy hơn thật</b> — phần mềm gỡ hẳn dải này chứ không chỉ giấu đi, nên dừng luôn việc thu âm chạy nền để vẽ. Tích lại là dải quay về ngay, không cần khởi động lại.</p>
     <div class="note">Gói <b>Standard</b> vốn không có dải visualizer nên ô này bị khoá — không có gì để ẩn.</div>

@@ -155,7 +155,7 @@ class WidgetBuilderDialog(QDialog):
         self.bypass_cb.setToolTip(
             "Bật khi control trong Studio One là nút Bypass: Bypass On = plugin TẮT.\n"
             "App sẽ gửi Bypass Off khi nút BẬT và đọc phản hồi theo đúng chiều đó,\n"
-            "để đèn nút và dải ĐANG BẬT không bị ngược với Studio One.")
+            "để đèn nút không bị ngược với Studio One.")
         self.bypass_cb.toggled.connect(lambda _c: self._refresh_preview())
         vl.addWidget(self.bypass_cb)
 
@@ -206,6 +206,13 @@ class WidgetBuilderDialog(QDialog):
         self.value_note = QLabel()
         self.value_note.setWordWrap(True)
         self.value_note.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+        # Dành sẵn 3 dòng: nhãn xuống dòng có chiều cao phụ thuộc chiều rộng
+        # (heightForWidth). Nếu để nó quyết định cỡ tối thiểu của dialog mỗi lần
+        # đổi ghi chú, Qt ép cỡ cửa sổ hai bước lệch nhau một dòng và in
+        # "QWindowsWindow::setGeometry: Unable to set geometry" mỗi lần đổi
+        # CC / Kiểu tham số. Ghi chú dài nhất ~2,7 dòng ở bề rộng tối thiểu.
+        self.value_note.ensurePolished()
+        self.value_note.setMinimumHeight(self.value_note.fontMetrics().lineSpacing() * 3 + 4)
         vl.addWidget(self.value_note)
 
         self.is_toggle_cb = QCheckBox("Là nút Toggle (Bật/Tắt)")

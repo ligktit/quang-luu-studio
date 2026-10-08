@@ -12,7 +12,7 @@
 ; ============================================================
 
 #define MyAppName "Quang Luu Studio"
-#define MyAppVersion "1.7.9"
+#define MyAppVersion "1.8.0"
 #define MyAppPublisher "Quang Luu"
 #define MyAppExeName "QuangLuuStudio.exe"
 #define MyAppURL "https://github.com/ligktit/quang-luu-studio"
@@ -113,6 +113,8 @@ Source: "studio_one\QuangLuuMIDI.surface.xml"; DestDir: "{app}\studio_one"; Flag
 Source: "studio_one\deviceinfo.xml"; DestDir: "{app}\studio_one"; Flags: ignoreversion
 ; Cubase MIDI Remote script (chép vào Documents\Steinberg\... bởi setup_all.bat)
 Source: "cubase\QuangLuu_QuangLuuMIDI.js"; DestDir: "{app}\cubase"; Flags: ignoreversion
+; Quy trình cài đặt cho máy Cubase (kỹ thuật viên đọc; setup_all.bat in đường dẫn này ở cuối bước 2b)
+Source: "cubase\HUONG_DAN_CAI_DAT_CUBASE.md"; DestDir: "{app}\cubase"; Flags: ignoreversion
 
 ; SFX (sound effects)
 Source: "sfx\*"; DestDir: "{app}\sfx"; Flags: ignoreversion recursesubdirs
@@ -159,14 +161,56 @@ Name: "{autoprograms}\{#MyAppName} - Kiểm tra dò tone"; Filename: "{app}\kiem
 Name: "{autoprograms}\{#MyAppName} Recordings"; Filename: "{userdocs}\{#MyAppDataFolder}"; Tasks: startmenuicon
 
 [Run]
-; Cài đặt loopMIDI + Surface sau khi cài đặt
-Filename: "{app}\setup_all.bat"; Description: "Cài đặt loopMIDI, cổng MIDI và phần nhận MIDI cho Studio One / Cubase"; Flags: nowait postinstall skipifsilent
+; Phần MIDI (loopMIDI, cổng, Surface/script Cubase) đã CHẠY TỰ ĐỘNG ở [Code] ChayCaiDatTuDong (setup_all.bat /auto,
+; quyền người dùng gốc, không cần bấm). Ô tích này chỉ để chạy lại bản tương tác khi bước tự động báo thiếu cổng
+; (máy không có winget/mạng) — mặc định không tích.
+Filename: "{app}\setup_all.bat"; Description: "Chạy lại cài đặt loopMIDI / MIDI có hướng dẫn (chỉ khi bước tự động báo lỗi)"; Flags: nowait postinstall skipifsilent unchecked
 ; Chạy ứng dụng sau khi cài đặt (tùy chọn)
 Filename: "{app}\{#MyAppExeName}"; Description: "Chạy {#MyAppName} ngay bây giờ"; Flags: nowait postinstall skipifsilent unchecked
 
 [Code]
 // ── Tạo các file JSON mặc định khi cài đặt lần đầu ──
 // File được tạo trong %APPDATA%\QuangLuuStudio\ (user-writable)
+// Có thư mục con khớp mẫu (VD Steinberg\Cubase*) không — DirExists không nhận wildcard.
+function CoThuMucKhop(Pattern: String): Boolean;
+var
+  FindRec: TFindRec;
+begin
+  Result := False;
+  if FindFirst(Pattern, FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+        begin
+          Result := True;
+          break;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
+
+// DAW mặc định cho settings.json lần cài đầu: máy chỉ có Cubase (không có Studio One)
+// thì chọn sẵn "cubase" để khách khỏi phải vào Thiết lập đổi — bài học từ ba máy khách
+// Cubase 2026-10. Có Studio One (hoặc không rõ) thì giữ mặc định cũ "studio_one".
+function DawMacDinh(): String;
+var
+  CoCubase, CoStudioOne: Boolean;
+begin
+  CoCubase := CoThuMucKhop(ExpandConstant('{commonpf64}\Steinberg\Cubase*'))
+    or CoThuMucKhop(ExpandConstant('{userappdata}\Steinberg\Cubase*'));
+  CoStudioOne := CoThuMucKhop(ExpandConstant('{userappdata}\PreSonus\Studio One*'))
+    or DirExists(ExpandConstant('{commonpf64}\PreSonus'));
+  if CoCubase and (not CoStudioOne) then
+    Result := 'cubase'
+  else
+    Result := 'studio_one';
+  Log('DAW mac dinh cho settings.json: ' + Result);
+end;
+
 procedure CreateDefaultDataFiles();
 var
   DataDir, FilePath: String;
@@ -191,7 +235,8 @@ begin
       '{' + #13#10 +
       '    "studio_one_path": "",' + #13#10 +
       '    "browser_path": "",' + #13#10 +
-      '    "auto_launch_studio_one": false' + #13#10 +
+      '    "auto_launch_studio_one": false,' + #13#10 +
+      '    "daw_kind": "' + DawMacDinh() + '"' + #13#10 +
       '}', False);
 
   // saved_songs.json
@@ -249,6 +294,37 @@ begin
   end;
 end;
 
+// ── Chạy setup_all.bat /auto ngay trong lúc cài (cả bản mới lẫn nâng cấp) ──
+// Chạy với quyền NGƯỜI DÙNG GỐC (không phải admin đang nâng quyền) vì script ghi vào
+// Documents (script Cubase), HKCU (cổng loopMIDI, tự khởi động) và %APPDATA% của người hát.
+// Mã thoát là tổng bit: 1 thiếu cổng MIDI, 2 chép script Cubase lỗi, 4 Cubase đang chạy
+// (phải Reload Scripts). Chỉ hiện thông báo khi còn việc phải làm; cài im lặng thì bỏ qua hộp thoại.
+procedure ChayCaiDatTuDong();
+var
+  ResultCode: Integer;
+  Msg: String;
+begin
+  if not ExecAsOriginalUser(ExpandConstant('{app}\setup_all.bat'), '/auto', ExpandConstant('{app}'),
+                            SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    Log('setup_all.bat /auto: khong chay duoc');
+    SuppressibleMsgBox('Không chạy được setup_all.bat tự động.' + #13#10 +
+      'Hãy chạy tay file setup_all.bat trong thư mục cài đặt.', mbError, MB_OK, IDOK);
+    exit;
+  end;
+  Log('setup_all.bat /auto -> ma thoat ' + IntToStr(ResultCode));
+  Msg := '';
+  if (ResultCode and 1) <> 0 then
+    Msg := Msg + '- Chưa đủ cổng MIDI ảo (loopMIDI). Chạy setup_all.bat trong thư mục cài đặt để cài có hướng dẫn.' + #13#10;
+  if (ResultCode and 2) <> 0 then
+    Msg := Msg + '- Chưa chép được script Cubase. Xem log bên dưới.' + #13#10;
+  if (ResultCode and 4) <> 0 then
+    Msg := Msg + '- Cubase đang mở: Studio → MIDI Remote Manager → Scripts → Reload Scripts (hoặc mở lại Cubase) để nhận script mới.' + #13#10;
+  if Msg <> '' then
+    SuppressibleMsgBox('Phần MIDI đã được cài tự động. Còn việc cần làm:' + #13#10#13#10 + Msg + #13#10 +
+      'Log: %APPDATA%\QuangLuuStudio\logs\setup_all.txt', mbInformation, MB_OK, IDOK);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
@@ -257,6 +333,8 @@ begin
     MigrateOldDataFiles();
     // 2. Tạo file mặc định (nếu chưa có)
     CreateDefaultDataFiles();
+    // 3. loopMIDI + cổng MIDI + Surface / script Cubase, không cần bấm gì
+    ChayCaiDatTuDong();
   end;
 end;
 

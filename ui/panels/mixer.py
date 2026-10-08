@@ -17,10 +17,6 @@ def _make_mute_callback(dashboard, cc_key, mute_cc_map, val_range=(0, 100)):
     min_v, max_v = val_range
     def toggle(is_muted):
         dashboard.mute_states[cc_key] = is_muted
-        # Tắt Vang được kể trong dải "ĐANG BẬT" — cập nhật ngay từ đây.
-        refresh = getattr(dashboard, "_refresh_active_bar", None)
-        if refresh is not None:
-            refresh()
         mute_cc = mute_cc_map.get(cc_key)
         if mute_cc is not None:
             dashboard.engine.send_midi(dashboard.MIDI_CC[mute_cc], 127 if is_muted else 0)

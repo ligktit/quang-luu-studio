@@ -72,7 +72,7 @@ giữa "thấy cửa sổ" và "trả lời ping" trong trường hợp xấu nh
 
 ### Kịch bản D — Studio One có báo lại trạng thái nút không
 
-Trả lời câu hỏi: nút MODE / Auto-Tune / Fix Méo / Bè / Tắt Ồn / Mute và dải "ĐANG BẬT" của
+Trả lời câu hỏi: nút MODE / Auto-Tune / Fix Méo / Bè / Tắt Ồn / Mute của
 app có thể hiển thị **đúng trạng thái thật trong Studio One** không. Hiện app chỉ hiển thị lệnh
 **nó đã gửi**; muốn hiển thị trạng thái thật thì Studio One phải gửi trả giá trị của từng nút.
 

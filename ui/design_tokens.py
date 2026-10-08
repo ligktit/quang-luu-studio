@@ -164,7 +164,7 @@ QLabel#panelTitle {{ color: {C['text_muted']}; font-weight: 700; font-size: 10px
 QFrame#card {{ background-color: rgba(30, 41, 59, 220); border-radius: 12px; border: 1px solid rgba(51, 65, 85, 0.5); }}
 QFrame#panel {{ background-color: rgba(15, 23, 42, 0.55); border-radius: 8px; border: 1px solid rgba(51, 65, 85, 0.4); }}
 QFrame#header {{ background-color: {C['bg']}; border-bottom: 1px solid rgba(51, 65, 85, 0.3); }}
-QComboBox {{ background-color: {C['card']}; color: {C['text']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 4px 10px; font-size: 13px; font-weight: 600; font-family: {FONT}; }}
+QComboBox {{ background-color: {C['card']}; color: {C['text']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 4px 10px; font-size: 9.75pt; font-weight: 600; font-family: {FONT}; }}
 QComboBox::drop-down {{ border: none; }}
 QComboBox QAbstractItemView {{ background-color: {C['card']}; color: {C['text']}; selection-background-color: {C['primary']}; border: 1px solid {C['border']}; font-size: 13px; }}
 QSlider::groove:vertical {{ background: rgba(51, 65, 85, 0.6); width: 6px; border-radius: 3px; }}

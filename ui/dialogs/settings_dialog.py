@@ -413,7 +413,7 @@ class SettingsDialog(QDialog):
         self._build_karaoke_widgets(settings)
         lay.addWidget(self._section_card(self._build_karaoke_display))
 
-        # Giao diện — ẩn/hiện dải visualizer
+        # Giao diện — tắt hiệu ứng bắt mắt, ẩn/hiện dải visualizer
         lay.addWidget(self._section_header(SVG_EYE_OPEN, "Giao diện"))
         self._build_appearance_widgets(settings)
         lay.addWidget(self._section_card(self._build_appearance))
@@ -493,10 +493,25 @@ class SettingsDialog(QDialog):
         except Exception:
             is_premium = False
 
+        # Tắt hiệu ứng bắt mắt: mọi gói đều có thứ để tắt (nháy tone, nút Ghi
+        # âm, nút SFX thiếu file), Premium còn thêm visualizer + nút lấp lánh.
+        self._cb_reduce_fx = QCheckBox(
+            "Tắt hiệu ứng bắt mắt (dải visualizer, nút lấp lánh, nhấp nháy)")
+        self._cb_reduce_fx.setStyleSheet(self._checkbox_qss)
+        self._cb_reduce_fx.setChecked(bool(settings.get("reduce_effects", False)))
+        self._cb_reduce_fx.setToolTip(
+            "Tích để tắt mọi hiệu ứng chuyển động: dải visualizer, nút lấp lánh"
+            " theo nhạc, huy hiệu Premium quét sáng, nháy viền ô tone, nút Ghi âm"
+            " và nút SFX nhấp nháy. Trạng thái vẫn hiện (đang ghi, thiếu file),"
+            " chỉ không còn chuyển động — đỡ rối mắt và nhẹ máy hơn.")
+
         self._cb_show_viz = QCheckBox("Hiện dải visualizer (thanh phổ nhảy theo nhạc)")
         self._cb_show_viz.setStyleSheet(self._checkbox_qss)
         self._cb_show_viz.setChecked(bool(settings.get("show_visualizer", True)))
-        self._cb_show_viz.setEnabled(is_premium)
+        self._viz_cb_premium = is_premium
+        # Tắt hiệu ứng thì visualizer bị ghi đè → khoá ô này để khỏi tưởng còn tác dụng.
+        self._cb_reduce_fx.toggled.connect(self._sync_show_viz_enabled)
+        self._sync_show_viz_enabled()
         if is_premium:
             self._cb_show_viz.setToolTip(
                 "Bỏ tích để ẩn dải visualizer ở đỉnh cửa sổ. Ẩn thì phần mềm gỡ"
@@ -509,8 +524,13 @@ class SettingsDialog(QDialog):
             self._cb_show_viz.setToolTip(
                 "Gói Standard không có dải visualizer nên không có gì để ẩn.")
 
+    def _sync_show_viz_enabled(self, *_):
+        self._cb_show_viz.setEnabled(self._viz_cb_premium and not self._cb_reduce_fx.isChecked())
+
     def _build_appearance(self, vl):
         vl.setSpacing(8)
+        self._cb_reduce_fx.setMinimumHeight(34)
+        vl.addWidget(self._cb_reduce_fx)
         self._cb_show_viz.setMinimumHeight(34)
         vl.addWidget(self._cb_show_viz)
 
@@ -1808,6 +1828,8 @@ class SettingsDialog(QDialog):
             s["display_monitor_index"]  = max(0, self._combo_monitor.currentIndex())
         if hasattr(self, "_cb_show_viz"):
             s["show_visualizer"] = self._cb_show_viz.isChecked()
+        if hasattr(self, "_cb_reduce_fx"):
+            s["reduce_effects"] = self._cb_reduce_fx.isChecked()
         if hasattr(self, "_cb_auto_echo"):
             s["auto_echo_enabled"]      = self._cb_auto_echo.isChecked()
             s["auto_noise_enabled"]     = self._cb_auto_noise.isChecked()
@@ -1843,6 +1865,13 @@ class SettingsDialog(QDialog):
                 self._dashboard._apply_embedded_player_setting()
         except Exception as e:
             print(f"[SETTINGS] apply embedded player lỗi: {e}")
+
+        # Áp dụng tắt/bật hiệu ứng bắt mắt ngay (lấp lánh, nhấp nháy…)
+        try:
+            if hasattr(self._dashboard, "_apply_effects_setting"):
+                self._dashboard._apply_effects_setting()
+        except Exception as e:
+            print(f"[SETTINGS] apply effects lỗi: {e}")
 
         # Áp dụng ẩn/hiện dải visualizer ngay (tạo/gỡ hẳn widget)
         try:

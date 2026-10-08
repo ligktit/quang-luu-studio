@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel
 from PySide6.QtCore import Qt
 
 from ui.design_tokens import C, SP, FONT
-from ui.components.painter_button import PainterButton
+from ui.components.mode_button import ModeToggleButton
 from ui.components.painter_panel import GlassPanel
 from ui.components.sfx_button_area import SfxButtonArea
 
@@ -34,7 +34,8 @@ def build_panel_mode(dashboard) -> GlassPanel:
     mode_row = QHBoxLayout()
     mode_row.setSpacing(3)
     for mlabel, mcolor, m_cfg in mode_config:
-        mbtn = PainterButton(mlabel, color=mcolor, height=26, radius=8, font_size=9)
+        # Tắt = viền mỏng, bật = đổ đầy + phát sáng (xem ui/components/mode_button.py).
+        mbtn = ModeToggleButton(mlabel, color=mcolor, height=28, radius=8, font_size=9)
         mbtn.setToolTip(f"Bật/tắt chế độ {mlabel} (độc lập với các mode khác)")
         mbtn.setAccessibleName(f"Chế độ {mlabel}")
         # Panel có thể bị dựng lại (Dev Mode) — lấy lại đèn theo trạng thái cũ.

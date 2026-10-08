@@ -63,7 +63,12 @@ QComboBox {
     border: 1px solid %(border)s;
     border-radius: 8px;
     padding: 4px 10px;
-    font-size: 13px;
+    /* 9.75pt = 13px ở 96 DPI. Để px thì QFont::pointSize() = -1 và style
+       windows11 của Qt (mặc định trên Windows 11) in cảnh báo
+       "QFont::setPointSize: Point size <= 0 (-1)" mỗi lần mở danh sách
+       thả xuống của combobox có viền QSS. Chỉ combobox dùng pt; QSS còn
+       lại giữ px. */
+    font-size: 9.75pt;
     font-weight: 600;
     min-width: 10px;
     font-family: %(font)s;

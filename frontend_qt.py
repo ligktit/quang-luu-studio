@@ -202,8 +202,6 @@ class MainDashboard(QMainWindow):
         self._marquee_timer = None
         self._waveform = None
         self._premium_viz = None     # dải visualizer (Premium, ẩn được trong Thiết lập)
-        self._active_bar = None      # dải "ĐANG BẬT" (mọi gói, không tắt được)
-        self._ui_colors = None       # {nhãn nút: màu} đọc từ ui_config, nhớ lại để khỏi đọc file mỗi lần bấm
         self._body_inner_layout = None
         self._player_window = None   # KaraokePlayerWindow (chế độ màn hình nhúng)
         self._search_input = None
@@ -350,20 +348,61 @@ class MainDashboard(QMainWindow):
         self._tech_shortcut.activated.connect(self._toggle_tech_session)
         self._apply_kiosk_visibility()
 
-        # Premium: nút lấp lánh theo nhạc (sau khi toàn bộ UI đã dựng).
-        self._enable_premium_button_fx()
+        # Hiệu ứng chuyển động (lấp lánh theo nhạc, nhấp nháy…) — sau khi toàn
+        # bộ UI đã dựng, theo thiết lập "Tắt hiệu ứng bắt mắt".
+        self._apply_effects_setting()
 
-    def _enable_premium_button_fx(self):
-        """Bật hiệu ứng glow/lấp lánh theo beat cho mọi PainterButton — chỉ Premium."""
+    # ── Hiệu ứng bắt mắt ─────────────────────────────────────
+    def _effects_enabled(self) -> bool:
+        """Hiệu ứng chuyển động có được chạy không (thiết lập reduce_effects)."""
+        return not bool(self.settings.get("reduce_effects", False))
+
+    def _apply_effects_setting(self):
+        """Bật/tắt mọi hiệu ứng chuyển động theo thiết lập "Tắt hiệu ứng bắt mắt".
+
+        Gọi lúc dựng xong cửa sổ, sau khi dựng lại thân cửa sổ (Dev Mode) và mỗi
+        lần lưu Thiết lập. Dải visualizer đi đường riêng (_apply_visualizer_setting)
+        vì nó phải gỡ hẳn widget. Những gì tắt ở đây vẫn giữ TRẠNG THÁI nhìn thấy
+        được (đang ghi, thiếu file) — chỉ bỏ phần chuyển động.
+        """
+        on = self._effects_enabled()
+
+        # 1. Nút lấp lánh theo nhạc: chỉ Premium, và chỉ khi chưa tắt hiệu ứng.
         try:
             from core import entitlements
-            if not entitlements.is_premium():
-                return
+            reactive = on and entitlements.is_premium()
+        except Exception as e:
+            print(f"[PREMIUM-FX] Không đọc được gói: {e}")
+            reactive = False
+        try:
             self._fx_buttons = self.findChildren(PainterButton)
             for btn in self._fx_buttons:
-                btn.set_music_reactive(True)
+                btn.set_music_reactive(reactive)
         except Exception as e:
             print(f"[PREMIUM-FX] enable lỗi: {e}")
+
+        # 2. Huy hiệu PREMIUM quét sáng, 3. nháy viền ô tone, 4. nút Ghi âm.
+        targets = (
+            (getattr(self, "_premium_tag", None), "set_animated"),
+            (getattr(self, "tone_combo", None), "set_flash_enabled"),
+            (getattr(self, "record_button", None), "set_pulse_enabled"),
+        )
+        for widget, method in targets:
+            fn = getattr(widget, method, None)
+            if fn is None:
+                continue
+            try:
+                fn(on)
+            except Exception as e:
+                print(f"[FX] {method} lỗi: {e}")
+
+        # 5. Nút SFX nhấp nháy đỏ khi thiếu file.
+        try:
+            from ui.components.sfx_button_area import SfxItemButton
+            for btn in self.findChildren(SfxItemButton):
+                btn.set_pulse_enabled(on)
+        except Exception as e:
+            print(f"[FX] sfx lỗi: {e}")
 
     def _toggle_dev_mode(self):
         self.is_dev_mode = not self.is_dev_mode
@@ -526,9 +565,6 @@ class MainDashboard(QMainWindow):
         # Gỡ dải visualizer TRƯỚC khi dọn layout: xoá widget qua layout thôi thì
         # stop() không chạy, ref AudioPulse rò thêm một nấc mỗi lần rebuild.
         self._destroy_visualizer()
-        # Dải "ĐANG BẬT" bị xoá cùng layout ngay dưới đây — bỏ ref trước, kẻo
-        # _refresh_active_bar chạm vào đối tượng C++ đã chết.
-        self._active_bar = None
 
         # Clear body layout
         removed_roots = []
@@ -561,8 +597,8 @@ class MainDashboard(QMainWindow):
         except Exception as e:
             print(f"[A11Y] Tab order lỗi: {e}")
 
-        # Bật lại lấp lánh theo nhạc cho các nút vừa dựng lại (Premium).
-        self._enable_premium_button_fx()
+        # Nút vừa dựng lại chưa biết thiết lập hiệu ứng — áp lại.
+        self._apply_effects_setting()
 
     def _on_add_widget(self, panel_name, widget_type):
         from ui.dialogs.widget_builder import WidgetBuilderDialog
@@ -647,8 +683,11 @@ class MainDashboard(QMainWindow):
     # ─────────────────────────────────────────
     # ── Dải visualizer (Premium) ─────────────────────────────
     def _visualizer_enabled(self) -> bool:
-        """Dải visualizer có được hiện hay không: Premium VÀ user chưa ẩn đi."""
+        """Dải visualizer có được hiện hay không: Premium VÀ user chưa ẩn đi
+        VÀ chưa tắt hiệu ứng bắt mắt."""
         if not self.settings.get("show_visualizer", True):
+            return False
+        if not self._effects_enabled():
             return False
         try:
             from core import entitlements
@@ -712,15 +751,6 @@ class MainDashboard(QMainWindow):
         self._premium_viz = None
         self._body_inner_layout = wl
         self._apply_visualizer_setting()
-
-        # ── Dải "ĐANG BẬT" — nằm ngay dưới dải sóng, nhưng là widget RIÊNG ──
-        # Cố ý không vẽ chồng lên visualizer: visualizer chỉ có ở gói Premium
-        # và tắt được trong Thiết lập, mà trạng thái mode thì bản nào cũng
-        # phải thấy.
-        from ui.components.active_modes_bar import ActiveModesBar
-        self._ui_colors = None   # panel vừa dựng lại (Dev Mode) → đọc lại màu
-        self._active_bar = ActiveModesBar()
-        wl.addWidget(self._active_bar)
 
         # ── Hàng 1: Mixer + Mode + Tools ──
         top_dock = QHBoxLayout()
@@ -1200,9 +1230,6 @@ class MainDashboard(QMainWindow):
                     self.mode_states[m_name] = new_state
                     self._refresh_mode_button(m_name)
                     print(f"[MIDI SYNC] Mode {m_name} -> {'ON' if new_state else 'OFF'}")
-
-            # Studio One vừa đổi trạng thái nút nào đó → dải phải theo.
-            self._refresh_active_bar()
 
         except Exception as e:
             print(f"[MIDI SYNC] UI MIDI Sync Error: {e}")
@@ -2341,7 +2368,6 @@ class MainDashboard(QMainWindow):
         if btn:
             btn.setActive(self.tune_state)
         print(f"[TONE AUTO] -> {'ON' if self.tune_state else 'OFF'} (Value {val})")
-        self._refresh_active_bar()
 
     def _on_fix_meo(self):
         self.fix_meo_state = not getattr(self, 'fix_meo_state', False)
@@ -2358,7 +2384,6 @@ class MainDashboard(QMainWindow):
         if btn:
             btn.setActive(self.fix_meo_state)
         print(f"[FIX MEO] -> {'ON' if self.fix_meo_state else 'OFF'} (Value {val})")
-        self._refresh_active_bar()
 
     def _on_be(self):
         """Toggle hiệu ứng bè giọng (CC "be") trên Studio One.
@@ -2373,7 +2398,6 @@ class MainDashboard(QMainWindow):
         if btn:
             btn.setActive(self.be_state)
         print(f"[BE] -> {'ON' if self.be_state else 'OFF'} (Value {val})")
-        self._refresh_active_bar()
 
     def _on_tat_on(self):
         """Toggle bộ khử tiếng ồn nền cho mic (CC "tat_on") — có ở MỌI phiên bản.
@@ -2401,7 +2425,6 @@ class MainDashboard(QMainWindow):
         if speak:
             self._a11y_speak(f"Tắt ồn {'bật' if self.tat_on_state else 'tắt'}")
         print(f"[TAT ON] -> {'ON' if self.tat_on_state else 'OFF'} (Value {val})")
-        self._refresh_active_bar()
 
     # ── Tự động bật/tắt Vang theo nhạc (Premium) ────────────────────────────
     # Chu kỳ lấy mẫu + số mẫu liên tiếp cần có trước khi CHỐT trạng thái mới.
@@ -2737,7 +2760,6 @@ class MainDashboard(QMainWindow):
                                          self.current_scale, 0)
         if self.current_title:
             self._refresh_tone_marquee()
-        self._refresh_active_bar()
         return restored
 
     # ── Phase 5: Live Setlist / Auto-Pilot (Premium) ──
@@ -3342,59 +3364,6 @@ class MainDashboard(QMainWindow):
         order += [m for m in self.mode_states if m not in order]
         return [m for m in order if self.mode_states.get(m, False)]
 
-    def _widget_colors(self) -> dict:
-        """{nhãn nút: mã màu} lấy từ ui_config (panel MODE + Công cụ).
-
-        Dải "ĐANG BẬT" phải dùng ĐÚNG màu của nút tương ứng — khác màu thì
-        người dùng không nối được hai thứ với nhau. Đọc một lần rồi nhớ lại:
-        hàm này chạy mỗi lần bấm nút, đọc file JSON mỗi lượt là phí.
-        """
-        if self._ui_colors is not None:
-            return self._ui_colors
-        colors = {}
-        try:
-            ui_config = backend.UiConfigManager.load_ui_config()
-            for group in ("mode", "tools"):
-                for cfg in ui_config.get(group, []):
-                    color = cfg.get("color", "")
-                    colors[cfg.get("label", "")] = C.get(color, color)
-        except Exception as e:
-            print(f"[ACTIVE BAR] Không đọc được màu nút: {e}")
-        self._ui_colors = colors
-        return colors
-
-    def _active_status_items(self) -> list:
-        """[(nhãn, màu)] của mọi MODE + nút chức năng đang bật.
-
-        Đọc thẳng từ trạng thái sống của app chứ không giữ danh sách riêng —
-        thêm một nguồn sự thật nữa là sớm muộn cũng lệch với đèn trên nút.
-        """
-        colors = self._widget_colors()
-        items = [(m, colors.get(m, C["pink"])) for m in self.active_modes()]
-        toggles = (
-            ("Auto-Tune", getattr(self, "tune_state", False)),
-            ("Fix Méo", getattr(self, "fix_meo_state", False)),
-            ("Bè", getattr(self, "be_state", False)),
-            ("Tắt Ồn", getattr(self, "tat_on_state", False)),
-        )
-        items += [(label, colors.get(label, C["primary"]))
-                  for label, on in toggles if on]
-        # Tắt Vang không phải nút trên panel Công cụ mà là nút mute của kênh
-        # VANG — vẫn phải kể, vì đây là thứ hay bị quên bật lại nhất.
-        if self.mute_states.get("mix_reverb", False):
-            items.append(("Tắt Vang", C["accent"]))
-        return items
-
-    def _refresh_active_bar(self):
-        """Vẽ lại dải "ĐANG BẬT". Gọi được ở bất kỳ đâu, kể cả khi chưa dựng dải."""
-        bar = getattr(self, "_active_bar", None)
-        if bar is None:
-            return
-        try:
-            bar.set_items(self._active_status_items())
-        except Exception as e:
-            print(f"[ACTIVE BAR] Cập nhật lỗi: {e}")
-
     def _refresh_mode_button(self, mode):
         """Bật/tắt đèn LED của một nút MODE theo mode_states."""
         btn = self._mode_buttons.get(mode)
@@ -3402,7 +3371,6 @@ class MainDashboard(QMainWindow):
             # PainterButton tự vẽ — setStyleSheet KHÔNG có tác dụng (code cũ
             # dùng stylesheet nên nút chưa bao giờ sáng lên). Phải là setActive.
             btn.setActive(bool(self.mode_states.get(mode, False)))
-        self._refresh_active_bar()
 
     @staticmethod
     def _dev_mode_cc_override(panel, label):

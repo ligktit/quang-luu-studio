@@ -282,11 +282,77 @@ Clipboard đồng bộ hai chiều (clip.exe trên máy dev → dán Notepad má
 sai trên máy khách (Documents chuyển hướng) → mở bằng `shell:Personal\Steinberg\Cubase\MIDI Remote\Driver Scripts\Local\QuangLuu\QuangLuuMIDI`.
 Script Console: danh sách không cuộn bằng phím, kéo thanh cuộn được; lọc "Log Messages" rồi kéo xuống cuối. Script hiện theo dõi 200 tham số (48 đầu qua CC 80–127 kênh 0, còn lại CC giả kênh 1–2) và log `disp[i]` mỗi khi giá trị hiển thị đổi: mở/đóng cửa sổ plugin làm Cubase báo lại toàn bộ (~400 dòng), nên xoá log rồi đổi tham số trên GUI, dòng cần tìm nằm ngay đầu.
 
-Còn lại trên máy khách: Tone Nhạc (CC 10) chưa gắn vào đâu (khách chỉ yêu cầu Tone Giọng); app đã về một phiên bản.
+Tối 2026-10-07 khách đổi yêu cầu: **Tone Nhạc** phải vừa dịch Key Auto-Tune vừa dịch Semitones của SoundShifter. App vốn đã gửi key_root (CC 33) dịch theo khi đổi Tone Nhạc (`_shift_key_by`), nên script chỉ cần đưa Tone Nhạc vào tham số 4; để không bỏ Tone Giọng khách đã dùng hôm trước mà hai nút không ghi đè nhau khi app gửi lại cả hai lúc khôi phục bài, script cộng dồn: Semitones = Tone Nhạc + Tone Giọng (kẹp ±12; `toneApp`, `datBanCungNhac`). **Bẫy đã gặp:** `D:\QuangLuuStudio\app_config.json` trên máy khách đang để `"tone_music": 55` (phiên Claude riêng của khách đổi lúc ~18:30 cùng ngày, bản gốc ở `app_config.json.bak`) nên app gửi CC 55 chứ không phải CC 10 → script nghe cả CC 10 lẫn CC 55 như Tone Nhạc (`CC_TONE_MUSIC_KHACH`). Đã đẩy lên máy khách lúc 19:22 (PowerShell đọc clipboard → ghi file, backup `.bak`), Reload Scripts, kiểm đạt: app Tone Nhạc −2 → tone hiện A#, Cubase Key = Bb, SoundShifter Semitones = −2 (`nhac disp[4] -2`); trả về 0/0 → Key C, Semitones 0. Cách đẩy script không cần Notepad: menu chuột phải Start → Windows PowerShell, chuột phải trong console để dán lệnh (hộp Run cắt ở ~255 ký tự), lệnh đợi clipboard chứa script rồi ghi vào `[Environment]::GetFolderPath('MyDocuments')\Steinberg\...`, trả `QLS_OK` về clipboard. Lưu ý: máy khách hay có người đang dùng (kể cả UltraViewer lồng tới máy thứ ba) → chụp 2 ảnh cách 20 s trước khi gửi thao tác; Cubase ẩn cửa sổ nổi (Script Console, plugin) khi mất focus. App đã về một phiên bản.
 Thang dB của app (Mic/Vang) chỉ khớp Cubase tại 0 dB: app −4 dB → Cubase −9.29 dB, +2 dB → 1.43 dB (`db_to_midi` tuyến tính theo CC, Cubase fader law không tuyến tính) — nếu khách cần số dB đúng thì phải đo đường cong fader Cubase.
 Cửa sổ app Quang Lưu Studio luôn nổi trên Cubase: khi mở Script Console phải thu nhỏ app, nếu không nút Reload/Clear bị che và click rơi vào app.
 Lưu ý thao tác: khi khách bật bộ gõ tiếng Việt (Telex), `type` qua UltraViewer bị đổi dấu → dán mọi đường dẫn/tên file qua clipboard;
 nút X của cửa sổ MIDI Remote nổi trùng vị trí nút X của Cubase → luôn dùng nút ↙ (trả về lower zone) thay vì X.
+
+## 10. Máy khách thứ hai: DESKTOP-826077C (Cubase Pro 15, 2026-10-07 tối, qua UltraViewer)
+
+Máy "Hai Van" (user `caoqu`), bài `LIVE vh`, app 1.8.0 ở `D:\QuangLuuStudio` (`app_config.json` chuẩn: tone_music = 10),
+loopMIDI đủ 2 cổng, Windows tiếng Anh. Bố cục y hệt máy 1: NHAC (SoundShifter Pitch Stereo, Auto-Key), GIONG (Auto-Tune Pro 11 VST3
++ UAD/Q8/CLA/RVox/NS1), FX "Vang dai"/"Delay"/"Vang ngan" → `nhomTheoTen` gom đúng. Trước khi đẩy, máy đã có một bản script
+(22700 byte, 16:57 cùng ngày) do phiên Claude riêng của khách viết: thêm **Fix Méo (CC 45) → Modern Scale Chromatic (CC 2),
+Dân Ca (CC 46) → Dorian (CC 45)**, nhớ scale app gửi để trả lại khi tắt mode — đã gộp vào script repo (`apScale`, `modeScale`).
+
+| Đo | Kết quả |
+|---|---|
+| Harmony Player (nút Bè, CC 47) | Auto-Tune Pro 11: tham số **155 "HP Bypass Harmony Player"** (On = tắt bè) → `be: 155, be_la_bypass: 1`, script gửi `1 − value`. Kiểm: Bè bật → Cubase "Bypass Harmony Player = Off", đèn Harmony Player trên GUI sáng; Bè tắt → "On". Các tham số HP khác: 115–118 Fixed Interval, 119–122 Scale Interval, 123–127 Latch, 128–131 Level, 132–135 Pan, 136–139 Width, 140–143 Formant, 144–147 Solo, 148–152 Trigger, 153 Interval Type, 156 Mute Input, 157 Solo Input, 158 Naturalize, 159–160 Variation, 161 Transition, 163–164 Attack/Release, 165–172 EQ, 173–174 Gate, 175 Stereo Width, 176–178 Bypass Gate/Env/EQ, 180 Mixer Show/Hide, **187 "Key" của HP** (không phải Key chính = 2). |
+| `mOnTitleChange` của tham số | `objectTitle` = **tên plugin**, `valueTitle` = **tên tham số** (log in `param[2] "Auto-Tune Pro" / "Key"`). Kiểm tra `objectTitle === 'Key'` cũ là mã chết → đổi sang `valueTitle`. Cubase 15 vẫn gọi `mOnChangePluginIdentity` sau Reload Scripts nên hồ sơ chọn đúng. |
+| Tone Nhạc −1/+1 | `nhac disp[4] -1` + `disp[2] E` rồi về 0 / F: SoundShifter và Key cùng đổi (CC 10 thật). |
+| Script Console trên Cubase 15 | Mục "Scripting Tools" ẩn mặc định: chuột phải thanh công cụ MIDI Remote → tích Scripting Tools, và phải đủ rộng (tắt Left Zone) mới hiện. Reload cũng có ở Studio → MIDI Remote Manager → Scripts (nút xoay). Console tự cuộn xuống cuối khi còn dòng mới; đợi hết flood rồi kéo thumb lên đầu, bấm vào rãnh cuộn để lật từng trang. |
+
+Đã đẩy script hoàn chỉnh (25837 byte) lúc 20:12, Reload, kiểm đạt. Chưa đẩy bản này lên máy 1 (DESKTOP-U46KFB8): máy 1 còn bản
+không có Bè/Fix Méo/Dân Ca và còn kiểm tra `objectTitle === 'Key'` (vô hại). Trạng thái để lại: Scripting Tools bật trên thanh MIDI Remote,
+các cửa sổ plugin SoundShifter/Auto-Key/Auto-Tune (vốn đang mở) đã bị đóng khi thao tác; lower zone và left zone trả về như cũ.
+
+## 11. Máy khách thứ ba: DESKTOP-M21N7VP (Cubase 15, 2026-10-07 sáng giờ máy khách, qua UltraViewer)
+
+User "phuong son", bài `LIVE MP`, app ở `D:\QuangLuuStudio` (config chuẩn, tone_music 10), loopMIDI đủ 2 cổng, script cũ là bản khảo sát
+11316 byte (04/10). Cùng bố cục NHAC (SoundShifter) / GIONG (Auto-Tune Pro 11). Đẩy bản script đầy đủ (25838 byte) bằng **chuỗi lệnh
+text-only** trong `docs/QUY_TRINH_UV_CUBASE.md` (agent PowerShell qua clipboard + OCR bấm theo chữ), kiểm đạt: Tone Nhạc −1/+1 →
+`nhac disp[4]`, Bè bật/tắt → `disp[155] Off/On`. Màn dev lúc này là 4K, ảnh khách 1:1 tại gốc (924,557) — `cb.sh calib` tự đo.
+Để lại: Scripting Tools bật trên thanh MIDI Remote; cửa sổ Cubase đã trả về kích thước cũ.
+
+**Scale trên máy 3 (2026-10-08):** app gửi 43/85 (bảng Pitch Correct của hồ sơ DAW cubase) vì chưa có `calibration_overrides.json`
+→ đã ghi {Major 10, Minor 18} (lần đầu kèm BOM nên app bỏ qua; ghi lại không BOM, khách khởi động lại app → log `val=10/18`).
+Sau đó GUI vẫn Chromatic: trên máy này ô Scale của GUI đi theo **tham số 1 "Scale"** (bảng cổ điển Major 0–2, Minor 3–7, Chromatic 8–11;
+186 là bản sao), không theo 162 như máy 1/2 → script ghi cả hai (`scale_classic`, `scaleCoDienTuModern`). Kiểm đạt: CC 35 = 18/10 →
+disp[1]/[162] Minor/Major. Gần một giờ chẩn đoán sai hướng vì công cụ `midi` gửi nhầm kênh 3 (xem QUY_TRINH §5).
+
+**Dân Ca → Dorian, Fix Méo → Chromatic trên máy 3 (2026-10-08, ~12:30–12:45):** app gửi đúng CC 45/46 (log `[FIX MEO]`, `[MODE] Dân Ca`).
+Fix Méo đã chạy sẵn (bảng cổ điển có Chromatic = 10). Dân Ca: script ghi 162 = Dorian nhưng bảng cổ điển không có Dorian nên GUI đứng yên.
+Đo: quét tham số 1 (CC 81, `midis`) → Major, Minor, Chromatic, Ling Lun, Scholar's Lute, Greek Diatonic/Chromatic/Enharmonic, Pythagorean,
+Just (Major/Minor), Meantone, Werckmeister, Vallotti & Young, Barnes-Bach, Indian, Slendro, Pelog, Arabic 1/2, 19 Tone, 24 Tone, …, Partch,
+Harmonic — đúng danh sách dropdown Scale trên GUI (ảnh), **không có Dorian/Harmonic Minor**. Thử tắt Classic Mode (tham số 11, GUI có nút
+Modern/Classic, máy đang Classic): GUI vẫn theo tham số 1, danh sách không đổi → không phải do Classic Mode; đã trả về Classic.
+Plugin báo **Version 11.0.0 (650)**, file `C:\Program Files\Common Files\VST3\Antares\Auto-Tune Pro.vst3` ngày 2024-04-06; tham số 162
+"Modern Scale" đổi được giá trị host (disp Dorian) nhưng bản này GUI không dùng tới. Kết luận: trên máy 3 không thể hiện Dorian; script
+lùi Dorian → Minor ở bảng cổ điển (`scaleCoDienTuModern(41..49) = 5`, log "(bang co dien: Minor)"), 162 vẫn = Dorian cho máy có bản mới.
+Kiểm: `midi 35 10` → disp[1] Major; `midi 46 127` → "scale -> Dorian (Dan Ca) (bang co dien: Minor)", disp[1] Minor; `midi 46 0` → disp[1]
+Major; `midi 35 18` → Minor. Muốn Dorian thật trên máy 3 phải cập nhật Auto-Tune Pro lên bản có bộ scale Modern (máy 1/2 có).
+Sự cố nhỏ: `clickt "Auto-Tune" --exact` trúng dòng log console → cú bấm sau mở nhầm hộp thoại Auto Fades của track GIONG, đã Cancel,
+không đổi gì. Máy 1 trong ghi chép cũng ghi "11.0.0" nhưng GUI có Harmonic Minor/Dorian — chưa đối chiếu lại số build (650?).
+
+## 12. Đúc kết thành quy trình cài đặt (2026-10-08)
+
+Phân tích ba máy: phần **đã tự động** trong bộ cài trước đó (chép script, tạo cổng loopMIDI, chẩn đoán Release Driver) đều
+chạy; phần **phải làm tay** lặp lại ở cả ba máy là (1) Scale cho Auto-Tune Pro — app mặc định bảng Pitch Correct 43/85, mỗi máy
+phải Cân chỉnh thành 10/18, máy 3 bỏ sót nên 43 rơi vào Dorian; (2) đẩy script mới và Reload khi Cubase đang mở, trong khi
+script trên máy có thể đã được sửa tay; (3) chọn DAW trong app; (4) chuẩn hoá bài mẫu (thứ tự track, tên kênh). Việc (1) nay
+làm ở script (`scale_tu_pitch_correct` trong hồ sơ Auto-Tune: 23–63 → 10, 64–105 → 18, giá trị ≤ 22 đi thẳng nên máy đã cân
+chỉnh vẫn đúng); (2) `setup_all.bat` sao lưu `.bak`, so bản, in `QLS_SCRIPT_VERSION`, phát hiện Cubase đang chạy; (3) bộ cài ghi
+`daw_kind` theo máy; (4) + mọi thứ còn lại nằm trong `cubase/HUONG_DAN_CAI_DAT_CUBASE.md` (đi kèm bộ cài). `QLS_ChanDoan` thêm
+kiểm phiên bản script và tệp cân chỉnh có BOM/hỏng. Chưa tự động được: cờ Release Driver (sửa `Defaults.xml` của Cubase là rủi ro,
+chỉ cảnh báo), Reload Scripts (Cubase không có lệnh ngoài), và bộ scale của bản Auto-Tune cũ (phải cập nhật plugin).
+
+Bước tiếp (cùng ngày): `setup_all.bat /auto` chạy **trong** bộ cài qua `ExecAsOriginalUser` ở `[Code]` (phải là người dùng gốc, không
+phải admin nâng quyền, vì script ghi Documents/HKCU/%APPDATA% của người hát), `ewWaitUntilTerminated`, `SW_HIDE`; chế độ này không
+`pause`, truyền `-NoPause` cho `setup_midi_ports.ps1`, bỏ bước tải FFmpeg (bộ cài đã kèm), tự ghi log, trả mã thoát bit 1/2/4; bộ cài
+hiện `SuppressibleMsgBox` khi mã ≠ 0. Đã chạy thật trên máy dev: mã 0 (đủ cổng, script đúng bản) và mã 4 (giả lập Cubase đang chạy).
+Bẫy: `setup_all.bat` trong cây làm việc đang LF (autocrlf không bật) → cmd đọc lệch dòng vì tiếng Việt nhiều byte; đã chuyển CRLF
+đúng như `.gitattributes` yêu cầu.
 
 ## Nguồn
 

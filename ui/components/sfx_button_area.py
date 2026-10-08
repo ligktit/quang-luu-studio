@@ -198,6 +198,7 @@ class SfxItemButton(QWidget):
         self._missing = False          # file not found
         self._pulse_alpha = 0
         self._pulse_dir = 1
+        self._pulse_enabled = True     # False = viền đỏ đứng yên khi thiếu file
 
         self.setFixedHeight(28)
         self.setMinimumWidth(52)
@@ -210,8 +211,7 @@ class SfxItemButton(QWidget):
         # Missing-file pulse timer
         self._pulse_timer = QTimer(self)
         self._pulse_timer.timeout.connect(self._tick_pulse)
-        if self._missing:
-            self._pulse_timer.start(40)
+        self._sync_pulse()
 
     # ── Public API ────────────────────────────────────────────────
     @property
@@ -221,11 +221,7 @@ class SfxItemButton(QWidget):
     def update_data(self, sfx_data: dict):
         self._data = dict(sfx_data)
         self._check_file()
-        if self._missing and not self._pulse_timer.isActive():
-            self._pulse_timer.start(40)
-        elif not self._missing and self._pulse_timer.isActive():
-            self._pulse_timer.stop()
-            self._pulse_alpha = 0
+        self._sync_pulse()
         self.setToolTip(self._build_tooltip())
         self.setAccessibleName(f"Hiệu ứng {self._data.get('name', 'Không tên')}")
         self.update()
@@ -248,6 +244,21 @@ class SfxItemButton(QWidget):
 
     def _base_color(self) -> QColor:
         return QColor(self._data.get("color", C["teal"]))
+
+    def set_pulse_enabled(self, on: bool):
+        """Thiết lập "Tắt hiệu ứng bắt mắt": thiếu file vẫn viền đỏ, nhưng đứng yên."""
+        self._pulse_enabled = bool(on)
+        self._sync_pulse()
+        self.update()
+
+    def _sync_pulse(self):
+        """Chạy/dừng nhấp nháy theo (thiếu file) × (hiệu ứng được bật)."""
+        if self._missing and self._pulse_enabled:
+            if not self._pulse_timer.isActive():
+                self._pulse_timer.start(40)
+        else:
+            self._pulse_timer.stop()
+            self._pulse_alpha = 200 if self._missing else 0
 
     def _tick_pulse(self):
         self._pulse_alpha += 8 * self._pulse_dir

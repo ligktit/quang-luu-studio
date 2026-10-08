@@ -121,7 +121,7 @@ DEFAULT_MODE_CONFIG = {
 # trong midi_cc). Mặc định app gửi 127 = BẬT, 0 = TẮT. Nếu trong Studio One nút
 # được gán vào tham số kiểu **Bypass** (127 = bỏ qua plugin = TẮT) thì bật cờ
 # này: app gửi 127 − giá trị (BẬT → 0, TẮT → 127) và đọc phản hồi cũng theo
-# chiều đó, để đèn nút + dải "ĐANG BẬT" khớp với Studio One.
+# chiều đó, để đèn nút khớp với Studio One.
 DEFAULT_TOGGLE_INVERT = {
     "tone_auto": False,   # Auto-Tune
     "fix_meo":   False,   # Fix Méo

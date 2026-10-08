@@ -1,16 +1,19 @@
-// Quang Luu Studio - script MIDI Remote cho Cubase (ban THAM DO, giai doan 0).
+// Quang Luu Studio - script MIDI Remote cho Cubase.
 //
 // Vai tro: thay cho QuangLuuMIDI.surface.xml cua Studio One. Cubase 12+ (moi ban
 // Elements/Artist/Pro) tu nap file nay khi thay du hai cong loopMIDI:
 //     QuangLuuMIDI  -> app GUI vao   (Cubase: MIDI Input)
 //     QLS_PhanHoi   -> Cubase TRA ve (Cubase: MIDI Output)
 //
-// Vi tri cai (chay ThamDoCubase.bat -CaiScript, hoac chep tay):
-//   %USERPROFILE%\Documents\Steinberg\Cubase\MIDI Remote\Driver Scripts\Local\QuangLuu\QuangLuuMIDI\QuangLuu_QuangLuuMIDI.js
-// Sua xong bam "Reload Scripts" trong MIDI Remote Manager, khong can mo lai Cubase.
+// Vi tri cai (setup_all.bat trong thu muc cai app chep vao; huong dan: cubase\HUONG_DAN_CAI_DAT_CUBASE.md):
+//   <Documents>\Steinberg\Cubase\MIDI Remote\Driver Scripts\Local\QuangLuu\QuangLuuMIDI\QuangLuu_QuangLuuMIDI.js
+// Sua xong bam "Reload Scripts" trong MIDI Remote Manager (hoac mo lai Cubase).
 // Log xem o: Lower Zone -> MIDI Remote -> Scripting Tools -> Script Console.
 //
-// Ban tham do nay do 5 dieu truoc khi viet adapter Cubase trong app:
+// QLS_SCRIPT_VERSION: setup_all.bat va QLS_ChanDoan doc dong nay (va log 'driver active') de biet may khach chay ban nao.
+var QLS_SCRIPT_VERSION = '2026-10-08'
+//
+// Ban dau day la ban tham do, do 5 dieu truoc khi viet adapter Cubase trong app:
 //   1. Cubase co nhan cong va TRA LOI ping (CC 49) khong, tre bao lau.
 //   2. mOnTitleChange cua kenh mixer co bao ten track luc bai nap xong khong
 //      -> dung lam tin hieu "san sang" thay cho hen gio +3/10/25/50s.
@@ -249,9 +252,10 @@ for (var pi = 0; pi < SO_THAM_SO; pi++) {
             if (objectTitle && objectTitle.length) {
                 log('param[' + i + '] "' + objectTitle + '" / "' + valueTitle + '"')
                 guiSysEx(activeDevice, 0x01, 'param|' + i + '|' + objectTitle + '|' + valueTitle)
-                // Tham so ten "Key" o chi so i -> chon ho so plugin co key_root = i.
-                // Chay ca khi Reload Scripts (mOnChangePluginIdentity thi KHONG).
-                if (objectTitle === 'Key') chonHoSoTheoChiSoKey(i)
+                // objectTitle = TEN PLUGIN, valueTitle = TEN THAM SO (do 2026-10-07: log in 'param[2] "Auto-Tune Pro" / "Key"').
+                // Tham so ten "Key" o chi so i -> chon ho so plugin co key_root = i (du phong khi
+                // mOnChangePluginIdentity khong chay; Cubase 15 thi identity van chay sau Reload Scripts).
+                if (valueTitle === 'Key') chonHoSoTheoChiSoKey(i)
             }
         }
         pv.mOnDisplayValueChange = function (activeDevice, activeMapping, value, units) {
@@ -272,11 +276,50 @@ for (var pi = 0; pi < SO_THAM_SO; pi++) {
 // knob CC cua app KHONG bind host, chi chuyen gia tri sang bien cua ho so dang chon (JS thuan).
 // Khong dung sub page: mActivate.trigger() goi tu callback khong doi binding (do 2026-10-06).
 // Ho so chon theo ten tham so "Key" (chay ca khi Reload Scripts) va theo mOnChangePluginIdentity.
+// be (CC 47, nut Be cua app, 127 = bat): Harmony Player cua Auto-Tune Pro 11. Do tren may khach DESKTOP-826077C
+// 2026-10-07 (Cubase 15, Auto-Tune Pro 11.0.0 VST3): tham so **155 "HP Bypass Harmony Player"** (On = tat be) ->
+// be_la_bypass: true de dao chieu (app 127 = bat be -> bypass 0). Cac tham so HP khac: 115-118 Voice 1-4 Fixed Interval,
+// 119-122 Scale Interval, 123-127 Latch, 128-131 Level, 132-135 Pan, 136-139 Width, 140-143 Formant, 144-147 Solo,
+// 148-152 Trigger, 153 Interval Type, 155 Bypass HP, 156 Mute Input, 157 Solo Input, 158 Naturalize, 159-160 Variation,
+// 161 Transition Time, 163-164 Attack/Release, 165-172 EQ, 173-174 Gate, 175 Stereo Width, 176-178 Bypass Gate/Env/EQ,
+// 180 Mixer Show/Hide, 187 "Key" (cua HP, khong phai Key chinh = 2). Plugin khong co bo be thi -1 = chi log.
+// scale_dorian / scale_chromatic: gia tri MIDI (0..127) dua vao tham so scale_type khi bat mode
+// Dan Ca (CC 46) / Fix Meo (CC 45); -1 = plugin chua do, chi ghi log. (Phan nay lay tu ban script tren may khach
+// DESKTOP-826077C, 2026-10-07 16:57, do phien Claude rieng cua khach viet.)
+//   Auto-Tune Pro 11 "Modern Scale" (may khach, do 2026-10-07 bang Can chinh trong app):
+//   Chromatic 0-5, Major 6-13, Minor 14-22, Harmonic Minor 23-31, Jazz Melodic Minor 32-40, Dorian 41-49.
+// scale_classic: tham so "Scale" bang co dien cua Auto-Tune Pro (1; 186 la ban sao). May khach DESKTOP-M21N7VP (2026-10-08) GUI/am thanh
+// di theo tham so NAY chu khong theo 162 "Modern Scale" (may 1, 2 thi nguoc lai) -> khi nhan CC 35 script ghi CA HAI:
+// 162 = gia tri app, 1 = quy doi tu bang Modern sang bang co dien (Chromatic 0-5 -> 10, Major 6-13 -> 1, Minor 14-22 -> 5;
+// scale khac khong co trong bang co dien thi de nguyen). Bang co dien do tren may 3: Major 0-2, Minor 3-7, Chromatic 8-11.
+// Ban Auto-Tune Pro tren may 3 (file .vst3 2024-04-06) chi co bang co dien tren GUI, ca o Modern lan Classic (tham so 11):
+// quet CC 81 (2026-10-08): Major, Minor, Chromatic, Ling Lun, Scholar's Lute, Greek..., Just, Barnes-Bach, Pelog, Arabic, 24 Tone,
+// Partch, Harmonic = 29 scale lich su, KHONG co Dorian; tham so 162 doi duoc gia tri host nhung GUI khong theo. Vi vay Dan Ca
+// (Dorian) tren bang co dien lui ve Minor (gan Dorian nhat: chi khac bac 6) - scaleCoDienTuModern(41..49) = 5. Chromatic (Fix Meo)
+// co trong bang co dien nen ghi dung. Tat/bat Classic Mode khong giup gi (da thu), script KHONG dung den tham so 11.
 var HO_SO_PLUGIN = [
-    { ten: 'Pitch Correct', key_root: 6, scale_type: 7, tone_auto: 3 },
-    { ten: 'Auto-Tune Pro', key_root: 2, scale_type: 162, tone_auto: -1 }
+    { ten: 'Pitch Correct', key_root: 6, scale_type: 7, tone_auto: 3, be: -1, scale_dorian: -1, scale_chromatic: -1, scale_classic: -1 },
+    { ten: 'Auto-Tune Pro', key_root: 2, scale_type: 162, tone_auto: -1, be: 155, be_la_bypass: 1, scale_dorian: 45, scale_chromatic: 2, scale_classic: 1,
+      // App gui Scale theo bang Pitch Correct cua ho so DAW cubase (Major 22-63 tam 43, Minor 64-105 tam 85). Tren Modern Scale
+      // cua Auto-Tune 43 lai la Dorian, 85 ngoai bang -> quy doi tai day: [tu, den, gia tri Auto-Tune]. Gia tri 0-22 (bang Auto-Tune: da can chinh
+      // bang app: Major 10 / Minor 18, hoac Chromatic) di thang. Nho vay may khach KHONG can calibration_overrides.json nua.
+      scale_tu_pitch_correct: [[23, 63, 10], [64, 105, 18]] }
 ]
-var ccTheoKhoa = { key_root: CC.key_root, scale_type: CC.scale_type, tone_auto: CC.tone_auto }
+function scaleTheoHoSo(value) {        // value 0..1 app gui -> 0..1 theo bang cua plugin dang chon
+    var bang = hoSoHienTai.scale_tu_pitch_correct
+    if (!bang) return value
+    var cc = Math.round(value * 127)
+    for (var i = 0; i < bang.length; i++) if (cc >= bang[i][0] && cc <= bang[i][1]) return bang[i][2] / 127
+    return value
+}
+function scaleCoDienTuModern(cc) {      // cc 0..127 cua bang Modern -> cc bang co dien, -1 = khong quy doi duoc
+    if (cc <= 5) return 10                  // Chromatic
+    if (cc <= 13) return 1                  // Major
+    if (cc <= 22) return 5                  // Minor
+    if (cc >= 41 && cc <= 49) return 5      // Dorian -> Minor (bang co dien khong co Dorian)
+    return -1
+}
+var ccTheoKhoa = { key_root: CC.key_root, scale_type: CC.scale_type, tone_auto: CC.tone_auto, be: CC.be }
 var hoSoHienTai = HO_SO_PLUGIN[0]
 for (var hi = 0; hi < HO_SO_PLUGIN.length; hi++) {
     (function (hoSo, so) {
@@ -284,20 +327,71 @@ for (var hi = 0; hi < HO_SO_PLUGIN.length; hi++) {
         for (var khoa in ccTheoKhoa) {
             if (!ccTheoKhoa.hasOwnProperty(khoa)) continue
             var idx = hoSo[khoa]
-            var bien = surface.makeCustomValueVariable('ql_' + so + '_' + khoa)
-            page.makeValueBinding(bien, idx >= 0 ? thamSo[idx] : insertViewer.mOn)
+            var bien = null
+            if (idx >= 0) {
+                bien = surface.makeCustomValueVariable('ql_' + so + '_' + khoa)
+                page.makeValueBinding(bien, thamSo[idx])
+            } else if (khoa === 'tone_auto') {
+                // Plugin khong lo tham so bat/tat -> nut On cua insert slot.
+                bien = surface.makeCustomValueVariable('ql_' + so + '_' + khoa)
+                page.makeValueBinding(bien, insertViewer.mOn)
+            }
             hoSo.bien[khoa] = bien
         }
+        hoSo.bien.scale_classic = null
+        if (hoSo.scale_classic >= 0) {
+            hoSo.bien.scale_classic = surface.makeCustomValueVariable('ql_' + so + '_scale_classic')
+            page.makeValueBinding(hoSo.bien.scale_classic, thamSo[hoSo.scale_classic])
+        }
     })(HO_SO_PLUGIN[hi], hi)
+}
+// Mode ghi de Scale: Fix Meo (CC 45) -> Chromatic, Dan Ca (CC 46) -> Dorian. Fix Meo uu tien hon.
+// Scale app gui (CC 35) luc mode dang bat duoc nho lai, tat mode thi tra ve scale do.
+var scaleApp = -1            // gia tri chuan hoa 0..1 cua CC 35 gan nhat (-1 = chua nhan)
+var modeScale = { fix_meo: false, mode_danca: false }
+function datScale(activeDevice, value, lyDo) {   // value 0..1 theo bang Modern; ghi 162 va quy doi sang bang co dien (1)
+    hoSoHienTai.bien.scale_type.setProcessValue(activeDevice, value)
+    var bc = hoSoHienTai.bien.scale_classic
+    var cd = bc ? scaleCoDienTuModern(Math.round(value * 127)) : 0
+    if (bc && cd >= 0) bc.setProcessValue(activeDevice, cd / 127)
+    if (lyDo) log('scale -> ' + lyDo + (bc && cd === 5 && value * 127 > 40 ? ' (bang co dien: Minor)' : ''))
+}
+function apScale(activeDevice) {
+    var bien = hoSoHienTai.bien.scale_type
+    if (!bien) return
+    if (modeScale.fix_meo && hoSoHienTai.scale_chromatic >= 0) {
+        datScale(activeDevice, hoSoHienTai.scale_chromatic / 127, 'Chromatic (Fix Meo)')
+    } else if (modeScale.mode_danca && hoSoHienTai.scale_dorian >= 0) {
+        datScale(activeDevice, hoSoHienTai.scale_dorian / 127, 'Dorian (Dan Ca)')
+    } else if (scaleApp >= 0) {
+        datScale(activeDevice, scaleTheoHoSo(scaleApp), null)
+    } else if (modeScale.fix_meo || modeScale.mode_danca) {
+        log('mode bat nhung ' + hoSoHienTai.ten + ' chua co gia tri Chromatic/Dorian')
+    }
 }
 for (var khoa in ccTheoKhoa) {
     if (!ccTheoKhoa.hasOwnProperty(khoa)) continue
     (function (k) {
         var knob = knobCC(ccTheoKhoa[k])
         knob.mSurfaceValue.mOnProcessValueChange = function (activeDevice, value, diff) {
-            hoSoHienTai.bien[k].setProcessValue(activeDevice, value)
+            if (k === 'scale_type') { scaleApp = value; apScale(activeDevice); return }
+            if (k === 'be' && hoSoHienTai.be_la_bypass) value = 1 - value   // tham so la Bypass: bat be = bypass 0
+            var bien = hoSoHienTai.bien[k]
+            if (bien) bien.setProcessValue(activeDevice, value)
+            else log('nhan CC ' + ccTheoKhoa[k] + ' = ' + Math.round(value * 127) + ' (' + k + ' chua gan tren ' + hoSoHienTai.ten + ')')
         }
     })(khoa)
+}
+for (var mk in modeScale) {
+    if (!modeScale.hasOwnProperty(mk)) continue
+    (function (m) {
+        var knob = knobCC(CC[m])
+        knob.mSurfaceValue.mOnProcessValueChange = function (activeDevice, value, diff) {
+            modeScale[m] = value > 0.5
+            log('nhan CC ' + CC[m] + ' = ' + Math.round(value * 127) + ' (' + m + (modeScale[m] ? ' BAT' : ' TAT') + ')')
+            apScale(activeDevice)
+        }
+    })(mk)
 }
 function datHoSo(hoSo, lyDo) {
     if (hoSoHienTai !== hoSo) log('ho so plugin: ' + hoSo.ten + ' (' + lyDo + ')')
@@ -327,9 +421,14 @@ insertViewer.mOnTitleChange = function (activeDevice, activeMapping, title) {
 }
 
 // ---- 6. Plugin o insert slot kenh Nhac (pitch shift: Waves SoundShifter Pitch Stereo tren may khach) ----
-// Theo doi tham so nhu kenh Mic (CC gia kenh MIDI 3..), app gui tone_voice (CC 11) / tone_music (CC 10)
-// 0..127 = -12..+12 ban cung (frontend_qt._set_tone_offset).
-// Waves SoundShifter Pitch Stereo (may khach, do 2026-10-07): tham so 4 "PitchSemitones" (0 .. 9, bank lap chu ky 10).
+// App gui tone_music (CC 10, Tone Nhac) va tone_voice (CC 11, Tone Giong): 0..127 = -12..+12 ban cung
+// (frontend_qt._set_tone_offset: cc = (st + 12) / 24 * 127, 0 ban cung = CC 63).
+// Tone Nhac dich ca nhac nen app DONG THOI gui key_root (CC 33) da dich theo -> Auto-Tune Key doi theo (muc 4);
+// script chi can dua Tone Nhac vao tham so ban cung cua plugin pitch tren kenh Nhac.
+// May khach chi co MOT plugin pitch (tren NHAC) nen ca hai nut cung vao do: ban cung plugin = Tone Nhac + Tone Giong
+// (cong roi kep -12..+12) de nut nay khong ghi de nut kia khi app gui lai ca hai luc khoi phuc bai.
+// Waves SoundShifter Pitch Stereo (may khach, do 2026-10-07): tham so 4 "PitchSemitones" (0 .. 9, bank lap chu ky 10),
+// gia tri 0..1 = -12..+12 ban cung tuyen tinh (kiem +-12 dat).
 var SO_THAM_SO_NHAC = 16   // SoundShifter chi co 10 tham so, bank lap lai theo chu ky 10
 var KENH_MIDI_NHAC = 3
 var viewerNhac = kenh[KENH.nhac].mInsertAndStripEffects.makeInsertEffectViewer('QuangLuuInsertNhac').excludeEmptySlots()
@@ -352,36 +451,52 @@ for (var pn = 0; pn < SO_THAM_SO_NHAC; pn++) {
         thamSoNhac.push(pv)
     })(pn)
 }
-// Ho so plugin pitch kenh Nhac: khoa app -> chi so tham so (-1 = chua gan).
+// Ho so plugin pitch kenh Nhac: ban_cung = chi so tham so dich ban cung (-1 = chua gan).
 var HO_SO_NHAC = [
-    { ten: 'SoundShifter', tone_voice: 4, tone_music: -1 }
+    { ten: 'SoundShifter', ban_cung: 4 }
 ]
-var ccTheoKhoaNhac = { tone_voice: CC.tone_voice, tone_music: CC.tone_music }
 var hoSoNhacHienTai = HO_SO_NHAC[0]
 for (var hn = 0; hn < HO_SO_NHAC.length; hn++) {
     (function (hoSo, so) {
-        hoSo.bien = {}
-        for (var khoa in ccTheoKhoaNhac) {
-            if (!ccTheoKhoaNhac.hasOwnProperty(khoa)) continue
-            if (hoSo[khoa] < 0) continue
-            var bien = surface.makeCustomValueVariable('qln_' + so + '_' + khoa)
-            page.makeValueBinding(bien, thamSoNhac[hoSo[khoa]])
-            hoSo.bien[khoa] = bien
-        }
+        hoSo.bien = null
+        if (hoSo.ban_cung < 0) return
+        hoSo.bien = surface.makeCustomValueVariable('qln_' + so + '_ban_cung')
+        page.makeValueBinding(hoSo.bien, thamSoNhac[hoSo.ban_cung])
     })(HO_SO_NHAC[hn], hn)
 }
-var ccNhacDaGan = {}
-for (var khoa in ccTheoKhoaNhac) {
-    if (!ccTheoKhoaNhac.hasOwnProperty(khoa)) continue
-    (function (k) {
-        var knob = knobCC(ccTheoKhoaNhac[k])
-        ccNhacDaGan[k] = true
+var ccTheoKhoaNhac = { tone_music: CC.tone_music, tone_voice: CC.tone_voice }
+// May khach (DESKTOP-U46KFB8, do 2026-10-07): app_config.json cua khach dat tone_music = 55 (ky thuat vien doi
+// tu hoi thanh "Giong" con gui nham CC 10). Script nghe them CC 55 nhu Tone Nhac de khong phai sua config khach.
+var CC_TONE_MUSIC_KHACH = 55
+var toneApp = { tone_music: 0, tone_voice: 0 }      // ban cung app dang gui, theo tung nut
+function banCungTuCC(value) {                        // value 0..1 (= CC/127) -> -12..+12
+    var st = Math.round(value * 24 - 12)
+    if (st < -12) st = -12
+    if (st > 12) st = 12
+    return st
+}
+function datBanCungNhac(activeDevice, nguon) {
+    var tong = toneApp.tone_music + toneApp.tone_voice
+    if (tong < -12) tong = -12
+    if (tong > 12) tong = 12
+    var moTa = 'Tone Nhac ' + toneApp.tone_music + ' + Tone Giong ' + toneApp.tone_voice + ' = ' + tong + ' ban cung (' + nguon + ')'
+    if (!hoSoNhacHienTai.bien) { log(moTa + ' - chua gan tren ' + hoSoNhacHienTai.ten); return }
+    hoSoNhacHienTai.bien.setProcessValue(activeDevice, (tong + 12) / 24)
+    log(moTa + ' -> ' + hoSoNhacHienTai.ten)
+}
+var ccToneNhac = [
+    { khoa: 'tone_music', cc: ccTheoKhoaNhac.tone_music },
+    { khoa: 'tone_music', cc: CC_TONE_MUSIC_KHACH },
+    { khoa: 'tone_voice', cc: ccTheoKhoaNhac.tone_voice }
+]
+for (var ti = 0; ti < ccToneNhac.length; ti++) {
+    (function (k, cc) {
+        var knob = knobCC(cc)
         knob.mSurfaceValue.mOnProcessValueChange = function (activeDevice, value, diff) {
-            var bien = hoSoNhacHienTai.bien[k]
-            if (bien) bien.setProcessValue(activeDevice, value)
-            else log('nhan CC ' + ccTheoKhoaNhac[k] + ' = ' + Math.round(value * 127) + ' (' + k + ' chua gan tren ' + hoSoNhacHienTai.ten + ')')
+            toneApp[k] = banCungTuCC(value)
+            datBanCungNhac(activeDevice, k + ' CC ' + cc)
         }
-    })(khoa)
+    })(ccToneNhac[ti].khoa, ccToneNhac[ti].cc)
 }
 viewerNhac.mOnChangePluginIdentity = function (activeDevice, activeMapping, pluginName, pluginVendor, pluginVersion, formatVersion) {
     log('plugin Nhac "' + pluginName + '" (' + pluginVendor + ' ' + pluginVersion + ')')
@@ -392,7 +507,7 @@ viewerNhac.mOnChangePluginIdentity = function (activeDevice, activeMapping, plug
 }
 
 // Cac CC con lai cua app: chi ghi log de biet Cubase CO nhan duoc (gan vao dau la viec cua giai doan 2).
-var ccChiLog = [CC.fix_meo, CC.mode_danca, CC.be, CC.tat_on, 30, 31, 32, 34, 36, 37, 38, 39, 41, 42, 43, 44, 54]
+var ccChiLog = [CC.tat_on, 30, 31, 32, 34, 36, 37, 38, 39, 41, 42, 43, 44, 54]
 for (var c = 0; c < ccChiLog.length; c++) {
     (function (cc) {
         var k = knobCC(cc)
@@ -413,7 +528,7 @@ page.mOnDeactivate = function (activeDevice, activeMapping) {
     currentMapping = null
 }
 deviceDriver.mOnActivate = function (activeDevice) {
-    log('driver active: Cubase da thay QuangLuuMIDI + QLS_PhanHoi')
+    log('driver active: Cubase da thay QuangLuuMIDI + QLS_PhanHoi (script ' + QLS_SCRIPT_VERSION + ')')
     guiCC(activeDevice, 72, 1)
 }
 deviceDriver.mOnDeactivate = function (activeDevice) {
