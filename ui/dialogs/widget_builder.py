@@ -206,13 +206,14 @@ class WidgetBuilderDialog(QDialog):
         self.value_note = QLabel()
         self.value_note.setWordWrap(True)
         self.value_note.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
-        # Dành sẵn 3 dòng: nhãn xuống dòng có chiều cao phụ thuộc chiều rộng
+        # Dành sẵn 4 dòng: nhãn xuống dòng có chiều cao phụ thuộc chiều rộng
         # (heightForWidth). Nếu để nó quyết định cỡ tối thiểu của dialog mỗi lần
         # đổi ghi chú, Qt ép cỡ cửa sổ hai bước lệch nhau một dòng và in
         # "QWindowsWindow::setGeometry: Unable to set geometry" mỗi lần đổi
-        # CC / Kiểu tham số. Ghi chú dài nhất ~2,7 dòng ở bề rộng tối thiểu.
+        # CC / Kiểu tham số. Ghi chú dài nhất ~2,7 dòng ở máy dev nhưng font
+        # mặc định của runner CI (Windows Server) rộng hơn nên xuống 4 dòng.
         self.value_note.ensurePolished()
-        self.value_note.setMinimumHeight(self.value_note.fontMetrics().lineSpacing() * 3 + 4)
+        self.value_note.setMinimumHeight(self.value_note.fontMetrics().lineSpacing() * 4 + 4)
         vl.addWidget(self.value_note)
 
         self.is_toggle_cb = QCheckBox("Là nút Toggle (Bật/Tắt)")
