@@ -599,6 +599,7 @@ class SettingsDialog(QDialog):
 
         lay.addWidget(self._section_header(SVG_MIC, "Thiết bị ghi âm"))
         self._combo_lb, self._combo_mic = self._create_audio_combos(settings)
+        self._combo_music_dev = self._create_music_device_combo(settings)
         lay.addWidget(self._section_card(self._build_audio))
 
         # Vang tự động theo nhạc (Premium)
@@ -1130,6 +1131,27 @@ class SettingsDialog(QDialog):
             self._dashboard._show_message(f"Chốt bản mẫu lỗi: {result['error']}", is_error=True)
         self._refresh_kiosk_ui()
 
+    def _create_music_device_combo(self, settings):
+        from PySide6.QtWidgets import QComboBox
+        from core.audio_doctor.win_audio import WinAudio
+        combo = QComboBox()
+        combo.setStyleSheet(self._combo_qss)
+        combo.addItem("(chưa chọn)", None)
+        saved_id = settings.get("music_playback_device_id")
+        saved_name = settings.get("music_playback_device_name", "")
+        try:
+            devices = WinAudio().render_devices()
+        except Exception as e:
+            print(f"[SETTINGS] Không liệt kê được thiết bị phát: {e}")
+            devices = []
+        for d in devices:
+            combo.addItem(d.name, d.id)
+        if saved_id and combo.findData(saved_id) < 0:
+            combo.addItem(f"{saved_name or saved_id} (không thấy trên máy)", saved_id)
+        idx = combo.findData(saved_id) if saved_id else 0
+        combo.setCurrentIndex(max(0, idx))
+        return combo
+
     def _create_audio_combos(self, settings):
         from PySide6.QtWidgets import QComboBox
         combo_lb  = QComboBox()
@@ -1193,6 +1215,10 @@ class SettingsDialog(QDialog):
         hint.setStyleSheet(self._field_label_qss(size=11, color=C["orange"], weight=600, italic=True))
         hint.setWordWrap(True)
         vl.addWidget(hint)
+        dev_lbl = QLabel("Thiết bị đưa nhạc vào DAW (Tự sửa âm thanh đặt lại về đây):")
+        dev_lbl.setStyleSheet(self._field_label_qss())
+        vl.addWidget(dev_lbl)
+        vl.addWidget(self._combo_music_dev)
         mic_lbl = QLabel("Microphone:")
         mic_lbl.setStyleSheet(self._field_label_qss())
         vl.addWidget(mic_lbl)
@@ -1823,6 +1849,14 @@ class SettingsDialog(QDialog):
         s["auto_close_browser"]     = self._cb_close_br.isChecked()
         s["record_loopback_device"] = self._combo_lb.currentData()
         s["record_mic_device"]      = self._combo_mic.currentData()
+        dev_id = self._combo_music_dev.currentData()
+        if dev_id:
+            s["music_playback_device_id"] = dev_id
+            s["music_playback_device_name"] = self._combo_music_dev.currentText().replace(
+                " (không thấy trên máy)", "")
+        else:
+            s.pop("music_playback_device_id", None)
+            s.pop("music_playback_device_name", None)
         if hasattr(self, "_cb_embedded_player"):
             s["use_embedded_player"]    = self._cb_embedded_player.isChecked()
             s["display_monitor_index"]  = max(0, self._combo_monitor.currentIndex())
