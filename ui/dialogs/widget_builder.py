@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QWidget, QFrame,
     QComboBox, QPushButton, QSpinBox, QDoubleSpinBox, QCheckBox, QColorDialog
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from core import so_values, ui_layout
 from ui.design_tokens import C, FONT
 from ui import responsive as rp
@@ -35,7 +35,8 @@ class WidgetBuilderDialog(QDialog):
     calibration_overrides.json (DATA_DIR, không cần quyền admin).
     """
 
-    def __init__(self, parent=None, panel_name="mixer", widget_type="slider", existing_data=None):
+    def __init__(self, parent=None, panel_name="mixer", widget_type="slider", existing_data=None,
+                 engine=None, ui_config=None, midi_cc=None):
         super().__init__(parent)
         self.panel_name = panel_name
         self.widget_type = widget_type
@@ -43,6 +44,10 @@ class WidgetBuilderDialog(QDialog):
         self.result_data = None
         self.result_calibration = None
         self._loading = False
+        # Gửi thử cần engine; dashboard truyền vào, hoặc lấy từ parent.
+        self._engine = engine if engine is not None else getattr(parent, "engine", None)
+        self._ui_config = ui_config   # None → đọc ui_config.json lúc cần
+        self._midi_cc = midi_cc       # None → AppConfig.get_midi_cc()
 
         title = "Sửa Widget" if existing_data else "Thêm Widget Mới"
         self.setWindowTitle(f"{title} - {panel_name.capitalize()}")
@@ -57,6 +62,7 @@ class WidgetBuilderDialog(QDialog):
 
         self._load_data()
         self._on_type_changed(self.type_combo.currentData())
+        self._refresh_cc_info()
         self._update_save_state()
 
     def _add_row(self, label_text, widget, layout=None):
@@ -149,7 +155,31 @@ class WidgetBuilderDialog(QDialog):
         self.cc_input.setSpecialValueText("— (không gán)")
         self.cc_input.setValue(-1)
         self.cc_input.valueChanged.connect(lambda _v: self._refresh_value_section())
-        self._add_row("MIDI CC:", self.cc_input)
+        self.cc_input.valueChanged.connect(lambda _v: self._refresh_cc_info())
+        self.test_btn = QPushButton("Gửi thử")
+        self.test_btn.setToolTip("Gửi giá trị BẬT rồi TẮT trên CC này — dùng để MIDI Learn "
+                                 "hoặc kiểm tra trong DAW mà chưa cần Lưu.")
+        self.test_btn.clicked.connect(self._on_test_send)
+        ccl = QHBoxLayout()
+        cclbl = QLabel("MIDI CC:")
+        cclbl.setFixedWidth(100)
+        ccl.addWidget(cclbl)
+        ccl.addWidget(self.cc_input, 1)
+        ccl.addWidget(self.test_btn)
+        self.vl.addLayout(ccl)
+
+        # Hai nhãn đổi nội dung theo CC: luôn hiện + dành sẵn chiều cao (geometry).
+        self.cc_note = QLabel()
+        self.cc_note.setWordWrap(True)
+        self.cc_note.setStyleSheet(f"color: {C['orange']}; font-size: 11px;")
+        self.cc_note.ensurePolished()
+        self.cc_note.setMinimumHeight(self.cc_note.fontMetrics().lineSpacing() * 2 + 4)
+        self.vl.addWidget(self.cc_note)
+        self.test_status = QLabel()
+        self.test_status.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+        self.test_status.ensurePolished()
+        self.test_status.setMinimumHeight(self.test_status.fontMetrics().lineSpacing() + 2)
+        self.vl.addWidget(self.test_status)
 
         # --- Slider Specific ---
         self.slider_widget = QVBoxLayout()
@@ -466,6 +496,71 @@ class WidgetBuilderDialog(QDialog):
         self.save_btn.setEnabled(err is None)
         self.save_btn.setToolTip(err or "")
         return err
+
+    # ── CC: cảnh báo trùng + gửi thử ────────────────────────
+    def _current_cc(self):
+        return self.cc_input.value() if self.cc_input.isEnabled() else -1
+
+    def _cc_conflicts(self, cc):
+        if cc < 0:
+            return []
+        app_config, _, _ = _config()
+        if self._ui_config is None:
+            try:
+                from core.config import UiConfigManager
+                self._ui_config = UiConfigManager.load_ui_config()
+            except Exception:
+                self._ui_config = {}
+        if self._midi_cc is None:
+            try:
+                self._midi_cc = app_config.get_midi_cc() or {}
+            except Exception:
+                self._midi_cc = {}
+        try:
+            modes = app_config.get_mode_config() or {}
+        except Exception:
+            modes = {}
+        return ui_layout.find_cc_conflicts(
+            cc, self._ui_config, self._midi_cc,
+            exclude_id=(self.existing_data or {}).get("id"), mode_config=modes)
+
+    def _refresh_cc_info(self):
+        cc = self._current_cc()
+        self.test_btn.setEnabled(self._engine is not None and cc >= 0)
+        hits = self._cc_conflicts(cc)
+        self.cc_note.setText(f"⚠ CC {cc} đang dùng bởi: {', '.join(hits)}" if hits else "")
+
+    def _test_values(self):
+        """(bật, tắt) theo MIDI để gửi thử; None nếu form chưa hợp lệ."""
+        if self.type_combo.currentData() == "slider":
+            return 64, 0   # giữa dải rồi về mức thấp nhất
+        spec = self._current_spec()
+        if self._validation_error(spec):
+            return None
+        return so_values.midi_pair(spec)
+
+    def _on_test_send(self):
+        cc = self._current_cc()
+        values = self._test_values()
+        if self._engine is None or cc < 0:
+            return
+        if values is None:
+            self.test_status.setText("Giá trị chưa hợp lệ — sửa phần Giá trị rồi gửi lại.")
+            return
+        on, off = int(values[0]), int(values[1])
+        try:
+            self._engine.send_midi(cc, on)
+        except Exception as e:
+            self.test_status.setText(f"Gửi lỗi: {e}")
+            return
+        self.test_status.setText(f"Đã gửi CC {cc} = {on}, sau đó {off}")
+        QTimer.singleShot(300, lambda: self._send_quiet(cc, off))
+
+    def _send_quiet(self, cc, value):
+        try:
+            self._engine.send_midi(cc, value)
+        except Exception as e:
+            self.test_status.setText(f"Gửi lỗi: {e}")
 
     def _rebuild_option_combos(self):
         options = self._options()
