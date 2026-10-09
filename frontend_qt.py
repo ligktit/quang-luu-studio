@@ -1120,20 +1120,28 @@ class MainDashboard(QMainWindow):
             self.engine.send_midi(tat_on_cc, tat_on_val)
             print(f"[TAT ON] Đồng bộ -> {'ON' if tat_on else 'OFF'} (CC {tat_on_cc} Value {tat_on_val})")
 
-            # 4. Tắt Vang (Mute Vang / mix_reverb)
-            is_reverb_muted = self.mute_states.get("mix_reverb", False)
-            mute_reverb_cc = int(MIDI_CC.get("mute_reverb", 52))
-            mute_val = 127 if is_reverb_muted else 0
-            self.engine.send_midi(mute_reverb_cc, mute_val)
-            print(f"[MUTE REVERB] Đồng bộ -> {'MUTED' if is_reverb_muted else 'ACTIVE'} (CC {mute_reverb_cc} Value {mute_val})")
+            # 4. Mute Mic / Vang / Bè theo đúng nút trên app. Thiếu Mic/Bè thì
+            # DAW mở lại giữ trạng thái mute của bản mẫu — khách thấy nút Mic
+            # sáng mà không có tiếng.
+            mute_cc_keys = (("mix_mic", "mute_mic", 51),
+                            ("mix_reverb", "mute_reverb", 52),
+                            ("mix_backing", "mute_backing", 53))
+            multi_cc_map = {}
             try:
                 multi_cc_map = backend.AppConfig.get_mute_multi_cc()
-                for entry in multi_cc_map.get("mix_reverb", []):
-                    cc_num = int(entry["cc"])
-                    val = int(entry["on_value"]) if is_reverb_muted else int(entry["off_value"])
-                    self.engine.send_midi(cc_num, val)
             except Exception as e:
                 print(f"[MIDI SYNC] Multi CC sync error: {e}")
+            for key, cc_name, cc_default in mute_cc_keys:
+                is_muted = self.mute_states.get(key, False)
+                cc = int(MIDI_CC.get(cc_name, cc_default))
+                self.engine.send_midi(cc, 127 if is_muted else 0)
+                print(f"[MUTE] Đồng bộ {key} -> {'MUTED' if is_muted else 'ACTIVE'} (CC {cc})")
+                for entry in multi_cc_map.get(key, []):
+                    try:
+                        val = int(entry["on_value"]) if is_muted else int(entry["off_value"])
+                        self.engine.send_midi(int(entry["cc"]), val)
+                    except Exception as e:
+                        print(f"[MIDI SYNC] Multi CC {key} lỗi: {e}")
 
             # 5. Tone + thể (key_root / scale_type)
             # Gửi CC thẳng chứ KHÔNG gọi _on_tone_selected: hàm đó kéo theo
@@ -1189,6 +1197,20 @@ class MainDashboard(QMainWindow):
         if senders:
             print(f"[MIXER] Đồng bộ {len(senders)} kênh")
 
+    def _daw_running_cached(self) -> bool:
+        """so_windows.is_running() quét process — gọi tối đa 5 s/lần từ timer UI."""
+        import time as _t
+        from core import so_windows
+        now = _t.monotonic()
+        at = getattr(self, "_daw_running_at", None)
+        if at is None or now - at > 5.0:
+            try:
+                self._daw_running_val = bool(so_windows.is_running())
+            except Exception:
+                self._daw_running_val = False
+            self._daw_running_at = now
+        return self._daw_running_val
+
     def _update_midi_status(self):
         try:
             connected = self.engine.is_midi_connected()
@@ -1198,16 +1220,23 @@ class MainDashboard(QMainWindow):
             if not getattr(self, '_has_synced_initial_midi', False):
                 self._has_synced_initial_midi = True
                 self._sync_midi_states()
-            try:
-                name = self.engine.get_midi_port_name()
-                if "QuangLuuMIDI" not in name:
-                    self._midi_dot.setStyleSheet(f"color: {C['accent']}; font-size: 10px;")
-                else:
-                    self._midi_dot.setStyleSheet(f"color: {C['teal']}; font-size: 10px;")
-            except Exception:
-                pass
+            from core import daw
+            daw_name = daw.active().display_name
+            if not self._daw_running_cached():
+                # Cổng loopMIDI mở được cả khi DAW chưa chạy — đừng báo xanh giả.
+                self._midi_dot.setStyleSheet(f"color: {C['orange']}; font-size: 10px;")
+                self._midi_dot.setToolTip(f"Cổng MIDI đã mở nhưng {daw_name} chưa chạy")
+            else:
+                try:
+                    name = self.engine.get_midi_port_name()
+                    color = C['teal'] if "QuangLuuMIDI" in name else C['accent']
+                except Exception:
+                    color = C['teal']
+                self._midi_dot.setStyleSheet(f"color: {color}; font-size: 10px;")
+                self._midi_dot.setToolTip(f"Đã kết nối {daw_name}")
         else:
             self._midi_dot.setStyleSheet(f"color: {C['accent']}; font-size: 10px;")
+            self._midi_dot.setToolTip("Chưa mở được cổng MIDI (loopMIDI)")
         # Sync waveform hero MIDI status
         if self._waveform is not None:
             self._waveform.set_midi_status(connected)
