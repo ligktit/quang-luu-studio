@@ -155,12 +155,18 @@ class MidiHandler:
                 self._connect_in_warned = True
             return False
 
-    def ensure_listening(self):
-        """Đang nghe thì thôi; mất inport (loopMIDI khởi động lại) thì mở lại."""
+    def ensure_listening(self, port_name=MIDI_FEEDBACK_PORT_NAME):
+        """Đang nghe thì thôi; mất inport hoặc cổng biến mất (loopMIDI khởi động
+        lại) thì mở lại. Gọi định kỳ từ timer trạng thái MIDI."""
         if self._is_listening and self.inport is not None:
-            return True
+            try:
+                import mido
+                if any(port_name in n for n in mido.get_input_names()):
+                    return True
+            except Exception:
+                return True
         self.stop_listening()
-        return self.start_listening()
+        return self.start_listening(port_name)
 
     def _listen_loop(self):
         """Thread loop nhận MIDI messages"""

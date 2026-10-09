@@ -4,7 +4,9 @@ import re
 
 from core.audio_doctor.model import Check, ok, loi, khong_ro, da_sua, can_lam_tay
 
-FADER_LOW_CC = 20          # fader thấp hơn mức này coi như kéo hết
+# Fader ≤ mức này coi như kéo hết. Thấp hơn nữa có thể là khách cố ý để nhỏ
+# (Mic -9 dB trên app = CC 10 ở Cubase) — không được báo lỗi.
+FADER_LOW_CC = 2
 MIC_LOW_DB = -40.0         # thanh Mic trên app thấp hơn mức này coi như tắt
 _RELEASE_RE = re.compile(r'(name="ReleaseHardware"\s+value=")(\d)(")')
 
@@ -32,9 +34,12 @@ class DawRunningCheck(Check):
     def fix(self, ctx):
         name = ctx.daw.display_name
         s = ctx.system
-        if not s.daw_running() and not ctx.actions.launch_daw():
-            return can_lam_tay(f"Không mở được {name}",
-                               guide=(f"Tự mở {name} từ biểu tượng trên màn hình.",))
+        if not s.daw_running():
+            if ctx.feedback is not None:
+                ctx.feedback.reset()
+            if not ctx.actions.launch_daw():
+                return can_lam_tay(f"Không mở được {name}",
+                                   guide=(f"Tự mở {name} từ biểu tượng trên màn hình.",))
         if not s.wait_daw_main_window(ctx.daw_wait_s):
             return can_lam_tay(f"{name} chưa mở xong sau {int(ctx.daw_wait_s // 60)} phút",
                                guide=(f"Xem {name} có đang hỏi gì không (hộp thoại) và trả lời.",))
@@ -68,7 +73,8 @@ class DawDialogCheck(Check):
 
 class CubaseReleaseDriverCheck(Check):
     id, group, title = "cubase_release_driver", "daw", "Cubase giữ card âm thanh khi chạy nền"
-    fix_timeout_s = 200.0
+    # Gồm cả thời gian khách trả lời câu hỏi + đóng Cubase (lưu bài) + mở lại.
+    fix_timeout_s = 600.0
 
     _GUIDE = ("Trong Cubase: Studio → Studio Setup → Audio System.",
               "Bỏ dấu «Release Driver when Application is in Background» rồi bấm OK.")
@@ -110,11 +116,16 @@ class CubaseReleaseDriverCheck(Check):
                 return can_lam_tay("Chưa sửa — cần đóng Cubase trước", guide=self._GUIDE)
             if not ctx.actions.close_daw():
                 return can_lam_tay("Không đóng được Cubase", guide=self._GUIDE)
+            if ctx.feedback is not None:
+                ctx.feedback.reset()
         for f in self._on(ctx):
             s.backup(f)
             s.write_text(f, _RELEASE_RE.sub(r"\g<1>0\g<3>", s.read_text(f)))
         if was_running:
+            # Chờ Cubase dựng xong rồi đồng bộ — các mục kênh chạy ngay sau đây.
             ctx.actions.launch_daw()
+            if s.wait_daw_main_window(ctx.daw_wait_s):
+                ctx.actions.sync_midi()
         return da_sua("Đã tắt «Release Driver when Application is in Background»")
 
 
@@ -144,7 +155,7 @@ class _ChannelCheck(Check):
             return khong_ro(f"{name} không báo lại trạng thái kênh {self.label}")
         if st.muted:
             return loi(f"Kênh {self.label} đang tắt (mute) trong {name}")
-        if st.fader is not None and st.fader < FADER_LOW_CC:
+        if st.fader is not None and st.fader <= FADER_LOW_CC:
             return loi(f"Fader kênh {self.label} trong {name} gần như kéo hết")
         return ok(f"Kênh {self.label} đang bật")
 

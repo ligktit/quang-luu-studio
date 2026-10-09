@@ -97,3 +97,25 @@ def test_so_chua_tung_chay_thi_khong_ro():
     _so_bundle(ctx)
     ctx.system.dirs = []
     assert DawRemoteCheck().detect(ctx).status is Status.KHONG_RO
+
+
+def test_loopmidi_can_khoi_dong_lai_khi_daw_dang_chay_thi_hoi_truoc():
+    ctx = make_ctx(answers=[False])
+    s = ctx.system
+    s.procs.add("loopmidi.exe")
+    s.running = True
+    f = LoopMidiCheck().fix(ctx)
+    assert f.status is Status.CAN_LAM_TAY
+    assert s.killed == [] and ctx.asked
+
+
+def test_loopmidi_khoi_dong_lai_khi_daw_dang_chay_thi_nhac_mo_lai_daw():
+    ctx = make_ctx(answers=[True])
+    s = ctx.system
+    s.procs.add("loopmidi.exe")
+    s.running = True
+    s.on_start = lambda p: (s.procs.add("loopmidi.exe"),
+                            setattr(s, "outs", ["QuangLuuMIDI"]), setattr(s, "ins", ["QLS_PhanHoi"]))
+    f = LoopMidiCheck().fix(ctx)
+    assert s.killed == ["loopMIDI.exe"]
+    assert f.status is Status.CAN_LAM_TAY and "Khởi động lại" in f.message

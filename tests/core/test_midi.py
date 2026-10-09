@@ -84,3 +84,17 @@ def test_ensure_listening_mo_lai_khi_inport_mat(mock_mido):
         assert mock_mido.open_input.call_count == 2
     finally:
         handler.stop_listening()
+
+
+def test_ensure_listening_mo_lai_khi_cong_phan_hoi_bien_mat(mock_mido):
+    mock_mido.get_input_names.return_value = ["QLS_PhanHoi"]
+    handler = MidiHandler()
+    try:
+        assert handler.ensure_listening() is True
+        mock_mido.get_input_names.return_value = []          # loopMIDI tắt / mất cổng
+        assert handler.ensure_listening() is False
+        mock_mido.get_input_names.return_value = ["QLS_PhanHoi"]
+        assert handler.ensure_listening() is True
+        assert mock_mido.open_input.call_count == 2
+    finally:
+        handler.stop_listening()

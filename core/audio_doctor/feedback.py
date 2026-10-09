@@ -48,6 +48,11 @@ class DawFeedback:
             self._cond.notify_all()
             return True
 
+    def reset(self):
+        """DAW vừa đóng / mở lại: trạng thái cũ không còn đúng."""
+        with self._cond:
+            self._state.clear()
+
     def get(self, group) -> Optional[ChannelState]:
         with self._cond:
             return self._state.get(group)

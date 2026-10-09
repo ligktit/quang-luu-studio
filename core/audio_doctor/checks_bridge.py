@@ -47,7 +47,15 @@ class LoopMidiCheck(Check):
                 s.reg_set("HKCU", LOOPMIDI_PORTS_KEY, port, port)
                 added = True
         # loopMIDI chỉ đọc danh sách cổng lúc khởi động.
+        restarted_under_daw = False
         if added and s.process_running(_LOOPMIDI_EXE):
+            if s.daw_running():
+                # Tắt loopMIDI là DAW mất cổng tới khi mở lại → hỏi trước.
+                if not ctx.ask("Cần khởi động lại loopMIDI để thêm cổng. Phần mềm thu âm sẽ mất kết nối "
+                               "MIDI tới khi bạn mở lại nó. Tiếp tục?"):
+                    return can_lam_tay("Chưa sửa — loopMIDI thiếu cổng " + ", ".join(self._missing(ctx)),
+                                       guide=("Tắt phần mềm thu âm, rồi bấm «Tự sửa lại».",))
+                restarted_under_daw = True
             s.kill_process(_LOOPMIDI_EXE)
             ctx.sleep(2)
         if not s.process_running(_LOOPMIDI_EXE):
@@ -61,6 +69,9 @@ class LoopMidiCheck(Check):
                                guide=("Mở loopMIDI, gõ tên cổng QuangLuuMIDI vào ô 'New port-name' rồi bấm +.",
                                       "Làm tương tự với QLS_PhanHoi."))
         ctx.actions.reconnect_midi()
+        if restarted_under_daw:
+            return can_lam_tay("Đã sửa loopMIDI — Khởi động lại phần mềm thu âm để nhận lại cổng MIDI",
+                               guide=("Lưu bài, tắt phần mềm thu âm rồi mở lại.",))
         return da_sua("Đã bật loopMIDI và nối lại MIDI")
 
 

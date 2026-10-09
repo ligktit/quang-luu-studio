@@ -22,7 +22,7 @@ def _order(checks):
     return ordered
 
 
-def _call_with_timeout(fn, timeout):
+def _call_with_timeout(fn, timeout, on_orphan=None):
     box = {}
 
     def target():
@@ -35,6 +35,8 @@ def _call_with_timeout(fn, timeout):
     t.start()
     t.join(timeout)
     if t.is_alive():
+        if on_orphan is not None:
+            on_orphan(t)
         raise TimeoutError(f"quá {timeout:.0f} s")
     if "e" in box:
         raise box["e"]
@@ -87,6 +89,9 @@ class Runner:
         # Một lượt tại một thời điểm: bấm Tự sửa giữa lúc lượt khởi động đang
         # chạy thì chờ lượt kia xong, không để hai lượt cùng mở loopMIDI/DAW.
         self._lock = threading.Lock()
+        # fix() quá giờ vẫn chạy nền (vd khách chưa trả lời câu hỏi) — lượt sau
+        # phải chờ nó xong, không thì hai lượt cùng đóng/mở DAW, sửa file.
+        self._orphans = []
 
     @property
     def checks(self):
@@ -95,7 +100,14 @@ class Runner:
     def run(self, ctx, mode, source, on_progress=None) -> RunReport:
         assert mode in ("check", "fix")
         with self._lock:
+            self._wait_orphans()
             return self._run(ctx, mode, source, on_progress)
+
+    def _wait_orphans(self, limit_s=600.0):
+        deadline = time.monotonic() + limit_s
+        for t in self._orphans:
+            t.join(max(0.0, deadline - time.monotonic()))
+        self._orphans = [t for t in self._orphans if t.is_alive()]
 
     def _emit(self, on_progress, check, finding):
         if on_progress is None:
@@ -107,7 +119,7 @@ class Runner:
 
     def _safe(self, fn, timeout, what):
         try:
-            result = _call_with_timeout(fn, timeout)
+            result = _call_with_timeout(fn, timeout, on_orphan=self._orphans.append)
             if not isinstance(result, Finding):
                 return khong_ro("Không kiểm tra được", detail=f"{what} trả {result!r}")
             return result

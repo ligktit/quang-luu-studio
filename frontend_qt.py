@@ -1145,7 +1145,12 @@ class MainDashboard(QMainWindow):
                 multi_cc_map = backend.AppConfig.get_mute_multi_cc()
             except Exception as e:
                 print(f"[MIDI SYNC] Multi CC sync error: {e}")
+            channels = getattr(self, "_mixer_channels", None) or {}
             for key, cc_name, cc_default in mute_cc_keys:
+                if key not in channels:
+                    # App không có kênh này (vd Bè là nút, không phải thanh trượt)
+                    # → không có trạng thái mute nào của app để ép sang DAW.
+                    continue
                 is_muted = self.mute_states.get(key, False)
                 cc = int(MIDI_CC.get(cc_name, cc_default))
                 self.engine.send_midi(cc, 127 if is_muted else 0)
@@ -1277,6 +1282,12 @@ class MainDashboard(QMainWindow):
             if not getattr(self, '_has_synced_initial_midi', False):
                 self._has_synced_initial_midi = True
                 self._sync_midi_states()
+            # Giữ cổng phản hồi (QLS_PhanHoi) luôn mở — loopMIDI có thể khởi
+            # động lại mà cổng gửi vẫn chạy được.
+            try:
+                self.engine.midi_handler.ensure_listening()
+            except Exception as e:
+                print(f"[MIDI IN] ensure_listening lỗi: {e}")
             from core import daw
             daw_name = daw.active().display_name
             if not self._daw_running_cached():

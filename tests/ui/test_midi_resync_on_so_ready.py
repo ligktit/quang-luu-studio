@@ -179,7 +179,10 @@ def test_dong_bo_gui_lai_mute_mic_va_be(qapp, mock_engine, qtbot):
     dashboard._sync_midi_states()
     sent = [c.args for c in mock_engine.send_midi.call_args_list]
     assert (51, 127) in sent
-    assert (53, 0) in sent
+    # Mixer mặc định không có kênh Bè → app không giữ trạng thái mute Bè,
+    # không được ép bỏ mute Bè trong DAW.
+    assert "mix_backing" not in dashboard._mixer_channels
+    assert not [a for a in sent if a[0] == 53]
 
 
 def test_cham_midi_vang_khi_cong_mo_ma_daw_chua_chay(qapp, mock_engine, qtbot):
@@ -199,3 +202,13 @@ def test_cham_midi_vang_khi_cong_mo_ma_daw_chua_chay(qapp, mock_engine, qtbot):
         dashboard._daw_running_at = None
         dashboard._update_midi_status()
     assert dashboard._midi_dot._color.name().upper() == C["teal"].upper()
+
+
+def test_timer_trang_thai_midi_giu_cong_phan_hoi(qapp, mock_engine, qtbot):
+    dashboard = _make_dashboard(qtbot)
+    dashboard._so_ready_watcher.stop()
+    mock_engine.is_midi_connected.return_value = True
+    dashboard._has_synced_initial_midi = True
+    mock_engine.midi_handler.ensure_listening.reset_mock()
+    dashboard._update_midi_status()
+    mock_engine.midi_handler.ensure_listening.assert_called_once()

@@ -153,7 +153,7 @@ def test_kenh_mic_cubase_khong_xac_nhan_thi_can_lam_tay():
 def test_kenh_nhac_fader_qua_thap_cubase():
     ctx = make_ctx(CUBASE)
     ctx.feedback.on_cc(50, 0)
-    ctx.feedback.on_cc(20, 5)
+    ctx.feedback.on_cc(20, 1)
     assert MusicChannelCheck().detect(ctx).status is Status.LOI
 
 
@@ -168,3 +168,34 @@ def test_kenh_khong_dung_be_va_vang():
     MicChannelCheck().fix(ctx)
     MusicChannelCheck().fix(ctx)
     assert not [cc for cc, _ in ctx.sent if cc in (22, 23, 52, 53)]
+
+
+# ── Sửa sau review cuối ──
+def test_mic_cubase_fader_thap_co_chu_y_khong_bi_coi_la_tat():
+    # Mic -9 dB trên app = CC 10 ở Cubase: khách cố ý để nhỏ, không phải lỗi.
+    ctx = make_ctx(CUBASE)
+    ctx.feedback.on_cc(51, 0)
+    ctx.feedback.on_cc(21, 10)
+    assert MicChannelCheck().detect(ctx).status is Status.OK
+
+
+def test_release_driver_mo_lai_cubase_thi_cho_xong_dong_bo_va_xoa_phan_hoi_cu():
+    ctx = make_ctx(CUBASE, answers=[True])
+    _cubase_prefs(ctx, 1)
+    ctx.system.running = True
+    ctx.system.main_window = True
+    ctx.feedback.on_cc(51, 0)                    # trạng thái của Cubase TRƯỚC khi đóng
+    f = CubaseReleaseDriverCheck().fix(ctx)
+    assert f.status is Status.DA_SUA
+    assert ctx.actions.calls == ["close_daw", "launch_daw", "sync_midi"]
+    assert ctx.feedback.get("mic") is None
+
+
+def test_mo_daw_xoa_phan_hoi_cu():
+    ctx = make_ctx(CUBASE, settings={"studio_one_path": SONG})
+    ctx.system.files[SONG] = ""
+    ctx.feedback.on_cc(51, 0)
+    ctx.actions.on_launch = lambda: (setattr(ctx.system, "running", True),
+                                     setattr(ctx.system, "main_window", True))
+    DawRunningCheck().fix(ctx)
+    assert ctx.feedback.get("mic") is None

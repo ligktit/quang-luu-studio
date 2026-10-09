@@ -161,3 +161,27 @@ def test_problems_va_log(tmp_path):
     append_log(rep, p)
     row = json.loads(p.read_text(encoding="utf-8").splitlines()[0])
     assert row["source"] == "startup" and row["results"]["a"]["status"] == "loi"
+
+
+def test_fix_qua_gio_chua_xong_thi_luot_sau_cho():
+    # fix bị bỏ dở vì quá giờ (vd khách chưa trả lời câu hỏi) vẫn chạy nền;
+    # lượt sau phải chờ nó xong, không chạy chồng lên.
+    log = []
+
+    class SlowFix(FakeCheck):
+        def fix(self, ctx):
+            time.sleep(1.0)
+            log.append("fix_xong")
+            return da_sua("ok")
+
+        def detect(self, ctx):
+            log.append("detect")
+            return loi("hỏng")
+
+    c = SlowFix("a")
+    c.fix_timeout_s = 0.2
+    r = Runner([c])
+    r.run(_ctx(), "fix", "button")
+    log.clear()
+    r.run(_ctx(), "check", "startup")
+    assert log[0] == "fix_xong"
