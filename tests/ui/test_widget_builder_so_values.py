@@ -46,6 +46,7 @@ def test_nut_moi_gan_bypass(qapp, qtbot, cfg):
 def test_nut_moi_phan_tram(qapp, qtbot, cfg):
     dlg = WidgetBuilderDialog(None, panel_name="tools", widget_type="button")
     qtbot.addWidget(dlg)
+    dlg.label_input.setText("Nút thử")
     dlg.cc_input.setValue(61)
     _set_type(dlg, "percent")
     dlg.on_num.setValue(75)
@@ -58,6 +59,7 @@ def test_nut_moi_phan_tram(qapp, qtbot, cfg):
 def test_nut_moi_danh_sach(qapp, qtbot, cfg):
     dlg = WidgetBuilderDialog(None, panel_name="mode", widget_type="button")
     qtbot.addWidget(dlg)
+    dlg.label_input.setText("Nút thử")
     dlg.cc_input.setValue(62)
     _set_type(dlg, "list")
     dlg.options_input.setText("Tắt, Nhẹ, Vừa, Mạnh")
