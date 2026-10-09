@@ -112,3 +112,15 @@ def test_bo_qua_phan_tu_hong():
     assert ui_layout.find_cc_conflicts(1, cfg, {"x": None}) == []
     assert ui_layout.index_of(cfg["mixer"], "custom_1") == 2
     assert not ui_layout.set_hidden(cfg["mixer"], "khong_co", True)
+
+
+def test_mixer_slider_on_cc():
+    cfg = _cfg()
+    cfg["mixer"].append({"id": "custom_s", "type": "slider", "label": "Bass", "cc": 70})
+    cfg["tools"].append({"id": "custom_b", "type": "button", "label": "Nút", "cc": 71})
+    midi_cc = {"mix_music": 20}
+    assert ui_layout.mixer_slider_on_cc(70, cfg, midi_cc) == "Bass"
+    assert ui_layout.mixer_slider_on_cc(20, cfg, midi_cc) == "Nhạc"   # tên built-in tra midi_cc
+    assert ui_layout.mixer_slider_on_cc(70, cfg, midi_cc, exclude_id="custom_s") is None
+    assert ui_layout.mixer_slider_on_cc(71, cfg, midi_cc) is None     # nút Tools không tính
+    assert ui_layout.mixer_slider_on_cc(-1, cfg, midi_cc) is None

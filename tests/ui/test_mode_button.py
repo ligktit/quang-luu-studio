@@ -15,13 +15,6 @@ MODE_COLOR = "#14B8A6"   # teal như nút Lofi
 HOST_BG = "#0F172A"
 
 
-@pytest.fixture(scope="session")
-def qapp():
-    from PySide6.QtWidgets import QApplication
-    app = QApplication.instance() or QApplication([])
-    yield app
-
-
 def _make_button(qtbot, active):
     from ui.components.mode_button import ModeToggleButton
     host = QWidget()

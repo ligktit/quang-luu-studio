@@ -25,13 +25,6 @@ def _khong_ghi_settings_that():
         yield
 
 
-@pytest.fixture(scope="session")
-def qapp():
-    from PySide6.QtWidgets import QApplication
-    app = QApplication.instance() or QApplication([])
-    yield app
-
-
 @pytest.fixture
 def mock_engine():
     with patch("frontend_qt.backend.SystemEngine") as mock_eng:

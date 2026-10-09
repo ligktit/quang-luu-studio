@@ -1,4 +1,4 @@
-"""Hàng nút Dev Mode cuối mỗi panel: "+ Thêm…" và "⚙ Quản lý"."""
+"""Dev Mode trên panel: hàng nút "+ Thêm…"/"⚙ Quản lý" và menu chuột phải Sửa/Ẩn."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QPushButton
 
@@ -26,3 +26,31 @@ def build_dev_row(dashboard, panel_name, add_text, widget_type, extra_style=""):
     row.addWidget(add_btn, 1)
     row.addWidget(manage_btn)
     return row
+
+
+def attach_dev_ctx_menu(dashboard, panel_name, widget, cfg):
+    """Menu chuột phải Sửa/Ẩn cho `widget`, nhắm đúng entry `cfg` của nó.
+
+    Gọi một lần cho mỗi widget lúc dựng panel — `cfg` và `widget` được giữ
+    theo lời gọi, không phụ thuộc biến vòng lặp của panel.
+    """
+    widget.setContextMenuPolicy(Qt.CustomContextMenu)
+
+    def show_ctx(pos):
+        # Import lúc chạy (không ở đầu module) để test thay được QMenu.
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QAction
+        menu = QMenu(widget)
+        menu.setStyleSheet("QMenu { background: #1e1e1e; color: white; }")
+
+        edit_act = QAction("Sửa", menu)
+        edit_act.triggered.connect(lambda: dashboard._on_edit_widget(panel_name, cfg))
+
+        hide_act = QAction("Ẩn", menu)
+        hide_act.triggered.connect(lambda: dashboard._on_hide_widget(panel_name, cfg))
+
+        menu.addAction(edit_act)
+        menu.addAction(hide_act)
+        menu.exec(widget.mapToGlobal(pos))
+
+    widget.customContextMenuRequested.connect(show_ctx)

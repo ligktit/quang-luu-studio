@@ -1,18 +1,10 @@
 """Dev Mode: nhập giá trị theo Studio One, app tự đổi sang MIDI (+ Bypass)."""
 import pytest
 from unittest.mock import patch
-from PySide6.QtWidgets import QApplication
+
 
 from core.config import DEFAULT_MODE_CONFIG, DEFAULT_TOGGLE_INVERT
 from ui.dialogs.widget_builder import WidgetBuilderDialog
-
-
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    yield app
 
 
 @pytest.fixture

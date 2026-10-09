@@ -87,6 +87,27 @@ def _as_int(value):
         return None
 
 
+def mixer_slider_on_cc(cc, ui_config, midi_cc, exclude_id=None):
+    """Tên slider MIXER khác đang dùng CC `cc` (None nếu không có).
+
+    Khác find_cc_conflicts (chỉ cảnh báo): hai slider MIXER cùng CC là lỗi —
+    panel khoá kênh theo CC nên slider thứ hai không hiện ra được.
+    """
+    if cc is None or cc < 0:
+        return None
+    midi_cc = midi_cc or {}
+    for e in (ui_config or {}).get("mixer") or []:
+        if not isinstance(e, dict) or e.get("type", "slider") != "slider":
+            continue
+        if exclude_id is not None and e.get("id") == exclude_id:
+            continue
+        raw = e.get("cc")
+        num = _as_int(midi_cc.get(raw)) if isinstance(raw, str) else _as_int(raw)
+        if num == cc:
+            return e.get("label") or e.get("id") or str(raw)
+    return None
+
+
 def find_cc_conflicts(cc, ui_config, midi_cc, exclude_id=None, mode_config=None):
     """Những thứ khác đang gửi trên CC `cc` — để cảnh báo (không chặn) trong
     Widget Builder. Gồm widget trên 3 panel (CC số hoặc tên tra midi_cc),

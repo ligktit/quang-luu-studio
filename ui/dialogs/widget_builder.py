@@ -493,6 +493,15 @@ class WidgetBuilderDialog(QDialog):
         if self.type_combo.currentData() == "slider":
             if self.min_val.value() >= self.max_val.value():
                 return "Min phải nhỏ hơn Max."
+            if self.panel_name == "mixer":
+                cc = self._current_cc()
+                if cc >= 0:
+                    self._load_cc_context()
+                    owner = ui_layout.mixer_slider_on_cc(
+                        cc, self._ui_config, self._midi_cc,
+                        exclude_id=(self.existing_data or {}).get("id"))
+                    if owner:
+                        return f"CC {cc} đã dùng cho slider “{owner}” — mỗi slider MIXER cần CC riêng."
             return None
         if self._value_target() is not None:
             return self._validation_error(self._current_spec())
@@ -511,9 +520,8 @@ class WidgetBuilderDialog(QDialog):
     def _current_cc(self):
         return self.cc_input.value() if self.cc_input.isEnabled() else -1
 
-    def _cc_conflicts(self, cc):
-        if cc < 0:
-            return []
+    def _load_cc_context(self):
+        """Nạp (một lần) ui_config + bảng MIDI_CC để tra CC trùng."""
         app_config, _, _ = _config()
         if self._ui_config is None:
             try:
@@ -526,6 +534,12 @@ class WidgetBuilderDialog(QDialog):
                 self._midi_cc = app_config.get_midi_cc() or {}
             except Exception:
                 self._midi_cc = {}
+        return app_config
+
+    def _cc_conflicts(self, cc):
+        if cc < 0:
+            return []
+        app_config = self._load_cc_context()
         try:
             modes = app_config.get_mode_config() or {}
         except Exception:

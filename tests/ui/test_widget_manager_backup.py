@@ -2,19 +2,13 @@
 import copy
 import pytest
 from unittest.mock import patch
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import QDialog, QMessageBox
 
 from core import devmode_backup
 from core.config import UiConfigManager
 from ui.dialogs.widget_manager import WidgetManagerDialog
 
 M = "ui.dialogs.widget_manager"
-
-
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
 
 
 @pytest.fixture

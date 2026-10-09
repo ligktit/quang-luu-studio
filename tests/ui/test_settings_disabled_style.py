@@ -12,15 +12,9 @@ pytest.importorskip("PySide6.QtWidgets")
 
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox
+from PySide6.QtWidgets import QCheckBox, QComboBox
 
 from ui.dialogs.settings_dialog import SettingsDialog
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
 
 
 def _render(widget):

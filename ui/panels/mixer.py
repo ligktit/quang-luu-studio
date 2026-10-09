@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt
 from ui.design_tokens import C
 from ui.components.painter_panel import GlassPanel
 from ui.components.hmixer_channel import HMixerChannel
+from ui.panels._dev_buttons import attach_dev_ctx_menu, build_dev_row
 
 
 def _resolve_cc_number(dashboard, cc_key):
@@ -119,7 +120,10 @@ def build_panel_mixer(dashboard) -> GlassPanel:
         if c_val in C:
             c_val = C[c_val]
 
-        cc_key = ch_cfg.get("cc", "mix_music")
+        # Slider custom bỏ CC ("không gán") thì khoá theo id của nó và không gửi
+        # MIDI — trước đây rơi về "mix_music", chiếm chỗ kênh Nhạc và chỉnh
+        # luôn âm lượng nhạc.
+        cc_key = ch_cfg.get("cc", ch_cfg.get("id", "mix_music"))
         return {
             "label": ch_cfg.get("label", ""),
             "icon": ch_cfg.get("icon", ""),
@@ -148,6 +152,11 @@ def build_panel_mixer(dashboard) -> GlassPanel:
         if ch_cfg.get("hidden", False):
             continue
         ch = _channel_spec(ch_cfg)
+        if ch["cc"] in dashboard._mixer_channels:
+            # Các bảng _mixer_* (và mixer_levels/mute_states) khoá theo CC — kênh
+            # thứ hai cùng CC sẽ đè kênh đầu, không đồng bộ được. Bỏ qua kênh trùng.
+            print(f"[MIXER] Bỏ kênh '{ch['label']}': trùng CC {ch['cc']!r} với kênh đã có")
+            continue
         ch_view = HMixerChannel(
             icon=ch["icon"],
             label=ch["label"],
@@ -197,28 +206,7 @@ def build_panel_mixer(dashboard) -> GlassPanel:
 
         # --- Dev Mode Context Menu ---
         if getattr(dashboard, "is_dev_mode", False):
-            ch_view.setContextMenuPolicy(Qt.CustomContextMenu)
-            
-            # Gắn sớm entry + view của CHÍNH kênh này (closure trong vòng lặp).
-            def make_ctx_cb(cfg=ch_cfg, view=ch_view):
-                def show_ctx(pos):
-                    from PySide6.QtWidgets import QMenu
-                    from PySide6.QtGui import QAction
-                    menu = QMenu(view)
-                    menu.setStyleSheet("QMenu { background: #1e1e1e; color: white; }")
-                    
-                    edit_act = QAction("Sửa", menu)
-                    edit_act.triggered.connect(lambda: dashboard._on_edit_widget("mixer", cfg))
-                    
-                    hide_act = QAction("Ẩn", menu)
-                    hide_act.triggered.connect(lambda: dashboard._on_hide_widget("mixer", cfg))
-                    
-                    menu.addAction(edit_act)
-                    menu.addAction(hide_act)
-                    menu.exec(view.mapToGlobal(pos))
-                return show_ctx
-                
-            ch_view.customContextMenuRequested.connect(make_ctx_cb())
+            attach_dev_ctx_menu(dashboard, "mixer", ch_view, ch_cfg)
 
         vl.addWidget(ch_view)
         dashboard._mixer_sliders[ch["cc"]] = ch_view.slider
@@ -228,9 +216,6 @@ def build_panel_mixer(dashboard) -> GlassPanel:
 
     # --- Dev Mode: + Thêm / ⚙ Quản lý ---
     if getattr(dashboard, "is_dev_mode", False):
-        # KHÔNG import Qt cục bộ ở đây — sẽ shadow import module-level
-        # và gây UnboundLocalError ở block context-menu phía trên.
-        from ui.panels._dev_buttons import build_dev_row
         vl.addLayout(build_dev_row(dashboard, "mixer", "+ Thêm", "slider"))
 
     vl.addStretch()

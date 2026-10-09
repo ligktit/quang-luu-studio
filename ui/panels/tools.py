@@ -10,6 +10,7 @@ from ui.design_tokens import C, SP, FONT, FONT_MONO, lighten
 from ui.components.painter_button import PainterButton
 from ui.components.mode_button import ModeToggleButton
 from ui.components.painter_panel import GlassPanel
+from ui.panels._dev_buttons import attach_dev_ctx_menu, build_dev_row
 
 # Nút có sẵn kiểu bật/tắt (giữ trạng thái, có setActive). Nút còn lại trong
 # panel (Dò Lại, Chế độ Nhanh/Full…) bấm một lần, không có "đang bật".
@@ -235,35 +236,12 @@ def build_panel_tools(dashboard) -> GlassPanel:
             
         # --- Dev Mode Context Menu ---
         if getattr(dashboard, "is_dev_mode", False):
-            # KHÔNG import Qt cục bộ ở đây — sẽ shadow import module-level
-            # và gây UnboundLocalError ở mọi chỗ dùng Qt trong hàm này.
-            btn.setContextMenuPolicy(Qt.CustomContextMenu)
-            
-            def make_ctx_cb(cfg=t_cfg, b=btn):
-                def show_ctx(pos):
-                    from PySide6.QtWidgets import QMenu
-                    from PySide6.QtGui import QAction
-                    menu = QMenu(b)
-                    menu.setStyleSheet("QMenu { background: #1e1e1e; color: white; }")
-                    
-                    edit_act = QAction("Sửa", menu)
-                    edit_act.triggered.connect(lambda: dashboard._on_edit_widget("tools", cfg))
-                    
-                    hide_act = QAction("Ẩn", menu)
-                    hide_act.triggered.connect(lambda: dashboard._on_hide_widget("tools", cfg))
-                    
-                    menu.addAction(edit_act)
-                    menu.addAction(hide_act)
-                    menu.exec(b.mapToGlobal(pos))
-                return show_ctx
-                
-            btn.customContextMenuRequested.connect(make_ctx_cb())
+            attach_dev_ctx_menu(dashboard, "tools", btn, t_cfg)
 
     panel.body_layout.addLayout(grid)
     
     # --- Dev Mode: + Thêm Nút / ⚙ Quản lý ---
     if getattr(dashboard, "is_dev_mode", False):
-        from ui.panels._dev_buttons import build_dev_row
         panel.body_layout.addLayout(build_dev_row(dashboard, "tools", "+ Thêm Nút", "button"))
         
     panel.body_layout.addSpacing(16)

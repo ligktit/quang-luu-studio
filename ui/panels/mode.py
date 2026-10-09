@@ -7,6 +7,7 @@ from ui.design_tokens import C, SP, FONT
 from ui.components.mode_button import ModeToggleButton
 from ui.components.painter_panel import GlassPanel
 from ui.components.sfx_button_area import SfxButtonArea
+from ui.panels._dev_buttons import attach_dev_ctx_menu, build_dev_row
 
 
 def build_panel_mode(dashboard) -> GlassPanel:
@@ -78,29 +79,7 @@ def build_panel_mode(dashboard) -> GlassPanel:
         
         # --- Dev Mode Context Menu ---
         if getattr(dashboard, "is_dev_mode", False):
-            # KHÔNG import Qt cục bộ ở đây — sẽ shadow import module-level
-            # và gây UnboundLocalError ở mọi chỗ dùng Qt trong hàm này.
-            mbtn.setContextMenuPolicy(Qt.CustomContextMenu)
-            
-            def make_ctx_cb(cfg=m_cfg, b=mbtn):
-                def show_ctx(pos):
-                    from PySide6.QtWidgets import QMenu
-                    from PySide6.QtGui import QAction
-                    menu = QMenu(b)
-                    menu.setStyleSheet("QMenu { background: #1e1e1e; color: white; }")
-                    
-                    edit_act = QAction("Sửa", menu)
-                    edit_act.triggered.connect(lambda: dashboard._on_edit_widget("mode", cfg))
-                    
-                    hide_act = QAction("Ẩn", menu)
-                    hide_act.triggered.connect(lambda: dashboard._on_hide_widget("mode", cfg))
-                    
-                    menu.addAction(edit_act)
-                    menu.addAction(hide_act)
-                    menu.exec(b.mapToGlobal(pos))
-                return show_ctx
-                
-            mbtn.customContextMenuRequested.connect(make_ctx_cb())
+            attach_dev_ctx_menu(dashboard, "mode", mbtn, m_cfg)
             
         mode_row.addWidget(mbtn)
         
@@ -108,7 +87,6 @@ def build_panel_mode(dashboard) -> GlassPanel:
     
     # --- Dev Mode: + Thêm Mode / ⚙ Quản lý ---
     if getattr(dashboard, "is_dev_mode", False):
-        from ui.panels._dev_buttons import build_dev_row
         vl.addLayout(build_dev_row(dashboard, "mode", "+ Thêm Mode", "button", " margin-top: 5px;"))
 
     sfx_title = QLabel("SFX")

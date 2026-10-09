@@ -2,15 +2,9 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from PySide6.QtWidgets import QApplication, QDialog, QPushButton, QWidget
+from PySide6.QtWidgets import QDialog, QPushButton, QWidget
 
 from ui.panels._dev_buttons import build_dev_row
-
-
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
 
 
 def test_hang_nut_dev_goi_dung_ham(qapp, qtbot):
@@ -131,3 +125,30 @@ def test_nhap_file_cap_nhat_gia_tri_scale(dashboard):
         assert dashboard.SCALE_VALUES == new
     finally:
         frontend_qt.SCALE_VALUES = old
+
+
+def test_menu_chuot_phai_nham_dung_entry_va_mo_tai_widget(qapp, qtbot):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QMenu
+    from ui.panels._dev_buttons import attach_dev_ctx_menu
+
+    dash = MagicMock()
+    host = QWidget()
+    qtbot.addWidget(host)
+    a, b = QPushButton("A", host), QPushButton("B", host)
+    b.move(50, 30)
+    cfg_a, cfg_b = {"id": "a"}, {"id": "b"}
+    attach_dev_ctx_menu(dash, "tools", a, cfg_a)
+    attach_dev_ctx_menu(dash, "tools", b, cfg_b)
+
+    opened = []
+
+    class FakeMenu(QMenu):
+        def exec(self, pos, *_a, **_k):
+            opened.append((self.parent(), pos))
+            next(x for x in self.actions() if x.text() == "Sửa").trigger()
+
+    with patch("PySide6.QtWidgets.QMenu", FakeMenu):
+        b.customContextMenuRequested.emit(QPoint(3, 4))
+    dash._on_edit_widget.assert_called_once_with("tools", cfg_b)
+    assert opened == [(b, b.mapToGlobal(QPoint(3, 4)))]

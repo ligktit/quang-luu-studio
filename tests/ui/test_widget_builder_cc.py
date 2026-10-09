@@ -2,16 +2,10 @@
 import copy
 import pytest
 from unittest.mock import MagicMock, patch
-from PySide6.QtWidgets import QApplication
+
 
 from core.config import DEFAULT_MODE_CONFIG, DEFAULT_TOGGLE_INVERT, UiConfigManager
 from ui.dialogs.widget_builder import WidgetBuilderDialog
-
-
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
 
 
 @pytest.fixture
@@ -103,3 +97,30 @@ def test_gui_thu_loi_khong_crash(qapp, qtbot, cfg, layout):
     qtbot.wait(500)
     assert "cổng MIDI đóng" in dlg.test_status.text()
     assert engine.send_midi.call_count == 1  # lỗi lần BẬT → không hẹn gửi TẮT
+
+
+def test_slider_mixer_trung_cc_slider_khac_thi_chan_luu(qapp, qtbot, cfg, layout):
+    layout["mixer"].append({"id": "custom_s", "type": "slider", "label": "Bass", "cc": 70})
+    dlg = _dlg(qtbot, panel_name="mixer", widget_type="slider", ui_config=layout)
+    dlg.cc_input.setValue(70)
+    assert not dlg.save_btn.isEnabled()
+    assert "Bass" in dlg.error_label.text()
+    dlg.cc_input.setValue(20)            # CC của Nhạc (mix_music)
+    assert not dlg.save_btn.isEnabled()
+    dlg.cc_input.setValue(71)
+    assert dlg.save_btn.isEnabled()
+
+
+def test_sua_slider_mixer_giu_cc_cua_chinh_no(qapp, qtbot, cfg, layout):
+    entry = {"id": "custom_s", "type": "slider", "label": "Bass", "cc": 70, "range": [0, 100]}
+    layout["mixer"].append(entry)
+    dlg = _dlg(qtbot, panel_name="mixer", widget_type="slider", ui_config=layout,
+               existing_data=dict(entry))
+    assert dlg.cc_input.value() == 70
+    assert dlg.save_btn.isEnabled()
+
+
+def test_nut_tools_trung_cc_slider_van_chi_canh_bao(qapp, qtbot, cfg, layout):
+    dlg = _dlg(qtbot, ui_config=layout)
+    dlg.cc_input.setValue(20)
+    assert dlg.save_btn.isEnabled()

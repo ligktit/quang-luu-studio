@@ -36,7 +36,7 @@ Bấm **`+ Thêm`** / **`+ Thêm Nút`** / **`+ Thêm Mode`** → mở dialog **
 | **Hiển thị → Màu sắc** | Mã hex (`#14b8a6`), bấm "Chọn màu", hoặc bấm một **ô màu nhanh** (màu chuẩn của app). Để trống = trắng. Cũng nhận tên token màu của app (`teal`, `accent`, `green`…) |
 | **Hiển thị → Icon** | (thanh trượt) 1 ký tự hiển thị (♪, ☉, ≡…) |
 | **MIDI → MIDI CC** | Số CC (0–127) sẽ gửi đến DAW qua port `QuangLuuMIDI` |
-| **MIDI → cảnh báo CC trùng** | Dòng vàng "⚠ CC n đang dùng bởi: …" khi CC đã dùng ở widget khác, ở mode (`mode_config`) hoặc ở CC hệ thống (`midi_cc`). Chỉ là cảnh báo — vẫn Lưu được |
+| **MIDI → cảnh báo CC trùng** | Dòng vàng "⚠ CC n đang dùng bởi: …" khi CC đã dùng ở widget khác, ở mode (`mode_config`) hoặc ở CC hệ thống (`midi_cc`). Chỉ là cảnh báo — vẫn Lưu được. Ngoại lệ: slider MIXER trùng CC với slider MIXER khác thì **không** Lưu được (panel khoá kênh theo CC; file sửa tay có kênh trùng thì kênh sau bị bỏ qua) |
 | **MIDI → Gửi thử** | Gửi giá trị BẬT, ~0,3 s sau gửi giá trị TẮT trên CC đang chọn (thanh trượt: 64 rồi 0) — dùng để MIDI Learn / kiểm tra trong DAW mà **chưa cần Lưu** |
 
 Nút **Lưu** bị khoá và lý do hiện bằng chữ đỏ khi: tên trống, màu sai, Min ≥ Max (thanh trượt), khoảng số "Từ" = "đến", danh sách lựa chọn dưới 2 mục.

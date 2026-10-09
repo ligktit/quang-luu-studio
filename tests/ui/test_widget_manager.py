@@ -3,19 +3,13 @@ import copy
 import pytest
 from unittest.mock import MagicMock, patch
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import QDialog, QMessageBox
 
 from core.config import UiConfigManager
 from ui.dialogs.widget_manager import WidgetManagerDialog
 
 YES = QMessageBox.Yes
 NO = QMessageBox.No
-
-
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
 
 
 @pytest.fixture

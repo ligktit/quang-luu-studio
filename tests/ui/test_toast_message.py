@@ -12,14 +12,6 @@ from PySide6.QtWidgets import QApplication, QWidget, QLabel, QFrame
 from frontend_qt import MainDashboard
 
 
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    yield app
-
-
 @pytest.fixture
 def host(qapp, qtbot):
     """Cửa sổ đóng vai dashboard — _show_message chỉ cần một QWidget."""

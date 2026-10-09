@@ -1,17 +1,11 @@
 """Widget Builder: nhãn thân thiện, ô màu, kiểm tra tức thì."""
 import pytest
 from unittest.mock import patch
-from PySide6.QtWidgets import QApplication
+
 
 from core.config import DEFAULT_MODE_CONFIG, DEFAULT_TOGGLE_INVERT
 from ui.design_tokens import C
 from ui.dialogs.widget_builder import WidgetBuilderDialog
-
-
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
 
 
 @pytest.fixture

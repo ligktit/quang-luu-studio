@@ -5,17 +5,9 @@ tảng khác test vẫn chạy nhưng không có gì để bắt.
 """
 import pytest
 from unittest.mock import patch
-from PySide6.QtWidgets import QApplication, QComboBox, QWidget, QVBoxLayout
+from PySide6.QtWidgets import QComboBox, QWidget, QVBoxLayout
 
 from core.config import DEFAULT_MODE_CONFIG, DEFAULT_TOGGLE_INVERT
-
-
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    yield app
 
 
 @pytest.fixture

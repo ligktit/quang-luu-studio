@@ -1,14 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from PySide6.QtWidgets import QApplication
-from frontend_qt import MainDashboard
 
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    yield app
+from frontend_qt import MainDashboard
 
 @pytest.fixture
 def mock_engine():

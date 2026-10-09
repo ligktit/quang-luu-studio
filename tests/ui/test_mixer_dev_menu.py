@@ -4,17 +4,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from PySide6.QtCore import QPoint
-from PySide6.QtWidgets import QApplication, QDialog, QMenu
+from PySide6.QtWidgets import QDialog, QMenu
 
 from core.config import UiConfigManager
 from frontend_qt import MainDashboard, _find_widget_index
 from ui.panels.mixer import build_panel_mixer
-
-
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
 
 
 def _dashboard():
@@ -104,3 +98,33 @@ def test_sua_entry_khong_con_thi_khong_luu_khong_calibration():
     save.assert_not_called()
     dash._apply_widget_calibration.assert_not_called()
     assert dash._show_message.call_args.kwargs["is_error"] is True
+
+
+def test_hai_kenh_trung_cc_chi_dung_kenh_dau(qapp, qtbot):
+    dash = _dashboard()
+    layout = copy.deepcopy(UiConfigManager._DEFAULT_UI_CONFIG)
+    layout["mixer"].append({"id": "custom_dup", "type": "slider", "label": "Nhạc 2",
+                            "cc": "mix_music", "range": [0, 100]})
+    with patch("ui.panels.mixer.backend.UiConfigManager.load_ui_config", return_value=layout):
+        panel = build_panel_mixer(dash)
+    qtbot.addWidget(panel)
+    assert dash._mixer_channels["mix_music"].slider is dash._mixer_sliders["mix_music"]
+    _click_menu(dash._mixer_channels["mix_music"], "Ẩn")
+    assert dash._on_hide_widget.call_args.args[1]["id"] == "mix_music"
+
+
+def test_slider_custom_khong_gan_cc_khong_chiem_kenh_nhac(qapp, qtbot):
+    dash = _dashboard()
+    layout = copy.deepcopy(UiConfigManager._DEFAULT_UI_CONFIG)
+    layout["mixer"].append({"id": "custom_nocc", "type": "slider", "label": "Trống",
+                            "range": [0, 100]})
+    with patch("ui.panels.mixer.backend.UiConfigManager.load_ui_config", return_value=layout):
+        panel = build_panel_mixer(dash)
+    qtbot.addWidget(panel)
+    assert "custom_nocc" in dash._mixer_channels
+    assert dash._mixer_channels["mix_music"] is not dash._mixer_channels["custom_nocc"]
+    dash.engine.send_midi.reset_mock()
+    dash.engine.set_browser_volume.reset_mock()
+    dash._mixer_sliders["custom_nocc"].setValue(50)
+    dash.engine.send_midi.assert_not_called()
+    dash.engine.set_browser_volume.assert_not_called()
