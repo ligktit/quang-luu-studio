@@ -135,7 +135,9 @@ def build_panel_mixer(dashboard) -> GlassPanel:
             "unit": ch_cfg.get("unit", ""),
             "has_mute": ch_cfg.get("has_mute", False),
             "has_inf_bottom": ch_cfg.get("has_inf_bottom", False),
-            "id": ch_cfg.get("id", cc_key)
+            "id": ch_cfg.get("id", cc_key),
+            # Entry gốc cho menu Sửa/Ẩn của Dev Mode — giữ theo từng kênh.
+            "cfg": ch_cfg,
         })
 
     dashboard._mixer_sliders = {}
@@ -199,12 +201,14 @@ def build_panel_mixer(dashboard) -> GlassPanel:
         if getattr(dashboard, "is_dev_mode", False):
             ch_view.setContextMenuPolicy(Qt.CustomContextMenu)
             
-            # Using default argument for early binding
-            def make_ctx_cb(cfg=ch_cfg):
+            # Gắn sớm entry + view của CHÍNH kênh này. Trước đây lấy `ch_cfg`
+            # của vòng lặp trên (luôn là entry cuối — "Giọng") nên Sửa/Ẩn ở
+            # mọi kênh đều nhắm vào Giọng.
+            def make_ctx_cb(cfg=ch["cfg"], view=ch_view):
                 def show_ctx(pos):
                     from PySide6.QtWidgets import QMenu
                     from PySide6.QtGui import QAction
-                    menu = QMenu(ch_view)
+                    menu = QMenu(view)
                     menu.setStyleSheet("QMenu { background: #1e1e1e; color: white; }")
                     
                     edit_act = QAction("Sửa", menu)
@@ -215,7 +219,7 @@ def build_panel_mixer(dashboard) -> GlassPanel:
                     
                     menu.addAction(edit_act)
                     menu.addAction(hide_act)
-                    menu.exec(ch_view.mapToGlobal(pos))
+                    menu.exec(view.mapToGlobal(pos))
                 return show_ctx
                 
             ch_view.customContextMenuRequested.connect(make_ctx_cb())
