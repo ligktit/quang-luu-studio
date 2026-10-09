@@ -261,14 +261,10 @@ def build_panel_tools(dashboard) -> GlassPanel:
 
     panel.body_layout.addLayout(grid)
     
-    # --- Dev Mode Add Button ---
+    # --- Dev Mode: + Thêm Nút / ⚙ Quản lý ---
     if getattr(dashboard, "is_dev_mode", False):
-        from PySide6.QtWidgets import QPushButton
-        add_btn = QPushButton("+ Thêm Nút")
-        add_btn.setStyleSheet(f"background-color: transparent; border: 1px dashed {C['teal']}; color: {C['teal']};")
-        add_btn.setCursor(Qt.PointingHandCursor)
-        add_btn.clicked.connect(lambda: dashboard._on_add_widget("tools", "button"))
-        panel.body_layout.addWidget(add_btn)
+        from ui.panels._dev_buttons import build_dev_row
+        panel.body_layout.addLayout(build_dev_row(dashboard, "tools", "+ Thêm Nút", "button"))
         
     panel.body_layout.addSpacing(16)
 

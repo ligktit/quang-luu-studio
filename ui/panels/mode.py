@@ -106,14 +106,10 @@ def build_panel_mode(dashboard) -> GlassPanel:
         
     vl.addLayout(mode_row)
     
-    # --- Dev Mode Add Button ---
+    # --- Dev Mode: + Thêm Mode / ⚙ Quản lý ---
     if getattr(dashboard, "is_dev_mode", False):
-        from PySide6.QtWidgets import QPushButton
-        add_btn = QPushButton("+ Thêm Mode")
-        add_btn.setStyleSheet(f"background-color: transparent; border: 1px dashed {C['teal']}; color: {C['teal']}; margin-top: 5px;")
-        add_btn.setCursor(Qt.PointingHandCursor)
-        add_btn.clicked.connect(lambda: dashboard._on_add_widget("mode", "button"))
-        vl.addWidget(add_btn)
+        from ui.panels._dev_buttons import build_dev_row
+        vl.addLayout(build_dev_row(dashboard, "mode", "+ Thêm Mode", "button", " margin-top: 5px;"))
 
     sfx_title = QLabel("SFX")
     sfx_title.setStyleSheet(

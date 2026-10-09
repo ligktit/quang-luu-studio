@@ -600,9 +600,39 @@ class MainDashboard(QMainWindow):
         # Nút vừa dựng lại chưa biết thiết lập hiệu ứng — áp lại.
         self._apply_effects_setting()
 
+    def _builder_context(self):
+        """Tham số chung cho Widget Builder: Gửi thử + cảnh báo CC trùng."""
+        return {"engine": self.engine, "midi_cc": self.MIDI_CC,
+                "ui_config": backend.UiConfigManager.load_ui_config()}
+
+    def _on_manage_widgets(self, panel_name):
+        from ui.dialogs.widget_manager import WidgetManagerDialog
+        dialog = WidgetManagerDialog(self, panel_name=panel_name, engine=self.engine,
+                                     midi_cc=self.MIDI_CC)
+        result = dialog.exec()
+        if dialog.restored:
+            self._after_backup_restore()
+            return
+        if result != QDialog.Accepted:
+            return
+        # Hộp đã tự ghi ui_config.json khi Lưu; còn calibration thì áp ở đây.
+        for calibration in dialog.calibrations:
+            self._apply_widget_calibration(calibration)
+        self.refresh_ui()
+
+    def _after_backup_restore(self):
+        """Vừa nhập file cấu hình: nạp lại config, vẽ lại, bắn lại trạng thái
+        mode/toggle theo cân chỉnh mới (như _apply_widget_calibration)."""
+        backend.AppConfig.reload()
+        self.refresh_ui()
+        self._resend_calibrated_states(list(self.mode_states),
+                                       ("tone_auto", "fix_meo", "be", "tat_on"))
+        self._show_message("Đã nhập cấu hình giao diện")
+
     def _on_add_widget(self, panel_name, widget_type):
         from ui.dialogs.widget_builder import WidgetBuilderDialog
-        dialog = WidgetBuilderDialog(self, panel_name=panel_name, widget_type=widget_type)
+        dialog = WidgetBuilderDialog(self, panel_name=panel_name, widget_type=widget_type,
+                                     **self._builder_context())
         if dialog.exec() == QDialog.Accepted and dialog.result_data:
             ui_config = backend.UiConfigManager.load_ui_config()
             panel_list = ui_config.get(panel_name, [])
@@ -614,7 +644,9 @@ class MainDashboard(QMainWindow):
 
     def _on_edit_widget(self, panel_name, widget_data):
         from ui.dialogs.widget_builder import WidgetBuilderDialog
-        dialog = WidgetBuilderDialog(self, panel_name=panel_name, widget_type=widget_data.get("type", "slider"), existing_data=widget_data)
+        dialog = WidgetBuilderDialog(self, panel_name=panel_name,
+                                     widget_type=widget_data.get("type", "slider"),
+                                     existing_data=widget_data, **self._builder_context())
         if dialog.exec() == QDialog.Accepted and dialog.result_data:
             ui_config = backend.UiConfigManager.load_ui_config()
             panel_list = ui_config.get(panel_name, [])
@@ -641,7 +673,13 @@ class MainDashboard(QMainWindow):
             self._show_message("Không lưu được cấu hình MIDI của nút", is_error=True)
             return
 
-        for mode in calibration.get("mode_config", {}):
+        self._resend_calibrated_states(calibration.get("mode_config", {}),
+                                       calibration.get("toggle_invert", {}))
+
+    def _resend_calibrated_states(self, modes, toggles):
+        """Bắn lại trạng thái hiện tại của các mode / nút Bypass vừa đổi cân chỉnh —
+        không thì DAW giữ giá trị theo chiều cũ, đèn trên app ngược cho tới lần bấm sau."""
+        for mode in modes:
             self._set_mode(mode, self.mode_states.get(mode, False))
 
         states = {
@@ -650,7 +688,7 @@ class MainDashboard(QMainWindow):
             "be": ("be_state", False),
             "tat_on": ("tat_on_state", False),
         }
-        for key in calibration.get("toggle_invert", {}):
+        for key in toggles:
             if key not in states:
                 continue
             attr, default = states[key]

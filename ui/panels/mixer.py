@@ -226,16 +226,12 @@ def build_panel_mixer(dashboard) -> GlassPanel:
         dashboard._mixer_icon_btns[ch["cc"]] = ch_view.mute_btn
         dashboard._mixer_channels[ch["cc"]] = ch_view
 
-    # --- Dev Mode Add Button ---
+    # --- Dev Mode: + Thêm / ⚙ Quản lý ---
     if getattr(dashboard, "is_dev_mode", False):
         # KHÔNG import Qt cục bộ ở đây — sẽ shadow import module-level
         # và gây UnboundLocalError ở block context-menu phía trên.
-        from PySide6.QtWidgets import QPushButton
-        add_btn = QPushButton("+ Thêm")
-        add_btn.setStyleSheet(f"background-color: transparent; border: 1px dashed {C['teal']}; color: {C['teal']};")
-        add_btn.setCursor(Qt.PointingHandCursor)
-        add_btn.clicked.connect(lambda: dashboard._on_add_widget("mixer", "slider"))
-        vl.addWidget(add_btn)
+        from ui.panels._dev_buttons import build_dev_row
+        vl.addLayout(build_dev_row(dashboard, "mixer", "+ Thêm", "slider"))
 
     vl.addStretch()
     return panel
