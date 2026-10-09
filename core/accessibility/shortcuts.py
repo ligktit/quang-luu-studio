@@ -34,6 +34,7 @@ _DEFAULT_BINDINGS = [
     ("Ctrl+O",      "_show_songs_list",         "Mở danh sách bài"),
     ("Ctrl+P",      "_on_score",                "Chấm điểm"),
     ("Ctrl+,",      "_show_settings_dialog",    "Mở thiết lập"),
+    ("Ctrl+Shift+A", "_open_audio_doctor",      "Tự sửa âm thanh"),
     ("Ctrl+Shift+V", "_a11y_toggle_tts",        "Bật/tắt giọng đọc TTS"),
     ("Ctrl+H",      "_a11y_toggle_high_contrast", "Bật/tắt tương phản cao"),
     ("Ctrl++",      "_a11y_increase_font",      "Tăng cỡ chữ"),

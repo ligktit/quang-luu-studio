@@ -131,6 +131,7 @@ class MainDashboard(QMainWindow):
     _embedded_volume_signal = Signal(int)   # set âm lượng player nhúng (thread-safe)
     _search_results_signal = Signal(list)   # kết quả tìm kiếm YouTube (thread-safe)
     _stream_resolved_signal = Signal(str, str, str, str)  # (video_id, url, title, loi)
+    _audio_doctor_report_signal = Signal(object, str)   # (RunReport, "run"/"rerun"/"button")
 
     @property
     def _marquee_text(self):
@@ -315,6 +316,19 @@ class MainDashboard(QMainWindow):
         self._midi_status_signal.connect(self._update_midi_status)
         self._browser_status_signal.connect(self._update_browser_status)
         self._so_ready_signal.connect(self._on_studio_one_ready)
+        # Tự sửa âm thanh: lúc mở app chỉ KIỂM TRA (chờ DAW sẵn sàng) rồi báo.
+        self._audio_doctor_report_signal.connect(self._on_audio_doctor_report)
+        self._audio_doctor_speak_next = True
+        try:
+            from ui.audio_doctor_bridge import build_service
+            self._audio_doctor = build_service(self)
+        except Exception as e:
+            print(f"[AUDIO DOCTOR] Không khởi tạo được: {e}")
+            self._audio_doctor = None
+        self._audio_doctor_timer = QTimer(self)
+        self._audio_doctor_timer.setSingleShot(True)
+        self._audio_doctor_timer.timeout.connect(self._start_audio_doctor_watch)
+        self._audio_doctor_timer.start(1000)
         # Đổi bài (trình duyệt, Danh sách bài hát, Setlist, ô tìm kiếm) → reset
         # thiết lập theo bài rồi khôi phục preset nếu bài đã lưu.
         self._song_changed_signal.connect(self._on_song_changed)
@@ -1196,6 +1210,49 @@ class MainDashboard(QMainWindow):
                 print(f"[MIDI SYNC] Đồng bộ mixer {cc_key} lỗi: {e}")
         if senders:
             print(f"[MIXER] Đồng bộ {len(senders)} kênh")
+
+    def _start_audio_doctor_watch(self):
+        if self._audio_doctor is None:
+            return
+        from core import so_windows
+        wait_s = float(self.settings.get("audio_doctor_startup_wait_s", 180) or 180)
+        self._audio_doctor.start_startup_watch(
+            on_report=lambda rep, act: self._audio_doctor_report_signal.emit(rep, act),
+            is_daw_ready=lambda: bool(so_windows.main_windows()),
+            wait_s=wait_s,
+        )
+
+    def _open_audio_doctor(self):
+        if getattr(self, "_audio_doctor", None) is None:
+            self._show_message("Không mở được Tự sửa âm thanh", is_error=True)
+            return
+        from ui.dialogs.audio_doctor_dialog import AudioDoctorDialog
+        dlg = getattr(self, "_audio_doctor_dialog", None)
+        if dlg is not None and dlg.isVisible():
+            dlg.raise_()
+            dlg.activateWindow()
+            return
+        self._audio_doctor_dialog = AudioDoctorDialog(self, self._audio_doctor, auto_fix=True)
+        self._audio_doctor_dialog.show()
+
+    def _on_audio_doctor_report(self, report, action):
+        """Cập nhật dải cảnh báo header. Chỉ đọc TTS ở lượt khởi động đầu tiên."""
+        problems = report.problems()
+        btn = getattr(self, "_audio_warn_btn", None)
+        if btn is None:
+            return
+        if not problems:
+            btn.hide()
+            return
+        _, first = problems[0]
+        extra = f" · +{len(problems) - 1} vấn đề khác" if len(problems) > 1 else ""
+        btn.setText(f"⚠ {first.message}{extra} · Bấm để tự sửa")
+        btn.setToolTip("\n".join(f"• {f.message}" for _, f in problems))
+        btn.show()
+        if action == "run" and self._audio_doctor_speak_next:
+            self._audio_doctor_speak_next = False
+            self._a11y_speak(f"Có {len(problems)} vấn đề âm thanh. {first.message}. "
+                             "Nhấn Control Shift A để tự sửa.")
 
     def _daw_running_cached(self) -> bool:
         """so_windows.is_running() quét process — gọi tối đa 5 s/lần từ timer UI."""
@@ -4041,6 +4098,7 @@ class MainDashboard(QMainWindow):
             # interrupt() chỉ ngắt câu đang đọc + xoá queue — KHÔNG kill worker
             # thread (stop() sẽ làm các announce sau bị kẹt vĩnh viễn).
             "stop_tts":         lambda: self._a11y_speaker and self._a11y_speaker.interrupt(),
+            "fix_audio":        self._open_audio_doctor,
             "mute_music":       self._a11y_toggle_mute_music,
             "mute_mic":         self._a11y_toggle_mute_mic,
             "volume_up_music":  lambda: self._a11y_step_volume("mix_music", +5),
@@ -4240,6 +4298,9 @@ class MainDashboard(QMainWindow):
             except Exception:
                 pass
             self._player_window = None
+
+        if getattr(self, "_audio_doctor", None) is not None:
+            self._audio_doctor.stop()
 
         # Vòng chờ Studio One — dừng trước khi widget bị huỷ, kẻo nó còn emit
         # signal vào một cửa sổ đã chết.

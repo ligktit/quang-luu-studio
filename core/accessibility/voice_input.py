@@ -64,6 +64,8 @@ _KEYWORD_INTENTS = [
                            "trang thai", "đọc trạng"]),
     ("stop_tts",          ["tắt giọng", "dừng đọc", "im đi", "im lặng",
                            "tat giong", "dung doc"]),
+    ("fix_audio",         ["sửa âm thanh", "sua am thanh", "sửa tiếng", "sua tieng",
+                           "mất tiếng", "mat tieng", "tự sửa", "không có tiếng"]),
     ("mute_music",        ["tắt nhạc", "tat nhac", "mute nhạc", "tắt bài",
                            "tắt nhạc nền"]),
     ("mute_mic",          ["tắt mic", "tat mic", "mute mic", "tắt micro"]),
