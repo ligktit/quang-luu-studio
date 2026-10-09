@@ -113,19 +113,14 @@ def build_panel_mixer(dashboard) -> GlassPanel:
     ui_config = backend.UiConfigManager.load_ui_config()
     channels_config = ui_config.get("mixer", [])
 
-    channels = []
-    for ch_cfg in channels_config:
-        if ch_cfg.get("hidden", False):
-            continue
-        
+    def _channel_spec(ch_cfg):
         # Resolve dynamic color if it's a token name
         c_val = ch_cfg.get("color", "#ffffff")
         if c_val in C:
             c_val = C[c_val]
 
         cc_key = ch_cfg.get("cc", "mix_music")
-        
-        channels.append({
+        return {
             "label": ch_cfg.get("label", ""),
             "icon": ch_cfg.get("icon", ""),
             "color": c_val,
@@ -135,10 +130,7 @@ def build_panel_mixer(dashboard) -> GlassPanel:
             "unit": ch_cfg.get("unit", ""),
             "has_mute": ch_cfg.get("has_mute", False),
             "has_inf_bottom": ch_cfg.get("has_inf_bottom", False),
-            "id": ch_cfg.get("id", cc_key),
-            # Entry gốc cho menu Sửa/Ẩn của Dev Mode — giữ theo từng kênh.
-            "cfg": ch_cfg,
-        })
+        }
 
     dashboard._mixer_sliders = {}
     dashboard._mixer_val_labels = {}
@@ -149,7 +141,13 @@ def build_panel_mixer(dashboard) -> GlassPanel:
     # phép quy đổi dB -> MIDI ở chỗ khác.
     dashboard._mixer_senders = {}
 
-    for ch in channels:
+    # Một vòng duy nhất trên entry cấu hình: `ch_cfg` trong thân vòng luôn là
+    # kênh đang dựng. (Trước đây chép sang list trung gian rồi dựng ở vòng thứ
+    # hai — `ch_cfg` lọt vào vòng sau là entry cuối, menu Sửa/Ẩn nhắm nhầm Giọng.)
+    for ch_cfg in channels_config:
+        if ch_cfg.get("hidden", False):
+            continue
+        ch = _channel_spec(ch_cfg)
         ch_view = HMixerChannel(
             icon=ch["icon"],
             label=ch["label"],
@@ -201,10 +199,8 @@ def build_panel_mixer(dashboard) -> GlassPanel:
         if getattr(dashboard, "is_dev_mode", False):
             ch_view.setContextMenuPolicy(Qt.CustomContextMenu)
             
-            # Gắn sớm entry + view của CHÍNH kênh này. Trước đây lấy `ch_cfg`
-            # của vòng lặp trên (luôn là entry cuối — "Giọng") nên Sửa/Ẩn ở
-            # mọi kênh đều nhắm vào Giọng.
-            def make_ctx_cb(cfg=ch["cfg"], view=ch_view):
+            # Gắn sớm entry + view của CHÍNH kênh này (closure trong vòng lặp).
+            def make_ctx_cb(cfg=ch_cfg, view=ch_view):
                 def show_ctx(pos):
                     from PySide6.QtWidgets import QMenu
                     from PySide6.QtGui import QAction

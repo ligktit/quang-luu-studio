@@ -89,8 +89,23 @@ def add_shadow(widget, color="#000000", blur=20, offset=(0, 4)):
         pass
 
 
+def _find_widget_index(panel_list, widget_data):
+    """Vị trí entry của `widget_data` trong `panel_list`, None nếu không còn.
 
+    Entry có `id` thì khớp theo id. Entry không có `id` (sửa tay, file cũ, file
+    nhập) thì khớp nguyên nội dung — so `None == None` theo id sẽ luôn trúng
+    entry thiếu id ĐẦU TIÊN, Sửa/Ẩn lại nhắm nhầm kênh.
+    """
+    wid = widget_data.get("id")
+    if wid is not None:
+        return next((i for i, item in enumerate(panel_list)
+                     if item.get("id") == wid), None)
 
+    def _strip(d):
+        return {k: v for k, v in d.items() if k != "hidden"}
+    target = _strip(widget_data)
+    return next((i for i, item in enumerate(panel_list)
+                 if "id" not in item and _strip(item) == target), None)
 
 
 # ══════════════════════════════════════════════════════
@@ -654,10 +669,15 @@ class MainDashboard(QMainWindow):
         if dialog.exec() == QDialog.Accepted and dialog.result_data:
             ui_config = backend.UiConfigManager.load_ui_config()
             panel_list = ui_config.get(panel_name, [])
-            for i, item in enumerate(panel_list):
-                if item.get("id") == widget_data.get("id"):
-                    panel_list[i] = dialog.result_data
-                    break
+            idx = _find_widget_index(panel_list, widget_data)
+            if idx is None:
+                # Entry đã đổi/mất từ lúc dựng panel (nhập file, migrate id…) —
+                # báo lỗi, không lưu nửa vời (calibration + MIDI mà bỏ mất bản sửa).
+                self._show_message("Không tìm thấy mục cần sửa — giao diện đã thay đổi, hãy thử lại",
+                                   is_error=True)
+                self.refresh_ui()
+                return
+            panel_list[idx] = dialog.result_data
             ui_config[panel_name] = panel_list
             backend.UiConfigManager.save_ui_config(ui_config)
             self._apply_widget_calibration(dialog.result_calibration)
@@ -706,10 +726,13 @@ class MainDashboard(QMainWindow):
     def _on_hide_widget(self, panel_name, widget_data):
         ui_config = backend.UiConfigManager.load_ui_config()
         panel_list = ui_config.get(panel_name, [])
-        for i, item in enumerate(panel_list):
-            if item.get("id") == widget_data.get("id"):
-                panel_list[i]["hidden"] = True
-                break
+        idx = _find_widget_index(panel_list, widget_data)
+        if idx is None:
+            self._show_message("Không tìm thấy mục cần ẩn — giao diện đã thay đổi, hãy thử lại",
+                               is_error=True)
+            self.refresh_ui()
+            return
+        panel_list[idx]["hidden"] = True
         ui_config[panel_name] = panel_list
         backend.UiConfigManager.save_ui_config(ui_config)
         self.refresh_ui()
