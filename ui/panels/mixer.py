@@ -148,6 +148,8 @@ def build_panel_mixer(dashboard) -> GlassPanel:
     # (_sync_midi_states) bắn lại được mức thanh trượt mà không phải chép lại
     # phép quy đổi dB -> MIDI ở chỗ khác.
     dashboard._mixer_senders = {}
+    # Đặt mute theo giá trị (không lật) — Tự sửa âm thanh dùng.
+    dashboard._mixer_mute_setters = {}
 
     # Một vòng duy nhất trên entry cấu hình: `ch_cfg` trong thân vòng luôn là
     # kênh đang dựng. (Trước đây chép sang list trung gian rồi dựng ở vòng thứ
@@ -196,6 +198,13 @@ def build_panel_mixer(dashboard) -> GlassPanel:
 
         if ch["has_mute"]:
             ch_view.mute_btn.clicked.connect(_bind_mute(ch_view))
+
+            def _set_muted(muted, channel_view=ch_view, cc_key=ch["cc"], val_range=ch["range"]):
+                # Cùng đường gửi CC với nút bấm; chỉ lật hình khi trạng thái khác.
+                if channel_view.is_muted() != bool(muted):
+                    channel_view.toggle_mute()
+                _make_mute_callback(dashboard, cc_key, mute_cc_map, val_range)(bool(muted))
+            dashboard._mixer_mute_setters[ch["cc"]] = _set_muted
 
         _send_value = _make_value_changed_callback(dashboard, ch["cc"], ch["range"], ch["unit"])
         ch_view.slider.valueChanged.connect(_send_value)
