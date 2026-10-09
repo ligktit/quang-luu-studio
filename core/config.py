@@ -550,6 +550,8 @@ class AppConfig:
 # Load config ngay khi import module
 AppConfig.load()
 MIDI_PORT_NAME = AppConfig.get("midi_port_name", "QuangLuuMIDI")
+# Cổng DAW → app (Cubase script / Studio One readyPing gửi về đây). Khác cổng gửi.
+MIDI_FEEDBACK_PORT_NAME = AppConfig.get("midi_feedback_port_name", "QLS_PhanHoi")
 
 # FFmpeg location (sử dụng consolidated find_ffmpeg từ core.utils)
 FFMPEG_LOCATION = find_ffmpeg()
