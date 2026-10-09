@@ -11,11 +11,11 @@ import copy
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QMessageBox, QPushButton, QTabWidget, QVBoxLayout,
+    QAbstractItemView, QDialog, QFileDialog, QHBoxLayout, QLabel, QListWidget,
+    QListWidgetItem, QMessageBox, QPushButton, QTabWidget, QVBoxLayout,
 )
 
-from core import ui_layout
+from core import devmode_backup, ui_layout
 from core.config import UiConfigManager
 from ui import responsive as rp
 from ui.design_tokens import C, FONT
@@ -85,6 +85,14 @@ class WidgetManagerDialog(QDialog):
         vl.addWidget(self.reset_btn)
 
         self.footer = QHBoxLayout()
+        self.export_btn = QPushButton("Xuất file")
+        self.export_btn.setToolTip("Lưu giao diện + cân chỉnh MIDI của máy này ra một file .json")
+        self.export_btn.clicked.connect(self._export)
+        self.import_btn = QPushButton("Nhập file")
+        self.import_btn.setToolTip("Nạp giao diện + cân chỉnh MIDI từ file đã xuất")
+        self.import_btn.clicked.connect(self._import)
+        self.footer.addWidget(self.export_btn)
+        self.footer.addWidget(self.import_btn)
         self.footer.addStretch()
         self.save_btn = QPushButton("Lưu")
         self.save_btn.setStyleSheet(f"background-color: {C['green']}; padding: 5px;")
@@ -264,6 +272,48 @@ class WidgetManagerDialog(QDialog):
         self._dirty = True
         self._populate(panel)
         self._refresh_buttons()
+
+    # ── Xuất / Nhập ──────────────────────────────────────────
+    def _export(self):
+        if self._dirty:
+            QMessageBox.information(self, "Xuất file",
+                                    "Có thay đổi chưa lưu — bấm Lưu trước rồi mới xuất.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Xuất cấu hình giao diện", devmode_backup.default_filename(),
+            "Cấu hình (*.json)")
+        if not path:
+            return
+        try:
+            devmode_backup.export_backup(path)
+        except Exception as e:
+            QMessageBox.warning(self, "Xuất file", f"Không xuất được: {e}")
+            return
+        QMessageBox.information(self, "Xuất file", f"Đã xuất:\n{path}")
+
+    def _import(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Nhập cấu hình giao diện", "", "Cấu hình (*.json)")
+        if not path:
+            return
+        try:
+            backup = devmode_backup.read_backup(path)
+        except devmode_backup.BackupError as e:
+            QMessageBox.warning(self, "Nhập file", str(e))
+            return
+        text = (f"{devmode_backup.summarize(backup)}\n\n"
+                "Cấu hình hiện tại sẽ được sao lưu tự động trước khi ghi đè.")
+        if self._dirty:
+            text += "\nCác thay đổi chưa lưu trong hộp này sẽ bị bỏ."
+        if QMessageBox.question(self, "Nhập cấu hình", text) != QMessageBox.Yes:
+            return
+        try:
+            self.restored_backups = devmode_backup.restore_backup(backup)
+        except devmode_backup.BackupError as e:
+            QMessageBox.warning(self, "Nhập file", str(e))
+            return
+        self.restored = True
+        self.accept()
 
     # ── Lưu / đóng ───────────────────────────────────────────
     def _on_save(self):
