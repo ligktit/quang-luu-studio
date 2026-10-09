@@ -11,7 +11,9 @@ Features:
   - Add/Edit dialog (emoji, label, file path)
   - Visual indicator (red pulsing border) for missing files
   - Signal: sfx_changed(list) → parent saves to settings
-  - Signal: sfx_play(str path) → parent plays audio
+  - Signal: sfx_toggle(id, path) → parent bật/tắt (ui.components.sfx_player)
+  - Signal: sfx_stop(id) → nút đang phát bị xoá / đổi file
+  - set_playing(id, on) → đèn "đang phát" trên nút
 """
 import os
 import uuid
@@ -199,6 +201,7 @@ class SfxItemButton(QWidget):
         self._pulse_alpha = 0
         self._pulse_dir = 1
         self._pulse_enabled = True     # False = viền đỏ đứng yên khi thiếu file
+        self._playing = False          # đang phát → viền sáng + dấu ■, bấm để dừng
 
         self.setFixedHeight(28)
         self.setMinimumWidth(52)
@@ -226,6 +229,18 @@ class SfxItemButton(QWidget):
         self.setAccessibleName(f"Hiệu ứng {self._data.get('name', 'Không tên')}")
         self.update()
 
+    def is_playing(self) -> bool:
+        return self._playing
+
+    def setPlaying(self, on: bool):
+        on = bool(on)
+        if on == self._playing:
+            return
+        self._playing = on
+        self.setToolTip(self._build_tooltip())
+        self.setAccessibleDescription("Đang phát" if on else "")
+        self.update()
+
     # ── Helpers ───────────────────────────────────────────────────
     def _check_file(self):
         fp = self._data.get("file_path", "")
@@ -240,6 +255,8 @@ class SfxItemButton(QWidget):
             return f"{name}\n(Chưa gán file)"
         if self._missing:
             return f"{name}\n⚠️ File không tồn tại:\n{fp}"
+        if self._playing:
+            return f"{name}\n▶ Đang phát — bấm để dừng\n{fp}"
         return f"{name}\n{fp}"
 
     def _base_color(self) -> QColor:
@@ -279,10 +296,10 @@ class SfxItemButton(QWidget):
 
         base = self._base_color()
 
-        # Glow on hover
-        if self._hover:
+        # Glow on hover (đang phát: quầng đậm hơn)
+        if self._hover or self._playing:
             glow = QColor(base)
-            glow.setAlpha(40)
+            glow.setAlpha(110 if self._playing else 40)
             p.setPen(Qt.NoPen)
             p.setBrush(glow)
             p.drawRoundedRect(QRectF(0, 0, w, h), r + 2, r + 2)
@@ -306,6 +323,8 @@ class SfxItemButton(QWidget):
             bc = QColor("#EF4444")
             bc.setAlpha(max(80, self._pulse_alpha))
             p.setPen(QPen(bc, 2))
+        elif self._playing:
+            p.setPen(QPen(QColor(255, 255, 255, 230), 2))
         elif self._hover:
             bc = self._lighten(base, 0.35)
             bc.setAlpha(200)
@@ -336,6 +355,12 @@ class SfxItemButton(QWidget):
         p.setFont(font)
         p.setPen(QColor("#FFFFFF"))
         p.drawText(QRectF(0, 0, w, h), Qt.AlignCenter, display)
+
+        # Đang phát: dấu ■ nhỏ góc phải — "bấm để dừng"
+        if self._playing:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(255, 255, 255, 235))
+            p.drawRoundedRect(QRectF(w - 10, 5, 5, 5), 1, 1)
         p.end()
 
     # ── Mouse ─────────────────────────────────────────────────────
@@ -680,10 +705,12 @@ class SfxButtonArea(QWidget):
 
     Signals:
         sfx_changed(list)  — emitted whenever the list changes; parent saves to settings
-        sfx_play(str)      — emitted when a button is clicked with file_path
+        sfx_toggle(id, path) — bấm nút có file: bật nếu đang tắt, tắt nếu đang phát
+        sfx_stop(id)       — nút đang phát bị xoá / đổi file → phải dừng
     """
     sfx_changed = Signal(list)
-    sfx_play    = Signal(str)
+    sfx_toggle  = Signal(str, str)
+    sfx_stop    = Signal(str)
 
     _DEFAULT_SFX = [
         {"id": "sfx_001", "label": "😂", "name": "Cười",    "file_path": "", "color": C["orange"]},
@@ -741,6 +768,11 @@ class SfxButtonArea(QWidget):
     # ── Public API ────────────────────────────────────────────────
     def get_sfx_list(self) -> list:
         return [b.data for b in self._btn_widgets]
+
+    def set_playing(self, sfx_id: str, on: bool):
+        for b in self._btn_widgets:
+            if b.data.get("id") == sfx_id:
+                b.setPlaying(on)
 
     def reorder_by_id(self, src_id: str, target_id: str):
         ids = [b.data["id"] for b in self._btn_widgets]
@@ -825,13 +857,18 @@ class SfxButtonArea(QWidget):
         if dlg.exec() == QDialog.Accepted:
             result = dlg.get_result()
             if result:
-                new_data = {**btn_widget.data, **result}
+                old_data = btn_widget.data
+                new_data = {**old_data, **result}
+                if btn_widget.is_playing() and new_data.get("file_path") != old_data.get("file_path"):
+                    self.sfx_stop.emit(old_data.get("id", ""))
                 btn_widget.update_data(new_data)
                 self.sfx_changed.emit(self.get_sfx_list())
 
 
     def _on_delete(self, btn_widget: SfxItemButton):
         if btn_widget in self._btn_widgets:
+            if btn_widget.is_playing():
+                self.sfx_stop.emit(btn_widget.data.get("id", ""))
             self._btn_widgets.remove(btn_widget)
             self._flow.remove_widget(btn_widget)
             btn_widget.deleteLater()
@@ -839,9 +876,10 @@ class SfxButtonArea(QWidget):
             self.sfx_changed.emit(self.get_sfx_list())
 
     def _on_sfx_clicked(self, btn_widget: SfxItemButton):
-        fp = btn_widget.data.get("file_path", "")
+        data = btn_widget.data
+        fp = data.get("file_path", "")
         if fp:
-            self.sfx_play.emit(fp)
+            self.sfx_toggle.emit(data.get("id", ""), fp)
 
     # ── Drag-and-drop (area level) ────────────────────────────────
     def dragEnterEvent(self, e):

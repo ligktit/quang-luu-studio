@@ -223,6 +223,19 @@ class MainDashboard(QMainWindow):
         self._search_results_list = None
         self._func_buttons = {}
         self._mode_buttons = {}
+        # SFX sống cùng dashboard (không theo panel) — Dev Mode dựng lại panel
+        # vẫn giữ/tắt được SFX đang phát. Nút + fader do ui/panels/mode.py nối.
+        from ui.components.sfx_player import SfxPlayer
+        self._sfx_player = SfxPlayer(parent=self)
+        self._sfx_player.set_volume(self._sfx_volume_setting())
+        self._sfx_player.started.connect(lambda i: self._sfx_set_playing(i, True))
+        self._sfx_player.stopped.connect(lambda i: self._sfx_set_playing(i, False))
+        self._sfx_area = None
+        self._sfx_volume_slider = None
+        self._sfx_volume_save_timer = QTimer(self)
+        self._sfx_volume_save_timer.setSingleShot(True)
+        self._sfx_volume_save_timer.setInterval(400)
+        self._sfx_volume_save_timer.timeout.connect(self._save_sfx_volume)
         self._tone_value_labels = {}   # {"tone_music"/"tone_voice": QLabel số bán cung}
         self._marquee_text_value = ""
 
@@ -3498,59 +3511,39 @@ class MainDashboard(QMainWindow):
         for m in known:
             self._set_mode(m, m in wanted)
 
-    def _on_sfx_play(self, file_path: str):
-        """Phát sound effect theo đường dẫn file (hỗ trợ wav, mp3, ogg, flac...)."""
-        if not file_path:
-            return
-        if not os.path.exists(file_path):
+    def _on_sfx_toggle(self, sfx_id: str, file_path: str):
+        """Bấm nút SFX: chưa phát → phát, đang phát → fade rồi dừng."""
+        if not self._sfx_player.is_playing(sfx_id) and not os.path.exists(file_path):
             print(f"[SFX] Khong tim thay file SFX: {file_path}")
             return
+        self._sfx_player.toggle(sfx_id, file_path)
+
+    def _sfx_set_playing(self, sfx_id: str, on: bool):
+        area = self._sfx_area
+        if area is None:
+            return
         try:
-            from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-            from PySide6.QtCore import QUrl
+            area.set_playing(sfx_id, on)
+        except RuntimeError:
+            pass   # panel vừa bị dựng lại, widget cũ đã xoá
 
-            # Tạo player mới mỗi lần (cho phép chồng tiếng)
-            player = QMediaPlayer(self)
-            audio_out = QAudioOutput(self)
-            player.setAudioOutput(audio_out)
-            audio_out.setVolume(1.0)
-            player.setSource(QUrl.fromLocalFile(file_path))
-            player.play()
+    def _sfx_volume_setting(self) -> int:
+        try:
+            return max(0, min(100, int(self.settings.get("sfx_volume", 100))))
+        except (TypeError, ValueError):
+            return 100
 
-            # Dọn dẹp khi phát xong HOẶC khi media lỗi — nếu chỉ dọn ở
-            # EndOfMedia thì file hỏng/decode lỗi sẽ leak player tích lũy dần.
-            _disposed = {"done": False}
+    def _on_sfx_volume_changed(self, value: int):
+        self._sfx_player.set_volume(value)
+        self.settings["sfx_volume"] = int(value)
+        # Ghi file sau khi ngừng kéo, không ghi mỗi nấc fader.
+        self._sfx_volume_save_timer.start()
 
-            def _dispose():
-                if _disposed["done"]:
-                    return
-                _disposed["done"] = True
-                player.deleteLater()
-                audio_out.deleteLater()
-
-            def _cleanup(status):
-                if status in (QMediaPlayer.EndOfMedia, QMediaPlayer.InvalidMedia):
-                    _dispose()
-
-            def _on_media_error(error, error_string=""):
-                print(f"[SFX] Loi media: {error_string or error}")
-                _dispose()
-
-            player.mediaStatusChanged.connect(_cleanup)
-            player.errorOccurred.connect(_on_media_error)
-
-            print(f"[SFX] Playing: {os.path.basename(file_path)}")
+    def _save_sfx_volume(self):
+        try:
+            backend.ConfigManager.save_settings(self.settings)
         except Exception as e:
-            print(f"[SFX] Loi phat SFX: {e}")
-            # Fallback: winsound cho file .wav
-            if file_path.lower().endswith(".wav"):
-                def _play_fallback():
-                    try:
-                        import winsound
-                        winsound.PlaySound(file_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-                    except Exception:
-                        pass
-                threading.Thread(target=_play_fallback, daemon=True).start()
+            print(f"[SFX] Khong luu duoc am luong SFX: {e}")
 
     def _on_sfx_config_changed(self, sfx_list: list):
         """Lưu danh sách SFX buttons vào settings.json khi thay đổi."""

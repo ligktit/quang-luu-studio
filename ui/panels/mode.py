@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt
 
 from ui.design_tokens import C, SP, FONT
 from ui.components.mode_button import ModeToggleButton
+from ui.components.painter_hslider import PainterHSlider
 from ui.components.painter_panel import GlassPanel
 from ui.components.sfx_button_area import SfxButtonArea
 from ui.panels._dev_buttons import attach_dev_ctx_menu, build_dev_row
@@ -97,6 +98,30 @@ def build_panel_mode(dashboard) -> GlassPanel:
     sfx_title.setAlignment(Qt.AlignCenter)
     vl.addWidget(sfx_title)
 
+    # Fader âm lượng chung cho mọi SFX (phát trong app, không qua DAW).
+    vol_row = QHBoxLayout()
+    vol_row.setSpacing(6)
+    vol_icon = QLabel("🔊")
+    vol_icon.setStyleSheet("font-size:11px; background:transparent;")
+    vol_pct = QLabel()
+    vol_pct.setFixedWidth(34)
+    vol_pct.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    vol_pct.setStyleSheet(
+        f"font-size:10px; font-weight:700; color:{C['text_muted']};"
+        f" font-family:{FONT}; background:transparent;"
+    )
+    slider = PainterHSlider(0, 100, dashboard._sfx_volume_setting(), color=C["teal"])
+    slider.setToolTip("Âm lượng SFX")
+    slider.setAccessibleName("Âm lượng SFX")
+    vol_pct.setText(f"{slider.value()}%")
+    slider.valueChanged.connect(lambda v: vol_pct.setText(f"{v}%"))
+    slider.valueChanged.connect(dashboard._on_sfx_volume_changed)
+    dashboard._sfx_volume_slider = slider
+    vol_row.addWidget(vol_icon)
+    vol_row.addWidget(slider, 1)
+    vol_row.addWidget(vol_pct)
+    vl.addLayout(vol_row)
+
     # In frozen (onefile) build, sfx/ is extracted to _MEIPASS.
     # In dev, walk up from ui/panels/ to project root.
     import sys
@@ -111,7 +136,12 @@ def build_panel_mode(dashboard) -> GlassPanel:
         parent=panel,
     )
     dashboard._sfx_area.sfx_changed.connect(dashboard._on_sfx_config_changed)
-    dashboard._sfx_area.sfx_play.connect(dashboard._on_sfx_play)
+    dashboard._sfx_area.sfx_toggle.connect(dashboard._on_sfx_toggle)
+    dashboard._sfx_area.sfx_stop.connect(dashboard._sfx_player.stop)
+    # Panel có thể bị dựng lại (Dev Mode) — lấy lại đèn SFX đang phát.
+    for item in dashboard._sfx_area.get_sfx_list():
+        if dashboard._sfx_player.is_playing(item.get("id", "")):
+            dashboard._sfx_area.set_playing(item["id"], True)
     vl.addWidget(dashboard._sfx_area)
 
     vl.addStretch()
