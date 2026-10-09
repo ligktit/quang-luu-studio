@@ -623,7 +623,11 @@ class MainDashboard(QMainWindow):
     def _after_backup_restore(self):
         """Vừa nhập file cấu hình: nạp lại config, vẽ lại, bắn lại trạng thái
         mode/toggle theo cân chỉnh mới (như _apply_widget_calibration)."""
+        global SCALE_VALUES
         backend.AppConfig.reload()
+        # Giá trị Major/Minor nằm trong calibration — nạp lại như wizard cân chỉnh.
+        SCALE_VALUES = backend.AppConfig.get_scale_values()
+        self.SCALE_VALUES = SCALE_VALUES
         self.refresh_ui()
         self._resend_calibrated_states(list(self.mode_states),
                                        ("tone_auto", "fix_meo", "be", "tat_on"))

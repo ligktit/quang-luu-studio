@@ -1,11 +1,3 @@
-## 4b. Xuất / Nhập cấu hình
-
-Trong hộp **⚙ Quản lý**:
-
-- **Xuất file** → lưu file `quangluu-giaodien-YYYYMMDD-HHMM.json` gồm giao diện (`ui_config`) **và nguyên** `calibration_overrides.json` (Bypass, mode_config và các cân chỉnh riêng của máy). Nếu còn thay đổi chưa lưu, app nhắc bấm Lưu trước.
-- **Nhập file** → app hiện tóm tắt (số widget mỗi panel, số widget ẩn, số mục cân chỉnh, bản app đã xuất) và hỏi trước khi ghi đè. Hai file hiện tại được chép tự động vào `<thư mục ui_config.json>/backups/*.bak` trước khi ghi. Nhập xong app tự vẽ lại và gửi lại trạng thái mode/Bypass sang DAW.
-- File hỏng, không phải file sao lưu, hoặc tạo bởi bản app mới hơn → báo lỗi, **không ghi gì**. Nếu ghi lỗi giữa chừng, app trả lại hai file cũ từ bản .bak.
-
 # Hướng dẫn Dev Mode — Tuỳ biến nút & slider trên Dashboard
 
 > **Ngày viết:** 2026-06-11 · đối chiếu trực tiếp với code hiện tại · cập nhật 2026-10-09 (hộp Quản lý giao diện, Xuất/Nhập, Gửi thử).
@@ -111,6 +103,14 @@ Phân biệt 2 loại entry:
 - **Custom** (tạo từ Widget Builder): `"cc"` là **số** CC thô, kèm `on_value/off_value/is_toggle` (button) hoặc `range/icon/has_mute` (slider).
 
 **Reset toàn bộ về mặc định:** xoá file `ui_config.json` → app tự dùng config mặc định trong code (`UiConfigManager._DEFAULT_UI_CONFIG`). File hỏng/JSON sai cú pháp cũng tự rơi về mặc định, không crash.
+
+## 4b. Xuất / Nhập cấu hình
+
+Trong hộp **⚙ Quản lý**:
+
+- **Xuất file** → lưu file `quangluu-giaodien-YYYYMMDD-HHMM.json` gồm giao diện (`ui_config`) **và nguyên** `calibration_overrides.json` (Bypass, mode_config và các cân chỉnh riêng của máy). Nếu còn thay đổi chưa lưu, app nhắc bấm Lưu trước.
+- **Nhập file** → app hiện tóm tắt (số widget mỗi panel, số widget ẩn, số mục cân chỉnh, bản app đã xuất) và hỏi trước khi ghi đè. Hai file hiện tại được chép tự động vào `<thư mục ui_config.json>/backups/*.bak` trước khi ghi. Nhập xong app tự vẽ lại và gửi lại trạng thái mode/Bypass sang DAW.
+- File hỏng, không phải file sao lưu, hoặc tạo bởi bản app mới hơn → báo lỗi, **không ghi gì**. Nếu ghi lỗi giữa chừng, app trả lại hai file cũ từ bản .bak.
 
 ## 5. Quy trình khuyến nghị khi setup cho khách
 

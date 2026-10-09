@@ -116,3 +116,18 @@ def test_them_widget_truyen_engine_cho_builder(dashboard):
     assert kwargs["engine"] is dashboard.engine
     assert kwargs["midi_cc"] is dashboard.MIDI_CC
     assert "tools" in kwargs["ui_config"]
+
+
+def test_nhap_file_cap_nhat_gia_tri_scale(dashboard):
+    import frontend_qt
+    new = {"major": 43, "minor": 85}
+    old = frontend_qt.SCALE_VALUES
+    try:
+        with patch("frontend_qt.backend.AppConfig.get_scale_values", return_value=new), \
+             patch.object(dashboard, "refresh_ui"), \
+             patch.object(dashboard, "_resend_calibrated_states"):
+            dashboard._after_backup_restore()
+        assert frontend_qt.SCALE_VALUES == new
+        assert dashboard.SCALE_VALUES == new
+    finally:
+        frontend_qt.SCALE_VALUES = old

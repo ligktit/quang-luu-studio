@@ -74,6 +74,11 @@ def read_backup(path):
         raise BackupError("File sao lưu không có cấu hình giao diện (mixer/tools/mode).")
     if not isinstance(data.get("calibration_overrides", {}), dict):
         raise BackupError("Phần cân chỉnh MIDI trong file bị hỏng.")
+    # Panel gặp phần tử không phải dict sẽ crash lúc dựng → bỏ ngay ở đây.
+    # Panel không phải list thì để nguyên: lúc nạp app thay bằng mặc định.
+    for panel in PANEL_TITLES:
+        if isinstance(ui.get(panel), list):
+            ui[panel] = [e for e in ui[panel] if isinstance(e, dict)]
     data.setdefault("calibration_overrides", {})
     return data
 

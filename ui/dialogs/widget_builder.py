@@ -36,7 +36,7 @@ class WidgetBuilderDialog(QDialog):
     """
 
     def __init__(self, parent=None, panel_name="mixer", widget_type="slider", existing_data=None,
-                 engine=None, ui_config=None, midi_cc=None):
+                 engine=None, ui_config=None, midi_cc=None, pending_calibration=None):
         super().__init__(parent)
         self.panel_name = panel_name
         self.widget_type = widget_type
@@ -48,6 +48,9 @@ class WidgetBuilderDialog(QDialog):
         self._engine = engine if engine is not None else getattr(parent, "engine", None)
         self._ui_config = ui_config   # None → đọc ui_config.json lúc cần
         self._midi_cc = midi_cc       # None → AppConfig.get_midi_cc()
+        # Calibration đã sửa trong hộp Quản lý nhưng chưa Lưu xuống đĩa — đọc
+        # trước AppConfig, không thì sửa lần hai hiện giá trị cũ rồi ghi đè mất.
+        self._pending = pending_calibration or {}
 
         title = "Sửa Widget" if existing_data else "Thêm Widget Mới"
         self.setWindowTitle(f"{title} - {panel_name.capitalize()}")
@@ -395,6 +398,9 @@ class WidgetBuilderDialog(QDialog):
         return None
 
     def _mode_cfg(self, label):
+        pending = (self._pending.get("mode_config") or {}).get(label)
+        if pending:
+            return pending
         app_config, default_modes, _ = _config()
         try:
             modes = app_config.get_mode_config() or {}
@@ -408,8 +414,12 @@ class WidgetBuilderDialog(QDialog):
         target = self._value_target()
         if target == "toggle_invert":
             app_config, _, _ = _config()
+            pending = self._pending.get("toggle_invert") or {}
             try:
-                invert = bool(app_config.get_toggle_invert().get(self._action(), False))
+                if self._action() in pending:
+                    invert = bool(pending[self._action()])
+                else:
+                    invert = bool(app_config.get_toggle_invert().get(self._action(), False))
             except Exception:
                 invert = False
             return {"type": "switch", "bypass": invert}

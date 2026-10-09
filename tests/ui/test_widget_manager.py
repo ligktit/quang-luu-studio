@@ -178,3 +178,17 @@ def test_dong_khi_con_thay_doi_hoi_truoc(qapp, qtbot, layout):
     with patch("ui.dialogs.widget_manager.QMessageBox.question", return_value=YES):
         dlg.close()
     assert not dlg.isVisible()
+
+
+def test_sua_lan_hai_thay_calibration_chua_luu(qapp, qtbot, layout):
+    """Sửa Bè bật Bypass rồi sửa lại Bè: Builder phải thấy Bypass đang chờ lưu,
+    không đọc giá trị cũ trên đĩa rồi ghi đè mất."""
+    dlg = _dlg(qtbot, layout)
+    dlg.select("tools", "btn_be")
+    first = _fake_builder(dict(dlg.working["tools"][4]), {"toggle_invert": {"be": True}})
+    with patch("ui.dialogs.widget_manager.WidgetBuilderDialog", first):
+        dlg.edit_btn.click()
+    second = _fake_builder(dict(dlg.working["tools"][4]), None)
+    with patch("ui.dialogs.widget_manager.WidgetBuilderDialog", second):
+        dlg.edit_btn.click()
+    assert second.call_args.kwargs["pending_calibration"] == {"toggle_invert": {"be": True}}

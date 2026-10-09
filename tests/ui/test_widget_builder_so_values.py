@@ -139,3 +139,23 @@ def test_nut_khong_gui_midi_khong_ghi_gia_tri(qapp, qtbot, cfg):
     dlg._on_save()
     assert "on_value" not in dlg.result_data
     assert dlg.result_calibration is None
+
+
+def test_calibration_cho_luu_uu_tien_hon_tren_dia(qapp, qtbot, cfg):
+    _, invert = cfg
+    invert["be"] = False
+    entry = {"id": "btn_be", "type": "button", "label": "Bè", "action": "be"}
+    dlg = WidgetBuilderDialog(None, panel_name="tools", widget_type="button", existing_data=entry,
+                              pending_calibration={"toggle_invert": {"be": True}})
+    qtbot.addWidget(dlg)
+    assert dlg.bypass_cb.isChecked()
+
+
+def test_mode_config_cho_luu_uu_tien_hon_tren_dia(qapp, qtbot, cfg):
+    modes, _ = cfg
+    lofi = dict(modes["Lofi"], on_value=0, off_value=127)
+    entry = {"id": "mode_lofi", "type": "button", "label": "Lofi", "action": "set_mode_lofi"}
+    dlg = WidgetBuilderDialog(None, panel_name="mode", widget_type="button", existing_data=entry,
+                              pending_calibration={"mode_config": {"Lofi": lofi}})
+    qtbot.addWidget(dlg)
+    assert dlg.bypass_cb.isChecked()

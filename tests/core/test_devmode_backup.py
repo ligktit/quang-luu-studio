@@ -142,3 +142,13 @@ def test_summarize_dem_widget_an():
     assert "Mode" not in text
     assert "2 mục cân chỉnh MIDI" in text
     assert "v1.8.0 lúc 09/10/2026 14:30" in text
+
+
+def test_read_backup_bo_phan_tu_khong_phai_dict(tmp_path):
+    """Phần tử hỏng trong panel làm dựng panel crash → lọc bỏ ngay khi đọc file."""
+    p = tmp_path / "x.json"
+    data = {"format": "quangluu-devmode-backup", "format_version": 1,
+            "ui_config": {"tools": [None, "x", {"id": "custom_1"}], "mixer": "không phải list"}}
+    p.write_text(json.dumps(data), encoding="utf-8")
+    out = bk.read_backup(str(p))
+    assert out["ui_config"]["tools"] == [{"id": "custom_1"}]

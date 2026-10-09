@@ -210,10 +210,19 @@ class WidgetManagerDialog(QDialog):
             self._dirty = True
         self._populate(panel, wid)
 
+    def _pending_calibration(self):
+        """Gộp các calibration chưa Lưu theo thứ tự — cái sau đè cái trước."""
+        merged = {}
+        for cal in self.calibrations:
+            for key, value in cal.items():
+                merged.setdefault(key, {}).update(value)
+        return merged
+
     def _builder(self, panel, widget_type, existing=None):
         return WidgetBuilderDialog(self, panel_name=panel, widget_type=widget_type,
                                    existing_data=existing, engine=self._engine,
-                                   ui_config=self.working, midi_cc=self._midi_cc)
+                                   ui_config=self.working, midi_cc=self._midi_cc,
+                                   pending_calibration=self._pending_calibration())
 
     def _take_result(self, dlg):
         if dlg.exec() != QDialog.Accepted or not dlg.result_data:
