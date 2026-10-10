@@ -168,10 +168,14 @@ def parse_time(text) -> float | None:
 def parse_timeline_text(text: str, primary_key: str) -> list | None:
     """Ô 'mốc thời gian' trên form admin → list entry chuẩn của thư viện.
 
-    Mỗi dòng: `<mm:ss|giây> <tone>`. Bỏ trống → một mốc 0s theo `primary_key`.
-    Một dòng sai là trả None cho CẢ ô: admin sửa lại, không ghi nửa vời.
+    Mỗi mốc: `<mm:ss|giây> <tone>`, cách nhau bằng xuống dòng, dấu phẩy hoặc
+    chấm phẩy (ô một dòng cũng gõ được nhiều mốc). Bỏ trống → một mốc 0s theo
+    `primary_key`. Mốc đầu không ở 0s thì chèn `primary_key` vào 0s — thiếu cả
+    hai thì không biết đầu bài hát tone gì. Mốc liền nhau cùng tone gộp làm một.
+    Một mốc sai, hai mốc trùng giờ hay quá MAX_ENTRIES là trả None cho CẢ ô:
+    admin sửa lại, không ghi nửa vời.
     """
-    lines = [ln.strip() for ln in str(text or "").splitlines() if ln.strip()]
+    lines = [ln.strip() for ln in re.split(r"[\n\r,;]+", str(text or "")) if ln.strip()]
     if not lines:
         parsed = parse_key(primary_key)
         if not parsed:
@@ -193,7 +197,79 @@ def parse_timeline_text(text: str, primary_key: str) -> list | None:
         entries.append({"time": seconds, "key_display": key_display(idx, scale),
                         "key_index": idx, "scale": scale})
     entries.sort(key=lambda e: e["time"])
-    return entries
+
+    times = [e["time"] for e in entries]
+    if len(set(times)) != len(times):
+        return None
+    if entries[0]["time"] > 0:
+        parsed = parse_key(primary_key)
+        if not parsed:
+            return None
+        idx, scale = parsed
+        entries.insert(0, {"time": 0.0, "key_display": key_display(idx, scale),
+                           "key_index": idx, "scale": scale})
+
+    merged = [entries[0]]
+    for entry in entries[1:]:
+        if entry["key_display"] != merged[-1]["key_display"]:
+            merged.append(entry)
+    if len(merged) > MAX_ENTRIES:
+        return None
+    return merged
+
+
+def _format_time(seconds: float) -> str:
+    """95.0 → '1:35', 254.5 → '4:14.5', 3723 → '1:02:03' — đọc lại được bằng parse_time."""
+    whole = int(seconds)
+    frac = round(seconds - whole, 1)
+    hours, rest = divmod(whole, 3600)
+    minutes, secs = divmod(rest, 60)
+    tail = f"{secs:02d}" + (f"{frac:.1f}"[1:] if frac else "")
+    return f"{hours}:{minutes:02d}:{tail}" if hours else f"{minutes}:{tail}"
+
+
+def timeline_steps(entries) -> list:
+    """Timeline → các bước để trang admin vẽ chuỗi 'Gm 0:00 → +1 → G#m 3:57'.
+
+    delta = số nửa cung so với mốc trước, gần nhất trong -5..+6 ("" ở mốc đầu,
+    "±0" khi chỉ đổi thể cùng chủ âm). Kỹ thuật viên cần biết bài nâng/hạ bao
+    nhiêu chứ không chỉ tên tone.
+    """
+    if not isinstance(entries, list):
+        return []
+    steps, prev = [], None
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get("key_display"):
+            continue
+        try:
+            seconds = max(0.0, float(entry.get("time", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+        parsed = parse_key(entry["key_display"])
+        delta = ""
+        if prev is not None and parsed is not None:
+            diff = (parsed[0] - prev[0]) % 12
+            diff = diff - 12 if diff > 6 else diff
+            delta = "±0" if diff == 0 else f"{diff:+d}"
+        steps.append({"time": _format_time(seconds), "key": entry["key_display"], "delta": delta})
+        prev = parsed
+    return steps
+
+
+def format_timeline(entries, sep: str = "\n") -> str:
+    """Timeline đã lưu → chữ dạng ô 'mốc thời gian' (để hiện và điền sẵn form sửa)."""
+    if not isinstance(entries, list):
+        return ""
+    parts = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get("key_display"):
+            continue
+        try:
+            seconds = max(0.0, float(entry.get("time", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+        parts.append(f"{_format_time(seconds)} {entry['key_display']}")
+    return sep.join(parts)
 
 
 # ── Cursor keyset cho /api/v1/library/changes ──

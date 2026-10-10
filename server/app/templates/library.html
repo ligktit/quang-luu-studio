@@ -1,5 +1,21 @@
 {% extends "base.html" %}
+{% macro chain(steps) -%}
+<span class="tl-chain">
+  {%- for st in steps -%}
+    {%- if not loop.first %}<span class="tl-arrow">→ {% if st.delta %}<b>{{ st.delta }}</b> →{% endif %}</span>{% endif -%}
+    <span class="tl-step"><b>{{ st.key }}</b> <small>{{ st.time }}</small></span>
+  {%- endfor -%}
+</span>
+{%- endmacro %}
 {% block content %}
+<style>
+  .tl-chain { display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px; }
+  .tl-step { background:#0b1220; border:1px solid #334155; border-radius:6px; padding:2px 8px; white-space:nowrap; }
+  .tl-step small { color:var(--muted); font-family:ui-monospace,monospace; }
+  .tl-arrow { color:var(--muted); font-size:12px; white-space:nowrap; }
+  .tl-arrow b { color:#fed7aa; }
+  .song-summary { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:8px; }
+</style>
 <h1>Thư viện tone cộng đồng</h1>
 <div style="color:var(--muted);font-size:13px;margin-bottom:12px">
   Mỗi bài có thể có nhiều biến thể do các máy gửi lên. Bản <b>thắng</b> là bản được
@@ -9,6 +25,9 @@
 
 <form method="get" action="/admin/library" class="row" style="margin-bottom:16px">
   <input type="text" name="q" value="{{ q }}" placeholder="Tìm theo mã video hoặc tên bài" style="min-width:280px">
+  <label style="display:flex;align-items:center;gap:6px;margin:0 0 8px">
+    <input type="checkbox" name="multi" value="1" {% if multi %}checked{% endif %}> Chỉ bài có chuyển tone
+  </label>
   <button>Tìm</button>
   <a href="/admin/library/export" style="margin-left:12px">Tải bộ đáp án (JSON)</a>
   <a href="/admin/library/errors" style="margin-left:12px">Máy dò vs người sửa</a>
@@ -21,13 +40,15 @@
   <div style="color:var(--muted);font-size:13px;margin:6px 0 10px">
     Dùng khi máy dò sai cả mạng lưới và chưa ai sửa tay. Bản này tự <b>ghim</b> và
     được phát tới mọi máy khách ở lần đồng bộ kế (không đè chuỗi tone khách đã sửa tay).
-    Mốc thời gian: mỗi dòng <code>mm:ss Tone</code>, ví dụ <code>1:35 Bm</code>; bỏ trống = một tone cả bài.
+    Mốc thời gian: mỗi dòng một mốc <code>mm:ss Tone</code> (hoặc cách nhau bằng dấu phẩy),
+    ví dụ <code>0:00 Gm, 3:57 G#m</code>; bỏ trống = một tone cả bài (theo ô tone chính).
+    Có mốc thì tone chính lấy theo mốc 0:00; mốc đầu sau 0:00 thì ô tone chính là tone đoạn đầu.
   </div>
   <form method="post" action="/admin/library/set" class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-start">
     <input type="text" name="song_key" placeholder="Mã video (11 ký tự)" value="{{ q if q|length == 11 else '' }}" required style="width:170px">
     <input type="text" name="title" placeholder="Tên bài (tuỳ chọn)" style="min-width:220px">
-    <input type="text" name="primary_key" placeholder="Tone chính, vd F#m" required style="width:140px">
-    <textarea name="timeline" placeholder="0:00 F#m&#10;1:35 Bm" rows="2" style="min-width:200px"></textarea>
+    <input type="text" name="primary_key" placeholder="Tone chính, vd F#m" style="width:140px">
+    <textarea name="timeline" placeholder="0:00 F#m&#10;1:35 Bm&#10;3:57 Cm" rows="4" style="min-width:200px"></textarea>
     <button>Đặt tone</button>
   </form>
 </div>
@@ -38,20 +59,31 @@
     <b>{{ song.title or '(chưa có tên)' }}</b> ·
     <code>{{ song.song_key }}</code> ·
     <a href="https://youtu.be/{{ song.song_key }}" target="_blank" rel="noopener">mở YouTube</a>
+    {% if song.best_id is not none %}
+    <div class="song-summary">
+      {% if song.changes %}
+        <span class="badge expired">Chuyển tone {{ song.changes }} lần</span>
+      {% else %}
+        <span class="badge unused">Một tone cả bài</span>
+      {% endif %}
+      <span style="color:var(--muted);font-size:13px">Bản máy khách đang nhận:</span>
+      {{ chain(song.steps[song.best_id]) }}
+    </div>
+    {% endif %}
   </div>
   <table>
-    <tr><th>Tone</th><th>Nguồn</th><th>Phiếu</th><th>Báo sai</th><th>Điểm</th><th>Mốc</th><th>Trạng thái</th><th></th></tr>
+    <tr><th>Chuỗi tone</th><th>Nguồn</th><th>Phiếu</th><th>Báo sai</th><th>Điểm</th><th>Chuyển</th><th>Trạng thái</th><th></th></tr>
     {% for v in song.variants %}
     <tr>
-      <td>
-        {{ v.primary_key or '—' }}
+      <td title="{{ song.timelines[v.id] }}">
+        {% if song.steps[v.id] %}{{ chain(song.steps[v.id]) }}{% else %}{{ v.primary_key or '—' }}{% endif %}
         {% if v.id == song.best_id %}<span class="badge active">thắng</span>{% endif %}
       </td>
       <td>{{ {'human': 'người sửa', 'admin': 'admin đặt'}.get(v.source, 'máy dò') }}</td>
       <td>{{ v.votes }}</td>
       <td>{{ v.reports }}</td>
       <td>{{ song.scores[v.id] }}</td>
-      <td>{{ song.segments[v.id] }}</td>
+      <td>{% if song.segments[v.id] > 1 %}{{ song.segments[v.id] - 1 }} lần{% else %}—{% endif %}</td>
       <td>
         {% if v.pinned %}<span class="badge answered">đã ghim</span>{% endif %}
         {% if v.status == 'hidden' %}<span class="badge revoked">đã ẩn</span>{% endif %}
@@ -72,11 +104,11 @@
     </tr>
     {% endfor %}
   </table>
-  <form method="post" action="/admin/library/set" class="row" style="margin-top:8px;gap:8px">
+  <form method="post" action="/admin/library/set" class="row" style="margin-top:8px;gap:8px;align-items:flex-start">
     <input type="hidden" name="song_key" value="{{ song.song_key }}">
     <input type="hidden" name="title" value="{{ song.title }}">
-    <input type="text" name="primary_key" placeholder="Đặt tone, vd F#m" required style="width:140px">
-    <input type="text" name="timeline" placeholder="mốc (tuỳ chọn): 1:35 Bm" style="min-width:200px">
+    <input type="text" name="primary_key" placeholder="Tone chính, vd F#m" title="Chỉ cần khi không có mốc, hoặc mốc đầu sau 0:00" style="width:150px">
+    <textarea name="timeline" placeholder="0:00 F#m&#10;1:35 Bm" rows="{{ [song.edit_timeline.count('\n') + 2, 8]|min }}" style="min-width:200px">{{ song.edit_timeline }}</textarea>
     <button class="ghost">Đặt tone cho bài này</button>
   </form>
 </div>

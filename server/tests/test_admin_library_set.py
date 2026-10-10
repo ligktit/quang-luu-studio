@@ -180,3 +180,48 @@ def test_khong_co_moc_thi_tone_chinh_theo_o_go(admin_client):
     token = _token(admin_client, fp)
     _set(admin_client, primary_key="F#m")
     assert _lookup(admin_client, token, fp)["primary_key"] == "F#m"
+
+
+def test_co_moc_thi_khong_can_o_tone_chinh(admin_client):
+    fp = "may-dat-09"
+    token = _token(admin_client, fp)
+    res = _set(admin_client, timeline="0:00 Gm\n3:57 G#m\n4:49 Am")
+
+    assert "Gm" in res.headers["location"]
+    tl = _lookup(admin_client, token, fp)["timeline"]
+    assert [(e["time"], e["key_display"]) for e in tl] == [(0.0, "Gm"), (237.0, "G#m"), (289.0, "Am")]
+
+
+def test_khong_moc_khong_tone_chinh_thi_khong_ghi_gi(admin_client):
+    res = _set(admin_client)
+    assert "msg=" in res.headers["location"]
+    assert _variants() == []
+
+
+def test_trung_moc_thi_khong_ghi_gi(admin_client):
+    _set(admin_client, timeline="0:00 Gm\n3:57 G#m\n3:57 Am")
+    assert _variants() == []
+
+
+def test_trang_thu_vien_hien_chuoi_moc_va_dien_san_form_sua(admin_client):
+    _set(admin_client, title="Rất Lâu Rồi Mới Khóc", timeline="0:00 Gm\n3:57 G#m")
+    res = admin_client.get("/admin/library?q=" + SONG)
+    assert res.status_code == 200
+    assert "0:00 Gm · 3:57 G#m" in res.text  # cột Mốc hiện chuỗi thật, không chỉ số đếm
+    # Form sửa của bài là textarea nhiều dòng, điền sẵn chuỗi của bản thắng.
+    assert '<textarea name="timeline"' in res.text
+    assert "0:00 Gm\n3:57 G#m</textarea>" in res.text
+
+
+def test_trang_thu_vien_noi_ro_bai_co_chuyen_tone(admin_client):
+    _set(admin_client, title="Bài chuyển tone", timeline="0:00 Gm\n3:57 G#m")
+    _set(admin_client, song_key="aaaaaaaaaaa", title="Bài một tone", primary_key="Am")
+
+    res = admin_client.get("/admin/library")
+    assert "Chuyển tone 1 lần" in res.text
+    assert "Một tone cả bài" in res.text
+    assert "+1" in res.text and "3:57" in res.text and "G#m" in res.text
+
+    res = admin_client.get("/admin/library?multi=1")
+    assert "Bài chuyển tone" in res.text
+    assert "Bài một tone" not in res.text

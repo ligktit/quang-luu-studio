@@ -581,6 +581,21 @@ def _count_segments(timeline_json: str) -> int:
         return 0
 
 
+def _timeline_text(timeline_json: str, sep: str = "\n") -> str:
+    """Timeline JSON của biến thể → chữ 'mm:ss Tone' (sep giữa các mốc)."""
+    try:
+        return tonelib.format_timeline(json.loads(timeline_json or "[]"), sep)
+    except (ValueError, TypeError):
+        return ""
+
+
+def _timeline_steps(timeline_json: str) -> list:
+    try:
+        return tonelib.timeline_steps(json.loads(timeline_json or "[]"))
+    except (ValueError, TypeError):
+        return []
+
+
 def _touch_winner(db: Session, song_key: str) -> None:
     """Đặt last_seen = now cho bản THẮNG hiện tại của bài.
 
@@ -603,10 +618,14 @@ def library_page(
     request: Request,
     q: str = "",
     msg: str = "",
+    multi: int = 0,
     admin: str = Depends(current_admin),
     db: Session = Depends(get_db),
 ):
-    """Van an toàn của thư viện chung: nhìn thấy và sửa được dữ liệu rác từ xa."""
+    """Van an toàn của thư viện chung: nhìn thấy và sửa được dữ liệu rác từ xa.
+
+    multi=1: chỉ hiện bài mà bản THẮNG có chuyển tone (từ 2 mốc trở lên).
+    """
     query = select(SharedTone)
     term = (q or "").strip()
     if term:
@@ -629,10 +648,19 @@ def library_page(
         song["best_id"] = best.id if best is not None else None
         song["scores"] = {t.id: tonelib.score(t) for t in song["variants"]}
         song["segments"] = {t.id: _count_segments(t.timeline) for t in song["variants"]}
+        song["timelines"] = {t.id: _timeline_text(t.timeline, " · ") for t in song["variants"]}
+        # Điền sẵn form sửa bằng chuỗi của bản thắng: sửa một mốc không phải gõ lại cả bài.
+        song["edit_timeline"] = _timeline_text(best.timeline) if best is not None else ""
+        song["steps"] = {t.id: _timeline_steps(t.timeline) for t in song["variants"]}
+        # Số lần chuyển tone của bản thắng — bản máy khách đang nhận.
+        song["changes"] = max(0, len(song["steps"][best.id]) - 1) if best is not None else 0
+        if multi and not song["changes"]:
+            continue
         groups.append(song)
 
     return templates.TemplateResponse(
-        request, "library.html", {"admin": admin, "groups": groups, "q": term, "msg": msg}
+        request, "library.html",
+        {"admin": admin, "groups": groups, "q": term, "msg": msg, "multi": multi},
     )
 
 
@@ -812,19 +840,22 @@ def library_set(
     if not tonelib.valid_song_key(song_key):
         return _library_msg(song_key[:24], "Mã video phải là 11 ký tự YouTube id.")
 
-    parsed_primary = tonelib.parse_key(primary_key)
-    if not parsed_primary:
+    # Ô tone chính chỉ bắt buộc khi không có mốc nào (cả bài một tone); có mốc
+    # mà mốc đầu sau 0:00 thì parse_timeline_text dùng nó cho đoạn đầu bài.
+    if not timeline.strip() and not tonelib.parse_key(primary_key):
         return _library_msg(song_key, f"Không đọc được tone chính “{primary_key.strip()}”.")
     entries = tonelib.parse_timeline_text(timeline, primary_key)
     if not entries:
-        return _library_msg(song_key, "Mốc thời gian sai: mỗi dòng dạng “mm:ss Tone”, ví dụ “1:35 Bm”.")
+        return _library_msg(
+            song_key,
+            "Mốc thời gian sai: mỗi mốc dạng “mm:ss Tone” (xuống dòng hoặc dấu phẩy giữa "
+            "các mốc), ví dụ “0:00 Gm, 3:57 G#m”; không trùng giờ; mốc đầu sau 0:00 thì "
+            "phải điền tone chính.",
+        )
 
     # Có mốc thì tone chính là mốc đầu: bài chạy theo mốc, cột tone ở máy khách
     # cũng phải hiện đúng tone đang chạy. Ô "tone chính" chỉ quyết khi mốc trống.
-    if timeline.strip():
-        primary_display = entries[0]["key_display"]
-    else:
-        primary_display = tonelib.key_display(*parsed_primary)
+    primary_display = entries[0]["key_display"]
     normalized = tonelib.normalize_timeline(entries)
     digest = tonelib.payload_hash(song_key, normalized)
 
