@@ -115,3 +115,9 @@ def test_luu_ghim_an_xoa_deu_quay_ve_trang_sua(admin_client):
 def test_trang_sua_can_dang_nhap(client):
     res = client.get(f"/admin/library/song/{SONG}", follow_redirects=False)
     assert res.status_code in (302, 303, 401)
+
+
+def test_moi_dong_co_nut_sua_ro_rang(admin_client):
+    _set(admin_client, primary_key="Am")
+    res = admin_client.get("/admin/library")
+    assert f'<a class="edit-btn" href="/admin/library/song/{SONG}">Sửa →</a>' in res.text
