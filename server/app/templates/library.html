@@ -1,117 +1,59 @@
 {% extends "base.html" %}
-{% macro chain(steps) -%}
-<span class="tl-chain">
-  {%- for st in steps -%}
-    {%- if not loop.first %}<span class="tl-arrow">→ {% if st.delta %}<b>{{ st.delta }}</b> →{% endif %}</span>{% endif -%}
-    <span class="tl-step"><b>{{ st.key }}</b> <small>{{ st.time }}</small></span>
-  {%- endfor -%}
-</span>
-{%- endmacro %}
+{% from "_tone_macros.html" import tone_css, chain, change_badge %}
 {% block content %}
+{{ tone_css() }}
 <style>
-  .tl-chain { display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px; }
-  .tl-step { background:#0b1220; border:1px solid #334155; border-radius:6px; padding:2px 8px; white-space:nowrap; }
-  .tl-step small { color:var(--muted); font-family:ui-monospace,monospace; }
-  .tl-arrow { color:var(--muted); font-size:12px; white-space:nowrap; }
-  .tl-arrow b { color:#fed7aa; }
-  .song-summary { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:8px; }
+  .lib-search { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:16px; }
+  .lib-search input[type=text] { flex:1; min-width:260px; font-size:16px; padding:10px 12px; }
+  .lib-search label { display:flex; align-items:center; gap:6px; margin:0; font-size:14px; }
+  .song-row td { vertical-align:middle; }
+  .song-row a.title { color:var(--text); font-weight:600; }
+  .song-row a.title:hover { color:var(--accent); }
+  .song-row .key { color:var(--muted); font-size:12px; font-family:ui-monospace,monospace; }
 </style>
-<h1>Thư viện tone cộng đồng</h1>
-<div style="color:var(--muted);font-size:13px;margin-bottom:12px">
-  Mỗi bài có thể có nhiều biến thể do các máy gửi lên. Bản <b>thắng</b> là bản được
-  trả về cho toàn mạng lưới: điểm cao nhất, bản người sửa tay nhân hệ số 3, mỗi lượt
-  báo sai trừ 2. Ghim để chốt cứng một bản, ẩn để loại bản rác.
-</div>
 
-<form method="get" action="/admin/library" class="row" style="margin-bottom:16px">
-  <input type="text" name="q" value="{{ q }}" placeholder="Tìm theo mã video hoặc tên bài" style="min-width:280px">
-  <label style="display:flex;align-items:center;gap:6px;margin:0 0 8px">
-    <input type="checkbox" name="multi" value="1" {% if multi %}checked{% endif %}> Chỉ bài có chuyển tone
-  </label>
+<h1>Thư viện tone cộng đồng</h1>
+
+<form method="get" action="/admin/library" class="lib-search">
+  <input type="text" name="q" value="{{ q }}" autofocus
+         placeholder="Dán link YouTube khách gửi, hoặc gõ tên bài / mã video">
+  <label><input type="checkbox" name="multi" value="1" {% if multi %}checked{% endif %}> Chỉ bài có chuyển tone</label>
   <button>Tìm</button>
-  <a href="/admin/library/export" style="margin-left:12px">Tải bộ đáp án (JSON)</a>
-  <a href="/admin/library/errors" style="margin-left:12px">Máy dò vs người sửa</a>
 </form>
 
-{% if msg %}<div class="card" style="border-left:4px solid var(--accent, #3b82f6)">{{ msg }}</div>{% endif %}
+{% if msg %}<div class="card" style="border-left:4px solid var(--accent)">{{ msg }}</div>{% endif %}
 
+{% if new_key and not songs %}
 <div class="card">
-  <b>Đặt tone cho bài (theo mã video)</b>
-  <div style="color:var(--muted);font-size:13px;margin:6px 0 10px">
-    Dùng khi máy dò sai cả mạng lưới và chưa ai sửa tay. Bản này tự <b>ghim</b> và
-    được phát tới mọi máy khách ở lần đồng bộ kế (không đè chuỗi tone khách đã sửa tay).
-    Mốc thời gian: mỗi dòng một mốc <code>mm:ss Tone</code> (hoặc cách nhau bằng dấu phẩy),
-    ví dụ <code>0:00 Gm, 3:57 G#m</code>; bỏ trống = một tone cả bài (theo ô tone chính).
-    Có mốc thì tone chính lấy theo mốc 0:00; mốc đầu sau 0:00 thì ô tone chính là tone đoạn đầu.
-  </div>
-  <form method="post" action="/admin/library/set" class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-start">
-    <input type="text" name="song_key" placeholder="Mã video (11 ký tự)" value="{{ q if q|length == 11 else '' }}" required style="width:170px">
-    <input type="text" name="title" placeholder="Tên bài (tuỳ chọn)" style="min-width:220px">
-    <input type="text" name="primary_key" placeholder="Tone chính, vd F#m" style="width:140px">
-    <textarea name="timeline" placeholder="0:00 F#m&#10;1:35 Bm&#10;3:57 Cm" rows="4" style="min-width:200px"></textarea>
-    <button>Đặt tone</button>
-  </form>
+  Bài <code>{{ new_key }}</code> chưa có trong thư viện.
+  <a href="/admin/library/song/{{ new_key }}" style="margin-left:8px"><b>Đặt tone cho bài này →</b></a>
 </div>
+{% endif %}
 
-{% for song in groups %}
-<div class="card">
-  <div style="margin-bottom:10px">
-    <b>{{ song.title or '(chưa có tên)' }}</b> ·
-    <code>{{ song.song_key }}</code> ·
-    <a href="https://youtu.be/{{ song.song_key }}" target="_blank" rel="noopener">mở YouTube</a>
-    {% if song.best_id is not none %}
-    <div class="song-summary">
-      {% if song.changes %}
-        <span class="badge expired">Chuyển tone {{ song.changes }} lần</span>
-      {% else %}
-        <span class="badge unused">Một tone cả bài</span>
-      {% endif %}
-      <span style="color:var(--muted);font-size:13px">Bản máy khách đang nhận:</span>
-      {{ chain(song.steps[song.best_id]) }}
-    </div>
-    {% endif %}
-  </div>
-  <table>
-    <tr><th>Chuỗi tone</th><th>Nguồn</th><th>Phiếu</th><th>Báo sai</th><th>Điểm</th><th>Chuyển</th><th>Trạng thái</th><th></th></tr>
-    {% for v in song.variants %}
-    <tr>
-      <td title="{{ song.timelines[v.id] }}">
-        {% if song.steps[v.id] %}{{ chain(song.steps[v.id]) }}{% else %}{{ v.primary_key or '—' }}{% endif %}
-        {% if v.id == song.best_id %}<span class="badge active">thắng</span>{% endif %}
-      </td>
-      <td>{{ {'human': 'người sửa', 'admin': 'admin đặt'}.get(v.source, 'máy dò') }}</td>
-      <td>{{ v.votes }}</td>
-      <td>{{ v.reports }}</td>
-      <td>{{ song.scores[v.id] }}</td>
-      <td>{% if song.segments[v.id] > 1 %}{{ song.segments[v.id] - 1 }} lần{% else %}—{% endif %}</td>
-      <td>
-        {% if v.pinned %}<span class="badge answered">đã ghim</span>{% endif %}
-        {% if v.status == 'hidden' %}<span class="badge revoked">đã ẩn</span>{% endif %}
-      </td>
-      <td>
-        <div class="row">
-          <form method="post" action="/admin/library/{{ v.id }}/pin">
-            <button class="ghost">{{ 'Bỏ ghim' if v.pinned else 'Ghim' }}</button>
-          </form>
-          <form method="post" action="/admin/library/{{ v.id }}/hide">
-            <button class="ghost">{{ 'Hiện lại' if v.status == 'hidden' else 'Ẩn' }}</button>
-          </form>
-          <form method="post" action="/admin/library/{{ v.id }}/delete">
-            <button class="danger">Xoá</button>
-          </form>
-        </div>
-      </td>
-    </tr>
-    {% endfor %}
-  </table>
-  <form method="post" action="/admin/library/set" class="row" style="margin-top:8px;gap:8px;align-items:flex-start">
-    <input type="hidden" name="song_key" value="{{ song.song_key }}">
-    <input type="hidden" name="title" value="{{ song.title }}">
-    <input type="text" name="primary_key" placeholder="Tone chính, vd F#m" title="Chỉ cần khi không có mốc, hoặc mốc đầu sau 0:00" style="width:150px">
-    <textarea name="timeline" placeholder="0:00 F#m&#10;1:35 Bm" rows="{{ [song.edit_timeline.count('\n') + 2, 8]|min }}" style="min-width:200px">{{ song.edit_timeline }}</textarea>
-    <button class="ghost">Đặt tone cho bài này</button>
-  </form>
+{% if songs %}
+<table>
+  <tr><th>Bài</th><th>Tone máy khách đang nhận</th><th></th></tr>
+  {% for song in songs %}
+  <tr class="song-row">
+    <td>
+      <a class="title" href="/admin/library/song/{{ song.song_key }}">{{ song.title or '(chưa có tên)' }}</a>
+      <div class="key">{{ song.song_key }}</div>
+    </td>
+    <td>{% if song.best_id is not none %}{{ chain(song.steps[song.best_id]) }}{% else %}<span style="color:var(--muted)">(mọi bản đều đã ẩn)</span>{% endif %}</td>
+    <td style="white-space:nowrap">
+      {{ change_badge(song) }}
+      {% if song.reports %}<span class="badge revoked">{{ song.reports }} báo sai</span>{% endif %}
+      {% if song.contested > 1 %}<span class="badge open">{{ song.contested }} bản</span>{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+<div style="color:var(--muted);font-size:13px;margin-top:10px">
+  Bấm tên bài để nghe và sửa tone. ·
+  <a href="/admin/library/export">Tải bộ đáp án (JSON)</a> ·
+  <a href="/admin/library/errors">Máy dò vs người sửa</a>
 </div>
-{% endfor %}
-{% if not groups %}<p style="color:var(--muted)">Thư viện chung chưa có dữ liệu nào.</p>{% endif %}
+{% elif not new_key %}
+<p style="color:var(--muted)">{% if q or multi %}Không tìm thấy bài nào.{% else %}Thư viện chung chưa có dữ liệu nào.{% endif %}</p>
+{% endif %}
 {% endblock %}

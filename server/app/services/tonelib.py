@@ -43,6 +43,22 @@ def valid_song_key(song_key) -> bool:
     return bool(song_key) and bool(SONG_KEY_RE.match(str(song_key)))
 
 
+# Link YouTube các dạng: watch?v=, youtu.be/, shorts/, embed/, live/.
+_YT_URL_RE = re.compile(r"(?:[?&]v=|youtu\.be/|/shorts/|/embed/|/live/)([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])")
+
+
+def song_key_from_input(text) -> str | None:
+    """Ô tìm của admin → video_id nếu người gõ là mã 11 ký tự hoặc dán link YouTube.
+
+    Kỹ thuật viên thường có sẵn link khách gửi; dán thẳng vào là mở đúng bài.
+    """
+    text = str(text or "").strip()
+    if valid_song_key(text):
+        return text
+    match = _YT_URL_RE.search(text)
+    return match.group(1) if match else None
+
+
 def normalize_timeline(entries) -> list:
     """Rút timeline về phần CỐT LÕI để băm: (giây làm tròn, tên tone, scale).
 

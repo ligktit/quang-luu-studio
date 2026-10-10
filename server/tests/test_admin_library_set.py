@@ -48,7 +48,7 @@ def test_dat_tone_cho_bai_chua_co(admin_client):
 
     res = _set(admin_client, primary_key="F#m", title="Lưng Cha Bụng Mẹ")
     assert res.status_code == 303
-    assert "/admin/library?q=" + SONG in res.headers["location"]
+    assert res.headers["location"].startswith(f"/admin/library/song/{SONG}?msg=")
 
     found = _lookup(admin_client, token, fp)
     assert found["primary_key"] == "F#m"
@@ -156,11 +156,16 @@ def test_an_ban_ghim_thi_ban_thang_moi_duoc_bom_last_seen(admin_client):
     assert vs[bm_id].last_seen.replace(tzinfo=timezone.utc) > cu + timedelta(days=1)
 
 
-def test_trang_thu_vien_hien_thong_bao_va_form(admin_client):
+def test_trang_thu_vien_hien_thong_bao(admin_client):
     res = admin_client.get("/admin/library?msg=Xin+ch%C3%A0o")
     assert res.status_code == 200
     assert "Xin chào" in res.text
-    assert 'action="/admin/library/set"' in res.text
+
+
+def test_ma_video_sai_thi_bao_loi_o_danh_sach(admin_client):
+    res = _set(admin_client, song_key="ngan", primary_key="F#m")
+    assert res.headers["location"].startswith("/admin/library?")
+    assert "msg=" in res.headers["location"]
 
 
 def test_co_moc_thi_tone_chinh_lay_theo_moc_dau(admin_client):
@@ -201,27 +206,3 @@ def test_khong_moc_khong_tone_chinh_thi_khong_ghi_gi(admin_client):
 def test_trung_moc_thi_khong_ghi_gi(admin_client):
     _set(admin_client, timeline="0:00 Gm\n3:57 G#m\n3:57 Am")
     assert _variants() == []
-
-
-def test_trang_thu_vien_hien_chuoi_moc_va_dien_san_form_sua(admin_client):
-    _set(admin_client, title="Rất Lâu Rồi Mới Khóc", timeline="0:00 Gm\n3:57 G#m")
-    res = admin_client.get("/admin/library?q=" + SONG)
-    assert res.status_code == 200
-    assert "0:00 Gm · 3:57 G#m" in res.text  # cột Mốc hiện chuỗi thật, không chỉ số đếm
-    # Form sửa của bài là textarea nhiều dòng, điền sẵn chuỗi của bản thắng.
-    assert '<textarea name="timeline"' in res.text
-    assert "0:00 Gm\n3:57 G#m</textarea>" in res.text
-
-
-def test_trang_thu_vien_noi_ro_bai_co_chuyen_tone(admin_client):
-    _set(admin_client, title="Bài chuyển tone", timeline="0:00 Gm\n3:57 G#m")
-    _set(admin_client, song_key="aaaaaaaaaaa", title="Bài một tone", primary_key="Am")
-
-    res = admin_client.get("/admin/library")
-    assert "Chuyển tone 1 lần" in res.text
-    assert "Một tone cả bài" in res.text
-    assert "+1" in res.text and "3:57" in res.text and "G#m" in res.text
-
-    res = admin_client.get("/admin/library?multi=1")
-    assert "Bài chuyển tone" in res.text
-    assert "Bài một tone" not in res.text
