@@ -2,12 +2,16 @@
 
 Chạy nền (BackgroundTasks) vì gói Full ~500 MB. Chỉ lấy các phần tử Assets
 của ĐÚNG phiên bản (releases.win.json của vpk còn liệt kê bản trước), kiểm
-kích thước + SHA256 từng gói, ghi qua file .part rồi mới đổi tên.
+kích thước + SHA256 từng gói. Mỗi lượt tải vào velopack/.staging-<hex>/ riêng;
+chỉ lượt còn giữ đúng import_token mới chuyển file sang velopack/. Lượt bị thay,
+bị xoá dòng hay lỗi chỉ dọn thư mục staging của chính nó — không bao giờ đụng
+file đang phục vụ.
 """
 import hashlib
 import json
 import logging
 import os
+import shutil
 import uuid
 
 import httpx
@@ -23,47 +27,27 @@ FEED_ASSET = "releases.win.json"
 SETUP_ASSET = "QuangLuuStudio-CaiDat.exe"
 
 
-def _download(client, url, name, expect_sha256=None, expect_size=None, written=None):
+def _download(client, url, name, staging, expect_sha256=None, expect_size=None):
     if not velopack_feed.valid_filename(name):
         raise ValueError(f"Tên file không hợp lệ: {name!r}")
-    dest = velopack_feed.velopack_dir() / name
-    tmp = dest.with_name(f"{dest.name}.part-{uuid.uuid4().hex[:8]}")  # riêng từng lần tải
+    dest = staging / name
     h = hashlib.sha256()
     size = 0
-    try:
-        with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            with open(tmp, "wb") as f:
-                for chunk in resp.iter_bytes(1024 * 1024):
-                    f.write(chunk)
-                    h.update(chunk)
-                    size += len(chunk)
-        if expect_size and size != int(expect_size):
-            raise ValueError(f"{name}: sai kích thước ({size} ≠ {expect_size})")
-        if expect_sha256 and h.hexdigest().lower() != str(expect_sha256).lower():
-            raise ValueError(f"{name}: sai SHA256")
-        existed = dest.exists()
-        os.replace(tmp, dest)
-        if written is not None and not existed:
-            written.append(dest)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
+    with client.stream("GET", url) as resp:
+        resp.raise_for_status()
+        with open(dest, "wb") as f:
+            for chunk in resp.iter_bytes(1024 * 1024):
+                f.write(chunk)
+                h.update(chunk)
+                size += len(chunk)
+    if expect_size and size != int(expect_size):
+        raise ValueError(f"{name}: sai kích thước ({size} ≠ {expect_size})")
+    if expect_sha256 and h.hexdigest().lower() != str(expect_sha256).lower():
+        raise ValueError(f"{name}: sai SHA256")
 
 
-def _download_all(client, version):
-    """Trả (assets, tên setup, các file lần này đã tạo mới)."""
-    written = []
-    try:
-        assets, setup_name = _download_all_into(client, version, written)
-        return assets, setup_name, written
-    except BaseException:
-        for p in written:  # dọn các gói đã tải trong lần này, tránh file mồ côi ~500 MB
-            p.unlink(missing_ok=True)
-        raise
-
-
-def _download_all_into(client, version, written):
+def _download_all(client, version, staging):
+    """Tải mọi tài sản của bản `version` vào `staging`. Trả (assets, tên setup, các tên file)."""
     api = f"https://api.github.com/repos/{settings.github_repo}/releases/tags/v{version}"
     r = client.get(api, headers={"Accept": "application/vnd.github+json"})
     r.raise_for_status()
@@ -76,26 +60,24 @@ def _download_all_into(client, version, written):
     mine = [a for a in feed.json().get("Assets", []) if a.get("Version") == version]
     if not any(a.get("Type") == "Full" for a in mine):
         raise ValueError(f"{FEED_ASSET} không có gói Full của bản {version}")
+    names = []
     for a in mine:
         name = a.get("FileName", "")
         if not velopack_feed.valid_filename(name):
             raise ValueError(f"Tên file không hợp lệ trong feed: {name!r}")
         if name not in urls:
             raise ValueError(f"Release v{version} thiếu {name}")
-        _download(client, urls[name], name, a.get("SHA256"), a.get("Size"), written)
+        _download(client, urls[name], name, staging, a.get("SHA256"), a.get("Size"))
+        names.append(name)
     setup_name = None
     if SETUP_ASSET in urls:
         setup_name = f"{version}_{SETUP_ASSET}"
         meta = gh[SETUP_ASSET]  # GitHub ghi sẵn size (và digest "sha256:<hex>" ở bản mới)
         digest = str(meta.get("digest") or "")
         sha = digest[len("sha256:"):] if digest.lower().startswith("sha256:") else None
-        _download(client, urls[SETUP_ASSET], setup_name, sha, meta.get("size"), written)
-    return mine, setup_name
-
-
-def _remove(paths):
-    for p in paths:
-        p.unlink(missing_ok=True)
+        _download(client, urls[SETUP_ASSET], setup_name, staging, sha, meta.get("size"))
+        names.append(setup_name)
+    return mine, setup_name, names
 
 
 def import_release(release_id, token=None, *, client=None, session_factory=SessionLocal):
@@ -103,6 +85,7 @@ def import_release(release_id, token=None, *, client=None, session_factory=Sessi
     if own:
         client = httpx.Client(timeout=httpx.Timeout(60.0, read=300.0), follow_redirects=True,
                               headers={"User-Agent": "QuangLuuStudio-Server"})
+    staging = velopack_feed.velopack_dir() / f".staging-{uuid.uuid4().hex}"
     try:
         with session_factory() as db:
             row = db.get(VelopackRelease, release_id)
@@ -110,9 +93,10 @@ def import_release(release_id, token=None, *, client=None, session_factory=Sessi
         if version is None:
             log.warning("Nhập Velopack: dòng %s đã bị xoá, bỏ qua", release_id)
             return
-        written = []
+        staging.mkdir(parents=True)
+        names = []
         try:
-            assets, setup_name, written = _download_all(client, version)
+            assets, setup_name, names = _download_all(client, version, staging)
             status, error = "xong", None
         except Exception as e:  # mọi lỗi → trạng thái "loi" để admin thấy, không làm chết worker
             log.warning("Nhập Velopack %s lỗi: %s", version, e)
@@ -120,16 +104,19 @@ def import_release(release_id, token=None, *, client=None, session_factory=Sessi
         with session_factory() as db:
             row = db.get(VelopackRelease, release_id)
             if row is None or row.import_token != token:
-                # Dòng đã bị xoá, hoặc có lần nhập mới hơn thay thế: bỏ kết quả, dọn file của lần này.
+                # Dòng đã bị xoá, hoặc có lần nhập mới hơn thay thế: bỏ kết quả (staging dọn ở finally).
                 log.warning("Nhập Velopack %s: kết quả bị bỏ (dòng đã xoá hoặc lần nhập đã bị thay)", version)
-                _remove(written)
                 return
-            row.status = status
-            row.import_error = error
             if assets is not None:
+                dest = velopack_feed.velopack_dir()
+                for name in names:  # cùng tên = cùng nội dung (đã kiểm SHA256) → ghi đè vô hại
+                    os.replace(staging / name, dest / name)
                 row.assets_json = json.dumps(assets, ensure_ascii=False)
                 row.setup_filename = setup_name
+            row.status = status
+            row.import_error = error
             db.commit()
     finally:
+        shutil.rmtree(staging, ignore_errors=True)
         if own:
             client.close()

@@ -1,6 +1,7 @@
 """Nhập bản Velopack từ GitHub Release: chỉ lấy tài sản của đúng bản, kiểm SHA256."""
 import hashlib
 import json
+import os
 import re
 from unittest.mock import patch
 
@@ -171,8 +172,8 @@ def test_dong_bi_xoa_trong_luc_tai_don_file(client):
     rid = _new_row()
     real = velopack_import._download_all
 
-    def download_then_delete(c, version):
-        out = real(c, version)
+    def download_then_delete(c, version, staging):
+        out = real(c, version, staging)
         with SessionLocal() as db:
             db.delete(db.get(VelopackRelease, rid))
             db.commit()
@@ -184,7 +185,7 @@ def test_dong_bi_xoa_trong_luc_tai_don_file(client):
     assert list(velopack_feed.velopack_dir().iterdir()) == []
 
 
-def test_ten_part_rieng_moi_lan_tai(client):
+def test_moi_luot_tai_vao_thu_muc_staging_rieng(client):
     full, files = _full_files()
     rid = _new_row()
     seen = []
@@ -198,8 +199,38 @@ def test_ten_part_rieng_moi_lan_tai(client):
             httpx.Client(transport=_transport([full], files)) as c:
         velopack_import.import_release(rid, client=c)
         velopack_import.import_release(rid, client=c)
-    assert len(seen) == 2 and seen[0] != seen[1]
-    assert all(re.search(r"\.part-[0-9a-f]{8}$", s) for s in seen)
+    staging = {os.path.basename(os.path.dirname(s)) for s in seen}
+    assert len(staging) == 2 and all(re.fullmatch(r"\.staging-[0-9a-f]{32}", s) for s in staging)
+    # chỉ còn gói thật, không sót thư mục staging
+    assert sorted(p.name for p in velopack_feed.velopack_dir().iterdir()) == [full["FileName"]]
+
+
+def test_luot_cu_bi_thay_khong_xoa_file_luot_moi_dang_phuc_vu(client):
+    """Lượt mới (token khớp) đã nhập xong; lượt cũ chạy xong sau với token cũ →
+    file đang phục vụ phải còn nguyên."""
+    full, files = _full_files()
+    rid = _new_row()
+    with SessionLocal() as db:
+        db.get(VelopackRelease, rid).import_token = "moi" * 10 + "ab"
+        db.commit()
+    with httpx.Client(transport=_transport([full], files)) as c:
+        velopack_import.import_release(rid, "moi" * 10 + "ab", client=c)   # lượt mới xong trước
+        velopack_import.import_release(rid, "cu" * 16, client=c)           # lượt cũ xong sau
+    assert _row(rid).status == "xong"
+    assert (velopack_feed.velopack_dir() / full["FileName"]).read_bytes() == FULL
+
+
+def test_loi_khong_dung_file_da_phuc_vu_cua_ban_khac(client):
+    """Bản 1.9.1 lỗi giữa chừng không được xoá gói trùng tên đã có sẵn trong velopack/."""
+    full = _a("1.9.1", "Full", FULL)
+    delta = _a("1.9.1", "Delta", DELTA)
+    (velopack_feed.velopack_dir() / full["FileName"]).write_bytes(FULL)
+    files = {"releases.win.json": b"", full["FileName"]: FULL, delta["FileName"]: b"X" * len(DELTA)}
+    rid = _new_row()
+    with httpx.Client(transport=_transport([full, delta], files)) as c:
+        velopack_import.import_release(rid, client=c)
+    assert _row(rid).status == "loi"
+    assert sorted(p.name for p in velopack_feed.velopack_dir().iterdir()) == [full["FileName"]]
 
 
 SETUP_NAME = "QuangLuuStudio-CaiDat.exe"
