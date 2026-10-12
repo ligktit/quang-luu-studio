@@ -60,6 +60,10 @@ Source: "tools\don_ban_cu.ps1"; Flags: dontcopy
 const
   NewExeRel = 'QuangLuuStudio\current\QuangLuuStudio.exe';
 
+var
+  { Mã thoát của script dọn bản cũ; -1 = chưa chạy. }
+  CleanupCode: Integer;
+
 { Chuỗi PowerShell trong nháy đơn: ' → '' }
 function PsLit(S: String): String;
 begin
@@ -81,12 +85,24 @@ begin
   Log('PS rc=' + IntToStr(Code) + ': ' + Cmd);
 end;
 
+{ Bước 1 đã dừng app cũ; nếu cài bản mới hỏng thì mở lại bản cũ cho người hát. }
+procedure RelaunchOldApp(AppDir: String);
+var
+  Rc: Integer;
+  OldExe: String;
+begin
+  OldExe := AddBackslash(AppDir) + 'QuangLuuStudio.exe';
+  if FileExists(OldExe) then
+    ExecAsOriginalUser(OldExe, '', AppDir, SW_SHOWNORMAL, ewNoWait, Rc);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   AppDir, CaiDat, Script: String;
   Code: Integer;
 begin
   Result := '';
+  CleanupCode := -1;
   AppDir := ExpandConstant('{app}');
 
   { 1. App cũ nằm trong thư mục cài cũ (AppDir) }
@@ -101,12 +117,14 @@ begin
   begin
     Result := 'Chưa cài được bản mới (mã ' + IntToStr(Code) + '). Bản cũ vẫn dùng bình thường. ' +
               'Tải bộ cài tại https://qlstudio.duckdns.org/tai-ve hoặc liên hệ kỹ thuật viên.';
+    RelaunchOldApp(AppDir);
     exit;
   end;
   if (not RunPs('if (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA ' + PsLit(NewExeRel) + ')) { exit 0 } else { exit 2 }', True, Code)) or (Code <> 0) then
   begin
     Result := 'Đã chạy bộ cài mới nhưng không thấy app trong %LocalAppData%\QuangLuuStudio. ' +
               'Bản cũ vẫn dùng bình thường — liên hệ kỹ thuật viên.';
+    RelaunchOldApp(AppDir);
     exit;
   end;
 
@@ -118,19 +136,33 @@ begin
     thật sau khi Windows tách tham số: đường dẫn có dấu cách đi nguyên một đối số. }
   if RunPs('$p = Start-Process -FilePath (Join-Path $env:LOCALAPPDATA ' + PsLit(NewExeRel) +
            ') -ArgumentList @(''--chuyen-cau-hinh-cu'', ' + PsLit('\"' + AppDir + '\"') +
-           ') -Wait -PassThru; if ($null -eq $p) { exit 1 }; exit $p.ExitCode', True, Code) and (Code = 0) then
+           ') -Wait -PassThru; if ($null -eq $p) { exit 1 }; if ($null -eq $p.ExitCode) { exit 1 }; exit $p.ExitCode', True, Code) and (Code = 0) then
   begin
     { 5. Dọn bản cũ (đang chạy quyền admin). Không xoá được hết → mã 2/3, app mới hỏi lại. }
     ExtractTemporaryFile('don_ban_cu.ps1');
     Script := ExpandConstant('{tmp}\don_ban_cu.ps1');
-    Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + Script +
+    if Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + Script +
          '" -LegacyDir "' + AppDir + '" -ProtectedDirs "' + ExpandConstant('{localappdata}') + '\QuangLuuStudio"',
-         '', SW_HIDE, ewWaitUntilTerminated, Code);
-    Log('don_ban_cu.ps1 rc=' + IntToStr(Code));
+         '', SW_HIDE, ewWaitUntilTerminated, Code) then
+      CleanupCode := Code;
+    Log('don_ban_cu.ps1 rc=' + IntToStr(CleanupCode));
   end
   else
     Log('Chuyển cấu hình cũ lỗi (rc=' + IntToStr(Code) + ') — giữ bản cũ, app mới tự xử lý ở lần chạy đầu');
 
   { 6. Mở app mới }
   RunPs('Start-Process -FilePath (Join-Path $env:LOCALAPPDATA ' + PsLit(NewExeRel) + '); exit 0', True, Code);
+end;
+
+{ Inno tạo lại thư mục cài rỗng ở ssInstall (CreateAppDir=yes) sau khi don_ban_cu.ps1 đã xoá nó.
+  Chỉ khi dọn xong hoàn toàn (mã 0) mới bỏ thư mục rỗng này; RemoveDir không xoá thư mục có file. }
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if (CurStep = ssPostInstall) and (CleanupCode = 0) then
+  begin
+    if RemoveDir(ExpandConstant('{app}')) then
+      Log('Đã bỏ thư mục cài rỗng do Inno tạo lại')
+    else
+      Log('Không bỏ được thư mục cài (còn file hoặc đang bị giữ)');
+  end;
 end;

@@ -49,3 +49,30 @@ def test_sync_version_cap_nhat_cau_noi():
     with open(os.path.join(ROOT, "sync_version.py"), encoding="utf-8") as f:
         src = f.read()
     assert "QuangLuuStudio_Bridge.iss" in src and "QuangLuuStudio_Setup.iss" not in src
+
+
+def test_bo_thu_muc_app_rong_chi_khi_don_xong():
+    iss = _iss()
+    m = re.search(r"procedure CurStepChanged\(CurStep: TSetupStep\);.*?\nend;", iss, re.S)
+    assert m, "thiếu CurStepChanged"
+    body = m.group(0)
+    assert "ssPostInstall" in body and "CleanupCode = 0" in body
+    assert "RemoveDir(ExpandConstant('{app}'))" in body
+    assert "CleanupCode := -1;" in iss
+    assert "CleanupCode := Code;" in iss
+
+
+def test_cong_don_dung_khi_exitcode_null():
+    iss = _iss()
+    assert "if ($null -eq $p.ExitCode) { exit 1 }; exit $p.ExitCode" in iss
+    assert "if ($null -eq $p) { exit 1 }" in iss
+
+
+def test_mo_lai_app_cu_o_ca_hai_duong_loi():
+    iss = _iss()
+    assert "procedure RelaunchOldApp(" in iss
+    assert "ExecAsOriginalUser(OldExe" in iss
+    code = iss[iss.index("function PrepareToInstall"):]
+    fails = re.findall(r"Result := '[^;]*;\s*RelaunchOldApp\(AppDir\);\s*exit;", code)
+    assert len(fails) == 2
+    assert len(re.findall(r"Result := '[^']", code)) == 2
