@@ -3,6 +3,9 @@
 Các tệp trong thư mục này chạy được trên **mọi máy Windows 10/11, không cần cài Python**
 (dùng Windows PowerShell 5.1 có sẵn trong Windows).
 
+Từ 1.9.0 app cài ở `%LocalAppData%\QuangLuuStudio\current` (Velopack, không cần admin); các
+script dò đường này trước Program Files. Máy còn bản cũ trong Program Files vẫn được nhận.
+
 | Tệp | Vai trò |
 |---|---|
 | `ChanDoan.bat` | Khách bấm đúp để **kiểm tra** — chỉ ĐỌC, không sửa gì |
