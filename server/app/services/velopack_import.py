@@ -67,7 +67,8 @@ def _download_all_into(client, version, written):
     api = f"https://api.github.com/repos/{settings.github_repo}/releases/tags/v{version}"
     r = client.get(api, headers={"Accept": "application/vnd.github+json"})
     r.raise_for_status()
-    urls = {a["name"]: a["browser_download_url"] for a in r.json().get("assets", [])}
+    gh = {a["name"]: a for a in r.json().get("assets", [])}
+    urls = {n: a["browser_download_url"] for n, a in gh.items()}
     if FEED_ASSET not in urls:
         raise ValueError(f"Release v{version} thiếu {FEED_ASSET}")
     feed = client.get(urls[FEED_ASSET])
@@ -85,7 +86,10 @@ def _download_all_into(client, version, written):
     setup_name = None
     if SETUP_ASSET in urls:
         setup_name = f"{version}_{SETUP_ASSET}"
-        _download(client, urls[SETUP_ASSET], setup_name, written=written)
+        meta = gh[SETUP_ASSET]  # GitHub ghi sẵn size (và digest "sha256:<hex>" ở bản mới)
+        digest = str(meta.get("digest") or "")
+        sha = digest[len("sha256:"):] if digest.lower().startswith("sha256:") else None
+        _download(client, urls[SETUP_ASSET], setup_name, sha, meta.get("size"), written)
     return mine, setup_name
 
 

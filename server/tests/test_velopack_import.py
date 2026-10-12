@@ -22,9 +22,10 @@ def _a(version, kind, data):
             "NotesMarkdown": "", "NotesHtml": ""}
 
 
-def _transport(feed_assets, files):
+def _transport(feed_assets, files, extra=None):
     base = "https://github.com/dl/"
-    release = {"assets": [{"name": n, "browser_download_url": base + n} for n in files]}
+    release = {"assets": [{"name": n, "browser_download_url": base + n, **(extra or {}).get(n, {})}
+                          for n in files]}
 
     def handler(req):
         url = str(req.url)
@@ -199,3 +200,43 @@ def test_ten_part_rieng_moi_lan_tai(client):
         velopack_import.import_release(rid, client=c)
     assert len(seen) == 2 and seen[0] != seen[1]
     assert all(re.search(r"\.part-[0-9a-f]{8}$", s) for s in seen)
+
+
+SETUP_NAME = "QuangLuuStudio-CaiDat.exe"
+
+
+def _setup_case(extra):
+    full, files = _full_files()
+    files[SETUP_NAME] = SETUP
+    rid = _new_row()
+    with httpx.Client(transport=_transport([full], files, {SETUP_NAME: extra})) as c:
+        velopack_import.import_release(rid, client=c)
+    return _row(rid)
+
+
+def test_setup_dung_size_va_digest(client):
+    row = _setup_case({"size": len(SETUP), "digest": "sha256:" + hashlib.sha256(SETUP).hexdigest()})
+    assert row.status == "xong", row.import_error
+    assert row.setup_filename == "1.9.1_" + SETUP_NAME
+
+
+def test_setup_sai_size_bao_loi(client):
+    row = _setup_case({"size": len(SETUP) + 1})
+    assert row.status == "loi" and "kích thước" in row.import_error
+    assert list(velopack_feed.velopack_dir().iterdir()) == []
+
+
+def test_setup_sai_digest_bao_loi(client):
+    row = _setup_case({"size": len(SETUP), "digest": "sha256:" + "0" * 64})
+    assert row.status == "loi" and "SHA256" in row.import_error
+    assert list(velopack_feed.velopack_dir().iterdir()) == []
+
+
+def test_setup_digest_chu_hoa_va_loai_khac(client):
+    ok = _setup_case({"digest": "sha256:" + hashlib.sha256(SETUP).hexdigest().upper()})
+    assert ok.status == "xong", ok.import_error
+
+
+def test_setup_digest_khong_phai_sha256_bi_bo_qua(client):
+    row = _setup_case({"digest": "md5:abc"})
+    assert row.status == "xong", row.import_error
