@@ -590,14 +590,15 @@ class AppConfig:
         """Ghi PHẦN NGƯỜI DÙNG ĐỔI ra DATA_DIR/app_config_overrides.json.
 
         Không ghi app_config.json cạnh exe (thư mục cài có thể read-only hoặc bị
-        thay khi cập nhật). Khoá calibration có file riêng (set_calibration) nên
-        không ghi ở đây — ghi cả hai chỗ thì xoá cân chỉnh sẽ không có tác dụng.
+        thay khi cập nhật). Khoá calibration (set_calibration) và accessibility
+        (set_accessibility) có file riêng nên không ghi ở đây — ghi cả hai chỗ thì
+        xoá cân chỉnh / đặt lại accessibility sẽ bị bản sao cũ che mất.
         """
         with cls._lock:
             if cls._data is None:
                 return False
             diff = config_diff(cls._load_base(), cls._data)
-            for key in CALIBRATION_KEYS:
+            for key in (*CALIBRATION_KEYS, "accessibility"):
                 diff.pop(key, None)
             path = cls._get_overrides_path()
             try:

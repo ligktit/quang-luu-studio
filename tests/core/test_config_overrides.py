@@ -76,3 +76,16 @@ def test_config_diff_dict_long_nhau():
     base = {"a": 1, "d": {"x": 1, "y": 2}, "e": [1]}
     data = {"a": 1, "d": {"x": 1, "y": 3}, "e": [1, 2], "moi": True}
     assert config_diff(base, data) == {"d": {"y": 3}, "e": [1, 2], "moi": True}
+
+
+def test_save_khong_ghi_accessibility(_iso):
+    (_iso / "a11y.json").write_text(json.dumps({"font_scale": 1.5}), encoding="utf-8")
+    AppConfig.load()
+    assert AppConfig.save() is True
+    saved = json.loads((_iso / "ov.json").read_text(encoding="utf-8"))
+    assert "accessibility" not in saved
+    # reset file accessibility riêng → không bị bản sao cũ trong overrides che
+    (_iso / "a11y.json").unlink()
+    AppConfig._data = None
+    data = AppConfig.load()
+    assert data["accessibility"]["font_scale"] == cfg._DEFAULT_APP_CONFIG["accessibility"]["font_scale"]
