@@ -8,10 +8,13 @@ import logging
 
 # ── PyInstaller _MEI cleanup ──────────────────────────────────────────────────
 def _cleanup_mei():
-    """Xóa thư mục tạm _MEI khi app thoát (chỉ chạy trong PyInstaller frozen mode)."""
-    if not getattr(sys, 'frozen', False):
-        return
-    mei_dir = getattr(sys, '_MEIPASS', None)
+    """Xóa thư mục tạm _MEI khi app thoát — CHỈ của bản onefile.
+
+    Bản onedir (cài bằng Velopack) có _MEIPASS = <thư mục cài>\\_internal;
+    xoá nó là app tự huỷ, nên onefile_extract_dir() trả None cho trường hợp đó.
+    """
+    from core.frozen_paths import onefile_extract_dir
+    mei_dir = onefile_extract_dir()
     if mei_dir and os.path.isdir(mei_dir):
         shutil.rmtree(mei_dir, ignore_errors=True)
 
