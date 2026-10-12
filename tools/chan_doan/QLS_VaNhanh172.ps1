@@ -11,7 +11,7 @@
 #    2. plugin yt-dlp mac dinh-> %APPDATA%\yt-dlp\plugins        (yt-dlp tu do)
 #    3. bgutil-pot.exe tren PATH -> plugin tu tim thay
 #    4. deno.exe tren PATH    -> 1.7.2 chi bat `deno`, KHONG bat quickjs
-#    5. app_config.json       -> khoa youtube_player_clients
+#    5. app_config_overrides.json (%APPDATA%\QuangLuuStudio) -> khoa youtube_player_clients
 #
 #  ⚠ DAY LA GIAI PHAP TAM. Doc muc "HAN CHE" trong docs/PLAN_YOUTUBE_NO_ACCOUNT.md
 #    truoc khi dung hang loat. Cach dut diem van la cai ban 1.7.3.
@@ -69,6 +69,10 @@ $BIN_DIR    = Join-Path $env:LOCALAPPDATA "QuangLuuStudio\bin"
 $PLUGIN_DIR = Join-Path $env:APPDATA "yt-dlp\plugins\bgutil"
 $YTDLP_DIR  = Join-Path $DATA_DIR "ytdlp"
 $MARKER     = Join-Path $DATA_DIR "vanhanh_172.json"
+# Lop cau hinh nguoi dung. KHONG ghi app_config.json trong thu muc cai: ban cai
+# Velopack thay ca thu muc moi lan cap nhat, Program Files thi chi doc.
+$OVERRIDES  = Join-Path $DATA_DIR "app_config_overrides.json"
+$KHOA_VA    = @("youtube_player_clients", "youtube_player_clients_hotfix", "ytdlp_auto_update")
 
 $script:Done   = New-Object System.Collections.ArrayList
 $script:Failed = New-Object System.Collections.ArrayList
@@ -174,23 +178,29 @@ function BoKhoiPath {
     return $true
 }
 
-# ── app_config.json ─────────────────────────────────────────────────────────
+# ── app_config_overrides.json ───────────────────────────────────────────────
 function SuaAppConfig {
-    param([string]$Duong, [switch]$HoanTac)
-    if (-not (Test-Path -LiteralPath $Duong)) { throw "khong thay $Duong" }
-    $goc = Get-Content -LiteralPath $Duong -Raw -Encoding UTF8
-    $cfg = $goc | ConvertFrom-Json
+    param([switch]$HoanTac)
+    New-Item -ItemType Directory -Path $DATA_DIR -Force | Out-Null
+    $cfg = $null
+    if (Test-Path -LiteralPath $OVERRIDES) {
+        # Doc chap nhan BOM (script cu tung ghi BOM); file hong -> nem loi, KHONG ghi de.
+        $goc = [System.IO.File]::ReadAllText($OVERRIDES).TrimStart([char]0xFEFF)
+        if ($goc.Trim()) { $cfg = $goc | ConvertFrom-Json }
+    }
+    if ($null -eq $cfg) { $cfg = New-Object psobject }
 
     if ($HoanTac) {
-        $cfg.youtube_player_clients = @()
-        if ($cfg.PSObject.Properties.Name -contains "youtube_player_clients_hotfix") {
-            $cfg.PSObject.Properties.Remove("youtube_player_clients_hotfix")
+        # Go dung cac khoa ban va da dat -> app quay ve mac dinh cua chinh no.
+        foreach ($k in $KHOA_VA) {
+            if ($cfg.PSObject.Properties[$k]) { $cfg.PSObject.Properties.Remove($k) }
         }
-        $cfg | Add-Member -NotePropertyName ytdlp_auto_update -NotePropertyValue $true -Force
     } else {
         # Sao luu mot lan, de con duong lui
-        $bak = $Duong + ".truoc_vanhanh172.bak"
-        if (-not (Test-Path -LiteralPath $bak)) { Set-Content -LiteralPath $bak -Value $goc -Encoding UTF8 }
+        $bak = $OVERRIDES + ".truoc_vanhanh172.bak"
+        if ((Test-Path -LiteralPath $OVERRIDES) -and -not (Test-Path -LiteralPath $bak)) {
+            Copy-Item -LiteralPath $OVERRIDES -Destination $bak -Force
+        }
         $cfg | Add-Member -NotePropertyName youtube_player_clients -NotePropertyValue $PIN_CLIENTS -Force
         # Co nay bao cho ban 1.7.3 tro len biet day la khoa TAM cua script va,
         # de no tu bo qua va dung lai thang client thong minh cua minh.
@@ -199,7 +209,9 @@ function SuaAppConfig {
         # yt-dlp. De no tu cap nhat 24h/lan thi vai hom sau lai hong am tham.
         $cfg | Add-Member -NotePropertyName ytdlp_auto_update -NotePropertyValue $false -Force
     }
-    $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Duong -Encoding UTF8
+    # UTF-8 KHONG BOM: app doc bang json, BOM lam hong ca file cau hinh.
+    [System.IO.File]::WriteAllText($OVERRIDES, ($cfg | ConvertTo-Json -Depth 20),
+                                   (New-Object System.Text.UTF8Encoding($false)))
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -214,13 +226,11 @@ if (-not $app) {
 W ("   Thu muc cai dat : " + $app)
 W ("   Du lieu nguoi dung: " + $DATA_DIR)
 
-$cfgFile = Join-Path $app "app_config.json"
-
 # ── Go bo ───────────────────────────────────────────────────────────────────
 if ($GoBo) {
     Head "GO BO BAN VA"
-    try { SuaAppConfig -Duong $cfgFile -HoanTac; Ok "Tra app_config.json ve mac dinh" }
-    catch { Fail ("Khong sua duoc app_config.json: " + $_.Exception.Message) }
+    try { SuaAppConfig -HoanTac; Ok "Bo khoa ban va khoi app_config_overrides.json" }
+    catch { Fail ("Khong sua duoc app_config_overrides.json: " + $_.Exception.Message) }
     if (Test-Path -LiteralPath $PLUGIN_DIR) {
         Remove-Item -LiteralPath $PLUGIN_DIR -Recurse -Force -ErrorAction SilentlyContinue
         Ok "Xoa plugin PO Token"
@@ -334,8 +344,8 @@ try {
 
     # ── 5. Khoa client + kiem chung ─────────────────────────────────────────
     Head "5/5  KHOA CLIENT VA KIEM CHUNG"
-    SuaAppConfig -Duong $cfgFile
-    Ok ("app_config.json: youtube_player_clients = " + ($PIN_CLIENTS -join ", "))
+    SuaAppConfig
+    Ok ("app_config_overrides.json: youtube_player_clients = " + ($PIN_CLIENTS -join ", "))
     Info "Da tat ytdlp_auto_update: script nap san gan chat voi so hieu yt-dlp,"
     Info "de no tu cap nhat thi vai hom sau se hong am tham."
 
