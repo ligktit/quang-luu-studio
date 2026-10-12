@@ -9,8 +9,6 @@ Các tệp trong thư mục này chạy được trên **mọi máy Windows 10/1
 | `QLS_ChanDoan.ps1` | Toàn bộ phần kiểm tra |
 | `SuaLoi.bat` | Khách bấm đúp để **sửa** những lỗi chẩn đoán tìm ra |
 | `QLS_SuaLoi.ps1` | Toàn bộ phần sửa lỗi |
-| `VaNhanh172.bat` | **Chỉ dùng cho máy đang cài bản 1.7.2** — xem mục dưới |
-| `QLS_VaNhanh172.ps1` | Toàn bộ phần vá nhanh 1.7.2 |
 | `SuaPOToken.bat` | Sửa lỗi `PO Token provider: CHUA co (binary)` rồi **tải thử** một bài YouTube bằng `yt-dlp.exe` độc lập (chạy với **mọi** bản app, có tiến độ, mỗi lượt tối đa 100 giây, đứng im 45 giây là diệt) qua từng nhóm client (`-Link`, `-ExeFile`, `-Auto`, `-ChiThuTai`). Nấc đầu của app hỏng mà bản vá tải được thì đề nghị **vá nhanh**: ép `youtube_player_clients = web_embedded, android, android_vr` trong `app_config.json` (có sao lưu) rồi tải thử lại |
 | `QLS_SuaPOToken.ps1` | Toàn bộ phần sửa PO Token + tải thử |
 | `SuaManHinhNhung.bat` | Sửa lỗi **nạp QtWebEngine thất bại** (ô "Màn hình karaoke nhúng" bị mờ): đọc lỗi trong `app.log` → cài Heavy / loại trừ Defender / dọn `_MEI` / cập nhật VC++ → mở app xác nhận (`-Xem`, `-Auto`, `-LoaiTruTemp`, `-KhongMoApp`) |
@@ -144,27 +142,12 @@ Lối thoát của bản 1.7.2: **lần thử KHÔNG cookie chạy trước vớ
 khoản), gói kèm runtime JavaScript `qjs.exe` và ffmpeg. Xem
 `docs/PLAN_YOUTUBE_NO_ACCOUNT.md`.
 
-### Vá nhanh cho máy CHƯA cài lại được — `VaNhanh172.bat`
+### Máy còn bản 1.7.2
 
-Dành cho quán đang chạy 1.7.2 cần tải được lại ngay. Script tải ~100 MB rồi đặt
-`bgutil-pot.exe` + `deno.exe` vào PATH người dùng, plugin vào thư mục plugin mặc
-định của yt-dlp, nạp sẵn script giải n-challenge, và khoá
-`youtube_player_clients` trong `app_config.json`.
-
-```
-VaNhanh172.bat            # vá
-VaNhanh172.bat -GoBo      # gỡ bỏ, trả lại nguyên trạng
-VaNhanh172.bat -KhongHoi  # không hỏi, dùng khi triển khai hàng loạt
-```
-
-Ba điều phải nói với khách trước khi chạy:
-
-1. Script **tắt tự cập nhật yt-dlp**. Bắt buộc — script giải n-challenge nạp sẵn
-   gắn chặt với số hiệu yt-dlp; để nó tự cập nhật thì vài hôm sau hỏng lại âm
-   thầm. Đổi lại, máy đó đứng yên ở một bản yt-dlp cũ dần.
-2. Nó **ghim cứng một client**. YouTube đổi lần nữa là phải vá lại bằng tay.
-3. Đây là **cầu tạm**. Cài 1.7.3 mới là đường chính; khi cài, khoá client tự
-   được bỏ qua (nhờ cờ `youtube_player_clients_hotfix`), không phải dọn tay.
+Bộ vá nhanh `VaNhanh172.bat` đã bị gỡ (2026-10-12): từ khi cấu hình người dùng
+chuyển sang `app_config_overrides.json`, nó không còn tác dụng trên 1.7.2. Máy
+còn 1.7.2 thì cài bản mới nhất. Máy từng chạy bản vá vẫn được app tự bỏ qua khoá
+client ghim cứng (cờ `youtube_player_clients_hotfix`), không phải dọn tay.
 
 Muốn ép client bằng tay trên một máy cụ thể, thêm vào `app_config.json`:
 
