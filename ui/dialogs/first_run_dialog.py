@@ -170,14 +170,19 @@ class FirstRunDialog(QDialog):
 
     def _sau_chuyen_cau_hinh(self, wrote):
         if isinstance(wrote, Exception):
-            log.error("Chuyển cấu hình bản cũ lỗi: %s", wrote)   # lần mở sau thử lại
-        else:
-            settings = ConfigManager.load_settings()
-            settings["legacy_config_migrated"] = first_run.legacy_path_key(self._legacy_dir)
-            ConfigManager.save_settings(settings)
-            if wrote:
-                # MIDI_CC… của giao diện được đọc lúc import → cần mở lại app.
-                self._notes.append("Đã chuyển cấu hình từ bản cũ — hãy đóng và mở lại app để áp dụng.")
+            # Giá trị cũ chưa sang được lớp người dùng → KHÔNG cho dọn bản cũ lúc này
+            # (dọn là mất hẳn). Lần mở sau thử chuyển lại rồi mới hỏi dọn.
+            log.error("Chuyển cấu hình bản cũ lỗi: %s", wrote)
+            self._notes.append("Chưa chuyển cấu hình từ bản cũ được (lỗi ghi file) — "
+                               "app sẽ thử lại và hỏi dọn bản cũ ở lần mở sau.")
+            self._ket_thuc()
+            return
+        settings = ConfigManager.load_settings()
+        settings["legacy_config_migrated"] = first_run.legacy_path_key(self._legacy_dir)
+        ConfigManager.save_settings(settings)
+        if wrote:
+            # MIDI_CC… của giao diện được đọc lúc import → cần mở lại app.
+            self._notes.append("Đã chuyển cấu hình từ bản cũ — hãy đóng và mở lại app để áp dụng.")
         self._hoi_don_ban_cu()
 
     def _hoi_don_ban_cu(self):

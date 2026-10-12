@@ -296,6 +296,29 @@ def migrate_legacy_app_config(legacy_dir):
     return wrote
 
 
+def migrate_cli(legacy_dir):
+    """`QuangLuuStudio.exe --chuyen-cau-hinh-cu <thư mục cũ>` — bộ cài cầu nối gọi dưới
+    quyền người dùng gốc trước khi dọn bản Inno. Ghi cờ legacy_config_migrated để lần
+    chạy đầu không chuyển lại. 0 = xong, 1 = lỗi, 2 = thiếu đối số."""
+    if not legacy_dir:
+        log.error("--chuyen-cau-hinh-cu thiếu thư mục bản cũ")
+        return 2
+    try:
+        wrote = migrate_legacy_app_config(legacy_dir)
+        settings = _cfg.ConfigManager.load_settings()
+        # Chưa có settings.json: đừng tạo file chỉ có một khoá — main.py coi settings
+        # khác rỗng là "đã cài đặt" và bỏ qua màn hình thiết lập.
+        if settings:
+            settings["legacy_config_migrated"] = legacy_path_key(legacy_dir)
+            if not _cfg.ConfigManager.save_settings(settings):
+                return 1
+        log.info("Chuyển cấu hình bản cũ %s: %s", legacy_dir, "có ghi" if wrote else "không có gì khác")
+        return 0
+    except Exception:
+        log.exception("Chuyển cấu hình bản cũ %s lỗi", legacy_dir)
+        return 1
+
+
 def find_bundled(rel_path):
     """File đóng gói theo app: _MEIPASS (onefile/onedir) rồi thư mục exe/gốc dự án."""
     roots = [getattr(sys, "_MEIPASS", None), _cfg.APP_DIR]

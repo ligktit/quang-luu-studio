@@ -18,7 +18,8 @@ def saved():
          patch("ui.dialogs.first_run_dialog.ConfigManager.save_settings",
                side_effect=lambda s: store.__setitem__("settings", dict(s)) or True), \
          patch("ui.dialogs.first_run_dialog.first_run.ensure_default_data_files", return_value=[]), \
-         patch("ui.dialogs.first_run_dialog.first_run.default_daw", return_value="studio_one"):
+         patch("ui.dialogs.first_run_dialog.first_run.default_daw", return_value="studio_one"), \
+         patch("ui.dialogs.first_run_dialog.first_run.migrate_legacy_app_config", return_value=False):
         yield store
 
 
@@ -285,3 +286,19 @@ def test_run_first_run_if_needed_dung_app_co_style():
         m.run_first_run_if_needed()
     ensure.assert_called_once()
     dlg.assert_called_once()
+
+
+def test_chuyen_cau_hinh_loi_chi_cho_de_sau(qtbot, saved):
+    """Chuyển cấu hình cũ lỗi → không được dọn bản cũ (giá trị cũ còn nằm ở đó)."""
+    with patch("ui.dialogs.first_run_dialog.first_run.run_setup_all", return_value=0), \
+         patch("ui.dialogs.first_run_dialog.first_run.migrate_legacy_app_config",
+               side_effect=OSError("đĩa đầy")), \
+         patch("ui.dialogs.first_run_dialog.first_run.cleanup_legacy_elevated") as clean:
+        d = _make(qtbot, legacy=LEGACY)
+        qtbot.waitUntil(lambda: d._btn_continue.isVisible(), timeout=5000)
+        assert not d._btn_legacy.isVisible()
+        assert "chuyển cấu hình" in d._lbl_notes.text().lower()
+        qtbot.mouseClick(d._btn_continue, Qt.LeftButton)
+    clean.assert_not_called()
+    assert "legacy_config_migrated" not in saved["settings"]
+    assert saved["settings"].get("first_run_done") is True

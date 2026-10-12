@@ -300,3 +300,40 @@ def test_setup_all_duong_dan_co_ngoac_va_va(tmp_path):
     d.mkdir()
     (d / "setup_all.bat").write_text("@exit /b 5\r\n", encoding="ascii")
     assert first_run.run_setup_all(str(d)) == 5
+
+
+def _settings_iso(tmp_path, monkeypatch, content):
+    p = tmp_path / "settings.json"
+    if content is not None:
+        p.write_text(json.dumps(content), encoding="utf-8")
+    monkeypatch.setattr(cfg, "SETTINGS_FILE", str(p))
+    return p
+
+
+def test_migrate_cli_ghi_co_da_chuyen(_cfg_iso, monkeypatch):
+    legacy = _cfg_iso / "legacy"
+    legacy.mkdir()
+    (legacy / "app_config.json").write_text(json.dumps({"midi_cc": {"tone_music": 55}}), encoding="utf-8")
+    s = _settings_iso(_cfg_iso, monkeypatch, {"daw_kind": "cubase"})
+    assert first_run.migrate_cli(str(legacy)) == 0
+    saved = json.loads(s.read_text(encoding="utf-8"))
+    assert saved["legacy_config_migrated"] == first_run.legacy_path_key(str(legacy))
+    assert saved["daw_kind"] == "cubase"
+    assert json.loads((_cfg_iso / "ov.json").read_text(encoding="utf-8")) == {"midi_cc": {"tone_music": 55}}
+
+
+def test_migrate_cli_chua_co_settings_khong_tao_file(_cfg_iso, monkeypatch):
+    """settings.json rỗng mà ghi một khoá thì app tưởng đã cài đặt xong → bỏ qua màn hình Setup."""
+    s = _settings_iso(_cfg_iso, monkeypatch, None)
+    assert first_run.migrate_cli(str(_cfg_iso / "khong_co")) == 0
+    assert not s.exists()
+
+
+def test_migrate_cli_thieu_doi_so():
+    assert first_run.migrate_cli("") == 2
+
+
+def test_migrate_cli_loi_tra_1(_cfg_iso, monkeypatch):
+    _settings_iso(_cfg_iso, monkeypatch, {"daw_kind": "cubase"})
+    with patch.object(first_run, "migrate_legacy_app_config", side_effect=OSError("x")):
+        assert first_run.migrate_cli(str(_cfg_iso)) == 1
