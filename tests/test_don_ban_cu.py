@@ -35,10 +35,11 @@ def ctx(tmp_path):
             pass
 
 
-def _run(legacy, key, sc):
+def _run(legacy, key, sc, protected=None):
+    extra = ["-ProtectedDirs", str(protected)] if protected else []
     return subprocess.run(
         ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", SCRIPT,
-         "-LegacyDir", str(legacy), "-UninstallKey", key, "-ShortcutDirs", str(sc)],
+         "-LegacyDir", str(legacy), "-UninstallKey", key, "-ShortcutDirs", str(sc)] + extra,
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=60)
 
@@ -77,3 +78,22 @@ def test_chay_lai_khi_da_sach_van_ma_0(ctx):
     _run(ctx["legacy"], ctx["key"], ctx["sc"])
     r = _run(ctx["legacy"], ctx["key"], ctx["sc"])
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_khong_xoa_goc_o_dia(ctx):
+    """Thư mục nằm trong danh sách bảo vệ (đại diện gốc ổ / thư mục hệ thống) thì
+    không bị xoá dù có QuangLuuStudio.exe bên trong. Không đụng ổ thật."""
+    r = _run(ctx["legacy"], ctx["key"], ctx["sc"], protected=ctx["legacy"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (ctx["legacy"] / "QuangLuuStudio.exe").exists()
+    assert (ctx["legacy"] / "sfx" / "a.wav").exists()
+    assert "BO QUA" in r.stdout
+
+
+def test_xoa_chua_het_giu_khoa_va_ma_2(ctx):
+    """File đang bị khoá → thư mục còn lại → giữ khoá gỡ cài đặt, mã thoát 2."""
+    with open(ctx["legacy"] / "sfx" / "a.wav", "rb"):
+        r = _run(ctx["legacy"], ctx["key"], ctx["sc"])
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert ctx["legacy"].exists()
+    assert _key_exists(ctx["sub"])
