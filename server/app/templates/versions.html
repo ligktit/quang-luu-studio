@@ -1,6 +1,30 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Phiên bản</h1>
+<h2>Velopack (1.9.0 trở đi — cập nhật ngầm)</h2>
+<div class="card">
+  <form method="post" action="/admin/velopack/import" class="row">
+    <div><label>Nhập từ GitHub Release (vd 1.9.1)</label><input name="version" required></div>
+    <button type="submit">Nhập</button>
+  </form>
+  <p>Bản nhập xong <b>chưa phát</b>: bật lên rồi chỉnh % máy nhận. Link cài lần đầu: <code>/tai-ve</code> (bản mới nhất đang phát 100%).</p>
+</div>
+<table>
+  <tr><th>Version</th><th>Trạng thái</th><th>Rollout</th><th>Active</th><th></th></tr>
+  {% for r in velopack %}
+  <tr>
+    <td>{{ r.version }}</td>
+    <td>{{ {'dang_nhap': '⏳ đang nhập', 'xong': '✓ xong', 'loi': '✗ lỗi'}.get(r.status, r.status) }}
+        {% if r.import_error %}<br><small>{{ r.import_error }}</small>{% endif %}</td>
+    <td><form method="post" action="/admin/velopack/{{ r.id }}/rollout" class="row">
+          <input name="rollout_percent" type="number" min="0" max="100" value="{{ r.rollout_percent }}" style="width:5em">
+          <button class="ghost">Lưu</button></form></td>
+    <td>{{ '🟢' if r.is_active else '⚪' }}</td>
+    <td>{% if r.status == 'xong' %}<form method="post" action="/admin/velopack/{{ r.id }}/toggle"><button class="ghost">{{ 'Tắt' if r.is_active else 'Bật' }}</button></form>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+<h2>Bộ cài Inno (máy 1.8.x — bộ cài cầu nối)</h2>
 <div class="card">
   <form method="post" action="/admin/versions/upload" enctype="multipart/form-data" class="row">
     <div><label>Version (vd 1.5.2)</label><input name="version" required></div>
