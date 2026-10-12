@@ -276,7 +276,16 @@ def migrate_legacy_app_config(legacy_dir):
         if os.path.exists(dest):
             try:
                 existing = _cfg.read_json_dict(dest)
-            except Exception:
+            except Exception as e:
+                # Sắp ghi đè file không đọc được → giữ bản sao để còn cứu tay.
+                bak = dest + ".bak"
+                try:
+                    shutil.copy2(dest, bak)
+                    log.warning("%s hỏng (%s) — đã sao lưu sang %s trước khi ghi đè", dest, e, bak)
+                except OSError as e2:
+                    log.warning("%s hỏng (%s), không sao lưu được sang %s (%s) — không ghi đè",
+                                dest, e, bak, e2)
+                    continue
                 existing = {}
         merged = dict(part)
         _cfg.merge_config(merged, existing)   # giá trị đã có ở đích thắng

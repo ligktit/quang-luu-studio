@@ -229,6 +229,18 @@ def test_migrate_cau_hinh_cu_giong_mac_dinh_thi_khong_ghi(_cfg_iso):
     assert not (_cfg_iso / "ov.json").exists()
 
 
+def test_migrate_sao_luu_file_dich_hong_truoc_khi_ghi(_cfg_iso, caplog):
+    legacy = _cfg_iso / "legacy"
+    legacy.mkdir()
+    (legacy / "app_config.json").write_text(json.dumps({"midi_cc": {"tone_music": 55}}), encoding="utf-8")
+    (_cfg_iso / "ov.json").write_text("{hong", encoding="utf-8")
+    with caplog.at_level("WARNING", logger="core.first_run"):
+        assert first_run.migrate_legacy_app_config(str(legacy)) is True
+    assert (_cfg_iso / "ov.json.bak").read_text(encoding="utf-8") == "{hong"
+    assert json.loads((_cfg_iso / "ov.json").read_text(encoding="utf-8")) == {"midi_cc": {"tone_music": 55}}
+    assert any("ov.json.bak" in r.getMessage() for r in caplog.records)
+
+
 def test_migrate_cau_hinh_cu_hong_tra_false(_cfg_iso):
     legacy = _cfg_iso / "legacy"
     legacy.mkdir()
