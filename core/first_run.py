@@ -1,0 +1,244 @@
+# core/first_run.py
+"""Việc phải làm ở lần chạy đầu sau khi cài — thay cho [Code] của bộ cài Inno.
+
+Velopack chỉ cho hook cài đặt 30 giây và không được hiện giao diện, nên các
+việc này chạy trong app, sau một hộp thoại (ui/dialogs/first_run_dialog.py).
+Module này KHÔNG đụng Qt để test được.
+"""
+import base64
+import glob
+import json
+import logging
+import os
+import shutil
+import subprocess
+import sys
+
+from core import config as _cfg
+from core.utils import atomic_write_json
+
+log = logging.getLogger(__name__)
+
+FIRST_RUN_KEY = "first_run_done"
+SETUP_ALL_FAILED = -1
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+LEGACY_APP_ID = "{B8F3E2A1-5D6C-4E7F-9A0B-1C2D3E4F5A6B}"
+LEGACY_UNINSTALL_KEY = (
+    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" + "\\" + LEGACY_APP_ID + "_is1"
+)
+
+
+# ── Cờ + nhận biết bản cài ───────────────────────────────────────────────────
+def is_done(settings):
+    return bool((settings or {}).get(FIRST_RUN_KEY))
+
+
+def mark_done(settings):
+    settings[FIRST_RUN_KEY] = True
+    return settings
+
+
+def is_velopack_install(app_dir):
+    """Bản cài Velopack: <gốc>\\current\\QuangLuuStudio.exe và <gốc>\\Update.exe."""
+    return os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(app_dir)), "Update.exe"))
+
+
+# ── DAW mặc định + file dữ liệu mặc định ────────────────────────────────────
+def _has_dir(pattern):
+    return any(os.path.isdir(p) for p in glob.glob(pattern))
+
+
+def default_daw(program_files, appdata):
+    """Máy chỉ có Cubase (không có Studio One) → "cubase"; còn lại "studio_one".
+    Cùng logic DawMacDinh của bộ cài Inno (bài học ba máy khách Cubase 2026-10)."""
+    has_cubase = (_has_dir(os.path.join(program_files, "Steinberg", "Cubase*"))
+                  or _has_dir(os.path.join(appdata, "Steinberg", "Cubase*")))
+    has_s1 = (_has_dir(os.path.join(appdata, "PreSonus", "Studio One*"))
+              or os.path.isdir(os.path.join(program_files, "PreSonus")))
+    return "cubase" if has_cubase and not has_s1 else "studio_one"
+
+
+def ensure_default_data_files(data_dir, daw_kind):
+    """Tạo các file JSON mặc định còn thiếu (không đè file có sẵn). Trả tên file đã tạo."""
+    defaults = {
+        "activation.json": {"activation_code": "", "activation_date": "", "activation_timestamp": 0},
+        "settings.json": {"studio_one_path": "", "browser_path": "",
+                          "auto_launch_studio_one": False, "daw_kind": daw_kind},
+        "saved_songs.json": [],
+        "playlists.json": {},
+        "tone_cache.json": {},
+        "manual_timelines.json": {},
+    }
+    os.makedirs(data_dir, exist_ok=True)
+    created = []
+    for name, value in defaults.items():
+        path = os.path.join(data_dir, name)
+        if not os.path.exists(path):
+            atomic_write_json(path, value)
+            created.append(name)
+    return created
+
+
+# ── setup_all.bat /auto ──────────────────────────────────────────────────────
+def run_setup_all(app_dir, timeout=300):
+    """Chạy setup_all.bat /auto (cổng MIDI, Surface Studio One, script Cubase).
+    Trả mã thoát (tổng bit 1/2/4) hoặc SETUP_ALL_FAILED nếu không chạy được/quá giờ."""
+    bat = os.path.join(app_dir, "setup_all.bat")
+    if not os.path.isfile(bat):
+        log.warning("Thiếu %s", bat)
+        return SETUP_ALL_FAILED
+    try:
+        r = subprocess.run(["cmd.exe", "/c", bat, "/auto"], cwd=app_dir, timeout=timeout,
+                           creationflags=_NO_WINDOW)
+        log.info("setup_all.bat /auto -> %s", r.returncode)
+        return r.returncode
+    except subprocess.TimeoutExpired:
+        log.warning("setup_all.bat /auto quá %ss", timeout)
+        return SETUP_ALL_FAILED
+    except OSError as e:
+        log.warning("Không chạy được setup_all.bat: %s", e)
+        return SETUP_ALL_FAILED
+
+
+def describe_setup_all_code(code):
+    """Việc người dùng còn phải làm, theo mã thoát setup_all.bat (rỗng = xong)."""
+    if code is None or code == 0:
+        return []
+    if code < 0:
+        return ["Không chạy được bước cài MIDI tự động. Hãy chạy tay setup_all.bat trong thư mục cài đặt."]
+    msgs = []
+    if code & 1:
+        msgs.append("Chưa đủ cổng MIDI ảo (loopMIDI). Chạy setup_all.bat trong thư mục cài đặt để cài có hướng dẫn.")
+    if code & 2:
+        msgs.append("Chưa chép được script Cubase. Xem log %APPDATA%\\QuangLuuStudio\\logs\\setup_all.txt.")
+    if code & 4:
+        msgs.append("Cubase đang mở: Studio → MIDI Remote Manager → Scripts → Reload Scripts "
+                    "(hoặc mở lại Cubase) để nhận script mới.")
+    return msgs
+
+
+# ── loopMIDI ────────────────────────────────────────────────────────────────
+def find_loopmidi(env=None):
+    """Đường dẫn loopMIDI.exe (cùng danh sách với setup_midi_ports.ps1) hoặc None."""
+    env = os.environ if env is None else env
+    cands = []
+    for var, sub in (("ProgramFiles", ""), ("ProgramFiles(x86)", ""), ("LOCALAPPDATA", "Programs")):
+        base = env.get(var)
+        if base:
+            cands.append(os.path.join(base, sub, "Tobias Erichsen", "loopMIDI", "loopMIDI.exe"))
+    return next((c for c in cands if os.path.isfile(c)), None)
+
+
+def _run_elevated_ps(inner, timeout):
+    """Chạy một lệnh PowerShell có nâng quyền (UAC) và chờ xong. True nếu mã thoát 0.
+    Từ chối UAC → Start-Process ném lỗi → mã khác 0."""
+    enc = base64.b64encode(inner.encode("utf-16-le")).decode("ascii")
+    try:
+        r = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                            "-EncodedCommand", enc], timeout=timeout, creationflags=_NO_WINDOW)
+        return r.returncode == 0
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.warning("Lệnh nâng quyền lỗi: %s", e)
+        return False
+
+
+def install_loopmidi_elevated(timeout=600):
+    """Cài loopMIDI bằng winget có nâng quyền (loopMIDI cài cho cả máy). True nếu sau đó tìm thấy."""
+    if shutil.which("winget") is None:
+        return False
+    inner = ("$p = Start-Process winget -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList "
+             "'install --id TobiasErichsen.loopMIDI --exact --silent "
+             "--accept-package-agreements --accept-source-agreements'; exit $p.ExitCode")
+    _run_elevated_ps(inner, timeout)
+    return find_loopmidi() is not None
+
+
+# ── Bản cài Inno cũ (Program Files) ─────────────────────────────────────────
+def _read_uninstall_location():
+    """InstallLocation của bản Inno cũ trong HKLM (view 64 rồi 32), "" nếu khoá có mà thiếu
+    giá trị, None nếu không có khoá."""
+    try:
+        import winreg
+    except ImportError:
+        return None
+    for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, LEGACY_UNINSTALL_KEY, 0,
+                                winreg.KEY_READ | view) as k:
+                try:
+                    return str(winreg.QueryValueEx(k, "InstallLocation")[0])
+                except OSError:
+                    return ""
+        except OSError:
+            continue
+    return None
+
+
+def find_legacy_install():
+    loc = _read_uninstall_location()
+    if loc is None:
+        return None
+    return loc.rstrip("\\/")
+
+
+def migrate_legacy_app_config(legacy_dir):
+    """Gộp phần khác biệt của <legacy_dir>\\app_config.json (so với mặc định + bản
+    đóng gói hiện tại) vào lớp người dùng: khoá calibration → calibration_overrides.json, accessibility →
+    accessibility_overrides.json, còn lại → app_config_overrides.json. Giá trị đã có ở đích được GIỮ. True nếu có ghi."""
+    path = os.path.join(legacy_dir, "app_config.json")
+    if not os.path.isfile(path):
+        return False
+    try:
+        old = _cfg.read_json_dict(path)
+    except Exception as e:
+        log.warning("app_config.json cũ hỏng, bỏ qua: %s", e)
+        return False
+    diff = _cfg.config_diff(_cfg.AppConfig._load_base(), old)
+    cal = {k: diff.pop(k) for k in list(diff) if k in _cfg.CALIBRATION_KEYS}
+    # accessibility có file riêng (phẳng: khoá → giá trị), save() không ghi nó vào overrides chung
+    acc = diff.pop("accessibility", None)
+    acc = acc if isinstance(acc, dict) else {}
+    wrote = False
+    for part, dest in ((diff, _cfg.APP_CONFIG_OVERRIDES_FILE),
+                       (cal, _cfg.CALIBRATION_OVERRIDES_FILE),
+                       (acc, _cfg.ACCESSIBILITY_OVERRIDES_FILE)):
+        if not part:
+            continue
+        existing = {}
+        if os.path.exists(dest):
+            try:
+                existing = _cfg.read_json_dict(dest)
+            except Exception:
+                existing = {}
+        merged = dict(part)
+        _cfg.merge_config(merged, existing)   # giá trị đã có ở đích thắng
+        atomic_write_json(dest, merged)
+        wrote = True
+    if wrote:
+        _cfg.AppConfig._data = None   # nạp lại lần get() sau
+    return wrote
+
+
+def find_bundled(rel_path):
+    """File đóng gói theo app: _MEIPASS (onefile/onedir) rồi thư mục exe/gốc dự án."""
+    roots = [getattr(sys, "_MEIPASS", None), _cfg.APP_DIR]
+    for root in roots:
+        if root:
+            p = os.path.join(root, rel_path)
+            if os.path.isfile(p):
+                return p
+    return None
+
+
+def cleanup_legacy_elevated(legacy_dir, timeout=300):
+    """Chạy tools/don_ban_cu.ps1 có nâng quyền để xoá bản Inno cũ. True nếu xong."""
+    script = find_bundled(os.path.join("tools", "don_ban_cu.ps1"))
+    if script is None:
+        log.warning("Thiếu tools/don_ban_cu.ps1")
+        return False
+    q = lambda s: s.replace("'", "''")  # noqa: E731 — trích dẫn chuỗi PowerShell
+    inner = ("$p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden "
+             "-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',"
+             f"'\"{q(script)}\"','-LegacyDir','\"{q(legacy_dir)}\"'); exit $p.ExitCode")
+    return _run_elevated_ps(inner, timeout)
