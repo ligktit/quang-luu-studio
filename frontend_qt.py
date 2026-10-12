@@ -1212,8 +1212,32 @@ class MainDashboard(QMainWindow):
         if self._waveform is not None:
             self._waveform.set_midi_status(connected)
 
+    _MUSIC_UNAVAILABLE_TIP = (
+        "Thanh Nhạc chỉ chỉnh âm lượng YouTube — chưa có trình phát nào để điều khiển.\n"
+        "Bật màn hình karaoke nhúng, hoặc mở YouTube bằng trình duyệt đã kết nối (đèn trình duyệt xanh)."
+    )
+
+    def _update_music_channel_availability(self):
+        """Thanh Nhạc chỉ điều khiển player YouTube (nhúng hoặc CDP), không gửi
+        gì sang DAW — Studio One hay Cubase đều vậy. Không có player thì xám.
+        Vừa có player trở lại thì đẩy ngay mức đang hiển thị sang player đó:
+        lúc bị xám thanh trượt vẫn có thể đổi (preset, mức theo bài)."""
+        ch = (getattr(self, "_mixer_channels", None) or {}).get(panels.mixer.YOUTUBE_ONLY_KEY)
+        if ch is None:
+            return
+        try:
+            available = bool(self.engine.browser_volume_available())
+        except Exception:
+            available = False
+        was = ch.is_available()
+        ch.set_available(available, self._MUSIC_UNAVAILABLE_TIP)
+        if available and not was:
+            muted = self.mute_states.get(panels.mixer.YOUTUBE_ONLY_KEY, False)
+            self.engine.set_browser_volume(0 if muted else int(ch.slider.value()))
+
     def _update_browser_status(self):
         """Cập nhật đèn báo trạng thái trình duyệt (CDP/WinRT)."""
+        self._update_music_channel_availability()
         cdp_connected = getattr(self.engine.cdp_monitor, 'is_connected', False)
         
         # Check WinRT fallback logic
@@ -1255,8 +1279,9 @@ class MainDashboard(QMainWindow):
                 self._sync_scale_button(self.scale_is_major)
             
             # --- Xử lý phản hồi Mute từ MIDI ---
+            # Không có mute_music: thanh Nhạc chỉ điều khiển player YouTube, mute
+            # kênh nhạc trong DAW không liên quan tới nó.
             mute_cc_to_key = {
-                int(MIDI_CC.get("mute_music", 50)): "mix_music",
                 int(MIDI_CC.get("mute_mic", 51)): "mix_mic",
                 int(MIDI_CC.get("mute_reverb", 52)): "mix_reverb",
                 int(MIDI_CC.get("mute_backing", 53)): "mix_backing",
@@ -1510,6 +1535,7 @@ class MainDashboard(QMainWindow):
         # chạy ở thread nền nên callback chỉ được đọc thuộc tính thuần của cửa sổ
         # player (playback_state), tuyệt đối không gọi API Qt.
         self.engine.embedded_position_callback = self._embedded_playback_state
+        self._update_music_channel_availability()
 
     def _embedded_playback_state(self):
         """(vị trí giây, có đang phát không) cho engine. Cửa sổ đã đóng → (0, False)
@@ -1534,6 +1560,7 @@ class MainDashboard(QMainWindow):
             except Exception:
                 pass
             self._player_window = None
+        self._update_music_channel_availability()
 
     def _set_embedded_volume(self, volume: int):
         if self._player_window is not None:
@@ -3954,6 +3981,9 @@ class MainDashboard(QMainWindow):
             if ch is None or not getattr(ch, "mute_btn", None):
                 self._a11y_speak(f"Kênh {label} không có nút tắt âm")
                 return
+            if not ch.is_available():
+                self._a11y_speak(f"{label} chưa điều khiển được — chưa có trình phát YouTube")
+                return
             ch.mute_btn.click()
             is_muted = ch.is_muted()
             self._a11y_speak(f"{label} {'đã tắt âm' if is_muted else 'đã bật lại'}")
@@ -4018,6 +4048,10 @@ class MainDashboard(QMainWindow):
         try:
             sl = self._mixer_sliders.get(cc_key) if hasattr(self, "_mixer_sliders") else None
             if sl is None:
+                return
+            ch = (getattr(self, "_mixer_channels", None) or {}).get(cc_key)
+            if ch is not None and not ch.is_available():
+                self._a11y_speak("Chưa điều khiển được — chưa có trình phát YouTube")
                 return
             new = max(sl.minimum(), min(sl.maximum(), sl.value() + delta))
             sl.setValue(new)
@@ -4238,10 +4272,6 @@ class MainDashboard(QMainWindow):
             self.is_recording = False
 
         # ── BƯỚC 4: Cleanup tức thì (non-blocking COM/MIDI calls) ──────────────
-        try:
-            self.engine.restore_browser_volume()
-        except Exception:
-            pass
         try:
             self.engine.disconnect_midi()
         except Exception:

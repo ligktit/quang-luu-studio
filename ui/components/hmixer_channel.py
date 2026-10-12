@@ -63,6 +63,8 @@ class HMixerChannel(QWidget):
         self._icon_on = icon            # channel icon (♪/☉/≡/☖) — NOT used for mute button
         self._name_text = label         # original label text, needed to restore after unmute
         self._pre_mute_val: int = -1    # slider value saved before mute
+        self._available = True          # False = không có gì để điều khiển → xám
+        self._unavailable_tip = ""
 
         hl = QHBoxLayout(self)
         hl.setContentsMargins(0, 2, 0, 2)
@@ -142,6 +144,22 @@ class HMixerChannel(QWidget):
         self._muted = muted
         self._apply_mute_visual(muted)
 
+    def is_available(self) -> bool:
+        return self._available
+
+    def set_available(self, available: bool, tooltip: str = ""):
+        """Khoá + làm xám cả kênh khi không có gì để điều khiển (vd thanh Nhạc
+        khi chưa có player YouTube). Giữ nguyên giá trị và trạng thái mute;
+        mở lại thì kênh hiện đúng như trước khi bị khoá."""
+        available = bool(available)
+        self._unavailable_tip = tooltip
+        if available == self._available:
+            if not available:
+                self.setToolTip(tooltip)
+            return
+        self._available = available
+        self._apply_mute_visual(self._muted)
+
     def toggle_mute(self) -> bool:
         """Toggle mute state, save/restore pre-mute volume. Returns new muted state."""
         if not self._muted:
@@ -191,6 +209,8 @@ class HMixerChannel(QWidget):
     def _apply_mute_visual(self, muted: bool):
         """Update all visual elements to reflect mute/unmute state."""
         self._apply_mute_style(muted)
+        self.mute_btn.setEnabled(self._available)
+        self.setToolTip("" if self._available else self._unavailable_tip)
 
         if muted:
             # Lock slider interaction
@@ -213,7 +233,7 @@ class HMixerChannel(QWidget):
             )
         else:
             # Unlock slider
-            self.slider.setEnabled(True)
+            self.slider.setEnabled(self._available)
             # Restore icon color
             self._icon_lbl.setStyleSheet(
                 f"font-size:14px; color:{self._color}; background:transparent;"
@@ -239,6 +259,33 @@ class HMixerChannel(QWidget):
                 self.slider.setValue(self._pre_mute_val)
                 self.slider.blockSignals(False)
                 self._pre_mute_val = -1
+
+        if not self._available:
+            self._apply_unavailable_visual()
+
+    def _apply_unavailable_visual(self):
+        """Xám toàn kênh: biểu tượng, tên, giá trị (đè lên kiểu mute/bình thường)."""
+        grey = "#555577"
+        self._icon_lbl.setStyleSheet(
+            f"font-size:14px; color:{grey}; background:transparent;"
+        )
+        self._name_lbl.setStyleSheet(
+            f"font-size:11px; color:{grey}; font-weight:600; "
+            f"font-family: {FONT}; background:transparent;"
+        )
+        val_font = "font-size:9px; font-weight:800; letter-spacing:1.5px;" if self._muted \
+            else "font-size:12px; font-weight:600;"
+        self.val_label.setStyleSheet(
+            f"{val_font} color:{grey}; font-family: {FONT_MONO}; background:transparent;"
+        )
+        self.mute_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: 1px solid transparent;
+                font-size: 13px; border-radius: 4px;
+                color: {grey};
+            }}
+        """)
 
     def _apply_mute_style(self, muted: bool):
         """Style the mute button itself — always uses 🔊/🔇, never the channel icon."""

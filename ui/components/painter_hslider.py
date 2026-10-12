@@ -30,6 +30,7 @@ class PainterHSlider(QWidget):
     HANDLE_W   = 16      # handle width
     HANDLE_H   = 22      # handle height
     METER_H    = 3       # LED meter height
+    _DISABLED_COLOR = "#555577"
 
     def __init__(self, minimum=0, maximum=100, value=70,
                  color="#38BDF8", parent=None):
@@ -86,6 +87,10 @@ class PainterHSlider(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        # Bị khoá (mute, hoặc kênh không có gì để điều khiển) → vẽ xám, mờ hẳn.
+        enabled = self.isEnabled()
+        if not enabled:
+            p.setOpacity(0.45)
 
         tr = self._track_rect()
         cy = self.height() // 2
@@ -112,10 +117,11 @@ class PainterHSlider(QWidget):
         if hx > tr.left():
             fill_rect = QRect(tr.left(), tr.top(), hx - tr.left(), tr.height())
             fill_grad = QLinearGradient(tr.left(), 0, hx, 0)
-            fc = QColor(self._color)
+            base = self._color if enabled else QColor(self._DISABLED_COLOR)
+            fc = QColor(base)
             fc.setAlpha(180)
             fill_grad.setColorAt(0.0, fc)
-            fc2 = QColor(self._color)
+            fc2 = QColor(base)
             fc2.setAlpha(100)
             fill_grad.setColorAt(1.0, fc2)
             p.setBrush(fill_grad)
@@ -160,7 +166,7 @@ class PainterHSlider(QWidget):
         p.drawRoundedRect(hr.adjusted(2, 1, -2, -hr.height() // 2), 3, 3)
 
         # ── Drag glow ────────────────────────────────────────
-        if self._dragging or self._hover:
+        if enabled and (self._dragging or self._hover):
             glow_color = QColor(self._color)
             glow_color.setAlpha(25 if self._hover else 45)
             p.setPen(Qt.NoPen)

@@ -1,37 +1,15 @@
-"""Thanh Nhạc và âm lượng trình duyệt (core/engine/_recording.py).
+"""Thanh Nhạc và âm lượng player YouTube (core/engine/_recording.py).
 
-Lỗi 1.8.0: lúc khởi động chưa có CDP nên `set_browser_volume` hạ âm lượng *ứng
-dụng* trình duyệt trong Volume Mixer (pycaw). Khi CDP kết nối, thanh trượt chỉ
-còn chỉnh player YouTube, mức trong Volume Mixer kẹt ở mức thấp. Hành vi đúng:
-pycaw chỉ là tạm thời; CDP (hoặc player nhúng) điều khiển được thì trả session
-trình duyệt về mức gốc.
+Thanh Nhạc chỉ điều khiển player YouTube — màn hình karaoke nhúng hoặc tab
+trình duyệt qua CDP. Không còn nhánh pycaw hạ cả ứng dụng trình duyệt trong
+Volume Mixer (lỗi 1.8.0: mức đó kẹt lại khi CDP tiếp quản). Không có player
+nào thì `set_browser_volume` trả False và giao diện làm xám thanh Nhạc.
 """
 from unittest.mock import MagicMock
 
 import pytest
 
 from core.engine._recording import _RecordingMixin
-
-
-class _FakeVolume:
-    def __init__(self, level=1.0):
-        self.level = level
-        self.set_calls = []
-
-    def GetMasterVolume(self):
-        return self.level
-
-    def SetMasterVolume(self, level, _ctx):
-        self.level = level
-        self.set_calls.append(level)
-
-
-class _FakeSession:
-    def __init__(self, name, volume):
-        self.Process = MagicMock()
-        self.Process.name.return_value = name
-        self._ctl = MagicMock()
-        self._ctl.QueryInterface.return_value = volume
 
 
 class _Engine(_RecordingMixin):
@@ -42,54 +20,47 @@ class _Engine(_RecordingMixin):
 
 
 @pytest.fixture
-def chrome(mocker):
-    vol = _FakeVolume(1.0)
-    mocker.patch(
-        "pycaw.pycaw.AudioUtilities.GetAllSessions",
-        return_value=[_FakeSession("chrome.exe", vol), _FakeSession("Studio One.exe", _FakeVolume())],
-    )
-    return vol
+def pycaw_sessions(mocker):
+    return mocker.patch("pycaw.pycaw.AudioUtilities.GetAllSessions", return_value=[])
 
 
-def test_without_cdp_pycaw_lowers_browser_session(chrome):
+def test_khong_co_player_thi_khong_dieu_khien_gi(pycaw_sessions):
     eng = _Engine()
-    assert eng.set_browser_volume(60) is True
-    assert chrome.level == pytest.approx(0.6)
+    assert eng.browser_volume_available() is False
+    assert eng.set_browser_volume(60) is False
+    eng.cdp_monitor.set_player_volume.assert_not_called()
+    pycaw_sessions.assert_not_called()
 
 
-def test_cdp_taking_over_restores_browser_session(chrome):
+def test_cdp_dieu_khien_player_youtube(pycaw_sessions):
     eng = _Engine()
-    eng.set_browser_volume(60)                      # khởi động: chưa có CDP → pycaw hạ 60%
-
     eng.cdp_monitor.is_connected = True
-    assert eng.set_browser_volume(30) is True       # có CDP: chỉnh player YouTube
-
+    assert eng.browser_volume_available() is True
+    assert eng.set_browser_volume(30) is True
     eng.cdp_monitor.set_player_volume.assert_called_with(30)
-    assert chrome.level == pytest.approx(1.0), "Volume Mixer phải về mức gốc khi CDP tiếp quản"
-    assert chrome.set_calls == [pytest.approx(0.6), pytest.approx(1.0)]
+    pycaw_sessions.assert_not_called()
 
 
-def test_cdp_path_never_touches_pycaw_when_nothing_was_lowered(chrome):
+def test_cdp_khong_tim_thay_player_tra_false():
     eng = _Engine()
     eng.cdp_monitor.is_connected = True
-    eng.set_browser_volume(30)
-    eng.set_browser_volume(80)
-    assert chrome.set_calls == []
+    eng.cdp_monitor.set_player_volume.return_value = None
+    assert eng.set_browser_volume(30) is False
 
 
-def test_embedded_player_taking_over_restores_browser_session(chrome):
+def test_player_nhung_uu_tien_hon_cdp():
     eng = _Engine()
-    eng.set_browser_volume(60)
+    eng.cdp_monitor.is_connected = True
     eng.embedded_volume_callback = MagicMock()
-    eng.set_browser_volume(30)
-    eng.embedded_volume_callback.assert_called_with(30)
-    assert chrome.level == pytest.approx(1.0)
+    assert eng.browser_volume_available() is True
+    assert eng.set_browser_volume(45) is True
+    eng.embedded_volume_callback.assert_called_with(45)
+    eng.cdp_monitor.set_player_volume.assert_not_called()
 
 
-def test_restore_is_one_shot(chrome):
+def test_player_nhung_loi_thi_roi_ve_cdp():
     eng = _Engine()
-    eng.set_browser_volume(60)
     eng.cdp_monitor.is_connected = True
-    eng.set_browser_volume(30)
-    eng.set_browser_volume(40)
-    assert chrome.set_calls == [pytest.approx(0.6), pytest.approx(1.0)]
+    eng.embedded_volume_callback = MagicMock(side_effect=RuntimeError("đã đóng"))
+    assert eng.set_browser_volume(45) is True
+    eng.cdp_monitor.set_player_volume.assert_called_with(45)

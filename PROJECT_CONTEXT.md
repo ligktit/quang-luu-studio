@@ -246,7 +246,7 @@ Giữ Ctrl+Space → core/accessibility/voice_input.py
 |----|-----------|--------|
 | 10 | tone_music | Tone Nhạc (mapped từ -12/+12) |
 | 11 | tone_voice | Tone Giọng (mapped từ -12/+12) |
-| 20 | mix_music | Volume Nhạc |
+| 20 | mix_music | Volume Nhạc — app không gửi nữa (thanh Nhạc chỉ chỉnh player YouTube) |
 | 21 | mix_mic | Volume Mic |
 | 22 | mix_reverb | Vang |
 | 23 | mix_backing | Bè |
@@ -261,7 +261,7 @@ Giữ Ctrl+Space → core/accessibility/voice_input.py
 | 38 | mode_remix | Mode Remix |
 | 39 | mode_datheloai | Mode Đa Thể Loại |
 | 41-44 | mute_multi_cc (mix_reverb) | Mute Vang multi-CC |
-| 50 | mute_music | Mute Nhạc |
+| 50 | mute_music | Mute Nhạc — app không gửi/không nghe nữa |
 | 51 | mute_mic | Mute Mic |
 | 52 | mute_reverb | Mute Vang |
 | 53 | mute_backing | Mute Bè |

@@ -14,10 +14,21 @@ def _resolve_cc_number(dashboard, cc_key):
     return dashboard.MIDI_CC.get(cc_key)
 
 
+# Kênh chỉ điều khiển player YouTube (nhúng hoặc CDP), không gửi CC nào cho DAW
+# — Studio One lẫn Cubase. Không có player thì frontend làm xám kênh.
+YOUTUBE_ONLY_KEY = "mix_music"
+
+
 def _make_mute_callback(dashboard, cc_key, mute_cc_map, val_range=(0, 100)):
     min_v, max_v = val_range
     def toggle(is_muted):
         dashboard.mute_states[cc_key] = is_muted
+        if cc_key == YOUTUBE_ONLY_KEY:
+            if is_muted:
+                dashboard.engine.set_browser_volume(0)
+            else:
+                dashboard.engine.set_browser_volume(int(dashboard._mixer_sliders[cc_key].value()))
+            return
         mute_cc = mute_cc_map.get(cc_key)
         if mute_cc is not None:
             dashboard.engine.send_midi(dashboard.MIDI_CC[mute_cc], 127 if is_muted else 0)
@@ -33,14 +44,6 @@ def _make_mute_callback(dashboard, cc_key, mute_cc_map, val_range=(0, 100)):
                     val = slider.value() if slider is not None else min_v
                     normalized = (val - min_v) / (max_v - min_v) if max_v > min_v else 0
                     dashboard.engine.send_midi(cc_num, max(0, min(127, int(normalized * 127))))
-
-        # Mute browser volume if it's the music channel
-        if cc_key == "mix_music":
-            if is_muted:
-                dashboard.engine.set_browser_volume(0)
-            else:
-                val = dashboard._mixer_sliders["mix_music"].value()
-                dashboard.engine.set_browser_volume(int(val))
 
         try:
             multi_cc_map = backend.AppConfig.get_mute_multi_cc()
@@ -67,6 +70,9 @@ def db_to_midi(db, min_v, unity):
 def _make_value_changed_callback(dashboard, cc_key, range_tuple, unit):
     min_v, max_v = range_tuple
     def cb(raw_value):
+        if cc_key == YOUTUBE_ONLY_KEY:
+            dashboard.engine.set_browser_volume(int(raw_value))
+            return
         cc_num = _resolve_cc_number(dashboard, cc_key)
         if cc_num is None:
             return
@@ -75,14 +81,12 @@ def _make_value_changed_callback(dashboard, cc_key, range_tuple, unit):
             from core import daw
             midi = db_to_midi(raw_value, min_v, daw.active().fader_unity_cc)
         else:
-            # voice_fx, mix_music và slider custom: tuyến tính min..max -> 0..127
+            # voice_fx và slider custom: tuyến tính min..max -> 0..127
             normalized = (raw_value - min_v) / (max_v - min_v) if max_v > min_v else 0
             midi = int(normalized * 127)
             midi = max(0, min(127, midi))
 
         dashboard.engine.send_midi(cc_num, midi)
-        if cc_key == "mix_music":
-            dashboard.engine.set_browser_volume(int(raw_value))
     return cb
 
 
@@ -219,4 +223,10 @@ def build_panel_mixer(dashboard) -> GlassPanel:
         vl.addLayout(build_dev_row(dashboard, "mixer", "+ Thêm", "slider"))
 
     vl.addStretch()
+
+    # Kênh mới dựng mặc định sáng — xám ngay nếu chưa có player YouTube, khỏi
+    # chờ nhịp kiểm tra trình duyệt 2.5s.
+    update_music = getattr(dashboard, "_update_music_channel_availability", None)
+    if callable(update_music):
+        update_music()
     return panel
