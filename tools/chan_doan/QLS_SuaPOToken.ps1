@@ -338,6 +338,8 @@ foreach ($hive in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
         if ($p.InstallLocation) { [void]$candidates.Add($p.InstallLocation.TrimEnd('\')) }
     }
 }
+# Bản cài Velopack (từ 1.9.0) — dò TRƯỚC Program Files: máy có thể còn cả bản Inno cũ.
+[void]$candidates.Add((Join-Path $env:LOCALAPPDATA "QuangLuuStudio\current"))
 foreach ($c in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, (Join-Path $env:LOCALAPPDATA "Programs"))) {
     if ($c) { [void]$candidates.Add((Join-Path $c "QuangLuuStudio")) }
 }

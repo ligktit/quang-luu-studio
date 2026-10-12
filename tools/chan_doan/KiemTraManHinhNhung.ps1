@@ -55,6 +55,7 @@ if (-not $targetExe -and $procExe) { $targetExe = $procExe }
 
 $caiDat = $null
 foreach ($p in @(
+    "$env:LOCALAPPDATA\QuangLuuStudio\current\QuangLuuStudio.exe",
     "$env:ProgramFiles\QuangLuuStudio\QuangLuuStudio.exe",
     "${env:ProgramFiles(x86)}\QuangLuuStudio\QuangLuuStudio.exe",
     "$env:LOCALAPPDATA\Programs\QuangLuuStudio\QuangLuuStudio.exe")) {

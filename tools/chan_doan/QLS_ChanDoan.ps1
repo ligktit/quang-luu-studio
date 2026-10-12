@@ -311,6 +311,8 @@ Safe "Tìm thư mục cài đặt" {
             }
         }
     }
+    # Bản cài Velopack (từ 1.9.0) — dò TRƯỚC Program Files: máy có thể còn cả bản Inno cũ.
+    [void]$candidates.Add((JP $env:LOCALAPPDATA "QuangLuuStudio\current"))
     [void]$candidates.Add((JP $env:ProgramFiles "QuangLuuStudio"))
     [void]$candidates.Add((JP ${env:ProgramFiles(x86)} "QuangLuuStudio"))
     [void]$candidates.Add((JP $env:LOCALAPPDATA "Programs\QuangLuuStudio"))

@@ -181,6 +181,8 @@ foreach ($hive in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
         if ($reg.DisplayVersion -and -not $installedVer) { $installedVer = [string]$reg.DisplayVersion }
     }
 }
+# Bản cài Velopack (từ 1.9.0) — dò TRƯỚC Program Files: máy có thể còn cả bản Inno cũ.
+[void]$cands.Add((Join-Path $env:LOCALAPPDATA "QuangLuuStudio\current"))
 foreach ($c in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, (Join-Path $env:LOCALAPPDATA "Programs"))) {
     if ($c) { [void]$cands.Add((Join-Path $c "QuangLuuStudio")) }
 }
@@ -465,15 +467,22 @@ if (-not $needFix) {
         W "• Phần mềm diệt virus: cho app được giải nén và nạp DLL của nó." "White"
         if ($thirdAv.Count -gt 0) {
             Say-Need ("Mở " + ($thirdAv -join ", ") + " → khôi phục các file bị cách ly của QuangLuuStudio và thêm loại trừ cho:")
-            Say-Info ("  " + $appRoot)
+            Say-Info ("  " + $(if ((Split-Path $appRoot -Leaf) -eq "current") { Split-Path $appRoot -Parent } else { $appRoot }))
             Say-Info ("  " + $appExe + "   (loại trừ theo tiến trình, nếu phần mềm có mục này)")
             Say-Info ("  " + $tempRoot + "   (nếu không có loại trừ theo tiến trình)")
         }
         if ($defenderOn) {
             # Mặc định: thư mục cài đặt + TIẾN TRÌNH app. Loại trừ tiến trình phủ luôn
             # các file app tự giải nén ra %TEMP%\_MEI mà không phải mở cả %TEMP%.
+            # Bản Velopack: current\ bị THAY TOÀN BỘ mỗi lần cập nhật → loại trừ cả gốc
+            # %LocalAppData%\QuangLuuStudio (có Update.exe, packages\) cho bền qua các bản.
+            $exclRoot = $appRoot
+            $velRoot = Split-Path $appRoot -Parent
+            if ((Split-Path $appRoot -Leaf) -eq "current" -and (Test-Path -LiteralPath (Join-Path $velRoot "Update.exe"))) {
+                $exclRoot = $velRoot
+            }
             $cmds = @(
-                "Add-MpPreference -ExclusionPath '" + $appRoot.Replace("'", "''") + "'",
+                "Add-MpPreference -ExclusionPath '" + $exclRoot.Replace("'", "''") + "'",
                 "Add-MpPreference -ExclusionProcess '" + $appExe.Replace("'", "''") + "'"
             )
             $desc = "thư mục cài đặt + tiến trình " + $EXE_NAME
