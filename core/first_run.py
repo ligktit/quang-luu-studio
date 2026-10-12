@@ -251,8 +251,11 @@ def cleanup_legacy_elevated(legacy_dir, timeout=300):
         log.warning("Thiếu tools/don_ban_cu.ps1")
         return False
     q = lambda s: s.replace("'", "''")  # noqa: E731 — trích dẫn chuỗi PowerShell
+    # Không bao giờ để script xoá chính thư mục app đang chạy hoặc gốc Velopack (cha của nó).
+    protected = _cfg.APP_DIR + ";" + os.path.dirname(os.path.abspath(_cfg.APP_DIR))
     inner = ("$p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden "
              "-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',"
-             f"'\"{q(script)}\"','-LegacyDir','\"{q(_quote_arg_tail(legacy_dir))}\"'); "
+             f"'\"{q(script)}\"','-LegacyDir','\"{q(_quote_arg_tail(legacy_dir))}\"',"
+             f"'-ProtectedDirs','\"{q(_quote_arg_tail(protected))}\"'); "
              "if ($null -eq $p) { exit 1 }; exit $p.ExitCode")
     return _run_elevated_ps(inner, timeout)

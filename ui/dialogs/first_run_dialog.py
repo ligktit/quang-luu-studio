@@ -198,12 +198,23 @@ class FirstRunDialog(QDialog):
         self.accept()
 
 
+def _la_thu_muc_dang_chay(legacy, app_dir):
+    """True nếu `legacy` trùng/chứa thư mục app đang chạy hoặc gốc Velopack (cha của app_dir):
+    khoá gỡ cài đặt cũ có thể trỏ nhầm vào đó và việc dọn sẽ xoá chính bản đang dùng."""
+    norm = lambda p: os.path.normcase(os.path.realpath(p))  # noqa: E731 — realpath gỡ cả tên 8.3
+    leg = norm(legacy).rstrip("\\/") or norm(legacy)
+    app = norm(app_dir)
+    return leg in (app, os.path.dirname(app)) or app.startswith(leg.rstrip("\\/") + os.sep)
+
+
 def run_first_run_if_needed():
     """Gọi từ main.py trước cổng kích hoạt. Chỉ chạy ở bản cài Velopack."""
     if not first_run.is_velopack_install(APP_DIR):
         return
     settings = ConfigManager.load_settings()
     legacy = first_run.find_legacy_install() or None   # "" = khoá cũ không có đường dẫn → không có gì để dọn
+    if legacy is not None and _la_thu_muc_dang_chay(legacy, APP_DIR):
+        legacy = None
     need_setup = not first_run.is_done(settings)
     if not need_setup and legacy is None:
         return

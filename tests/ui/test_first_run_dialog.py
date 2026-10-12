@@ -97,6 +97,8 @@ def test_chi_con_ban_cu_khong_chay_setup(qtbot, saved):
         qtbot.waitUntil(lambda: d._btn_legacy.isVisible(), timeout=5000)
         qtbot.mouseClick(d._btn_later, Qt.LeftButton)
     setup.assert_not_called()
+    assert d.result() == QDialog.Accepted
+    assert "first_run_done" not in saved["settings"]
 
 
 def test_run_first_run_if_needed_bo_qua_ban_khong_phai_velopack():
@@ -125,3 +127,38 @@ def test_run_first_run_if_needed_bo_qua_khoa_cu_khong_co_duong_dan():
          patch.object(m, "FirstRunDialog") as dlg:
         m.run_first_run_if_needed()
     dlg.assert_not_called()
+
+
+def _chay_voi_ban_cu(tmp_path, legacy_of):
+    from ui.dialogs import first_run_dialog as m
+    app_dir = tmp_path / "QuangLuuStudio" / "current"
+    app_dir.mkdir(parents=True)
+    with patch.object(m, "APP_DIR", str(app_dir)), \
+         patch.object(m.first_run, "is_velopack_install", return_value=True), \
+         patch.object(m.ConfigManager, "load_settings", return_value={"first_run_done": True}), \
+         patch.object(m.first_run, "find_legacy_install", return_value=legacy_of(app_dir)), \
+         patch.object(m, "FirstRunDialog") as dlg:
+        m.run_first_run_if_needed()
+    return dlg
+
+
+def test_ban_cu_trung_thu_muc_app_khong_hoi(tmp_path):
+    dlg = _chay_voi_ban_cu(tmp_path, lambda app: str(app))
+    dlg.assert_not_called()
+
+
+def test_ban_cu_la_goc_velopack_khong_hoi(tmp_path):
+    dlg = _chay_voi_ban_cu(tmp_path, lambda app: str(app.parent))
+    dlg.assert_not_called()
+
+
+def test_ban_cu_la_cha_cua_app_khong_hoi(tmp_path):
+    dlg = _chay_voi_ban_cu(tmp_path, lambda app: str(app.parent.parent))
+    dlg.assert_not_called()
+
+
+def test_ban_cu_thu_muc_khac_van_hoi(tmp_path):
+    other = tmp_path / "Program Files" / "QuangLuuStudio"
+    other.mkdir(parents=True)
+    dlg = _chay_voi_ban_cu(tmp_path, lambda app: str(other))
+    dlg.assert_called_once()
