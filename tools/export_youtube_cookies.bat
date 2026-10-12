@@ -209,6 +209,7 @@ echo.
 if not exist "%APP_CONFIG%" powershell -NoProfile -Command "[IO.File]::WriteAllText('%APP_CONFIG%', '{}', (New-Object Text.UTF8Encoding($false)))"
 echo [3/3] Cap nhat app_config_overrides.json...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$ErrorActionPreference = 'Stop';" ^
     "$p = [IO.Path]::GetFullPath('%APP_CONFIG%');" ^
     "$c = [IO.File]::ReadAllText($p).TrimStart([char]0xFEFF) | ConvertFrom-Json;" ^
     "if (-not $c.PSObject.Properties['youtube_cookie_file']) { $c | Add-Member youtube_cookie_file '' };" ^
@@ -217,6 +218,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$c.youtube_cookie_browser = 'none';" ^
     "[IO.File]::WriteAllText($p, ($c | ConvertTo-Json -Depth 20) + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)));" ^
     "Write-Host '[OK] app_config_overrides.json da duoc cap nhat'"
+if errorlevel 1 goto :loi_cap_nhat
 
 echo.
 echo  =====================================================
@@ -230,3 +232,13 @@ echo  =====================================================
 echo.
 if "%INTERACTIVE%"=="1" pause
 exit /b 0
+
+:loi_cap_nhat
+:: Ngoai khoi ( ) de duong dan co dau ngoac khong lam vo lenh echo
+echo.
+echo [LOI] Khong cap nhat duoc app_config_overrides.json (file hong hoac khong ghi duoc):
+echo        %APP_CONFIG%
+echo        Cookie van nam o: %COOKIE_OUT%
+echo        Sua/xoa file tren roi chay lai script nay.
+if "%INTERACTIVE%"=="1" pause
+exit /b 1
