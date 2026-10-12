@@ -58,8 +58,11 @@ Shortcut do Velopack tạo trỏ vào đường dẫn ổn định → cập nh�
 
 **Quy tắc: không ghi gì vào `current\`.**
 
-- `app_config.json`: bản trong `current\` là mặc định; bản người dùng ở `%APPDATA%\QuangLuuStudio\app_config.json`.
-  Đọc = mặc định đè bởi bản người dùng. `AppConfig.save()` chỉ ghi vào `%APPDATA%`.
+- `app_config.json`: bản trong `current\` là mặc định; phần người dùng đổi nằm ở
+  `%APPDATA%\QuangLuuStudio\app_config_overrides.json` (cùng kiểu `accessibility_overrides.json`,
+  `calibration_overrides.json`; không đặt trùng tên `app_config.json` vì ở chế độ dev DATA_DIR = gốc repo).
+  Đọc = mặc định ← `app_config.json` đóng gói ← overrides. `AppConfig.save()` chỉ ghi **phần khác** so với
+  mặc định + bản đóng gói (trừ các khoá calibration, đã có file riêng) — để bản cập nhật sau đổi mặc định vẫn có tác dụng.
   `configure_youtube_cookies.bat`, `tools/export_youtube_cookies.bat`, `tools/chan_doan/QLS_SuaPOToken.ps1` đổi đích ghi theo.
 - Sửa luôn lỗi lưu đường dẫn SFX mặc định dạng `%TEMP%\_MEIxxxx\sfx\*.wav` vào `settings.json`
   (`ui/components/sfx_button_area.py:791-799`): lưu đường dẫn tương đối/tên file mặc định, phân giải lúc chạy.
@@ -120,15 +123,29 @@ Qua "Apps & features". Hook `--veloapp-uninstall` không hỏi gì, **giữ** `%
 
 ### Đường 1 — qua bộ cập nhật cũ (đa số)
 
-Phát hành **một bộ cài cầu nối Inno 1.9.0** (cùng `AppId {B8F3E2A1-...}`), chỉ phát qua endpoint cũ. Bộ cài:
+Máy 1.8.x hỏi server `/api/v1/updates/check` trước, **server không trả bản nào thì đọc GitHub `releases/latest`**
+và lấy file `.exe` đầu tiên có chữ "setup" trong tên (`_version_check.py:79-157`). Bảng `app_versions` trên server
+đang trống nên hiện tại mọi máy cập nhật qua GitHub. Vì vậy:
+
+- Từ 1.9.0, **GitHub Release được đánh dấu prerelease** → bộ cập nhật cũ bỏ qua GitHub (nó bỏ prerelease), chỉ còn
+  server quyết định, giữ được `rollout_percent` cho cả máy cũ. `vpk download github` dùng cờ `--pre`.
+- `Setup.exe` của Velopack được **đổi tên không chứa "setup"** (`QuangLuuStudio-CaiDat.exe`) trước khi đính kèm,
+  phòng trường hợp release nào đó lỡ không đánh dấu prerelease.
+- Bộ cài cầu nối mang tên kiểu cũ `Setup_QuangLuuStudio_v<ver>.exe`, được **upload lên server qua trang admin như hiện nay**
+  (`/admin/versions/upload`) — máy cũ nhận nó qua `/check` + `/download` theo `rollout_percent`.
+- CI build bộ cài cầu nối ở **mọi bản** cho tới khi log server cho thấy không còn máy 1.8.x (cầu nối bọc `Setup.exe` của chính bản đó).
+
+Bộ cài cầu nối (cùng `AppId {B8F3E2A1-...}`):
 
 1. `CloseApplications=force` (app cũ không tự thoát do lỗi luồng nền).
-2. Nếu `{app}\app_config.json` khác bản mặc định đóng gói → chép sang `%APPDATA%\QuangLuuStudio\app_config.json`
-   (chỉ khi đích chưa có), dưới quyền người dùng gốc.
+2. Nếu `{app}\app_config.json` khác bản mặc định đóng gói → gộp phần khác biệt vào `%APPDATA%\QuangLuuStudio\app_config_overrides.json`
+   (khoá đã có trong overrides thì giữ), dưới quyền người dùng gốc.
 3. Chạy `Setup.exe` Velopack im lặng bằng `ExecAsOriginalUser` (cài vào `%LocalAppData%` của người hát, không phải của admin).
 4. Xoá thư mục Program Files, shortcut cũ (Desktop, Start Menu, các mục `.bat`), và khoá gỡ cài đặt
    `HKLM\...\Uninstall\{AppId}_is1`. **Không** gọi `unins000.exe` cũ — nó hiện MsgBox "Xoá dữ liệu?" (không bị
    `/SUPPRESSMSGBOXES` chặn), khách bấm nhầm là mất dữ liệu.
+5. Mở app mới (`%LocalAppData%\QuangLuuStudio\current\QuangLuuStudio.exe`) bằng `ExecAsOriginalUser`, vì bộ cập nhật
+   cũ không tự mở lại app.
 
 Đây là lần cuối khách gặp UAC và cảnh đóng app.
 
@@ -165,10 +182,11 @@ Câu 1–4 có câu nào "không" → **dừng, báo người dùng** trước k
 
 - `actions/setup-dotnet` + `dotnet tool install -g vpk` ghim **cùng phiên bản** với `velopack` trong requirements.
 - PyInstaller onedir (`QuangLuuStudio.spec`: thêm `COLLECT`).
-- `vpk download github` (lấy bản trước để tạo delta) → `vpk pack --packId QuangLuuStudio --packVersion <ver>
-  --packDir dist\QuangLuuStudio --mainExe QuangLuuStudio.exe --icon app_icon.ico` → đính kèm GitHub Release.
+- `vpk download github --pre` (lấy bản trước để tạo delta) → `vpk pack --packId QuangLuuStudio --packVersion <ver>
+  --packDir dist\QuangLuuStudio --mainExe QuangLuuStudio.exe --icon app_icon.ico` → đổi tên `*-Setup.exe` thành
+  `QuangLuuStudio-CaiDat.exe` → đính kèm GitHub Release **dạng prerelease** (xem mục 4).
 - Chừa `--signParams` (tắt) cho chữ ký số sau này.
-- Riêng 1.9.0: build thêm bộ cài cầu nối Inno (`QuangLuuStudio_Bridge.iss`).
+- Build thêm bộ cài cầu nối Inno (`QuangLuuStudio_Bridge.iss`) ở mọi bản cho tới khi hết máy 1.8.x.
 - `sync_version.py` cập nhật theo (bỏ đồng bộ vào `.iss` chính khi Inno không còn là bộ cài chính).
 - Cập nhật memory quy trình phát hành và build máy dev.
 
