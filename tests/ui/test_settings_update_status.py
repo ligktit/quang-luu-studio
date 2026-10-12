@@ -37,7 +37,7 @@ def mock_engine():
         yield eng
 
 
-def _open(qtbot, updater):
+def _open(qtbot, updater, settings_update="khong-dat"):
     with patch("frontend_qt.backend.SongManager.load_songs", return_value=[]), \
          patch("frontend_qt.backend.ActivationManager.is_activated", return_value=True), \
          patch("frontend_qt.backend.ActivationManager.needs_activation", return_value=False), \
@@ -45,6 +45,8 @@ def _open(qtbot, updater):
          patch("frontend_qt.QTimer.start"):
         dashboard = MainDashboard({"studio_one_path": "", "auto_close_studio_one": False})
         qtbot.addWidget(dashboard)
+        if settings_update != "khong-dat":
+            dashboard.settings["update"] = settings_update
         if dashboard._so_ready_watcher is not None:
             dashboard._so_ready_watcher.stop()
     with patch("core.entitlements.is_premium", return_value=True), \
@@ -66,3 +68,8 @@ def test_trang_thai_cap_nhat_ban_cho(qtbot, mock_engine):
 def test_trang_thai_cap_nhat_ban_khong_velopack(qtbot, mock_engine):
     dlg = _open(qtbot, None)
     assert "không tự cập nhật" in dlg._update_status_lbl.text()
+
+
+def test_settings_update_null_khong_lam_hong_hop_thoai(qtbot, mock_engine):
+    dlg = _open(qtbot, None, settings_update=None)
+    assert dlg._update_status_lbl.text()

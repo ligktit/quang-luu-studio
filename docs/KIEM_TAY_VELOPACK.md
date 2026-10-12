@@ -8,12 +8,15 @@ Ghi kết quả (Đạt/Không + ghi chú) vào từng dòng. Mọi mục phải
 - [ ] Đọc giọng (piper) một câu.
 - [ ] Ghi âm 5 giây → đóng app → mở lại → app chạy (thư mục `current\_internal` còn nguyên).
 - [ ] Cài đặt → Cập nhật phần mềm: dòng trạng thái đúng; Cài đặt → Công cụ: Kiểm tra dò tone / Thử tải YouTube mở console, Mở thư mục bản thu đúng chỗ.
+- [ ] Có bản chờ → bấm Kiểm tra dò tone / Thử tải YouTube / bấm đúp shortcut khi app đang mở → app đang chạy KHÔNG bị tắt; bản chờ áp dụng khi đóng app (đóng bản cuối cùng).
 
 ## B. Máy ảo Windows sạch, tên người dùng **có dấu và dấu cách** (ví dụ `Nguyễn Văn A`)
 - [ ] Cài `QuangLuuStudio-CaiDat.exe`: SmartScreen một lần, không UAC, app tự mở, có shortcut Desktop + Start Menu.
 - [ ] Chưa có loopMIDI: hộp thoại lần đầu xin cài (UAC một lần) → cổng MIDI có.
 - [ ] Cập nhật 1.9.0 → 1.9.1 (feed thử trên server, rollout 100% cho máy ảo): bản mới tải ngầm khi app đang chạy, không hộp thoại; đóng app → **quan sát có cửa sổ nào lóe lên**; mở lại = 1.9.1.
+- [ ] Đo thời gian áp dụng bản cập nhật thật (gói ~550 MB) khi đóng app; đóng rồi mở lại ngay → app chờ cập nhật xong rồi mở bản mới, không bị tắt ngang; ghi lại số giây chờ (không có giao diện trong lúc chờ — app chỉ hiện sau khi Update.exe xong).
 - [ ] Có bản chờ → `taskkill /F` → mở lại: tự áp dụng; **đo thời gian mở** so với mở thường.
+- [ ] Mô hình và công cụ nằm dưới `%LocalAppData%` có dấu và dấu cách — kiểm từng thành phần gốc (native): đọc giọng (piper), nhận lệnh giọng nói (vosk), dò tone một bài, ghi âm 5 giây, tải một bài YouTube.
 - [ ] Gỡ qua Apps & features → `%APPDATA%\QuangLuuStudio` và `Documents\QuangLuuStudio` còn nguyên.
 - [ ] Xoá dữ liệu (Cài đặt → Công cụ) → đóng app → thư mục dữ liệu biến mất; mở lại → màn hình kích hoạt.
 

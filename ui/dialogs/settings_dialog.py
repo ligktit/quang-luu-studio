@@ -1346,7 +1346,7 @@ class SettingsDialog(QDialog):
         vl.addWidget(version_lbl)
 
         # Cập nhật chạy ngầm (core/updater): không nút, không hộp thoại — chỉ báo trạng thái.
-        auto = bool((self._dashboard.settings or {}).get("update", {}).get("auto_check", True))
+        auto = bool(((self._dashboard.settings or {}).get("update") or {}).get("auto_check", True))
         self._update_status_lbl = QLabel(status_text(__version__, get_updater(), auto_check=auto))
         self._update_status_lbl.setStyleSheet(self._field_label_qss(size=11, weight=500, italic=True))
         self._update_status_lbl.setWordWrap(True)

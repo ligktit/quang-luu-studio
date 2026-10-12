@@ -44,7 +44,8 @@ def _updater(mgr, auto=True):
         calls.append((url, timeout_ms))
         return mgr
     u = vu.BackgroundUpdater(f"{BASE}/api/v1/updates/velopack/{FP}", lambda: auto,
-                             manager_factory=factory, clock=lambda: 1000.0)
+                             manager_factory=factory, clock=lambda: 1000.0,
+                             other_instances=lambda: False)
     return u, calls
 
 
@@ -149,6 +150,32 @@ def test_ap_dung_khi_thoat_loi_khong_nem():
     mgr.wait_exit_then_apply_updates = lambda *a, **k: (_ for _ in ()).throw(OSError("x"))
     u, _ = _updater(mgr)
     assert u.apply_on_exit() is False
+
+
+def test_ap_dung_khi_thoat_bo_qua_neu_con_ban_khac_dang_chay():
+    # Update.exe sẽ tắt MỌI tiến trình trong thư mục cài, kể cả bản đang hát.
+    mgr = FakeManager(pending="1.9.1")
+    u, calls = _updater(mgr)
+    u._other_instances = lambda: True
+    assert u.apply_on_exit() is False
+    assert mgr.applied == [] and calls == []
+
+
+def test_ap_dung_khi_thoat_loi_khi_do_ban_khac_thi_bo_qua():
+    mgr = FakeManager(pending="1.9.1")
+    u, _ = _updater(mgr)
+    u._other_instances = lambda: (_ for _ in ()).throw(RuntimeError("x"))
+    assert u.apply_on_exit() is False and mgr.applied == []
+
+
+def test_ap_dung_khi_thoat_mac_dinh_hoi_instance_guard():
+    mgr = FakeManager(pending="1.9.1")
+    u = vu.BackgroundUpdater("u", lambda: True, manager_factory=lambda *_: mgr)
+    with patch("core.instance_guard.other_instances_running", return_value=True):
+        assert u.apply_on_exit() is False
+    assert mgr.applied == []
+    with patch("core.instance_guard.other_instances_running", return_value=False):
+        assert u.apply_on_exit() is True
 
 
 # ── start_background_updates / apply_pending_on_exit ──

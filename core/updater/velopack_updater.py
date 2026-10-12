@@ -44,14 +44,20 @@ class UpdateState:
     error: bool = False                 # lượt gần nhất lỗi (mạng, server, tải)
 
 
+def _other_instances_running():
+    from core.instance_guard import other_instances_running   # import trễ, như make_manager
+    return other_instances_running()
+
+
 class BackgroundUpdater:
-    def __init__(self, url, auto_check, manager_factory=make_manager, clock=time.time, wait=None):
+    def __init__(self, url, auto_check, manager_factory=make_manager, clock=time.time, wait=None, other_instances=None):
         self._url = url
         self._auto_check = auto_check
         self._factory = manager_factory
         self._clock = clock
         self._stop = threading.Event()
         self._wait = wait or self._stop.wait   # trả True khi được yêu cầu dừng
+        self._other_instances = other_instances or _other_instances_running
         self._lock = threading.Lock()          # một lượt kiểm/tải tại một thời điểm
         self.state = UpdateState()
 
@@ -104,8 +110,13 @@ class BackgroundUpdater:
 
     def apply_on_exit(self):
         """App tắt bình thường: có bản đã tải xong → Update.exe áp dụng im lặng sau khi
-        tiến trình này thoát, không mở lại app. True nếu đã giao việc áp dụng."""
+        tiến trình này thoát, không mở lại app. True nếu đã giao việc áp dụng.
+        Còn bản app khác đang chạy → thôi: Update.exe tắt mọi tiến trình trong thư mục cài;
+        bản chờ sẽ áp dụng ở lần tắt/mở sau khi chỉ còn một bản."""
         try:
+            if self._other_instances():
+                log.info("Còn bản app khác đang chạy — hoãn áp dụng bản cập nhật")
+                return False
             mgr = self._factory(self._url, CHECK_TIMEOUT_MS)
             asset = mgr.get_update_pending_restart()
             if asset is None:

@@ -12,9 +12,27 @@ import logging
 # nạp Qt/numba. Có bản đã tải sẵn mà lần trước app bị tắt ngang → nó áp dụng luôn
 # rồi mở lại app (VELOPACK_RESTART=true — không phải lần chạy đầu, không làm gì thêm).
 # Chạy từ mã nguồn / bản Inno cũ: không có gì để làm, bỏ qua lỗi.
+#
+# App().run() mặc định TỰ ÁP DỤNG bản chờ ở bất kỳ lần mở nào, và Update.exe tắt mọi
+# tiến trình trong thư mục cài — kể cả app đang hát. Nên (chỉ bản cài, frozen):
+#  - chờ Update.exe đang áp dụng (đóng rồi mở lại ngay) xong rồi mới đi tiếp — trừ khi
+#    chính Update.exe gọi hook --veloapp-* (đang chờ mình thoát, hook chỉ có 30 giây);
+#  - tắt tự áp dụng khi còn bản khác đang chạy hoặc đây là lệnh công cụ
+#    (--tu-kiem-tra, --thu-tai, --chuyen-cau-hinh-cu). Xem core/instance_guard.py.
 try:
     import velopack
-    velopack.App().run()
+    if getattr(sys, "frozen", False):
+        from core.instance_guard import (
+            auto_apply_on_startup_allowed, other_instances_running, wait_for_update_exe,
+        )
+        if not any(a.startswith("--veloapp-") for a in sys.argv[1:]):
+            wait_for_update_exe(os.path.dirname(sys.executable))
+        _velopack_app = velopack.App()
+        if not auto_apply_on_startup_allowed(sys.argv, other_instances_running()):
+            _velopack_app = _velopack_app.set_auto_apply_on_startup(False)
+        _velopack_app.run()
+    else:
+        velopack.App().run()
 except Exception:
     pass
 
