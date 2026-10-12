@@ -8,7 +8,8 @@ from PySide6.QtWidgets import (
 )
 
 from core.audio_doctor.model import GROUP_ORDER, GROUP_TITLES, Status
-from ui.design_tokens import C
+from ui import responsive as rp
+from ui.design_tokens import C, FONT, scrollarea_qss
 from ui.ui_invoker import UiInvoker
 
 _ICON = {
@@ -77,7 +78,11 @@ class AudioDoctorDialog(QDialog):
         self._running = False
         self.report = None
         self.setWindowTitle("Tự sửa âm thanh")
-        self.setMinimumWidth(520)
+        # Nền tối tường minh: thiếu nó thì chữ sáng của theme rơi lên nền sáng
+        # mặc định của Windows, gần như không đọc được.
+        self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']}; font-family: {FONT};")
+        rp.set_min_width(self, 520)
+        self.setMinimumHeight(rp.px(420, self))
         root = QVBoxLayout(self)
         self.summary_label = QLabel("Đang kiểm tra…")
         self.summary_label.setWordWrap(True)
@@ -102,6 +107,7 @@ class AudioDoctorDialog(QDialog):
         bl.addStretch()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(scrollarea_qss())
         scroll.setWidget(body)
         root.addWidget(scroll, 1)
 
@@ -169,6 +175,9 @@ class AudioDoctorDialog(QDialog):
             text = (f"Đã sửa {fixed} mục. Còn {len(manual)} mục cần làm tay — "
                     "bấm «Hướng dẫn» ở từng mục, hoặc «Gửi cho kỹ thuật».")
         self.summary_label.setText(text)
+        # DAW mở xong giữa chừng thường chiếm tiền cảnh, che mất hộp thoại.
+        self.raise_()
+        self.activateWindow()
         self._speak(text)
         cb = getattr(self._dashboard, "_on_audio_doctor_report", None)
         if cb:

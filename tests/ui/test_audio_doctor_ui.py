@@ -84,6 +84,33 @@ def test_hop_thoai_tu_sua_va_hien_trang_thai(qapp, mock_engine, qtbot, tmp_path)
     assert "Đã sửa 1" in dlg.summary_label.text()
 
 
+def test_hop_thoai_nen_toi_chu_sang_va_du_cao(qapp, mock_engine, qtbot, tmp_path):
+    """Chạy thật trên Windows: thiếu nền tối thì chữ sáng của theme nằm trên nền
+    sáng mặc định — gần như không đọc được; danh sách bị bóp còn hai dòng."""
+    from ui.design_tokens import C
+    from ui.dialogs.audio_doctor_dialog import AudioDoctorDialog
+    dashboard = _make_dashboard(qtbot)
+    dlg = AudioDoctorDialog(dashboard, _svc(tmp_path), auto_fix=False)
+    qtbot.addWidget(dlg)
+    qss = dlg.styleSheet()
+    assert f"background-color: {C['bg']}" in qss
+    assert f"color: {C['text']}" in qss
+    assert dlg.minimumHeight() >= 420
+
+
+def test_hop_thoai_noi_len_khi_chay_xong(qapp, mock_engine, qtbot, tmp_path):
+    """DAW mở xong giữa chừng sẽ che mất hộp thoại — chạy xong phải nổi lên lại."""
+    from ui.dialogs.audio_doctor_dialog import AudioDoctorDialog
+    dashboard = _make_dashboard(qtbot)
+    dlg = AudioDoctorDialog(dashboard, _svc(tmp_path), auto_fix=False)
+    qtbot.addWidget(dlg)
+    with patch.object(dlg, "raise_") as raise_, patch.object(dlg, "activateWindow") as act:
+        with qtbot.waitSignal(dlg._finished, timeout=5000):
+            dlg.start("check")
+    raise_.assert_called_once()
+    act.assert_called_once()
+
+
 def test_nut_va_phim_tat_mo_hop_thoai(qapp, mock_engine, qtbot):
     dashboard = _make_dashboard(qtbot)
     assert "Tự sửa âm thanh" in dashboard._func_buttons["Tự sửa âm thanh"].toolTip()
