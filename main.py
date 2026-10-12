@@ -6,6 +6,18 @@ import shutil
 import threading
 import logging
 
+# ── Velopack — PHẢI chạy trước mọi import nặng ────────────────────────────────
+# Setup.exe/Update.exe gọi exe với --veloapp-install/--veloapp-updated/... (hook chỉ
+# có 30 giây, không được hiện giao diện): App().run() xử lý rồi tự thoát trước khi
+# nạp Qt/numba. Có bản đã tải sẵn mà lần trước app bị tắt ngang → nó áp dụng luôn
+# rồi mở lại app (VELOPACK_RESTART=true — không phải lần chạy đầu, không làm gì thêm).
+# Chạy từ mã nguồn / bản Inno cũ: không có gì để làm, bỏ qua lỗi.
+try:
+    import velopack
+    velopack.App().run()
+except Exception:
+    pass
+
 # ── PyInstaller _MEI cleanup ──────────────────────────────────────────────────
 def _cleanup_mei():
     """Xóa thư mục tạm _MEI khi app thoát — CHỈ của bản onefile.
@@ -126,6 +138,18 @@ if "--thu-tai" in sys.argv:
     _cleanup_mei()
     os._exit(_ma_thoat)
 
+# Bộ cài cầu nối (máy 1.8.x → bản Velopack) gọi exe MỚI với cờ này, dưới quyền người
+# dùng gốc, để chuyển app_config.json của bản Program Files sang lớp người dùng
+# trước khi xoá bản cũ. Xem QuangLuuStudio_Bridge.iss.
+if "--chuyen-cau-hinh-cu" in sys.argv:
+    from core.first_run import migrate_cli
+    _i = sys.argv.index("--chuyen-cau-hinh-cu")
+    _ma_thoat = migrate_cli(sys.argv[_i + 1] if _i + 1 < len(sys.argv) else "")
+    flush_logs()
+    logging.shutdown()
+    _cleanup_mei()
+    os._exit(_ma_thoat)
+
 # ── yt-dlp ────────────────────────────────────────────────────────────────────
 # Bản yt-dlp nằm trong .exe đứng yên từ lúc build, còn YouTube đổi cơ chế phát
 # video gần như hàng tháng → vài tháng sau là không tải/dò tone được nữa. Ưu tiên
@@ -165,8 +189,7 @@ try:
 
         # Biến thể build. Ghi ra log vì nhìn màn hình không phân biệt được "bản
         # Light đúng thiết kế" với "bản Heavy nạp QtWebEngine hỏng" — mà hai ca
-        # đó chữa khác hẳn nhau, lại còn quyết định app tự tải file cài nào khi
-        # cập nhật (core/updater/_version_check.py).
+        # đó chữa khác hẳn nhau.
         try:
             from core import capabilities
             log.info("Biến thể build: %s", capabilities.describe())
@@ -190,70 +213,26 @@ import backend
 import frontend_qt
 
 
-# ── Update check ──────────────────────────────────────────────────────────────
-
 from PySide6.QtCore import QObject, Signal
 
 
-class _UpdateNotifier(QObject):
-    """Cầu nối thread: worker emit signal → slot chạy trên main thread (queued)."""
-    update_available = Signal(object)
+# ── Cập nhật ngầm (Velopack) ──────────────────────────────────────────────────
+
+def _auto_check_enabled():
+    settings = backend.ConfigManager.load_settings() or {}
+    return bool((settings.get("update") or {}).get("auto_check", True))
 
 
-def _show_update_dialog(release):
-    """Slot main-thread: hiển thị dialog cập nhật."""
+def _start_updates():
+    """Luồng nền kiểm/tải bản mới — chỉ trên bản cài Velopack (core/updater)."""
     try:
-        from ui.dialogs.update_dialog import UpdateDialog
-        dlg = UpdateDialog(release)
-        dlg.exec()
-    except Exception as e:
-        log.warning("Could not show update dialog: %s", e)
-
-
-def _schedule_update_check(notifier):
-    """
-    Chạy sau khi MainDashboard đã hiển thị (non-blocking background thread).
-    Nếu có phiên bản mới, emit signal để show dialog ở main thread.
-    """
-    from core.updater import check_and_notify_update
-    from core.config import ConfigManager
-    import time
-
-    # Respect user preference
-    settings   = ConfigManager.load_settings() or {}
-    update_cfg = settings.get("update", {})
-    if not update_cfg.get("auto_check", True):
-        return
-
-    # Rate-limit: check at most once per 24h
-    import time as _time
-    last_check = update_cfg.get("last_check_timestamp", 0)
-    if _time.time() - last_check < 86400:
-        log.info("Update check skipped (checked within last 24h)")
-        return
-
-    def _on_update_available(release):
-        from ui.dialogs.update_dialog import UpdateDialog
-        if UpdateDialog.should_skip(release.version):
-            log.info("Update %s skipped by user preference", release.version)
-            return
-        # Marshal sang main thread: emit signal từ worker → AutoConnection
-        # thành queued vì notifier thuộc main thread → slot show dialog an toàn.
-        notifier.update_available.emit(release)
-
-    check_and_notify_update(on_update_available=_on_update_available)
-
-    # Update last check timestamp
-    try:
-        from core.config import ConfigManager
-        import time as _t
-        settings   = ConfigManager.load_settings() or {}
-        update_cfg = settings.get("update", {})
-        update_cfg["last_check_timestamp"] = _t.time()
-        settings["update"] = update_cfg
-        ConfigManager.save_settings(settings)
+        from core.config import APP_DIR, AppConfig
+        from core.licensing.device import get_fingerprint
+        from core.updater import start_background_updates
+        start_background_updates(APP_DIR, AppConfig.get("license_server_url", ""),
+                                 get_fingerprint(), _auto_check_enabled)
     except Exception:
-        pass
+        log.exception("Không khởi động được cập nhật ngầm")
 
 
 # ── App lifecycle ─────────────────────────────────────────────────────────────
@@ -439,14 +418,9 @@ def main():
 
         # 3. Route
         if settings:
-            # Tạo dashboard TRƯỚC (đảm bảo QApplication tồn tại) rồi mới tạo
-            # notifier + thread check update — signal queued về main thread.
+            # Tạo dashboard TRƯỚC (đảm bảo QApplication tồn tại) rồi mới chạy các luồng nền.
             dashboard = frontend_qt.MainDashboard(settings)
-            notifier = _UpdateNotifier()
-            notifier.update_available.connect(_show_update_dialog)
-            threading.Thread(
-                target=_schedule_update_check, args=(notifier,), daemon=True
-            ).start()
+            _start_updates()
             # Nền: gửi lại crash report tồn đọng + check-in license định kỳ.
             lic_notifier = _LicenseNotifier()
             lic_notifier.license_lost.connect(_show_license_lost_dialog)
@@ -476,6 +450,12 @@ if __name__ == "__main__":
     except Exception:
         log.exception("Unhandled exception in main()")
     finally:
+        # Bản mới đã tải sẵn → Update.exe áp dụng im lặng sau khi tiến trình này thoát.
+        try:
+            from core.updater import apply_pending_on_exit
+            apply_pending_on_exit()
+        except Exception:
+            log.exception("Không giao được việc áp dụng bản cập nhật")
         log.info("App exiting — log dir: %s", _LOG_DIR)
         flush_logs()
         logging.shutdown()

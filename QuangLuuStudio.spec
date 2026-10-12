@@ -80,7 +80,10 @@ hiddenimports = [
     'ui.dialogs.premium_dialog',
     'ui.dialogs.progress_dialog',
     'ui.dialogs.setlist_dialog',
-    'ui.dialogs.update_dialog',
+    'ui.dialogs.first_run_dialog',
+    # Velopack: import trong khối try ở đầu main.py + import trễ trong core/updater
+    'velopack',
+    'core.updater.velopack_updater',
     # Khoá kỹ thuật / chế độ khách — lazy import từ header + settings dialog
     'ui.dialogs.tech_unlock',
     'ui.dialogs.shutdown_dialog',
