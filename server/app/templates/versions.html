@@ -15,12 +15,14 @@
   <tr>
     <td>{{ r.version }}</td>
     <td>{{ {'dang_nhap': '⏳ đang nhập', 'xong': '✓ xong', 'loi': '✗ lỗi'}.get(r.status, r.status) }}
-        {% if r.import_error %}<br><small>{{ r.import_error }}</small>{% endif %}</td>
+        {% if r.import_error %}<br><small>{{ r.import_error }}</small>{% endif %}
+        {% if r.status == 'xong' and not r.setup_filename %}<br><small>không có bản cài</small>{% endif %}</td>
     <td><form method="post" action="/admin/velopack/{{ r.id }}/rollout" class="row">
           <input name="rollout_percent" type="number" min="0" max="100" value="{{ r.rollout_percent }}" style="width:5em">
           <button class="ghost">Lưu</button></form></td>
     <td>{{ '🟢' if r.is_active else '⚪' }}</td>
-    <td>{% if r.status == 'xong' %}<form method="post" action="/admin/velopack/{{ r.id }}/toggle"><button class="ghost">{{ 'Tắt' if r.is_active else 'Bật' }}</button></form>{% endif %}</td>
+    <td>{% if r.status == 'xong' %}<form method="post" action="/admin/velopack/{{ r.id }}/toggle"><button class="ghost">{{ 'Tắt' if r.is_active else 'Bật' }}</button></form>{% endif %}
+        {% if not r.is_active %}<form method="post" action="/admin/velopack/{{ r.id }}/delete"><button class="ghost" onclick="return confirm('Xoá bản {{ r.version }}? File gói trên máy chủ cũng bị xoá.')">Xoá</button></form>{% endif %}</td>
   </tr>
   {% endfor %}
 </table>

@@ -35,7 +35,7 @@ from app.security import (
     make_session,
     verify_password,
 )
-from app.services import codegen, storage, tonelib, velopack_import
+from app.services import codegen, storage, tonelib, velopack_feed, velopack_import
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -537,6 +537,34 @@ def velopack_toggle(rid: int, admin: str = Depends(current_admin), db: Session =
         row.is_active = not row.is_active
         db.commit()
     return _redirect("/admin/versions")
+
+
+@router.post("/velopack/{rid}/delete")
+def velopack_delete(rid: int, admin: str = Depends(current_admin), db: Session = Depends(get_db)):
+    """Xoá bản đang tắt: dòng + file gói/bộ cài trên đĩa (~1 GB/bản), trừ file dòng khác còn dùng."""
+    row = db.get(VelopackRelease, rid)
+    if row is None or row.is_active:
+        return _redirect("/admin/versions")
+    mine = _velopack_files(row)
+    db.delete(row)
+    db.commit()
+    still_used = set()
+    for other in db.scalars(select(VelopackRelease)).all():
+        still_used |= _velopack_files(other)
+    for name in mine - still_used:
+        velopack_feed.velopack_dir().joinpath(name).unlink(missing_ok=True)
+    return _redirect("/admin/versions")
+
+
+def _velopack_files(row):
+    names = set()
+    try:
+        names.update(a.get("FileName", "") for a in json.loads(row.assets_json or "[]"))
+    except (ValueError, AttributeError):
+        pass
+    if row.setup_filename:
+        names.add(row.setup_filename)
+    return {n for n in names if velopack_feed.valid_filename(n)}
 
 
 @router.post("/velopack/{rid}/rollout")
