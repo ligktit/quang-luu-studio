@@ -82,6 +82,7 @@ manual_timelines.json
 ui_config.json
 accessibility_overrides.json
 calibration_overrides.json
+app_config_overrides.json
 crash_queue.json
 support_queue.json
 tone_share_queue.json

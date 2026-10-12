@@ -48,6 +48,8 @@ $SCRIPT_VERSION = "1.0"
 $DATA_DIR      = Join-Path $env:APPDATA $DATA_FOLDER
 $SETTINGS_FILE = Join-Path $DATA_DIR "settings.json"
 $COOKIE_TARGET = Join-Path $DATA_DIR "youtube_cookies.txt"   # _AUTO_COOKIE_FILE của app
+# Cấu hình người dùng đổi (cookie...) — app đọc phủ lên app_config.json đi kèm bản cài.
+$OVERRIDES_FILE = Join-Path $DATA_DIR "app_config_overrides.json"
 $BACKUP_DIR    = Join-Path $DATA_DIR ("backup_sualoi\" + (Get-Date -Format "yyyyMMdd_HHmmss"))
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -459,98 +461,109 @@ if (-not $sRes.Valid) {
 # ══════════════════════════════════════════════════════════════════════════
 Section "3. YOUTUBE — COOKIE ĐỂ TẢI ĐƯỢC NHẠC"
 
-if (-not $APP_CONFIG -or -not (Test-Path -LiteralPath $APP_CONFIG)) {
-    Say-Skip "Không tìm thấy app_config.json — bỏ qua phần cookie"
+# Cấu hình HIỆU LỰC = app_config.json (đi kèm bản cài, có thể không tìm thấy) phủ lên bởi
+# app_config_overrides.json (DATA_DIR). Sửa thì ghi vào overrides, KHÔNG vào thư mục cài:
+# bản Velopack thay cả thư mục mỗi lần cập nhật, Program Files thì chỉ đọc.
+$cfg = New-Object psobject
+if ($APP_CONFIG -and (Test-Path -LiteralPath $APP_CONFIG)) {
+    $bRes = Read-JsonFile $APP_CONFIG
+    if ($bRes.Valid -and $null -ne $bRes.Data) { $cfg = $bRes.Data }
+    elseif (-not $bRes.Valid) { Say-Info ("app_config.json hỏng (" + $bRes.Error + ") — app dùng giá trị mặc định") }
+}
+$ovRes = Read-JsonFile $OVERRIDES_FILE   # Get-Content -Encoding UTF8 chấp nhận BOM
+if ($ovRes.Exists -and -not $ovRes.Valid) {
+    W ("[ LỖI   ] app_config_overrides.json hỏng: " + $ovRes.Error) "Red"
+    Say-Need ("Sửa hoặc xoá " + $OVERRIDES_FILE + " rồi chạy lại script")
 } else {
-    $cRes = Read-JsonFile $APP_CONFIG
-    if (-not $cRes.Valid) {
-        W ("[ LỖI   ] app_config.json hỏng: " + $cRes.Error) "Red"
-        Say-Need "Chép lại app_config.json từ bộ cài rồi chạy lại script"
-    } else {
-        $cfg = $cRes.Data
-        $cfgChanged = $false
+    $ov = New-Object psobject
+    if ($ovRes.Valid -and $null -ne $ovRes.Data) { $ov = $ovRes.Data }
+    foreach ($p in $ov.PSObject.Properties) { Set-Prop $cfg $p.Name $p.Value }
+    # Đổi một khoá: cập nhật bản hiệu lực ($cfg) để đọc tiếp, và lớp người dùng ($ov) để ghi.
+    function Set-Cfg { param([string]$Name, $Value) Set-Prop $cfg $Name $Value; Set-Prop $ov $Name $Value }
+    $cfgChanged = $false
 
-        $curFile    = [string](Prop $cfg "youtube_cookie_file" "")
-        $curBrowser = ([string](Prop $cfg "youtube_cookie_browser" "auto")).ToLower()
-        W ("        Đang đặt: youtube_cookie_browser = " + $curBrowser + " | youtube_cookie_file = " + $(if ($curFile) { $curFile } else { "(trống)" }))
+    $curFile    = [string](Prop $cfg "youtube_cookie_file" "")
+    $curBrowser = ([string](Prop $cfg "youtube_cookie_browser" "auto")).ToLower()
+    W ("        Đang đặt: youtube_cookie_browser = " + $curBrowser + " | youtube_cookie_file = " + $(if ($curFile) { $curFile } else { "(trống)" }))
 
-        # 3.1 Dọn cấu hình trỏ tệp cookie không còn tồn tại
-        if ($curFile -and -not (Test-Path -LiteralPath $curFile)) {
-            W ("[ LỖI   ] youtube_cookie_file trỏ tệp không tồn tại: " + $curFile) "Red"
-            if (Ask "Xoá cấu hình hỏng này?") {
-                Set-Prop $cfg "youtube_cookie_file" ""; $cfgChanged = $true; $curFile = ""
-                Say-Ok "Đã xoá youtube_cookie_file hỏng"
-            }
+    # 3.1 Dọn cấu hình trỏ tệp cookie không còn tồn tại
+    if ($curFile -and -not (Test-Path -LiteralPath $curFile)) {
+        W ("[ LỖI   ] youtube_cookie_file trỏ tệp không tồn tại: " + $curFile) "Red"
+        if (Ask "Xoá cấu hình hỏng này?") {
+            Set-Cfg "youtube_cookie_file" ""; $cfgChanged = $true; $curFile = ""
+            Say-Ok "Đã xoá youtube_cookie_file hỏng"
         }
+    }
 
-        # 3.2 Nạp tệp cookies.txt do kỹ thuật cung cấp
-        if ($CookieFile) {
-            if (-not (Test-Path -LiteralPath $CookieFile)) {
-                Say-Fail ("Không thấy tệp cookie: " + $CookieFile)
+    # 3.2 Nạp tệp cookies.txt do kỹ thuật cung cấp
+    if ($CookieFile) {
+        if (-not (Test-Path -LiteralPath $CookieFile)) {
+            Say-Fail ("Không thấy tệp cookie: " + $CookieFile)
+        } else {
+            $head = Get-Content -LiteralPath $CookieFile -TotalCount 40 -Encoding UTF8 -ErrorAction SilentlyContinue
+            $text = ($head -join "`n")
+            $looksNetscape = ($text -match "Netscape HTTP Cookie File") -or ($text -match "\t(TRUE|FALSE)\t")
+            $hasYoutube = $false
+            try {
+                $hasYoutube = (Select-String -LiteralPath $CookieFile -Pattern "youtube\.com" -Quiet -ErrorAction SilentlyContinue) -eq $true
+            } catch { }
+            if (-not $looksNetscape) {
+                Say-Fail "Tệp cookie không đúng định dạng Netscape (cần bản xuất từ tiện ích 'Get cookies.txt')"
+            } elseif (-not $hasYoutube) {
+                Say-Fail "Tệp cookie không chứa dòng nào của youtube.com — xuất lại khi đang mở YouTube và đã đăng nhập"
             } else {
-                $head = Get-Content -LiteralPath $CookieFile -TotalCount 40 -Encoding UTF8 -ErrorAction SilentlyContinue
-                $text = ($head -join "`n")
-                $looksNetscape = ($text -match "Netscape HTTP Cookie File") -or ($text -match "\t(TRUE|FALSE)\t")
-                $hasYoutube = $false
-                try {
-                    $hasYoutube = (Select-String -LiteralPath $CookieFile -Pattern "youtube\.com" -Quiet -ErrorAction SilentlyContinue) -eq $true
-                } catch { }
-                if (-not $looksNetscape) {
-                    Say-Fail "Tệp cookie không đúng định dạng Netscape (cần bản xuất từ tiện ích 'Get cookies.txt')"
-                } elseif (-not $hasYoutube) {
-                    Say-Fail "Tệp cookie không chứa dòng nào của youtube.com — xuất lại khi đang mở YouTube và đã đăng nhập"
-                } else {
-                    if (Ask ("Nạp tệp cookie này cho app?")) {
-                        try {
-                            if (-not (Test-Path -LiteralPath $DATA_DIR)) { New-Item -ItemType Directory -Path $DATA_DIR -Force | Out-Null }
-                            Copy-Item -LiteralPath $CookieFile -Destination $COOKIE_TARGET -Force
-                            Set-Prop $cfg "youtube_cookie_file" $COOKIE_TARGET
-                            Set-Prop $cfg "youtube_cookie_browser" "none"   # đã có cookie file, khỏi dò trình duyệt
-                            $cfgChanged = $true; $curFile = $COOKIE_TARGET
-                            Say-Ok ("Đã nạp cookie → " + $COOKIE_TARGET)
-                            Say-Info "Cookie YouTube thường sống vài tháng; khi lỗi 'not a bot' quay lại thì xuất tệp mới."
-                        } catch { Say-Fail ("Chép tệp cookie thất bại: " + $_.Exception.Message) }
-                    }
+                if (Ask ("Nạp tệp cookie này cho app?")) {
+                    try {
+                        if (-not (Test-Path -LiteralPath $DATA_DIR)) { New-Item -ItemType Directory -Path $DATA_DIR -Force | Out-Null }
+                        Copy-Item -LiteralPath $CookieFile -Destination $COOKIE_TARGET -Force
+                        Set-Cfg "youtube_cookie_file" $COOKIE_TARGET
+                        Set-Cfg "youtube_cookie_browser" "none"   # đã có cookie file, khỏi dò trình duyệt
+                        $cfgChanged = $true; $curFile = $COOKIE_TARGET
+                        Say-Ok ("Đã nạp cookie → " + $COOKIE_TARGET)
+                        Say-Info "Cookie YouTube thường sống vài tháng; khi lỗi 'not a bot' quay lại thì xuất tệp mới."
+                    } catch { Say-Fail ("Chép tệp cookie thất bại: " + $_.Exception.Message) }
                 }
             }
         }
+    }
 
-        # 3.3 Chưa có cookie file → chọn nguồn cookie tốt nhất máy đang có
-        if (-not $curFile) {
-            $ffProfiles = Join-Path $env:APPDATA "Mozilla\Firefox\Profiles"
-            $hasFirefox = $false
-            if (Test-Path -LiteralPath $ffProfiles) {
-                $hasFirefox = @(Get-ChildItem -LiteralPath $ffProfiles -Recurse -Filter "cookies.sqlite" -ErrorAction SilentlyContinue).Count -gt 0
-            }
-            if (Test-Path -LiteralPath $COOKIE_TARGET) {
-                $age = ((Get-Date) - (Get-Item -LiteralPath $COOKIE_TARGET).LastWriteTime).TotalDays
-                W ("[ TỐT   ] Đã có tệp cookie tự lưu (" + [math]::Round($age) + " ngày trước): " + $COOKIE_TARGET)
-                if ($age -gt 60) { Say-Need "Tệp cookie đã cũ — nên xuất lại nếu YouTube vẫn chặn" }
-            } elseif ($hasFirefox) {
-                W "[ CHÚ Ý ] Máy có Firefox — đây là nguồn cookie đáng tin nhất (Firefox không khoá tệp cookie)" "Yellow"
-                if ($curBrowser -ne "firefox") {
-                    if (Ask "Đặt youtube_cookie_browser = firefox?") {
-                        Set-Prop $cfg "youtube_cookie_browser" "firefox"; $cfgChanged = $true
-                        Say-Ok "youtube_cookie_browser → firefox"
-                        Say-Info "Nhớ đăng nhập YouTube trên Firefox một lần."
-                    }
-                }
-            } else {
-                W "[ LỖI   ] Không có nguồn cookie dùng được → YouTube sẽ chặn tải nhạc" "Red"
-                Say-Info "Chrome/Edge/Brave từ bản 127 mã hoá cookie kiểu mới (App-Bound), yt-dlp báo"
-                Say-Info "'Failed to decrypt with DPAPI' và không đọc được — đóng trình duyệt cũng không chữa được."
-                Say-Need "Chọn MỘT trong hai cách:"
-                Say-Info "  (1) Cài Firefox, đăng nhập YouTube một lần, rồi chạy lại script này."
-                Say-Info "  (2) Trên Chrome cài tiện ích 'Get cookies.txt LOCALLY', mở youtube.com (đã đăng nhập),"
-                Say-Info "      bấm Export → được tệp cookies.txt, rồi chạy:"
-                Say-Info "      SuaLoi.bat -CookieFile ""C:\Users\...\Downloads\cookies.txt"""
-            }
+    # 3.3 Chưa có cookie file → chọn nguồn cookie tốt nhất máy đang có
+    if (-not $curFile) {
+        $ffProfiles = Join-Path $env:APPDATA "Mozilla\Firefox\Profiles"
+        $hasFirefox = $false
+        if (Test-Path -LiteralPath $ffProfiles) {
+            $hasFirefox = @(Get-ChildItem -LiteralPath $ffProfiles -Recurse -Filter "cookies.sqlite" -ErrorAction SilentlyContinue).Count -gt 0
         }
-
-        if ($cfgChanged) {
-            if (Backup-File $APP_CONFIG) {
-                if (Save-JsonFile $APP_CONFIG $cfg) { Say-Info "Đã ghi app_config.json (bản cũ nằm trong thư mục sao lưu)" }
+        if (Test-Path -LiteralPath $COOKIE_TARGET) {
+            $age = ((Get-Date) - (Get-Item -LiteralPath $COOKIE_TARGET).LastWriteTime).TotalDays
+            W ("[ TỐT   ] Đã có tệp cookie tự lưu (" + [math]::Round($age) + " ngày trước): " + $COOKIE_TARGET)
+            if ($age -gt 60) { Say-Need "Tệp cookie đã cũ — nên xuất lại nếu YouTube vẫn chặn" }
+        } elseif ($hasFirefox) {
+            W "[ CHÚ Ý ] Máy có Firefox — đây là nguồn cookie đáng tin nhất (Firefox không khoá tệp cookie)" "Yellow"
+            if ($curBrowser -ne "firefox") {
+                if (Ask "Đặt youtube_cookie_browser = firefox?") {
+                    Set-Cfg "youtube_cookie_browser" "firefox"; $cfgChanged = $true
+                    Say-Ok "youtube_cookie_browser → firefox"
+                    Say-Info "Nhớ đăng nhập YouTube trên Firefox một lần."
+                }
             }
+        } else {
+            W "[ LỖI   ] Không có nguồn cookie dùng được → YouTube sẽ chặn tải nhạc" "Red"
+            Say-Info "Chrome/Edge/Brave từ bản 127 mã hoá cookie kiểu mới (App-Bound), yt-dlp báo"
+            Say-Info "'Failed to decrypt with DPAPI' và không đọc được — đóng trình duyệt cũng không chữa được."
+            Say-Need "Chọn MỘT trong hai cách:"
+            Say-Info "  (1) Cài Firefox, đăng nhập YouTube một lần, rồi chạy lại script này."
+            Say-Info "  (2) Trên Chrome cài tiện ích 'Get cookies.txt LOCALLY', mở youtube.com (đã đăng nhập),"
+            Say-Info "      bấm Export → được tệp cookies.txt, rồi chạy:"
+            Say-Info "      SuaLoi.bat -CookieFile ""C:\Users\...\Downloads\cookies.txt"""
+        }
+    }
+
+    if ($cfgChanged) {
+        if (-not (Test-Path -LiteralPath $DATA_DIR)) { New-Item -ItemType Directory -Path $DATA_DIR -Force | Out-Null }
+        if (Backup-File $OVERRIDES_FILE) {
+            # Save-JsonFile ghi UTF-8 KHÔNG BOM
+            if (Save-JsonFile $OVERRIDES_FILE $ov) { Say-Info ("Đã ghi " + $OVERRIDES_FILE + " (bản cũ, nếu có, nằm trong thư mục sao lưu)") }
         }
     }
 }

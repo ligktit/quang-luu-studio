@@ -756,10 +756,12 @@ class SfxButtonArea(QWidget):
         self._flow._layout.addWidget(self._add_btn)
         self._add_btn.show()
 
-        # Load initial data
+        # Load initial data — nút mặc định luôn được trỏ lại file đóng gói
+        # (settings.json của bản onefile cũ lưu đường dẫn %TEMP%\_MEIxxxx đã mất).
         initial = sfx_list if sfx_list is not None else []
         if not initial:
-            initial = self._inject_default_paths(list(self._DEFAULT_SFX))
+            initial = list(self._DEFAULT_SFX)
+        initial = self._inject_default_paths(initial)
         for item in initial:
             self._append_button(item, emit=False)
 
@@ -789,14 +791,22 @@ class SfxButtonArea(QWidget):
 
     # ── Internal helpers ──────────────────────────────────────────
     def _inject_default_paths(self, items: list) -> list:
-        """Fill empty file_paths in default list with bundled sfx/ files."""
+        """Điền file đóng gói cho nút mặc định khi file_path rỗng, hoặc khi nó trỏ
+        tới file MẶC ĐỊNH ở chỗ cũ không còn tồn tại (thư mục _MEI tạm của bản
+        onefile). File người dùng tự chọn (tên khác) thì không đụng."""
         name_map = {"sfx_001": "sfx_laugh.wav", "sfx_002": "sfx_applause.wav", "sfx_003": "sfx_cheer.wav"}
+        out = []
         for item in items:
-            if not item.get("file_path") and item.get("id") in name_map:
-                candidate = os.path.join(self._app_dir, "sfx", name_map[item["id"]])
+            item = dict(item)
+            default_name = name_map.get(item.get("id"))
+            fp = item.get("file_path") or ""
+            stale_default = bool(fp) and not os.path.exists(fp) and os.path.basename(fp) == default_name
+            if default_name and (not fp or stale_default):
+                candidate = os.path.join(self._app_dir, "sfx", default_name)
                 if os.path.exists(candidate):
                     item["file_path"] = candidate
-        return items
+            out.append(item)
+        return out
 
     def _append_button(self, sfx_data: dict, emit=True):
         """Create a button widget and insert it before the [+] button."""
