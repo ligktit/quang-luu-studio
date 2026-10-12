@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import uuid
 
 import httpx
 
@@ -26,7 +27,7 @@ def _download(client, url, name, expect_sha256=None, expect_size=None, written=N
     if not velopack_feed.valid_filename(name):
         raise ValueError(f"Tên file không hợp lệ: {name!r}")
     dest = velopack_feed.velopack_dir() / name
-    tmp = dest.with_name(dest.name + ".part")
+    tmp = dest.with_name(f"{dest.name}.part-{uuid.uuid4().hex[:8]}")  # riêng từng lần tải
     h = hashlib.sha256()
     size = 0
     try:
@@ -51,9 +52,11 @@ def _download(client, url, name, expect_sha256=None, expect_size=None, written=N
 
 
 def _download_all(client, version):
+    """Trả (assets, tên setup, các file lần này đã tạo mới)."""
     written = []
     try:
-        return _download_all_into(client, version, written)
+        assets, setup_name = _download_all_into(client, version, written)
+        return assets, setup_name, written
     except BaseException:
         for p in written:  # dọn các gói đã tải trong lần này, tránh file mồ côi ~500 MB
             p.unlink(missing_ok=True)
@@ -86,22 +89,37 @@ def _download_all_into(client, version, written):
     return mine, setup_name
 
 
-def import_release(release_id, *, client=None, session_factory=SessionLocal):
+def _remove(paths):
+    for p in paths:
+        p.unlink(missing_ok=True)
+
+
+def import_release(release_id, token=None, *, client=None, session_factory=SessionLocal):
     own = client is None
     if own:
         client = httpx.Client(timeout=httpx.Timeout(60.0, read=300.0), follow_redirects=True,
                               headers={"User-Agent": "QuangLuuStudio-Server"})
     try:
         with session_factory() as db:
-            version = db.get(VelopackRelease, release_id).version
+            row = db.get(VelopackRelease, release_id)
+            version = row.version if row is not None else None
+        if version is None:
+            log.warning("Nhập Velopack: dòng %s đã bị xoá, bỏ qua", release_id)
+            return
+        written = []
         try:
-            assets, setup_name = _download_all(client, version)
+            assets, setup_name, written = _download_all(client, version)
             status, error = "xong", None
         except Exception as e:  # mọi lỗi → trạng thái "loi" để admin thấy, không làm chết worker
             log.warning("Nhập Velopack %s lỗi: %s", version, e)
             assets, setup_name, status, error = None, None, "loi", f"{type(e).__name__}: {e}"
         with session_factory() as db:
             row = db.get(VelopackRelease, release_id)
+            if row is None or row.import_token != token:
+                # Dòng đã bị xoá, hoặc có lần nhập mới hơn thay thế: bỏ kết quả, dọn file của lần này.
+                log.warning("Nhập Velopack %s: kết quả bị bỏ (dòng đã xoá hoặc lần nhập đã bị thay)", version)
+                _remove(written)
+                return
             row.status = status
             row.import_error = error
             if assets is not None:

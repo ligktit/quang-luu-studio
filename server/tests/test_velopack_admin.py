@@ -1,4 +1,8 @@
+import re
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
+
+from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models import VelopackRelease
@@ -15,7 +19,9 @@ def test_nhap_tao_dong_va_chay_nen(admin_client):
     assert r.status_code == 303
     rows = _rows()
     assert [(x.version, x.status) for x in rows] == [("1.9.1", "dang_nhap")]
-    imp.assert_called_once_with(rows[0].id)
+    imp.assert_called_once_with(rows[0].id, rows[0].import_token)
+    assert re.fullmatch(r"[0-9a-f]{32}", rows[0].import_token)
+    assert rows[0].import_started_at is not None
 
 
 def test_nhap_lai_cung_phien_ban(admin_client):
@@ -82,3 +88,49 @@ def test_phien_ban_chu_so_unicode_hoac_qua_dai_bi_bo_qua(admin_client):
         admin_client.post("/admin/velopack/import", data={"version": "1.9.1-" + "a" * 40})
     assert _rows() == []
     imp.assert_not_called()
+
+
+def _add_row(**kw):
+    with SessionLocal() as db:
+        row = VelopackRelease(version="1.9.1", **kw)
+        db.add(row)
+        db.commit()
+        return row.id
+
+
+def test_khong_nhap_lai_khi_dang_nhap_con_moi(admin_client):
+    started = datetime.now(timezone.utc) - timedelta(minutes=5)
+    _add_row(status="dang_nhap", import_started_at=started, import_token="a" * 32)
+    with patch("app.routers.admin.velopack_import.import_release") as imp:
+        r = admin_client.post("/admin/velopack/import", data={"version": "1.9.1"}, follow_redirects=False)
+    assert r.status_code == 303
+    imp.assert_not_called()
+    assert _rows()[0].import_token == "a" * 32
+
+
+def test_nhap_lai_khi_dang_nhap_da_qua_30_phut(admin_client):
+    started = datetime.now(timezone.utc) - timedelta(minutes=31)
+    _add_row(status="dang_nhap", import_started_at=started, import_token="a" * 32)
+    with patch("app.routers.admin.velopack_import.import_release") as imp:
+        admin_client.post("/admin/velopack/import", data={"version": "1.9.1"})
+    row = _rows()[0]
+    imp.assert_called_once_with(row.id, row.import_token)
+    assert row.import_token != "a" * 32
+
+
+def test_nhap_lai_khi_dang_nhap_chua_co_moc_thoi_gian(admin_client):
+    _add_row(status="dang_nhap")
+    with patch("app.routers.admin.velopack_import.import_release") as imp:
+        admin_client.post("/admin/velopack/import", data={"version": "1.9.1"})
+    imp.assert_called_once()
+
+
+def test_gui_doi_khong_loi_500(admin_client):
+    """Hai request cùng thấy chưa có dòng: request thứ hai đụng UNIQUE → bỏ qua, không 500."""
+    _add_row(status="dang_nhap", import_started_at=datetime.now(timezone.utc))
+    with patch("app.routers.admin.velopack_import.import_release") as imp, \
+            patch.object(Session, "scalar", return_value=None):
+        r = admin_client.post("/admin/velopack/import", data={"version": "1.9.1"}, follow_redirects=False)
+    assert r.status_code == 303
+    imp.assert_not_called()
+    assert len(_rows()) == 1

@@ -126,6 +126,10 @@ class VelopackRelease(Base):
     setup_filename:  Mapped[str | None] = mapped_column(String(255), nullable=True)
     status:          Mapped[str] = mapped_column(String(20), default="dang_nhap", index=True)
     import_error:    Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Chống hai lần nhập cùng bản chạy chồng: mỗi lần nhập có token riêng, chỉ token
+    # còn khớp mới được ghi trạng thái cuối.
+    import_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    import_token:    Mapped[str | None] = mapped_column(String(32), nullable=True)
     rollout_percent: Mapped[int] = mapped_column(Integer, default=0)
     is_active:       Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     published_at:    Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

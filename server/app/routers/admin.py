@@ -1,6 +1,7 @@
 """Admin web UI — đăng nhập mật khẩu, quản lý user / license / version / crash."""
 import json
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -9,6 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Request, Up
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -479,6 +481,7 @@ def toggle_version(ver_id: int, admin: str = Depends(current_admin), db: Session
 
 
 # ── Velopack: nhập từ GitHub Release, bật/tắt, chỉnh % phát ──
+_IMPORT_STALE_AFTER = timedelta(minutes=30)
 _VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?")
 
 
@@ -493,18 +496,38 @@ def velopack_import_release(
     if len(v) > 40 or not _VERSION_RE.fullmatch(v):
         return _redirect("/admin/versions")
     row = db.scalar(select(VelopackRelease).where(VelopackRelease.version == v))
-    if row is not None and row.status == "xong":
-        # Bản đã nhập xong đang được feed phục vụ — không đặt lại, tránh feed ngừng phát nó.
-        return _redirect("/admin/versions")
-    if row is None:
+    now = datetime.now(timezone.utc)
+    if row is not None:
+        if row.status == "xong":
+            # Bản đã nhập xong đang được feed phục vụ — không đặt lại, tránh feed ngừng phát nó.
+            return _redirect("/admin/versions")
+        if row.status == "dang_nhap" and _import_still_running(row, now):
+            # Một lần nhập đang chạy: chạy thêm lần nữa sẽ giẫm lên file của nó.
+            return _redirect("/admin/versions")
+    else:
         row = VelopackRelease(version=v)
         db.add(row)
-    # Nhập lại được: dòng kẹt "dang_nhap" (worker khởi động lại) hoặc "loi".
+    # Nhập lại được: dòng "loi", hoặc "dang_nhap" kẹt (worker khởi động lại) quá 30 phút.
     row.status = "dang_nhap"
     row.import_error = None
-    db.commit()
-    background.add_task(velopack_import.import_release, row.id)
+    row.import_started_at = now
+    row.import_token = uuid.uuid4().hex
+    try:
+        db.commit()
+    except IntegrityError:  # bấm đúp: request kia vừa tạo dòng cùng phiên bản
+        db.rollback()
+        return _redirect("/admin/versions")
+    background.add_task(velopack_import.import_release, row.id, row.import_token)
     return _redirect("/admin/versions")
+
+
+def _import_still_running(row, now):
+    started = row.import_started_at
+    if started is None:
+        return False
+    if started.tzinfo is None:  # SQLite trả datetime không múi giờ
+        started = started.replace(tzinfo=timezone.utc)
+    return now - started < _IMPORT_STALE_AFTER
 
 
 @router.post("/velopack/{rid}/toggle")

@@ -1,6 +1,8 @@
 """Nhập bản Velopack từ GitHub Release: chỉ lấy tài sản của đúng bản, kiểm SHA256."""
 import hashlib
 import json
+import re
+from unittest.mock import patch
 
 import httpx
 
@@ -121,3 +123,79 @@ def test_ten_file_doc_hai_bi_tu_choi(client):
     row = _row(rid)
     assert row.status == "loi"
     assert list(velopack_feed.velopack_dir().iterdir()) == []
+
+
+def _full_files():
+    full = _a("1.9.1", "Full", FULL)
+    return full, {"releases.win.json": b"", full["FileName"]: FULL}
+
+
+def test_token_bi_thay_khong_ghi_trang_thai(client):
+    full, files = _full_files()
+    rid = _new_row()
+    with SessionLocal() as db:
+        db.get(VelopackRelease, rid).import_token = "moi" * 10 + "ab"
+        db.commit()
+    with httpx.Client(transport=_transport([full], files)) as c:
+        velopack_import.import_release(rid, "cu" * 16, client=c)
+    row = _row(rid)
+    assert row.status == "dang_nhap" and row.assets_json == "[]"
+    assert list(velopack_feed.velopack_dir().iterdir()) == []  # file lần này đã ghi bị dọn
+
+
+def test_token_khop_ghi_trang_thai(client):
+    full, files = _full_files()
+    rid = _new_row()
+    with SessionLocal() as db:
+        db.get(VelopackRelease, rid).import_token = "t" * 32
+        db.commit()
+    with httpx.Client(transport=_transport([full], files)) as c:
+        velopack_import.import_release(rid, "t" * 32, client=c)
+    assert _row(rid).status == "xong"
+
+
+def test_dong_bi_xoa_giua_chung_don_file(client):
+    full, files = _full_files()
+    rid = _new_row()
+    with SessionLocal() as db:
+        db.delete(db.get(VelopackRelease, rid))
+        db.commit()
+    with httpx.Client(transport=_transport([full], files)) as c:
+        velopack_import.import_release(rid, client=c)  # không ném lỗi
+    assert list(velopack_feed.velopack_dir().iterdir()) == []
+
+
+def test_dong_bi_xoa_trong_luc_tai_don_file(client):
+    full, files = _full_files()
+    rid = _new_row()
+    real = velopack_import._download_all
+
+    def download_then_delete(c, version):
+        out = real(c, version)
+        with SessionLocal() as db:
+            db.delete(db.get(VelopackRelease, rid))
+            db.commit()
+        return out
+
+    with patch.object(velopack_import, "_download_all", download_then_delete), \
+            httpx.Client(transport=_transport([full], files)) as c:
+        velopack_import.import_release(rid, client=c)
+    assert list(velopack_feed.velopack_dir().iterdir()) == []
+
+
+def test_ten_part_rieng_moi_lan_tai(client):
+    full, files = _full_files()
+    rid = _new_row()
+    seen = []
+    real = velopack_import.os.replace
+
+    def spy(src, dst):
+        seen.append(str(src))
+        return real(src, dst)
+
+    with patch.object(velopack_import.os, "replace", spy), \
+            httpx.Client(transport=_transport([full], files)) as c:
+        velopack_import.import_release(rid, client=c)
+        velopack_import.import_release(rid, client=c)
+    assert len(seen) == 2 and seen[0] != seen[1]
+    assert all(re.search(r"\.part-[0-9a-f]{8}$", s) for s in seen)
