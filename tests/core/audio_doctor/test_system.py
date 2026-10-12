@@ -24,3 +24,16 @@ def test_sha256_va_copy(tmp_path):
     s.copy(str(src), str(dst))
     assert s.sha256(str(src)) == s.sha256(str(dst))
     assert s.sha256(str(tmp_path / "khong_co")) is None
+
+
+def test_start_process_mo_thu_nho_khong_cuop_tien_canh(monkeypatch):
+    """Chạy thật: tự bật loopMIDI làm cửa sổ của nó hiện giữa màn hình, đè lên app."""
+    import subprocess
+    from core.audio_doctor import system
+    seen = {}
+    monkeypatch.setattr(system.subprocess, "Popen", lambda args, **kw: seen.update(args=args, **kw))
+    SystemProbe().start_process(r"C:\x\loopMIDI.exe")
+    assert seen["args"] == [r"C:\x\loopMIDI.exe"]
+    si = seen["startupinfo"]
+    assert si.dwFlags & subprocess.STARTF_USESHOWWINDOW
+    assert si.wShowWindow == 7          # SW_SHOWMINNOACTIVE

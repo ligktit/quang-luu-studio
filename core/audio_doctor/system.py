@@ -34,7 +34,12 @@ class SystemProbe:
             print(f"[AUDIO DOCTOR] Không dừng được {exe}: {e}")
 
     def start_process(self, path) -> None:
-        subprocess.Popen([path], close_fds=True)
+        # Thu nhỏ, không lấy tiền cảnh: cửa sổ loopMIDI bật giữa màn hình sẽ
+        # đè lên app trong khi khách đang dùng.
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 7                  # SW_SHOWMINNOACTIVE
+        subprocess.Popen([path], close_fds=True, startupinfo=si)
 
     # ── MIDI ────────────────────────────────────────────────────────────────
     def midi_ports(self):
