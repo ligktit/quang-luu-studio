@@ -72,7 +72,7 @@ def test_ban_cu_de_sau_khong_don(qtbot, saved):
 
 def test_ban_cu_don_thi_chuyen_cau_hinh_roi_don(qtbot, saved):
     with patch("ui.dialogs.first_run_dialog.first_run.run_setup_all", return_value=0), \
-         patch("ui.dialogs.first_run_dialog.first_run.migrate_legacy_app_config", return_value=True) as mig, \
+         patch("ui.dialogs.first_run_dialog.first_run.migrate_legacy_app_config", return_value=False) as mig, \
          patch("ui.dialogs.first_run_dialog.first_run.cleanup_legacy_elevated", return_value=0) as clean:
         d = _make(qtbot, legacy="C:\\Program Files\\QuangLuuStudio")
         qtbot.waitUntil(lambda: d._btn_legacy.isVisible(), timeout=5000)
@@ -94,6 +94,42 @@ def _don_ban_cu_voi_ma(qtbot, code):
         qtbot.mouseClick(d._btn_legacy, Qt.LeftButton)
         qtbot.waitUntil(lambda: d._btn_continue.isVisible() or d.result() == QDialog.Accepted, timeout=5000)
     return d
+
+
+def _ban_cu_de_sau(qtbot, migrated):
+    with patch("ui.dialogs.first_run_dialog.first_run.run_setup_all", return_value=0), \
+         patch("ui.dialogs.first_run_dialog.first_run.migrate_legacy_app_config",
+               return_value=migrated) as mig, \
+         patch("ui.dialogs.first_run_dialog.first_run.cleanup_legacy_elevated") as clean:
+        d = _make(qtbot, legacy=LEGACY)
+        qtbot.waitUntil(lambda: d._btn_legacy.isVisible(), timeout=5000)
+        qtbot.mouseClick(d._btn_later, Qt.LeftButton)
+        qtbot.waitUntil(lambda: d._btn_continue.isVisible() or d.result() == QDialog.Accepted, timeout=5000)
+    clean.assert_not_called()
+    return d, mig
+
+
+def test_ban_cu_chuyen_cau_hinh_ngay_khi_phat_hien_du_de_sau(qtbot, saved):
+    from core import first_run
+    d, mig = _ban_cu_de_sau(qtbot, False)
+    mig.assert_called_once_with(LEGACY)
+    assert saved["settings"]["legacy_config_migrated"] == first_run.legacy_path_key(LEGACY)
+    assert d.result() == QDialog.Accepted   # không ghi gì → không cần nhắc mở lại
+
+
+def test_ban_cu_chuyen_cau_hinh_co_ghi_thi_nhac_mo_lai_app(qtbot, saved):
+    d, mig = _ban_cu_de_sau(qtbot, True)
+    mig.assert_called_once()
+    assert d._btn_continue.isVisible()
+    assert "đóng và mở lại app" in d._lbl_notes.text()
+
+
+def test_ban_cu_da_chuyen_cau_hinh_khong_chuyen_lai(qtbot, saved):
+    from core import first_run
+    saved["settings"] = {"legacy_config_migrated": first_run.legacy_path_key(LEGACY.lower() + "\\")}
+    d, mig = _ban_cu_de_sau(qtbot, True)
+    mig.assert_not_called()
+    assert d.result() == QDialog.Accepted
 
 
 def test_don_ban_cu_ma_0_xong_khong_ghi_chu(qtbot, saved):
