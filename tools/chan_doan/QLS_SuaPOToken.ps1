@@ -810,14 +810,15 @@ function Set-PreferIPv4 {
     return $false
 }
 
-# Ghi các khoá vào app_config.json (sao lưu, không BOM, xin admin nếu cần)
+# Ghi các khoá vào app_config_overrides.json (sao lưu, không BOM, xin admin nếu cần)
 function Set-AppConfigValues {
     param([hashtable]$Values, [string]$Label)
-    $cfgPath = Join-Path $AppRoot "app_config.json"
+    $cfgPath = Join-Path $DataDir "app_config_overrides.json"
+    New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
     $cfg = $null
     if (Test-Path -LiteralPath $cfgPath) {
         try { $cfg = [System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF) | ConvertFrom-Json -ErrorAction Stop }
-        catch { Say-Fail ("app_config.json hỏng, không đọc được: " + $_.Exception.Message); return $false }
+        catch { Say-Fail ("app_config_overrides.json hỏng, không đọc được: " + $_.Exception.Message); return $false }
     }
     if ($null -eq $cfg) { $cfg = New-Object psobject }
     $same = $true
@@ -826,7 +827,7 @@ function Set-AppConfigValues {
         if ($cur -ne ($Values[$k] | ConvertTo-Json -Compress)) { $same = $false }
         $cfg | Add-Member -NotePropertyName $k -NotePropertyValue $Values[$k] -Force
     }
-    if ($same) { Say-Info ("app_config.json đã " + $Label + " từ trước."); return $true }
+    if ($same) { Say-Info ("app_config_overrides.json đã " + $Label + " từ trước."); return $true }
     # KHÔNG BOM: core/config.py mở bằng encoding="utf-8", gặp BOM là json.load ném lỗi
     # và app lặng lẽ bỏ CẢ file cấu hình, dùng mặc định.
     $tmpCfg = New-TempPath ".json"
@@ -837,7 +838,7 @@ function Set-AppConfigValues {
     try {
         if (Test-Path -LiteralPath $cfgPath) {
             New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
-            Copy-Item -LiteralPath $cfgPath -Destination (Join-Path $backupDir "app_config.json") -Force -ErrorAction Stop
+            Copy-Item -LiteralPath $cfgPath -Destination (Join-Path $backupDir "app_config_overrides.json") -Force -ErrorAction Stop
         }
         Copy-Item -LiteralPath $tmpCfg -Destination $cfgPath -Force -ErrorAction Stop
         $written = $true
@@ -850,12 +851,12 @@ function Set-AppConfigValues {
             $written = ($pe.ExitCode -eq 0)
         } catch { Say-Info ("Không lấy được quyền admin: " + $_.Exception.Message) }
     } catch {
-        Say-Info ("Ghi app_config.json lỗi: " + $_.Exception.Message)
+        Say-Info ("Ghi app_config_overrides.json lỗi: " + $_.Exception.Message)
     }
     Remove-Item -LiteralPath $tmpCfg -Force -ErrorAction SilentlyContinue
-    if (-not $written) { Say-Fail "Không ghi được app_config.json (cần quyền admin)."; return $false }
-    Say-Ok ("app_config.json: " + $Label)
-    if (Test-Path -LiteralPath (Join-Path $backupDir "app_config.json")) { Say-Info ("Bản sao lưu: " + $backupDir) }
+    if (-not $written) { Say-Fail "Không ghi được app_config_overrides.json (cần quyền admin)."; return $false }
+    Say-Ok ("app_config_overrides.json: " + $Label)
+    if (Test-Path -LiteralPath (Join-Path $backupDir "app_config_overrides.json")) { Say-Info ("Bản sao lưu: " + $backupDir) }
     return $true
 }
 

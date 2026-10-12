@@ -32,7 +32,7 @@ chcp 65001 >nul
 
 set "APPDATA_DIR=%APPDATA%\QuangLuuStudio"
 set "COOKIE_OUT=%APPDATA_DIR%\youtube_cookies.txt"
-set "APP_CONFIG=%~dp0..\app_config.json"
+set "APP_CONFIG=%APPDATA_DIR%\app_config_overrides.json"
 set "BROWSER="
 set "PROFILE="
 set "INTERACTIVE=1"
@@ -205,21 +205,18 @@ echo.
 echo [2/3] File cookie da duoc luu (%FSIZE% bytes).
 echo.
 
-:: Update app_config.json neu ton tai
-if exist "%APP_CONFIG%" (
-    echo [3/3] Cap nhat app_config.json...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-        "$p = [IO.Path]::GetFullPath('%APP_CONFIG%');" ^
-        "$c = Get-Content -Raw $p | ConvertFrom-Json;" ^
-        "if (-not $c.PSObject.Properties['youtube_cookie_file']) { $c | Add-Member youtube_cookie_file '' };" ^
-        "if (-not $c.PSObject.Properties['youtube_cookie_browser']) { $c | Add-Member youtube_cookie_browser 'none' };" ^
-        "$c.youtube_cookie_file = '%COOKIE_OUT%';" ^
-        "$c.youtube_cookie_browser = 'none';" ^
-        "[IO.File]::WriteAllText($p, ($c | ConvertTo-Json -Depth 20) + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)));" ^
-        "Write-Host '[OK] app_config.json da duoc cap nhat'"
-) else (
-    echo [3/3] Khong tim thay app_config.json - bo qua cap nhat config
-)
+:: Phan nguoi dung doi cua app_config nam o %APPDATA% - chua co thi tao rong
+if not exist "%APP_CONFIG%" powershell -NoProfile -Command "[IO.File]::WriteAllText('%APP_CONFIG%', '{}', (New-Object Text.UTF8Encoding($false)))"
+echo [3/3] Cap nhat app_config_overrides.json...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$p = [IO.Path]::GetFullPath('%APP_CONFIG%');" ^
+    "$c = [IO.File]::ReadAllText($p).TrimStart([char]0xFEFF) | ConvertFrom-Json;" ^
+    "if (-not $c.PSObject.Properties['youtube_cookie_file']) { $c | Add-Member youtube_cookie_file '' };" ^
+    "if (-not $c.PSObject.Properties['youtube_cookie_browser']) { $c | Add-Member youtube_cookie_browser 'none' };" ^
+    "$c.youtube_cookie_file = '%COOKIE_OUT%';" ^
+    "$c.youtube_cookie_browser = 'none';" ^
+    "[IO.File]::WriteAllText($p, ($c | ConvertTo-Json -Depth 20) + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)));" ^
+    "Write-Host '[OK] app_config_overrides.json da duoc cap nhat'"
 
 echo.
 echo  =====================================================
