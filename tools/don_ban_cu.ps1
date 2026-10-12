@@ -39,9 +39,25 @@ $oldShortcuts = @(
 #      - không có reparse point (junction/symlink) ở chính nó hay bên trong.
 #    Có dấu hiệu bản cũ mà bị bỏ qua → $skipped: giữ khoá gỡ cài đặt, mã thoát 3
 #    để người dùng gỡ tay qua "Apps & features".
+#    Trong thư mục chỉ xoá các mục bộ cài cũ đặt ở cấp trên cùng ($known: [Files]
+#    DestDir {app} và [UninstallDelete] của QuangLuuStudio_Setup.iss qua mọi phiên
+#    bản, cộng unins000.*). Mục lạ là của khách → giữ lại.
 $dirIncomplete = $false
 $skipped = $false
 $markers = @("QuangLuuStudio.exe", "unins000.exe", "unins000.dat")
+$known = @(
+    "QuangLuuStudio.exe", "app_icon.ico", "setup_all.bat", "setup_midi_ports.ps1",
+    "configure_youtube_cookies.bat", "kiem_tra_tone.bat", "thu_tai_youtube.bat",
+    "app_config.json", "qjs.exe", "studio_one", "cubase", "sfx", "models", "tools", "ffmpeg",
+    "activation.json", "settings.json", "saved_songs.json", "tone_cache.json",
+    "manual_timelines.json", "playlists.json", "temp_audio"
+)
+# Dấu hiệu chỉ tính khi là FILE: thư mục trùng tên không phải của bộ cài, và
+# Remove-Item không -Recurse trên thư mục có nội dung sẽ hiện hộp xác nhận (ẩn khi chạy nâng quyền).
+function Test-Known($item) {
+    if ($markers -contains $item.Name) { return (-not $item.PSIsContainer) }
+    return (($known -contains $item.Name) -or ($item.Name -like 'unins000.*'))
+}
 $raw = $LegacyDir.Trim()
 $checkPath = $raw
 $dir = ""
@@ -72,7 +88,7 @@ if ($dir) {
 $hasMarker = $false
 if ($checkPath -and (Test-Path -LiteralPath $checkPath -PathType Container)) {
     foreach ($m in $markers) {
-        if (Test-Path -LiteralPath (Join-Path $checkPath $m)) { $hasMarker = $true; break }
+        if (Test-Path -LiteralPath (Join-Path $checkPath $m) -PathType Leaf) { $hasMarker = $true; break }
     }
 }
 if (-not $reason -and $hasMarker) {
@@ -94,22 +110,35 @@ if ($reason) {
 } elseif (-not $hasMarker) {
     if (Test-Path -LiteralPath $dir) { Write-Output "[BO QUA] $dir khong phai thu muc cai Quang Luu Studio" }
 } else {
-    # Xoá hết trừ dấu hiệu; dấu hiệu đi SAU CÙNG để xoá dở vẫn nhận ra được ở lần chạy lại.
+    # Xoá các mục của bộ cài cũ trừ dấu hiệu; dấu hiệu đi SAU CÙNG để xoá dở vẫn
+    # nhận ra được ở lần chạy lại.
     Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue |
-        Where-Object { $markers -notcontains $_.Name } |
+        Where-Object { ($markers -notcontains $_.Name) -and (Test-Known $_) } |
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    $others = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue |
-                Where-Object { $markers -notcontains $_.Name })
-    if ($others.Count -eq 0) {
+    $knownLeft = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue |
+                   Where-Object { ($markers -notcontains $_.Name) -and (Test-Known $_) })
+    if ($knownLeft.Count -eq 0) {
         foreach ($m in $markers) {
-            Remove-Item -LiteralPath (Join-Path $dir $m) -Force -ErrorAction SilentlyContinue
+            $mp = Join-Path $dir $m
+            if (Test-Path -LiteralPath $mp -PathType Leaf) {
+                Remove-Item -LiteralPath $mp -Force -ErrorAction SilentlyContinue
+            }
         }
-        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
     }
-    if (Test-Path -LiteralPath $dir) {
+    $rest = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)
+    $knownLeft = @($rest | Where-Object { Test-Known $_ })
+    if ($knownLeft.Count -eq 0 -and $rest.Count -gt 0) {
+        # Bản cũ đã gỡ xong; phần còn lại là của khách.
+        foreach ($i in $rest) { Write-Output "[GIU LAI] $($i.FullName) (khong phai file cua ban cai cu)" }
+    } elseif ($knownLeft.Count -eq 0) {
+        # Không -Recurse: thư mục phải rỗng, có gì mới xuất hiện thì lỗi chứ không xoá.
+        try { [IO.Directory]::Delete($dir, $false) } catch { }
+    }
+    if ($knownLeft.Count -gt 0 -or ($rest.Count -eq 0 -and (Test-Path -LiteralPath $dir))) {
         $dirIncomplete = $true
         Write-Output "[CANH BAO] Chua xoa het $dir (file dang bi khoa?)"
-    } else { Write-Output "[OK] Da xoa $dir" }
+    } elseif ($rest.Count -eq 0) { Write-Output "[OK] Da xoa $dir" }
+    else { Write-Output "[OK] Da go ban cai cu trong $dir (giu lai file cua ban)" }
 }
 
 # 2. Shortcut cũ — đúng 5 tên, chỉ trong các thư mục dùng chung.

@@ -35,13 +35,13 @@ def ctx(tmp_path):
             pass
 
 
-def _run(legacy, key, sc, protected=None, cwd=None):
+def _run(legacy, key, sc, protected=None, cwd=None, timeout=60):
     extra = ["-ProtectedDirs", str(protected)] if protected else []
     return subprocess.run(
         ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", SCRIPT,
          "-LegacyDir", str(legacy), "-UninstallKey", key, "-ShortcutDirs", str(sc)] + extra,
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=60, cwd=cwd)
+        stdin=subprocess.DEVNULL, timeout=timeout, cwd=cwd)
 
 
 def _key_exists(sub):
@@ -139,3 +139,50 @@ def test_duong_dan_tuong_doi_bo_qua(ctx, tmp_path):
     assert r.returncode == 3, r.stdout + r.stderr
     assert (cwd / "QuangLuuStudio" / "QuangLuuStudio.exe").exists()
     assert _key_exists(ctx["sub"])
+
+
+def test_chi_xoa_muc_cua_bo_cai_cu_giu_file_la(ctx):
+    """Chỉ xoá file/thư mục bộ cài Inno cũ đặt ở cấp trên cùng; mục lạ là của khách
+    → giữ, nhưng bản cũ coi như đã gỡ: vẫn xoá khoá + shortcut, mã 0."""
+    legacy = ctx["legacy"]
+    for n in ("unins000.exe", "unins000.dat", "unins000.msg", "app_config.json", "settings.json",
+              "setup_all.bat", "qjs.exe"):
+        (legacy / n).write_bytes(b"x")
+    (legacy / "temp_audio").mkdir()
+    (legacy / "temp_audio" / "a.wav").write_bytes(b"RIFF")
+    (legacy / "cua_toi.txt").write_text("x", encoding="utf-8")
+    (legacy / "BaiHatCuaToi").mkdir()
+    (legacy / "BaiHatCuaToi" / "bai.mp3").write_bytes(b"ID3")
+    r = _run(legacy, ctx["key"], ctx["sc"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sorted(os.listdir(legacy)) == ["BaiHatCuaToi", "cua_toi.txt"]
+    assert (legacy / "BaiHatCuaToi" / "bai.mp3").exists()
+    assert "GIU LAI" in r.stdout
+    assert not _key_exists(ctx["sub"])
+    assert sorted(os.listdir(ctx["sc"])) == ["Trình duyệt khác.lnk"]
+
+
+def test_thu_muc_trung_ten_dau_hieu_khong_tinh_la_dau_hieu(ctx, tmp_path):
+    """Thư mục tên "unins000.dat" không phải dấu hiệu bản cũ (chỉ file mới tính):
+    không xoá gì, không có hộp xác nhận ẩn của Remove-Item."""
+    d = tmp_path / "Khac" / "QuangLuuStudio"
+    (d / "unins000.dat").mkdir(parents=True)
+    (d / "unins000.dat" / "a.txt").write_text("x", encoding="utf-8")
+    (d / "settings.json").write_text("{}", encoding="utf-8")
+    r = _run(d, ctx["key"], ctx["sc"], timeout=30)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (d / "unins000.dat" / "a.txt").exists()
+    assert (d / "settings.json").exists()
+    assert "khong phai thu muc cai" in r.stdout
+
+
+def test_thu_muc_trung_ten_dau_hieu_ben_canh_exe_duoc_giu(ctx):
+    """Có QuangLuuStudio.exe thật + thư mục tên "unins000.exe": exe bị xoá, thư mục giữ
+    (không phải file của bộ cài), không treo vì hộp xác nhận."""
+    (ctx["legacy"] / "unins000.exe").mkdir()
+    (ctx["legacy"] / "unins000.exe" / "a.txt").write_text("x", encoding="utf-8")
+    r = _run(ctx["legacy"], ctx["key"], ctx["sc"], timeout=30)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sorted(os.listdir(ctx["legacy"])) == ["unins000.exe"]
+    assert (ctx["legacy"] / "unins000.exe" / "a.txt").exists()
+    assert not _key_exists(ctx["sub"])
