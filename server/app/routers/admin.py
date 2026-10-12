@@ -572,13 +572,19 @@ def support_set_status(
 
 
 # ── Thư viện tone cộng đồng ──
-def _count_segments(timeline_json: str) -> int:
-    """Số mốc chuyển tone trong một biến thể (timeline lưu dạng JSON string)."""
+def _timeline_text(timeline_json: str, sep: str = "\n") -> str:
+    """Timeline JSON của biến thể → chữ 'mm:ss Tone' (sep giữa các mốc)."""
     try:
-        data = json.loads(timeline_json or "[]")
-        return len(data) if isinstance(data, list) else 0
+        return tonelib.format_timeline(json.loads(timeline_json or "[]"), sep)
     except (ValueError, TypeError):
-        return 0
+        return ""
+
+
+def _timeline_steps(timeline_json: str) -> list:
+    try:
+        return tonelib.timeline_steps(json.loads(timeline_json or "[]"))
+    except (ValueError, TypeError):
+        return []
 
 
 def _touch_winner(db: Session, song_key: str) -> None:
@@ -595,7 +601,35 @@ def _touch_winner(db: Session, song_key: str) -> None:
 
 
 def _library_msg(song_key: str, text: str) -> RedirectResponse:
-    return _redirect(f"/admin/library?q={quote(song_key)}&msg={quote(text)}")
+    """Báo kết quả về trang sửa của bài; mã sai thì về danh sách (không có trang để về)."""
+    if tonelib.valid_song_key(song_key):
+        return _redirect(f"/admin/library/song/{song_key}?msg={quote(text)}")
+    return _redirect(f"/admin/library?msg={quote(text)}")
+
+
+def _song_view(song_key: str, variants: list) -> dict:
+    """Gói dữ liệu một bài cho cả danh sách lẫn trang sửa."""
+    best = tonelib.best_variant(variants)
+    # Bản thắng luôn đứng đầu (kể cả khi thắng nhờ ghim chứ không nhờ điểm).
+    variants = sorted(variants, key=lambda t: (best is not None and t.id == best.id, tonelib.score(t)),
+                      reverse=True)
+    steps = {t.id: _timeline_steps(t.timeline) for t in variants}
+    title = next((t.title for t in variants if t.title), "")
+    visible = [t for t in variants if t.status != "hidden"]
+    return {
+        "song_key": song_key,
+        "title": title,
+        "variants": variants,
+        "best": best,
+        "best_id": best.id if best is not None else None,
+        "scores": {t.id: tonelib.score(t) for t in variants},
+        "steps": steps,
+        "timelines": {t.id: _timeline_text(t.timeline, " · ") for t in variants},
+        # Số lần chuyển tone của bản thắng — bản máy khách đang nhận.
+        "changes": max(0, len(steps[best.id]) - 1) if best is not None else 0,
+        "reports": sum(int(t.reports or 0) for t in visible),
+        "contested": len(visible),
+    }
 
 
 @router.get("/library", response_class=HTMLResponse)
@@ -603,36 +637,63 @@ def library_page(
     request: Request,
     q: str = "",
     msg: str = "",
+    multi: int = 0,
     admin: str = Depends(current_admin),
     db: Session = Depends(get_db),
 ):
-    """Van an toàn của thư viện chung: nhìn thấy và sửa được dữ liệu rác từ xa."""
-    query = select(SharedTone)
+    """Danh sách gọn để TÌM bài: mỗi bài một dòng, bấm vào để sang trang sửa.
+
+    Ô tìm nhận cả link YouTube: dán link (hoặc mã của bài đã có) là mở thẳng
+    trang sửa. multi=1: chỉ hiện bài mà bản THẮNG có chuyển tone.
+    """
     term = (q or "").strip()
+    key = tonelib.song_key_from_input(term)
+    if key and (key != term or db.scalar(select(SharedTone.id).where(SharedTone.song_key == key))):
+        return _redirect(f"/admin/library/song/{key}")
+
+    query = select(SharedTone)
     if term:
         like = f"%{term}%"
         query = query.where(SharedTone.song_key.ilike(like) | SharedTone.title.ilike(like))
     tones = db.scalars(query.order_by(SharedTone.last_seen.desc()).limit(400)).all()
 
-    # Gom theo bài để dev thấy ngay các biến thể đang tranh nhau của cùng một bài.
-    songs: dict[str, dict] = {}
+    by_song: dict[str, list] = {}
     for tone in tones:
-        songs.setdefault(tone.song_key, {"song_key": tone.song_key, "title": "", "variants": []})
-        songs[tone.song_key]["variants"].append(tone)
-        if tone.title and not songs[tone.song_key]["title"]:
-            songs[tone.song_key]["title"] = tone.title
-
-    groups = []
-    for song in songs.values():
-        best = tonelib.best_variant(song["variants"])
-        song["variants"].sort(key=lambda t: tonelib.score(t), reverse=True)
-        song["best_id"] = best.id if best is not None else None
-        song["scores"] = {t.id: tonelib.score(t) for t in song["variants"]}
-        song["segments"] = {t.id: _count_segments(t.timeline) for t in song["variants"]}
-        groups.append(song)
+        by_song.setdefault(tone.song_key, []).append(tone)
+    songs = [_song_view(k, v) for k, v in by_song.items()]
+    if multi:
+        songs = [s for s in songs if s["changes"]]
 
     return templates.TemplateResponse(
-        request, "library.html", {"admin": admin, "groups": groups, "q": term, "msg": msg}
+        request, "library.html",
+        {"admin": admin, "songs": songs, "q": term, "msg": msg, "multi": multi,
+         "new_key": key},
+    )
+
+
+@router.get("/library/song/{song_key}", response_class=HTMLResponse)
+def library_song_page(
+    request: Request,
+    song_key: str,
+    msg: str = "",
+    admin: str = Depends(current_admin),
+    db: Session = Depends(get_db),
+):
+    """Trang sửa MỘT bài: nghe trên YouTube nhúng, sửa bảng mốc, lưu qua /library/set.
+
+    Bài chưa có trong thư viện vẫn mở được (bảng mốc trống) — đây cũng là chỗ
+    đặt tone cho bài mới.
+    """
+    if not tonelib.valid_song_key(song_key):
+        return _library_msg(song_key, "Mã video phải là 11 ký tự YouTube id.")
+    variants = db.scalars(select(SharedTone).where(SharedTone.song_key == song_key)).all()
+    song = _song_view(song_key, list(variants))
+    editor = song["steps"][song["best_id"]] if song["best_id"] is not None else []
+    return templates.TemplateResponse(
+        request, "library_song.html",
+        {"admin": admin, "song": song, "editor": editor, "msg": msg,
+         "keys": [tonelib.key_display(i, "Minor") for i in range(12)]
+                 + [tonelib.key_display(i, "Major") for i in range(12)]},
     )
 
 
@@ -812,19 +873,22 @@ def library_set(
     if not tonelib.valid_song_key(song_key):
         return _library_msg(song_key[:24], "Mã video phải là 11 ký tự YouTube id.")
 
-    parsed_primary = tonelib.parse_key(primary_key)
-    if not parsed_primary:
+    # Ô tone chính chỉ bắt buộc khi không có mốc nào (cả bài một tone); có mốc
+    # mà mốc đầu sau 0:00 thì parse_timeline_text dùng nó cho đoạn đầu bài.
+    if not timeline.strip() and not tonelib.parse_key(primary_key):
         return _library_msg(song_key, f"Không đọc được tone chính “{primary_key.strip()}”.")
     entries = tonelib.parse_timeline_text(timeline, primary_key)
     if not entries:
-        return _library_msg(song_key, "Mốc thời gian sai: mỗi dòng dạng “mm:ss Tone”, ví dụ “1:35 Bm”.")
+        return _library_msg(
+            song_key,
+            "Mốc thời gian sai: mỗi mốc dạng “mm:ss Tone” (xuống dòng hoặc dấu phẩy giữa "
+            "các mốc), ví dụ “0:00 Gm, 3:57 G#m”; không trùng giờ; mốc đầu sau 0:00 thì "
+            "phải điền tone chính.",
+        )
 
     # Có mốc thì tone chính là mốc đầu: bài chạy theo mốc, cột tone ở máy khách
     # cũng phải hiện đúng tone đang chạy. Ô "tone chính" chỉ quyết khi mốc trống.
-    if timeline.strip():
-        primary_display = entries[0]["key_display"]
-    else:
-        primary_display = tonelib.key_display(*parsed_primary)
+    primary_display = entries[0]["key_display"]
     normalized = tonelib.normalize_timeline(entries)
     digest = tonelib.payload_hash(song_key, normalized)
 
@@ -879,6 +943,7 @@ def library_pin(tone_id: int, admin: str = Depends(current_admin), db: Session =
             tone.pinned = False
         _touch_winner(db, tone.song_key)
         db.commit()
+        return _redirect(f"/admin/library/song/{tone.song_key}")
     return _redirect("/admin/library")
 
 
@@ -889,6 +954,7 @@ def library_hide(tone_id: int, admin: str = Depends(current_admin), db: Session 
         tone.status = "ok" if tone.status == "hidden" else "hidden"
         _touch_winner(db, tone.song_key)
         db.commit()
+        return _redirect(f"/admin/library/song/{tone.song_key}")
     return _redirect("/admin/library")
 
 
@@ -901,4 +967,5 @@ def library_delete(tone_id: int, admin: str = Depends(current_admin), db: Sessio
         db.flush()
         _touch_winner(db, song_key)
         db.commit()
+        return _redirect(f"/admin/library/song/{song_key}")
     return _redirect("/admin/library")

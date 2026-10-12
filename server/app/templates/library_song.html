@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+{% from "_tone_macros.html" import tone_css, chain, change_badge, source_name %}
+{% block content %}
+{{ tone_css() }}
+<style>
+  .song-head { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-bottom:14px; }
+  .song-head h1 { margin:0; font-size:22px; }
+  .song-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:18px; align-items:start; }
+  @media (max-width: 980px) { .song-grid { grid-template-columns:1fr; } }
+  .player-box { position:relative; width:100%; aspect-ratio:16/9; background:#000; border-radius:8px; overflow:hidden; }
+  .player-box iframe, .player-box > div { position:absolute; inset:0; width:100%; height:100%; }
+  .now { font-family:ui-monospace,monospace; color:var(--muted); margin-top:8px; }
+  .marks { width:100%; border-collapse:collapse; background:transparent; }
+  .marks td { padding:6px 4px; border-bottom:1px solid #334155; }
+  .marks input.time { width:80px; font-family:ui-monospace,monospace; }
+  .marks select { min-width:96px; }
+  .marks .bad { border-color:var(--danger); }
+  button.small { padding:6px 10px; font-size:13px; }
+  .editor-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:12px; }
+  .preview { margin-top:12px; padding:10px; background:#0b1220; border-radius:8px; min-height:24px; }
+  .err { color:#fecaca; margin-top:8px; }
+  .variant td { vertical-align:middle; }
+  details.more { display:inline-block; position:relative; }
+  details.more summary { list-style:none; cursor:pointer; padding:6px 10px; border:1px solid #334155; border-radius:6px; }
+  details.more summary::-webkit-details-marker { display:none; }
+  details.more[open] .menu { position:absolute; right:0; top:110%; background:var(--panel); border:1px solid #334155; border-radius:8px; padding:8px; display:flex; flex-direction:column; gap:6px; z-index:5; min-width:140px; }
+</style>
+
+<div style="margin-bottom:10px"><a href="/admin/library">← Danh sách bài</a></div>
+
+<div class="song-head">
+  <h1>{{ song.title or '(chưa có tên)' }}</h1>
+  <code>{{ song.song_key }}</code>
+  {{ change_badge(song) }}
+  {% if song.reports %}<span class="badge revoked">{{ song.reports }} báo sai</span>{% endif %}
+  <a href="https://youtu.be/{{ song.song_key }}" target="_blank" rel="noopener">mở trên YouTube ↗</a>
+</div>
+
+{% if msg %}<div class="card" style="border-left:4px solid var(--accent)">{{ msg }}</div>{% endif %}
+
+<div class="song-grid">
+  <div class="card">
+    <div class="player-box"><div id="player" data-video="{{ song.song_key }}"></div></div>
+    <div class="now">Đang phát: <b id="now">0:00</b></div>
+    <div style="color:var(--muted);font-size:13px;margin-top:6px">
+      Nghe tới chỗ đổi tone rồi bấm <b>+ Thêm mốc tại giờ đang phát</b>. Bấm ▶ ở một mốc để nghe lại từ đó.
+    </div>
+  </div>
+
+  <div class="card">
+    <b>Tone của bài</b>
+    <form id="editor" method="post" action="/admin/library/set">
+      <input type="hidden" name="song_key" value="{{ song.song_key }}">
+      <input type="hidden" name="primary_key" value="">
+      <input type="hidden" name="timeline" id="timeline-field">
+      <label>Tên bài</label>
+      <input type="text" name="title" value="{{ song.title }}" placeholder="Tên bài (tuỳ chọn)" style="width:100%;box-sizing:border-box">
+
+      <table class="marks" style="margin-top:10px">
+        <thead><tr style="color:var(--muted);font-size:12px;text-align:left"><td>Từ giờ</td><td>Tone</td><td></td></tr></thead>
+        <tbody id="marks"></tbody>
+      </table>
+
+      <div class="editor-actions">
+        <button type="button" class="ghost small" id="add-now">+ Thêm mốc tại giờ đang phát</button>
+        <button type="button" class="ghost small" id="add-end">+ Thêm mốc trống</button>
+      </div>
+
+      <div class="preview" id="preview"></div>
+      <div class="err" id="err"></div>
+
+      <div class="editor-actions">
+        <button id="save">Lưu và phát cho mọi máy</button>
+        <span style="color:var(--muted);font-size:13px">Bản lưu được ghim, máy khách nhận ở lần đồng bộ kế.</span>
+      </div>
+
+      <details style="margin-top:12px">
+        <summary style="cursor:pointer;color:var(--muted);font-size:13px">Dán chuỗi dạng chữ</summary>
+        <textarea id="paste" rows="3" style="width:100%;box-sizing:border-box;margin-top:6px" placeholder="0:00 Gm, 3:57 G#m"></textarea>
+        <button type="button" class="ghost small" id="paste-load" style="margin-top:6px">Nạp vào bảng</button>
+      </details>
+    </form>
+  </div>
+</div>
+
+{% if song.variants %}
+<div class="card">
+  <b>Các bản đã có</b>
+  <div style="color:var(--muted);font-size:13px;margin:4px 0 10px">
+    Bản <b>thắng</b> là bản máy khách đang nhận. Bấm <b>Dùng bản này</b> để chép vào bảng bên trên rồi chỉnh tiếp.
+  </div>
+  <table>
+    <tr><th>Chuỗi tone</th><th>Nguồn</th><th>Phiếu / báo sai</th><th></th></tr>
+    {% for v in song.variants %}
+    <tr class="variant" {% if v.status == 'hidden' %}style="opacity:.5"{% endif %}>
+      <td title="{{ song.timelines[v.id] }}">
+        {% if song.steps[v.id] %}{{ chain(song.steps[v.id]) }}{% else %}{{ v.primary_key or '—' }}{% endif %}
+        {% if v.id == song.best_id %}<span class="badge active">thắng</span>{% endif %}
+        {% if v.pinned %}<span class="badge answered">đã ghim</span>{% endif %}
+        {% if v.status == 'hidden' %}<span class="badge revoked">đã ẩn</span>{% endif %}
+      </td>
+      <td>{{ source_name(v) }}</td>
+      <td>{{ v.votes }} / {{ v.reports }}</td>
+      <td style="white-space:nowrap">
+        <div class="row" style="align-items:center;flex-wrap:nowrap">
+          <button type="button" class="ghost small use-variant" data-steps='{{ song.steps[v.id]|tojson }}'>Dùng bản này</button>
+          <form method="post" action="/admin/library/{{ v.id }}/pin">
+            <button class="ghost small">{{ 'Bỏ ghim' if v.pinned else 'Ghim' }}</button>
+          </form>
+          <details class="more">
+            <summary>⋯</summary>
+            <div class="menu">
+              <form method="post" action="/admin/library/{{ v.id }}/hide">
+                <button class="ghost small" style="width:100%">{{ 'Hiện lại' if v.status == 'hidden' else 'Ẩn bản này' }}</button>
+              </form>
+              <form method="post" action="/admin/library/{{ v.id }}/delete"
+                    onsubmit="return confirm('Xoá hẳn bản này? Không hoàn tác được.')">
+                <button class="danger small" style="width:100%">Xoá hẳn</button>
+              </form>
+            </div>
+          </details>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+<script>
+(function () {
+  const KEYS = {{ keys|tojson }};
+  const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+  let rows = {{ editor|tojson }}.map(r => ({ time: r.time, key: r.key }));
+  if (!rows.length) rows = [{ time: "0:00", key: "" }];
+  rows[0].time = "0:00";
+  let dirty = false;
+  let player = null;
+
+  const $ = id => document.getElementById(id);
+
+  function parseTime(text) {
+    const parts = String(text || "").trim().split(":");
+    if (!parts.length || parts.length > 3 || !parts.every(p => /^\d+(\.\d+)?$/.test(p))) return null;
+    return parts.reduce((total, p) => total * 60 + parseFloat(p), 0);
+  }
+  function fmtTime(sec) {
+    // Giữ 1 chữ số lẻ như server (4:14.5) — "Dùng bản này" rồi lưu không làm lệch mốc.
+    sec = Math.max(0, Math.round(sec * 10) / 10);
+    const whole = Math.floor(sec), frac = Math.round((sec - whole) * 10);
+    const h = Math.floor(whole / 3600), m = Math.floor(whole % 3600 / 60), s = whole % 60;
+    const ss = String(s).padStart(2, "0") + (frac ? "." + frac : "");
+    return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+  }
+  function root(key) {
+    const name = key.endsWith("m") ? key.slice(0, -1) : key;
+    return NOTES.indexOf(name);
+  }
+  function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+  function nowSec() { return player && player.getCurrentTime ? player.getCurrentTime() : null; }
+
+  function keyOptions(selected) {
+    const opt = k => `<option value="${k}" ${k === selected ? "selected" : ""}>${k}</option>`;
+    return `<option value="" ${selected ? "" : "selected"}>— chọn tone —</option>`
+      + `<optgroup label="Thứ">${KEYS.filter(k => k.endsWith("m")).map(opt).join("")}</optgroup>`
+      + `<optgroup label="Trưởng">${KEYS.filter(k => !k.endsWith("m")).map(opt).join("")}</optgroup>`;
+  }
+
+  function render() {
+    $("marks").innerHTML = rows.map((r, i) => `
+      <tr data-i="${i}">
+        <td><input class="time" value="${esc(r.time)}" ${i === 0 ? "readonly title='Mốc đầu luôn là 0:00'" : ""}></td>
+        <td><select>${keyOptions(r.key)}</select></td>
+        <td style="white-space:nowrap">
+          <button type="button" class="ghost small act-seek" title="Nghe từ mốc này">▶</button>
+          ${i === 0 ? "" : `<button type="button" class="ghost small act-stamp" title="Lấy giờ đang phát">⏱</button>
+          <button type="button" class="ghost small act-del" title="Bỏ mốc này">✕</button>`}
+        </td>
+      </tr>`).join("");
+    preview();
+  }
+
+  function sortedRows() {
+    return rows.map(r => ({ ...r, sec: parseTime(r.time) }))
+      .sort((a, b) => (a.sec ?? 1e9) - (b.sec ?? 1e9));
+  }
+
+  function validate() {
+    const seen = new Set();
+    for (const [i, r] of rows.entries()) {
+      const sec = parseTime(r.time);
+      if (sec === null) return `Giờ “${r.time}” ở dòng ${i + 1} không đúng dạng phút:giây (vd 3:57).`;
+      if (seen.has(sec)) return `Có hai mốc cùng giờ ${fmtTime(sec)}.`;
+      seen.add(sec);
+      if (!r.key) return `Dòng ${i + 1} chưa chọn tone.`;
+    }
+    return "";
+  }
+
+  function preview() {
+    const err = validate();
+    $("err").textContent = err;
+    $("marks").querySelectorAll("tr").forEach((tr, i) => {
+      tr.querySelector("input.time").classList.toggle("bad", parseTime(rows[i].time) === null);
+      tr.querySelector("select").classList.toggle("bad", !rows[i].key);
+    });
+    const list = sortedRows().filter(r => r.key && r.sec !== null);
+    const changes = list.filter((r, i) => i && r.key !== list[i - 1].key).length;
+    let html = changes ? `<span class="badge expired">Chuyển tone ${changes} lần</span> `
+                       : `<span class="badge unused">Một tone cả bài</span> `;
+    html += '<span class="tl-chain">';
+    list.forEach((r, i) => {
+      if (i) {
+        let d = (root(r.key) - root(list[i - 1].key) + 12) % 12;
+        if (d > 6) d -= 12;
+        const label = d === 0 ? "±0" : (d > 0 ? "+" : "") + d;
+        html += `<span class="tl-arrow">→ <b>${label}</b> →</span>`;
+      }
+      html += `<span class="tl-step"><b>${esc(r.key)}</b> <small>${fmtTime(r.sec)}</small></span>`;
+    });
+    $("preview").innerHTML = html + "</span>";
+  }
+
+  function addRow(sec) {
+    const list = sortedRows();
+    const before = list.filter(r => r.sec !== null && r.sec <= (sec ?? 1e9)).pop();
+    rows.push({ time: sec === null ? "" : fmtTime(sec), key: before ? before.key : "" });
+    rows = sortedRows().map(({ time, key }) => ({ time, key }));
+    rows[0].time = "0:00";
+    dirty = true;
+    render();
+  }
+
+  $("marks").addEventListener("input", e => {
+    const tr = e.target.closest("tr"); if (!tr) return;
+    const r = rows[+tr.dataset.i];
+    if (e.target.matches("input.time")) r.time = e.target.value;
+    if (e.target.matches("select")) r.key = e.target.value;
+    dirty = true;
+    preview();
+  });
+  $("marks").addEventListener("click", e => {
+    const tr = e.target.closest("tr"); if (!tr) return;
+    const i = +tr.dataset.i;
+    if (e.target.classList.contains("act-seek")) {
+      const sec = parseTime(rows[i].time);
+      if (player && player.seekTo && sec !== null) { player.seekTo(sec, true); player.playVideo(); }
+    } else if (e.target.classList.contains("act-stamp")) {
+      const sec = nowSec();
+      if (sec === null) { $("err").textContent = "Bấm phát video trước đã."; return; }
+      rows[i].time = fmtTime(Math.floor(sec)); dirty = true; render();
+    } else if (e.target.classList.contains("act-del")) {
+      rows.splice(i, 1); dirty = true; render();
+    }
+  });
+  $("add-now").addEventListener("click", () => {
+    const sec = nowSec();
+    if (sec === null || sec < 1) { $("err").textContent = "Bấm phát video và nghe tới chỗ đổi tone trước đã."; return; }
+    addRow(Math.floor(sec));
+  });
+  $("add-end").addEventListener("click", () => { rows.push({ time: "", key: "" }); dirty = true; render(); });
+
+  $("paste-load").addEventListener("click", () => {
+    const parsed = [];
+    for (const part of $("paste").value.split(/[\n\r,;]+/).map(s => s.trim()).filter(Boolean)) {
+      const m = part.match(/^(\S+)\s+(.+)$/);
+      if (!m) { $("err").textContent = `Không đọc được “${part}”.`; return; }
+      parsed.push({ time: m[1], key: KEYS.includes(m[2].trim()) ? m[2].trim() : "" });
+    }
+    if (!parsed.length) return;
+    rows = parsed.map(r => ({ ...r, sec: parseTime(r.time) })).sort((a, b) => (a.sec ?? 1e9) - (b.sec ?? 1e9))
+      .map(({ time, key }) => ({ time, key }));
+    rows[0].time = "0:00"; dirty = true; render();
+  });
+
+  document.querySelectorAll(".use-variant").forEach(btn => btn.addEventListener("click", () => {
+    const steps = JSON.parse(btn.dataset.steps || "[]");
+    if (!steps.length) return;
+    rows = steps.map(s => ({ time: s.time, key: KEYS.includes(s.key) ? s.key : "" }));
+    rows[0].time = "0:00"; dirty = true; render();
+    $("editor").scrollIntoView({ behavior: "smooth" });
+  }));
+
+  $("editor").addEventListener("submit", e => {
+    const err = validate();
+    if (err) { e.preventDefault(); $("err").textContent = err; return; }
+    $("timeline-field").value = sortedRows().map(r => `${fmtTime(r.sec)} ${r.key}`).join("\n");
+    dirty = false;
+  });
+  window.addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+
+  render();
+
+  // Trình phát YouTube (IFrame API) — để nghe và lấy giờ đang phát.
+  const box = $("player");
+  window.onYouTubeIframeAPIReady = function () {
+    player = new YT.Player("player", {
+      videoId: box.dataset.video,
+      playerVars: { rel: 0, modestbranding: 1 },
+    });
+    setInterval(() => { const s = nowSec(); if (s !== null) $("now").textContent = fmtTime(Math.floor(s)); }, 500);
+  };
+  const tag = document.createElement("script");
+  tag.src = "https://www.youtube.com/iframe_api";
+  document.head.appendChild(tag);
+})();
+</script>
+{% endblock %}

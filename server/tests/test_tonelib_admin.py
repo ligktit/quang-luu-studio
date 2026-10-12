@@ -75,3 +75,51 @@ def test_decode_cursor_ts_naive_duoc_ep_ve_utc():
     assert tone_id == 7
     assert ts.tzinfo is not None and ts.utcoffset().total_seconds() == 0
     assert ts == datetime(2026, 10, 3, 10, 0, 0, 123456, tzinfo=timezone.utc)
+
+
+def test_parse_timeline_text_mot_dong_phan_cach_bang_dau_phay():
+    entries = tonelib.parse_timeline_text("0:00 Gm, 3:57 G#m; 4:30 Am", "")
+    assert [(e["time"], e["key_display"]) for e in entries] == [(0.0, "Gm"), (237.0, "G#m"), (270.0, "Am")]
+
+
+def test_parse_timeline_text_moc_dau_khong_phai_0_thi_chen_tone_chinh():
+    entries = tonelib.parse_timeline_text("3:57 G#m", "Gm")
+    assert [(e["time"], e["key_display"]) for e in entries] == [(0.0, "Gm"), (237.0, "G#m")]
+    # Không có tone chính thì không biết trước 3:57 hát tone gì → từ chối.
+    assert tonelib.parse_timeline_text("3:57 G#m", "") is None
+
+
+def test_parse_timeline_text_trung_moc_thi_tra_none():
+    assert tonelib.parse_timeline_text("0:00 Gm\n3:57 G#m\n3:57 Am", "Gm") is None
+
+
+def test_parse_timeline_text_gop_moc_lien_tiep_cung_tone():
+    entries = tonelib.parse_timeline_text("0:00 Gm\n1:00 Gm\n3:57 G#m", "")
+    assert [(e["time"], e["key_display"]) for e in entries] == [(0.0, "Gm"), (237.0, "G#m")]
+
+
+def test_parse_timeline_text_qua_tran_moc_thi_tra_none():
+    text = "\n".join(f"{i} {'Gm' if i % 2 else 'Am'}" for i in range(tonelib.MAX_ENTRIES + 1))
+    assert tonelib.parse_timeline_text(text, "Am") is None
+
+
+def test_format_timeline_doc_lai_duoc():
+    entries = [{"time": 0.0, "key_display": "Gm"}, {"time": 237.0, "key_display": "G#m"},
+               {"time": 254.5, "key_display": "C#"}, {"time": 3723.0, "key_display": "D"}]
+    text = tonelib.format_timeline(entries)
+    assert text == "0:00 Gm\n3:57 G#m\n4:14.5 C#\n1:02:03 D"
+    again = tonelib.parse_timeline_text(text, "")
+    assert [(e["time"], e["key_display"]) for e in again] == [(e["time"], e["key_display"]) for e in entries]
+    assert tonelib.format_timeline("không phải list") == ""
+
+
+def test_timeline_steps_co_gio_va_so_nua_cung():
+    entries = [{"time": 0.0, "key_display": "Gm"}, {"time": 237.0, "key_display": "G#m"},
+               {"time": 289.0, "key_display": "Fm"}, {"time": 300.0, "key_display": "F"}]
+    assert tonelib.timeline_steps(entries) == [
+        {"time": "0:00", "key": "Gm", "delta": ""},
+        {"time": "3:57", "key": "G#m", "delta": "+1"},
+        {"time": "4:49", "key": "Fm", "delta": "-3"},
+        {"time": "5:00", "key": "F", "delta": "±0"},
+    ]
+    assert tonelib.timeline_steps("rác") == []

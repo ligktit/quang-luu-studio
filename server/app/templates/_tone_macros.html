@@ -1,0 +1,29 @@
+{# Dùng chung cho library.html và library_song.html. #}
+{% macro tone_css() -%}
+<style>
+  .tl-chain { display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px; }
+  .tl-step { background:#0b1220; border:1px solid #334155; border-radius:6px; padding:2px 8px; white-space:nowrap; }
+  .tl-step small { color:var(--muted); font-family:ui-monospace,monospace; }
+  .tl-arrow { color:var(--muted); font-size:12px; white-space:nowrap; }
+  .tl-arrow b { color:#fed7aa; }
+</style>
+{%- endmacro %}
+
+{% macro chain(steps) -%}
+<span class="tl-chain">
+  {%- for st in steps -%}
+    {%- if not loop.first %}<span class="tl-arrow">→ {% if st.delta %}<b>{{ st.delta }}</b> →{% endif %}</span>{% endif -%}
+    <span class="tl-step"><b>{{ st.key }}</b> <small>{{ st.time }}</small></span>
+  {%- endfor -%}
+</span>
+{%- endmacro %}
+
+{% macro change_badge(song) -%}
+{% if song.changes %}<span class="badge expired">Chuyển tone {{ song.changes }} lần</span>
+{% elif song.best_id is not none %}<span class="badge unused">Một tone cả bài</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro source_name(v) -%}
+{{ {'human': 'người sửa', 'admin': 'admin đặt'}.get(v.source, 'máy dò') }}
+{%- endmacro %}

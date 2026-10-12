@@ -209,7 +209,7 @@ def test_admin_thay_bien_the_va_ghim_duoc(admin_client):
     _contribute(admin_client, tokens[0], fps[0], _timeline((0, "C Major"), (30, "G Major")))
     _contribute(admin_client, tokens[1], fps[1], _timeline((0, "A Minor")), source="auto")
 
-    page = admin_client.get("/admin/library")
+    page = admin_client.get(f"/admin/library/song/{SONG}")
     assert page.status_code == 200
     assert SONG in page.text and "C Major" in page.text and "A Minor" in page.text
 
