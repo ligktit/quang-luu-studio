@@ -70,13 +70,37 @@ def test_nhap_thanh_cong(client):
 
 def test_sai_sha_bao_loi(client):
     full = _a("1.9.1", "Full", FULL)
-    files = {"releases.win.json": b"", full["FileName"]: b"hong-roi"}
+    files = {"releases.win.json": b"", full["FileName"]: b"X" * len(FULL)}
     rid = _new_row()
     with httpx.Client(transport=_transport([full], files)) as c:
         velopack_import.import_release(rid, client=c)
     row = _row(rid)
     assert row.status == "loi"
-    assert "SHA256" in row.import_error or "kích thước" in row.import_error
+    assert "SHA256" in row.import_error
+    assert list(velopack_feed.velopack_dir().iterdir()) == []
+
+
+def test_sha256_chu_hoa_van_nhan(client):
+    full = _a("1.9.1", "Full", FULL)
+    full["SHA256"] = full["SHA256"].upper()
+    files = {"releases.win.json": b"", full["FileName"]: FULL}
+    rid = _new_row()
+    with httpx.Client(transport=_transport([full], files)) as c:
+        velopack_import.import_release(rid, client=c)
+    row = _row(rid)
+    assert row.status == "xong", row.import_error
+
+
+def test_loi_giua_chung_don_file_da_tai(client):
+    full = _a("1.9.1", "Full", FULL)
+    delta = _a("1.9.1", "Delta", DELTA)
+    files = {"releases.win.json": b"", full["FileName"]: FULL,
+             delta["FileName"]: b"X" * len(DELTA)}
+    rid = _new_row()
+    with httpx.Client(transport=_transport([full, delta], files)) as c:
+        velopack_import.import_release(rid, client=c)
+    row = _row(rid)
+    assert row.status == "loi"
     assert list(velopack_feed.velopack_dir().iterdir()) == []
 
 

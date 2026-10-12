@@ -22,7 +22,7 @@ FEED_ASSET = "releases.win.json"
 SETUP_ASSET = "QuangLuuStudio-CaiDat.exe"
 
 
-def _download(client, url, name, expect_sha256=None, expect_size=None):
+def _download(client, url, name, expect_sha256=None, expect_size=None, written=None):
     if not velopack_feed.valid_filename(name):
         raise ValueError(f"Tên file không hợp lệ: {name!r}")
     dest = velopack_feed.velopack_dir() / name
@@ -41,13 +41,26 @@ def _download(client, url, name, expect_sha256=None, expect_size=None):
             raise ValueError(f"{name}: sai kích thước ({size} ≠ {expect_size})")
         if expect_sha256 and h.hexdigest().lower() != str(expect_sha256).lower():
             raise ValueError(f"{name}: sai SHA256")
+        existed = dest.exists()
         os.replace(tmp, dest)
+        if written is not None and not existed:
+            written.append(dest)
     finally:
         if tmp.exists():
             tmp.unlink()
 
 
 def _download_all(client, version):
+    written = []
+    try:
+        return _download_all_into(client, version, written)
+    except BaseException:
+        for p in written:  # dọn các gói đã tải trong lần này, tránh file mồ côi ~500 MB
+            p.unlink(missing_ok=True)
+        raise
+
+
+def _download_all_into(client, version, written):
     api = f"https://api.github.com/repos/{settings.github_repo}/releases/tags/v{version}"
     r = client.get(api, headers={"Accept": "application/vnd.github+json"})
     r.raise_for_status()
@@ -65,11 +78,11 @@ def _download_all(client, version):
             raise ValueError(f"Tên file không hợp lệ trong feed: {name!r}")
         if name not in urls:
             raise ValueError(f"Release v{version} thiếu {name}")
-        _download(client, urls[name], name, a.get("SHA256"), a.get("Size"))
+        _download(client, urls[name], name, a.get("SHA256"), a.get("Size"), written)
     setup_name = None
     if SETUP_ASSET in urls:
         setup_name = f"{version}_{SETUP_ASSET}"
-        _download(client, urls[SETUP_ASSET], setup_name)
+        _download(client, urls[SETUP_ASSET], setup_name, written=written)
     return mine, setup_name
 
 
