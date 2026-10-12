@@ -39,7 +39,8 @@ def _run(legacy, key, sc):
     return subprocess.run(
         ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", SCRIPT,
          "-LegacyDir", str(legacy), "-UninstallKey", key, "-ShortcutDirs", str(sc)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60)
 
 
 def _key_exists(sub):

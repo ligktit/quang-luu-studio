@@ -12,6 +12,7 @@ param(
     [string]$ShortcutDirs = ""
 )
 $ErrorActionPreference = "Continue"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 if (-not $ShortcutDirs) {
     # Inno cài admin → shortcut nằm ở thư mục DÙNG CHUNG. Bản Velopack đặt shortcut
