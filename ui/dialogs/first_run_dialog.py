@@ -240,6 +240,23 @@ def _la_thu_muc_dang_chay(legacy, app_dir):
     return leg in (app, os.path.dirname(app)) or app.startswith(leg.rstrip("\\/") + os.sep)
 
 
+_app = None   # giữ tham chiếu QApplication do bước lần chạy đầu tạo
+
+
+def _ensure_styled_app():
+    """QApplication cho bước lần chạy đầu, dựng GIỐNG frontend_qt._ensure_app (APP_QSS + font).
+    Bước này tạo app TRƯỚC ActivationDialog/SetupView; _ensure_app của chúng thấy app có sẵn
+    sẽ không gắn APP_QSS nữa → phải gắn ngay ở đây."""
+    global _app
+    import frontend_qt   # import trễ: module giao diện chính, nặng
+    app = QApplication.instance()
+    if app is None:
+        app = _app = QApplication(sys.argv)
+        app.setStyleSheet(frontend_qt.APP_QSS)
+    frontend_qt._load_fonts()
+    return app
+
+
 def run_first_run_if_needed():
     """Gọi từ main.py trước cổng kích hoạt. Chỉ chạy ở bản cài Velopack."""
     if not first_run.is_velopack_install(APP_DIR):
@@ -253,6 +270,5 @@ def run_first_run_if_needed():
     need_setup = not first_run.is_done(settings)
     if not need_setup and legacy is None:
         return
-    if QApplication.instance() is None:
-        QApplication(sys.argv)
+    _ensure_styled_app()
     FirstRunDialog(APP_DIR, DATA_DIR, legacy_dir=legacy, run_setup=need_setup).exec()

@@ -1,7 +1,7 @@
 # tests/ui/test_first_run_dialog.py
 """Hộp thoại lần chạy đầu: chạy setup_all nền, hỏi cài loopMIDI / dọn bản cũ khi
 cần, chỉ đánh dấu xong khi đi hết luồng."""
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from PySide6.QtCore import Qt
@@ -247,4 +247,41 @@ def test_ban_cu_thu_muc_khac_van_hoi(tmp_path):
     other = tmp_path / "Program Files" / "QuangLuuStudio"
     other.mkdir(parents=True)
     dlg = _chay_voi_ban_cu(tmp_path, lambda app: str(other))
+    dlg.assert_called_once()
+
+
+def test_ensure_styled_app_tao_app_co_app_qss():
+    """Lần chạy đầu tạo QApplication trước ActivationDialog/SetupView: phải gắn APP_QSS
+    như frontend_qt._ensure_app, vì _ensure_app thấy app có sẵn sẽ không gắn nữa."""
+    import frontend_qt
+    from ui.dialogs import first_run_dialog as m
+    fake = MagicMock()
+    with patch.object(m, "QApplication") as qa, patch.object(frontend_qt, "_load_fonts") as fonts:
+        qa.instance.return_value = None
+        qa.return_value = fake
+        assert m._ensure_styled_app() is fake
+    fake.setStyleSheet.assert_called_once_with(frontend_qt.APP_QSS)
+    fonts.assert_called_once()
+
+
+def test_ensure_styled_app_khong_tao_lai_khi_da_co():
+    import frontend_qt
+    from ui.dialogs import first_run_dialog as m
+    existing = MagicMock()
+    with patch.object(m, "QApplication") as qa, patch.object(frontend_qt, "_load_fonts"):
+        qa.instance.return_value = existing
+        assert m._ensure_styled_app() is existing
+    qa.assert_not_called()
+    existing.setStyleSheet.assert_not_called()
+
+
+def test_run_first_run_if_needed_dung_app_co_style():
+    from ui.dialogs import first_run_dialog as m
+    with patch.object(m.first_run, "is_velopack_install", return_value=True), \
+         patch.object(m.ConfigManager, "load_settings", return_value={}), \
+         patch.object(m.first_run, "find_legacy_install", return_value=None), \
+         patch.object(m, "_ensure_styled_app") as ensure, \
+         patch.object(m, "FirstRunDialog") as dlg:
+        m.run_first_run_if_needed()
+    ensure.assert_called_once()
     dlg.assert_called_once()
