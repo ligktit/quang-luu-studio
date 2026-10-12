@@ -107,3 +107,18 @@ def test_tai_ve_ban_100_phan_tram_moi_nhat(client):
 
 def test_tai_ve_khi_chua_co_ban_404(client):
     assert client.get("/tai-ve").status_code == 404
+
+
+@pytest.mark.parametrize("name", ["..", ".", "", None, "a.nupkg\n", "a/b", "a\\b", "x" * 201, "tên.nupkg"])
+def test_valid_filename_tu_choi(name):
+    assert velopack_feed.valid_filename(name) is False
+
+
+@pytest.mark.parametrize("fp", ["..", "", None, "abc\n", "a/b", "x" * 129])
+def test_valid_fingerprint_tu_choi(fp):
+    assert velopack_feed.valid_fingerprint(fp) is False
+
+
+def test_valid_hop_le():
+    assert velopack_feed.valid_filename("QuangLuuStudio-1.9.1-full.nupkg") is True
+    assert velopack_feed.valid_fingerprint("abc_DEF-123") is True

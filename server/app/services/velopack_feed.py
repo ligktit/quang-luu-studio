@@ -11,8 +11,8 @@ from pathlib import Path
 from app.config import settings
 from app.security import rollout_bucket
 
-_FP_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
-_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,200}$")
+_FP_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,200}")
 
 
 def parse_semver(v):
@@ -21,11 +21,11 @@ def parse_semver(v):
 
 
 def valid_fingerprint(fp):
-    return bool(_FP_RE.match(fp or ""))
+    return bool(_FP_RE.fullmatch(fp or ""))
 
 
 def valid_filename(name):
-    return bool(_NAME_RE.match(name or "")) and name not in (".", "..")
+    return bool(_NAME_RE.fullmatch(name or "")) and name not in (".", "..")
 
 
 def velopack_dir():

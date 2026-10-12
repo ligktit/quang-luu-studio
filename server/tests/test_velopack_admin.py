@@ -74,3 +74,11 @@ def test_can_dang_nhap(client):
     r = client.post("/admin/velopack/import", data={"version": "1.9.1"}, follow_redirects=False)
     assert r.status_code in (302, 303, 401)
     assert _rows() == []
+
+
+def test_phien_ban_chu_so_unicode_hoac_qua_dai_bi_bo_qua(admin_client):
+    with patch("app.routers.admin.velopack_import.import_release") as imp:
+        admin_client.post("/admin/velopack/import", data={"version": "١.٩.١"})
+        admin_client.post("/admin/velopack/import", data={"version": "1.9.1-" + "a" * 40})
+    assert _rows() == []
+    imp.assert_not_called()

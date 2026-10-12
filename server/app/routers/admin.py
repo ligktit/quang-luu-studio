@@ -479,7 +479,7 @@ def toggle_version(ver_id: int, admin: str = Depends(current_admin), db: Session
 
 
 # ── Velopack: nhập từ GitHub Release, bật/tắt, chỉnh % phát ──
-_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(-[A-Za-z0-9.]+)?$")
+_VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?")
 
 
 @router.post("/velopack/import")
@@ -490,7 +490,7 @@ def velopack_import_release(
     db: Session = Depends(get_db),
 ):
     v = version.strip().lstrip("v")
-    if not _VERSION_RE.match(v):
+    if len(v) > 40 or not _VERSION_RE.fullmatch(v):
         return _redirect("/admin/versions")
     row = db.scalar(select(VelopackRelease).where(VelopackRelease.version == v))
     if row is not None and row.status == "xong":
