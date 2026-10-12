@@ -2,7 +2,7 @@ import backend
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox,
     QLineEdit, QFileDialog, QWidget, QFrame, QTabWidget,
-    QSlider, QComboBox,
+    QSlider, QComboBox, QMessageBox,
 )
 from PySide6.QtCore import Qt, QSize, QByteArray
 from PySide6.QtGui import QIcon, QPixmap, QPainter
@@ -18,6 +18,7 @@ from ui.components.svg_icons import (
     SVG_SAVE,
     SVG_SEARCH,
     SVG_SETTINGS,
+    SVG_TRASH,
     SVG_UPLOAD,
     SVG_WRENCH,
     SVG_EYE_OPEN,
@@ -744,6 +745,8 @@ class SettingsDialog(QDialog):
         left.addWidget(self._section_card(self._build_cookie_tools))
         left.addWidget(self._section_header(SVG_GLOBE, "Thư viện tone cộng đồng"))
         left.addWidget(self._section_card(self._build_tone_share))
+        left.addWidget(self._section_header(SVG_WRENCH, "Công cụ chẩn đoán"))
+        left.addWidget(self._section_card(self._build_diag_tools))
         left.addStretch()
 
         right_col = QWidget()
@@ -1349,6 +1352,55 @@ class SettingsDialog(QDialog):
         self._update_status_lbl.setWordWrap(True)
         vl.addWidget(self._update_status_lbl)
 
+    def _build_diag_tools(self, vl):
+        """Thay shortcut Start Menu của bộ cài cũ: Velopack chỉ tạo shortcut cho exe chính."""
+        from core import app_tools
+        from core.config import APP_DIR, _get_recordings_dir
+
+        def _btn(text, color, slot):
+            b = QPushButton(text)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedHeight(36)
+            b.setStyleSheet(pill_btn_qss(color, _lighten(color, 0.1), 12, 12))
+            b.clicked.connect(slot)
+            return b
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self._btn_kiem_tra_tone = _btn("Kiểm tra dò tone", C["blue"],
+                                       lambda: app_tools.launch_bat(APP_DIR, "kiem_tra_tone.bat"))
+        self._btn_thu_tai = _btn("Thử tải YouTube", C["blue"],
+                                 lambda: app_tools.launch_bat(APP_DIR, "thu_tai_youtube.bat"))
+        row.addWidget(self._btn_kiem_tra_tone)
+        row.addWidget(self._btn_thu_tai)
+        vl.addLayout(row)
+
+        self._btn_mo_ban_thu = _btn("Mở thư mục bản thu", C["teal"],
+                                    lambda: app_tools.open_folder(_get_recordings_dir()))
+        vl.addWidget(self._btn_mo_ban_thu)
+
+        self._btn_xoa_du_lieu = _btn("Xoá dữ liệu…", C["accent"], self._action_wipe_data)
+        self._btn_xoa_du_lieu.setIcon(self._svg_icon(SVG_TRASH, "white", 16))
+        vl.addWidget(self._btn_xoa_du_lieu)
+        self._lbl_xoa_du_lieu = QLabel("")
+        self._lbl_xoa_du_lieu.setWordWrap(True)
+        self._lbl_xoa_du_lieu.setStyleSheet(self._field_label_qss(size=11, weight=500, italic=True))
+        vl.addWidget(self._lbl_xoa_du_lieu)
+
+    def _action_wipe_data(self):
+        import sys
+        from core import app_tools
+        from core.config import DATA_DIR, _get_recordings_dir
+        ok, include_recordings = _ask_wipe(self)
+        if not ok:
+            return
+        targets = app_tools.wipe_targets(DATA_DIR, _get_recordings_dir(), include_recordings,
+                                         frozen=getattr(sys, "frozen", False))
+        if not targets or not app_tools.schedule_wipe_after_exit(targets):
+            self._lbl_xoa_du_lieu.setText("Không xoá được: bản chạy từ mã nguồn hoặc thư mục dữ liệu lạ.")
+            return
+        self._lbl_xoa_du_lieu.setText("Dữ liệu sẽ bị xoá ngay sau khi bạn đóng app.")
+
     # ── Accessibility tab ────────────────────────────────────
 
     def _build_accessibility_tab(self):
@@ -1888,3 +1940,18 @@ class SettingsDialog(QDialog):
             self._dashboard._show_message("Đang chạy chế độ dự phòng")
         else:
             self._dashboard._show_message("Chưa kết nối — hãy mở YouTube trên Chrome/Edge", is_error=True)
+
+
+def _ask_wipe(parent):
+    """Hỏi xác nhận xoá dữ liệu. Trả (đồng ý, xoá cả bản thu)."""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Warning)
+    box.setWindowTitle("Xoá dữ liệu")
+    box.setText("Xoá toàn bộ bài hát đã lưu, cài đặt, kích hoạt và bộ nhớ đệm của Quang Lưu Studio?")
+    box.setInformativeText("Việc xoá diễn ra ngay sau khi bạn đóng app và KHÔNG khôi phục được. "
+                           "Sau đó app cần kích hoạt lại.")
+    cb = QCheckBox("Xoá cả các bản thu âm trong Documents\\QuangLuuStudio")
+    box.setCheckBox(cb)
+    box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+    box.setDefaultButton(QMessageBox.No)
+    return box.exec() == QMessageBox.Yes, cb.isChecked()
