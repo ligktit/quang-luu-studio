@@ -1,5 +1,5 @@
 """Header panel builder for MainDashboard."""
-from PySide6.QtWidgets import QComboBox, QLabel, QSizePolicy
+from PySide6.QtWidgets import QComboBox, QLabel, QPushButton, QSizePolicy
 from PySide6.QtCore import Qt
 
 from ui.design_tokens import C, SP, FONT
@@ -59,6 +59,17 @@ def build_header(dashboard) -> PaintedHeaderBar:
             dashboard._marquee_widget.set_led_border(True)
     except Exception as e:
         print(f"[PREMIUM-LED] init lỗi: {e}")
+    # Dải cảnh báo Tự sửa âm thanh — chỉ hiện khi lượt kiểm tra thấy lỗi.
+    dashboard._audio_warn_btn = QPushButton("")
+    dashboard._audio_warn_btn.setFlat(True)
+    dashboard._audio_warn_btn.setCursor(Qt.PointingHandCursor)
+    dashboard._audio_warn_btn.setStyleSheet(
+        f"QPushButton {{ color: {C['orange']}; border: 1px solid {C['orange']};"
+        f" border-radius: 8px; padding: 2px 8px; font-weight: 600; }}")
+    dashboard._audio_warn_btn.setAccessibleName("Cảnh báo âm thanh — bấm để tự sửa")
+    dashboard._audio_warn_btn.clicked.connect(dashboard._open_audio_doctor)
+    dashboard._audio_warn_btn.hide()
+    layout.addWidget(dashboard._audio_warn_btn)
     layout.addWidget(dashboard._marquee_widget, 1)
     dashboard.marquee_label = dashboard._marquee_widget
 

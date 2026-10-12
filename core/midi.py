@@ -5,7 +5,7 @@ Class: MidiHandler
 import time
 import threading
 
-from core.config import MIDI_PORT_NAME
+from core.config import MIDI_PORT_NAME, MIDI_FEEDBACK_PORT_NAME
 
 
 class MidiHandler:
@@ -116,11 +116,14 @@ class MidiHandler:
                     all_ok = False
             return all_ok
     
-    def start_listening(self):
-        """Bắt đầu lắng nghe MIDI input (background thread)"""
+    def start_listening(self, port_name=MIDI_FEEDBACK_PORT_NAME):
+        """Bắt đầu lắng nghe cổng PHẢN HỒI của DAW (QLS_PhanHoi) ở thread nền.
+
+        Không nghe cổng gửi (QuangLuuMIDI): trên đó chỉ có lệnh của chính app.
+        """
         import mido
         if self._is_listening:
-            return
+            return True
         try:
             # Đóng inport cũ trước khi mở mới — tránh leak khi reconnect
             if self.inport:
@@ -132,7 +135,7 @@ class MidiHandler:
 
             available = mido.get_input_names()
             for name in available:
-                if MIDI_PORT_NAME in name:
+                if port_name in name:
                     self.inport = mido.open_input(name)
                     self._is_listening = True
                     self._connect_in_warned = False
@@ -143,7 +146,7 @@ class MidiHandler:
                     print(f"Kết nối MIDI In thành công: {name}")
                     return True
             if not self._connect_in_warned:
-                print(f"Không tìm thấy MIDI input port '{MIDI_PORT_NAME}'")
+                print(f"Không tìm thấy MIDI input port '{port_name}'")
                 self._connect_in_warned = True
             return False
         except Exception as e:
@@ -151,7 +154,20 @@ class MidiHandler:
                 print(f"Lỗi kết nối MIDI In: {e}")
                 self._connect_in_warned = True
             return False
-    
+
+    def ensure_listening(self, port_name=MIDI_FEEDBACK_PORT_NAME):
+        """Đang nghe thì thôi; mất inport hoặc cổng biến mất (loopMIDI khởi động
+        lại) thì mở lại. Gọi định kỳ từ timer trạng thái MIDI."""
+        if self._is_listening and self.inport is not None:
+            try:
+                import mido
+                if any(port_name in n for n in mido.get_input_names()):
+                    return True
+            except Exception:
+                return True
+        self.stop_listening()
+        return self.start_listening(port_name)
+
     def _listen_loop(self):
         """Thread loop nhận MIDI messages"""
         while self._is_listening and self.inport:

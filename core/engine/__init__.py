@@ -43,6 +43,9 @@ class SystemEngine(
         # MIDI
         self.midi_handler          = MidiHandler()
         self.midi_handler.on_cc_received = self._handle_midi_in
+        # Trạng thái kênh DAW báo về (Cubase) — Tự sửa âm thanh đọc ở đây.
+        from core.audio_doctor.feedback import DawFeedback
+        self.daw_feedback = DawFeedback(AppConfig.get_midi_cc() or {})
 
         # Audio recording
         self.recorder              = AudioRecorder()

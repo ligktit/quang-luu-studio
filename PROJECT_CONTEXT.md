@@ -56,6 +56,7 @@ quang-luu-studio/
 │   ├── cdp_monitor.py       #   Chrome DevTools Protocol monitor (websocket-client)
 │   ├── media_monitor.py     #   WindowsMediaMonitor (WinRT Media Control)
 │   ├── memory.py            #   MemoryProfiler / MemoryGuard
+│   ├── audio_doctor/        #   Tự sửa âm thanh: Check/Runner, kiểm tra loopMIDI/DAW/Windows/trình duyệt
 │   ├── logger.py / utils.py / version.py / ytdlp_support.py
 │   ├── engine/              #   SystemEngine = composition các mixin:
 │   │   ├── _lifecycle.py    #     khởi tạo / shutdown
@@ -162,6 +163,7 @@ symbol nặng (SystemEngine, ToneDetector, AudioRecorder, ...) lazy qua PEP 562
 | `core.accessibility` | speaker (TTS), voice_input (Vosk push-to-talk Ctrl+Space), announcer, shortcuts, theme |
 | `core.updater` | check version → download → verify → install |
 | `core.memory` | MemoryProfiler / MemoryGuard |
+| `core.audio_doctor` | Tự sửa âm thanh — kiểm tra lúc mở app, nút sửa (ui/audio_doctor_bridge.py, ui/dialogs/audio_doctor_dialog.py) |
 
 ---
 

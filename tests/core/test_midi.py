@@ -60,3 +60,41 @@ def test_send_cc_with_channel(mock_mido):
     
     handler.send_cc(34, 64, channel=1)
     mock_mido.Message.assert_called_once_with('control_change', channel=1, control=34, value=64)
+
+
+def test_start_listening_mo_cong_phan_hoi(mock_mido):
+    mock_mido.get_input_names.return_value = ["QuangLuuMIDI 0", "QLS_PhanHoi 1"]
+    handler = MidiHandler()
+    try:
+        assert handler.start_listening() is True
+        mock_mido.open_input.assert_called_once_with("QLS_PhanHoi 1")
+    finally:
+        handler.stop_listening()
+
+
+def test_ensure_listening_mo_lai_khi_inport_mat(mock_mido):
+    mock_mido.get_input_names.return_value = ["QLS_PhanHoi"]
+    handler = MidiHandler()
+    try:
+        assert handler.ensure_listening() is True
+        assert handler.ensure_listening() is True          # đang nghe → không mở lại
+        assert mock_mido.open_input.call_count == 1
+        handler.inport = None                              # loopMIDI khởi động lại
+        assert handler.ensure_listening() is True
+        assert mock_mido.open_input.call_count == 2
+    finally:
+        handler.stop_listening()
+
+
+def test_ensure_listening_mo_lai_khi_cong_phan_hoi_bien_mat(mock_mido):
+    mock_mido.get_input_names.return_value = ["QLS_PhanHoi"]
+    handler = MidiHandler()
+    try:
+        assert handler.ensure_listening() is True
+        mock_mido.get_input_names.return_value = []          # loopMIDI tắt / mất cổng
+        assert handler.ensure_listening() is False
+        mock_mido.get_input_names.return_value = ["QLS_PhanHoi"]
+        assert handler.ensure_listening() is True
+        assert mock_mido.open_input.call_count == 2
+    finally:
+        handler.stop_listening()

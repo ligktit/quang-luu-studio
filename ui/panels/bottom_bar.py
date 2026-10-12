@@ -5,7 +5,7 @@ from PySide6.QtGui import QColor
 from ui.design_tokens import C, SP
 from ui.components.painter_button import PainterButton
 from ui.components.painter_record import PainterRecordButton
-from ui.components.svg_icons import SVG_STAR, SVG_LIST, SVG_SAVE, SVG_FOLDER
+from ui.components.svg_icons import SVG_STAR, SVG_LIST, SVG_SAVE, SVG_FOLDER, SVG_WRENCH
 
 
 def build_bottom_bar(dashboard) -> QWidget:
@@ -91,6 +91,17 @@ def build_bottom_bar(dashboard) -> QWidget:
     btn_folder.clicked.connect(dashboard._on_open_recordings_folder)
     bar_layout.addWidget(btn_folder)
     dashboard._func_buttons["Thư Mục"] = btn_folder
+
+    btn_fix = PainterButton(
+        "", color=C["orange"], height=34, radius=8,
+        font_size=10, svg_content=SVG_WRENCH, svg_size=18, fixed_width=38,
+    )
+    btn_fix.setToolTip("Tự sửa âm thanh · Ctrl+Shift+A")
+    btn_fix.setAccessibleName("Tự sửa âm thanh")
+    btn_fix.setAccessibleDescription("Kiểm tra và tự sửa khi mất tiếng mic hoặc nhạc")
+    btn_fix.clicked.connect(dashboard._open_audio_doctor)
+    bar_layout.addWidget(btn_fix)
+    dashboard._func_buttons["Tự sửa âm thanh"] = btn_fix
 
     wrapper_layout.addWidget(bar)
     return wrapper

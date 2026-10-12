@@ -265,3 +265,33 @@ class CDPYouTubeMonitor:
         }})();
         """
         return self._evaluate_js(script)
+
+    def get_player_state(self):
+        """{"muted", "volume"} của player YouTube (tính cả thẻ <video> bị muted); None nếu không có."""
+        if not self.is_connected:
+            return None
+        script = """
+        (function() {
+            var p = document.querySelector('#movie_player');
+            if (!p || typeof p.isMuted !== 'function') return null;
+            var v = document.querySelector('video');
+            return {muted: p.isMuted() || !!(v && v.muted), volume: p.getVolume()};
+        })();
+        """
+        state = self._evaluate_js(script)
+        return state if isinstance(state, dict) else None
+
+    def unmute_player(self):
+        """Bỏ tắt tiếng player YouTube (cả nút loa của player lẫn thẻ <video>)."""
+        if not self.is_connected:
+            return False
+        script = """
+        (function() {
+            var p = document.querySelector('#movie_player');
+            if (p && typeof p.unMute === 'function') p.unMute();
+            var v = document.querySelector('video');
+            if (v) v.muted = false;
+            return !!(p || v);
+        })();
+        """
+        return bool(self._evaluate_js(script))
