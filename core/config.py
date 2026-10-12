@@ -6,9 +6,9 @@ Constants: SETTINGS_FILE, SONGS_FILE, ACTIVATION_FILE, etc.
 File path convention:
   - USER DATA (writable): %APPDATA%/QuangLuuStudio/
     → settings.json, saved_songs.json, activation.json,
-      tone_cache.json, manual_timelines.json
-  - APP CONFIG (read-only, admin editable): next to EXE
-    → app_config.json
+      tone_cache.json, manual_timelines.json,
+      app_config_overrides.json (phần người dùng đổi của app_config)
+  - APP CONFIG MẶC ĐỊNH (read-only): next to EXE → app_config.json
   - RECORDINGS: Documents/QuangLuuStudio/
 """
 import os
@@ -79,6 +79,12 @@ ACCESSIBILITY_OVERRIDES_FILE = os.path.join(DATA_DIR, "accessibility_overrides.j
 # ghi calibration vào đó; thay vào đó lưu riêng và merge đè khi load() — giống
 # pattern accessibility ở trên.
 CALIBRATION_OVERRIDES_FILE = os.path.join(DATA_DIR, "calibration_overrides.json")
+
+# Cấu hình người dùng đổi (cookie, cổng MIDI, midi_cc...) → DATA_DIR. app_config.json
+# cạnh exe chỉ là MẶC ĐỊNH: bản cài Velopack thay cả thư mục cài mỗi lần cập nhật,
+# và trong Program Files thì không ghi được. save() chỉ ghi PHẦN KHÁC so với mặc
+# định + bản đóng gói, để bản cập nhật sau đổi mặc định vẫn có tác dụng.
+APP_CONFIG_OVERRIDES_FILE = os.path.join(DATA_DIR, "app_config_overrides.json")
 
 # Các key calibration được phép ghi đè qua set_calibration() và merge khi load().
 # Mỗi key là một dict → merge nông (update) đè lên app_config/defaults.
@@ -258,6 +264,44 @@ _DEFAULT_APP_CONFIG = {
 }
 
 
+_MISSING = object()
+
+
+def read_json_dict(path):
+    """Đọc file JSON là dict. Chấp nhận BOM (script PowerShell cũ từng ghi BOM).
+    Không phải dict → {}. Lỗi đọc/parse → ném ngoại lệ cho phía gọi xử lý."""
+    with open(path, "r", encoding="utf-8-sig") as f:
+        data = json.load(f)
+    return data if isinstance(data, dict) else {}
+
+
+def merge_config(base, extra):
+    """Gộp extra vào base tại chỗ; dict con gộp nông (giống cách load() vẫn làm)."""
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            base[key].update(value)
+        else:
+            base[key] = value
+
+
+def config_diff(base, data):
+    """Phần của data khác base. Dict con chỉ giữ các khoá con khác — khớp với
+    merge_config (gộp nông), nên merge_config(base, config_diff(base, data)) == data
+    trên các khoá của data."""
+    out = {}
+    for key, value in data.items():
+        old = base.get(key, _MISSING)
+        if old == value:
+            continue
+        if isinstance(value, dict) and isinstance(old, dict):
+            sub = {k: v for k, v in value.items() if old.get(k, _MISSING) != v}
+            if sub:
+                out[key] = sub
+        else:
+            out[key] = value
+    return out
+
+
 class AppConfig:
     """
     Singleton đọc app_config.json từ thư mục chứa exe (frozen) hoặc source (dev).
@@ -275,35 +319,45 @@ class AppConfig:
         return os.path.join(APP_DIR, APP_CONFIG_FILE)
 
     @classmethod
+    def _get_overrides_path(cls):
+        """Phần người dùng đổi — DATA_DIR (ghi được, sống qua các lần cập nhật)."""
+        return APP_CONFIG_OVERRIDES_FILE
+
+    @classmethod
+    def _load_base(cls):
+        """Mặc định + app_config.json đóng gói, CHƯA có lớp người dùng."""
+        import logging
+        log = logging.getLogger("config")
+        data = copy.deepcopy(_DEFAULT_APP_CONFIG)
+        config_path = cls._get_config_path()
+        if os.path.exists(config_path):
+            try:
+                merge_config(data, read_json_dict(config_path))
+                log.info(f"App config loaded: {config_path}")
+            except Exception as e:
+                log.warning(f"Lỗi đọc {APP_CONFIG_FILE}: {e} — dùng giá trị mặc định")
+        else:
+            log.info(f"{APP_CONFIG_FILE} không tìm thấy — dùng giá trị mặc định")
+        return data
+
+    @classmethod
     def load(cls):
         """Load config từ file, merge với defaults"""
         with cls._lock:
             if cls._data is not None:
                 return cls._data
 
-            cls._data = copy.deepcopy(_DEFAULT_APP_CONFIG)
-            config_path = cls._get_config_path()
+            cls._data = cls._load_base()
 
-            if os.path.exists(config_path):
-                try:
-                    with open(config_path, "r", encoding="utf-8") as f:
-                        user_config = json.load(f)
-
-                    # Merge: user config ghi đè defaults
-                    for key, value in user_config.items():
-                        if isinstance(value, dict) and key in cls._data and isinstance(cls._data[key], dict):
-                            cls._data[key].update(value)
-                        else:
-                            cls._data[key] = value
-
-                    import logging
-                    logging.getLogger("config").info(f"App config loaded: {config_path}")
-                except Exception as e:
-                    import logging
-                    logging.getLogger("config").warning(f"Lỗi đọc {APP_CONFIG_FILE}: {e} — dùng giá trị mặc định")
-            else:
+            # Lớp người dùng: app_config_overrides.json (DATA_DIR). Hỏng thì bỏ qua
+            # lớp này, vẫn chạy bằng mặc định + bản đóng gói.
+            try:
+                ov_path = cls._get_overrides_path()
+                if os.path.exists(ov_path):
+                    merge_config(cls._data, read_json_dict(ov_path))
+            except Exception as e:
                 import logging
-                logging.getLogger("config").info(f"{APP_CONFIG_FILE} không tìm thấy — dùng giá trị mặc định")
+                logging.getLogger("config").warning(f"Lỗi đọc app_config_overrides.json: {e} — bỏ qua")
 
             # Merge accessibility overrides của user (DATA_DIR, user-writable)
             # đè lên defaults + app_config — app_config.json cạnh exe có thể
@@ -533,17 +587,25 @@ class AppConfig:
 
     @classmethod
     def save(cls):
-        """Ghi config hiện tại ra file app_config.json"""
+        """Ghi PHẦN NGƯỜI DÙNG ĐỔI ra DATA_DIR/app_config_overrides.json.
+
+        Không ghi app_config.json cạnh exe (thư mục cài có thể read-only hoặc bị
+        thay khi cập nhật). Khoá calibration có file riêng (set_calibration) nên
+        không ghi ở đây — ghi cả hai chỗ thì xoá cân chỉnh sẽ không có tác dụng.
+        """
         with cls._lock:
             if cls._data is None:
                 return False
-            config_path = cls._get_config_path()
+            diff = config_diff(cls._load_base(), cls._data)
+            for key in CALIBRATION_KEYS:
+                diff.pop(key, None)
+            path = cls._get_overrides_path()
             try:
-                atomic_write_json(config_path, cls._data)
-                print(f"App config saved: {config_path}")
+                atomic_write_json(path, diff)
+                print(f"App config overrides saved: {path}")
                 return True
             except Exception as e:
-                print(f"Lỗi ghi {APP_CONFIG_FILE}: {e}")
+                print(f"Lỗi ghi app_config_overrides.json: {e}")
                 return False
 
 
