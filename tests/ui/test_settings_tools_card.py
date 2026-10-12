@@ -74,5 +74,35 @@ def test_xoa_du_lieu_dong_y_thi_hen_xoa(dlg):
     assert "đóng app" in dlg._lbl_xoa_du_lieu.text()
 
 
+@pytest.mark.parametrize("attr,bat", [("_btn_kiem_tra_tone", "kiem_tra_tone.bat"),
+                                      ("_btn_thu_tai", "thu_tai_youtube.bat")])
+def test_nut_bat_that_bai_thi_bao_loi(dlg, attr, bat):
+    with patch("core.app_tools.launch_bat", return_value=False):
+        qtbot_click(getattr(dlg, attr))
+    assert f"Không mở được {bat}" in dlg._lbl_cong_cu.text()
+
+
+def test_nut_bat_thanh_cong_thi_xoa_thong_bao(dlg):
+    dlg._lbl_cong_cu.setText("cũ")
+    with patch("core.app_tools.launch_bat", return_value=True):
+        qtbot_click(dlg._btn_kiem_tra_tone)
+    assert dlg._lbl_cong_cu.text() == ""
+
+
+def test_mo_thu_muc_ban_thu_that_bai_thi_bao_loi(dlg):
+    with patch("core.app_tools.open_folder", return_value=False):
+        qtbot_click(dlg._btn_mo_ban_thu)
+    assert "Không mở được thư mục bản thu" in dlg._lbl_cong_cu.text()
+
+
+def test_xoa_du_lieu_khong_co_dich_thi_bao_loi_va_khong_hen(dlg):
+    with patch("ui.dialogs.settings_dialog._ask_wipe", return_value=(True, False)), \
+         patch("core.app_tools.wipe_targets", return_value=[]), \
+         patch("core.app_tools.schedule_wipe_after_exit") as sched:
+        qtbot_click(dlg._btn_xoa_du_lieu)
+    sched.assert_not_called()
+    assert "Không xoá được" in dlg._lbl_xoa_du_lieu.text()
+
+
 def qtbot_click(btn):
     btn.click()

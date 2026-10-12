@@ -1365,19 +1365,34 @@ class SettingsDialog(QDialog):
             b.clicked.connect(slot)
             return b
 
+        def _run_bat(name):
+            if app_tools.launch_bat(APP_DIR, name):
+                self._lbl_cong_cu.setText("")
+            else:
+                self._lbl_cong_cu.setText(f"Không mở được {name} — thiếu file trong thư mục cài đặt.")
+
+        def _open_recordings():
+            if app_tools.open_folder(_get_recordings_dir()):
+                self._lbl_cong_cu.setText("")
+            else:
+                self._lbl_cong_cu.setText("Không mở được thư mục bản thu.")
+
         row = QHBoxLayout()
         row.setSpacing(10)
         self._btn_kiem_tra_tone = _btn("Kiểm tra dò tone", C["blue"],
-                                       lambda: app_tools.launch_bat(APP_DIR, "kiem_tra_tone.bat"))
+                                       lambda: _run_bat("kiem_tra_tone.bat"))
         self._btn_thu_tai = _btn("Thử tải YouTube", C["blue"],
-                                 lambda: app_tools.launch_bat(APP_DIR, "thu_tai_youtube.bat"))
+                                 lambda: _run_bat("thu_tai_youtube.bat"))
         row.addWidget(self._btn_kiem_tra_tone)
         row.addWidget(self._btn_thu_tai)
         vl.addLayout(row)
 
-        self._btn_mo_ban_thu = _btn("Mở thư mục bản thu", C["teal"],
-                                    lambda: app_tools.open_folder(_get_recordings_dir()))
+        self._btn_mo_ban_thu = _btn("Mở thư mục bản thu", C["teal"], _open_recordings)
         vl.addWidget(self._btn_mo_ban_thu)
+        self._lbl_cong_cu = QLabel("")
+        self._lbl_cong_cu.setWordWrap(True)
+        self._lbl_cong_cu.setStyleSheet(self._field_label_qss(size=11, weight=500, italic=True))
+        vl.addWidget(self._lbl_cong_cu)
 
         self._btn_xoa_du_lieu = _btn("Xoá dữ liệu…", C["accent"], self._action_wipe_data)
         self._btn_xoa_du_lieu.setIcon(self._svg_icon(SVG_TRASH, "white", 16))

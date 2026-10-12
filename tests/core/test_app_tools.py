@@ -66,6 +66,42 @@ def test_lenh_xoa_du_lieu_duong_dan_co_nhay_don():
     assert r"Remove-Item -LiteralPath 'C:\Users\O''Brien Văn\AppData\Roaming\QuangLuuStudio' -Recurse -Force" in script
 
 
+def _script(targets, pid=1):
+    return base64.b64decode(app_tools.build_wipe_command(pid, targets)[5]).decode("utf-16-le")
+
+
+def test_lenh_xoa_co_vong_thu_lai_va_log():
+    target = r"C:\Users\An\AppData\Roaming\QuangLuuStudio"
+    script = _script([target])
+    # chờ tiến trình thoát: lỗi ở đây = đã thoát rồi → bỏ qua
+    assert "Wait-Process -Id 1 -ErrorAction SilentlyContinue" in script
+    # thử lại tối đa 10 lần, nghỉ 2 giây, dừng khi thư mục đã mất
+    assert "$i -lt 10" in script
+    assert "Start-Sleep -Seconds 2" in script
+    assert f"if (-not (Test-Path -LiteralPath '{target}')) {{ break }}" in script
+    # lỗi xoá không bị nuốt: bắt lại để ghi log
+    assert "-ErrorAction Stop" in script and "$_.Exception.Message" in script
+    # còn sót sau khi thử hết → ghi log trong %TEMP% (ngoài thư mục bị xoá)
+    assert "$env:TEMP" in script and "QuangLuuStudio_xoa_du_lieu.log" in script
+    assert "Add-Content -LiteralPath $log" in script
+
+
+def test_lenh_xoa_moi_thu_muc_co_vong_rieng():
+    a, b = r"C:\x\QuangLuuStudio", r"C:\y\QuangLuuStudio"
+    script = _script([a, b])
+    assert script.count("Start-Sleep -Seconds 2") == 2
+    assert script.index(f"'{a}'") < script.index(f"'{b}'")
+
+
+def test_loi_os_thi_tra_false(tmp_path):
+    def boom(*a, **k):
+        raise OSError("khong chay duoc")
+    (tmp_path / "a.bat").write_text("@echo off", encoding="ascii")
+    assert app_tools.launch_bat(str(tmp_path), "a.bat", popen=boom) is False
+    assert app_tools.open_folder(str(tmp_path), opener=boom) is False
+    assert app_tools.schedule_wipe_after_exit([str(tmp_path)], popen=boom, pid=3) is False
+
+
 def test_hen_xoa_sau_khi_thoat(tmp_path):
     data, rec = _dirs(tmp_path)
     calls = []
