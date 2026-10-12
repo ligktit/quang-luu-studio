@@ -91,3 +91,37 @@ def test_sua_ten_khong_doi_file_thi_van_phat(area, qtbot, wav):
     with qtbot.assertNotEmitted(area.sfx_stop, wait=50):
         _edit_with(area, {"label": "A", "name": "Đổi tên", "file_path": wav, "color": "#14B8A6"})
     assert _btn(area, "sfx_a").is_playing()
+
+
+def test_duong_dan_mac_dinh_cu_trong_thu_muc_tam_duoc_tro_lai(qapp, qtbot, tmp_path):
+    """settings.json từng lưu %TEMP%\\_MEIxxxx\\sfx\\sfx_applause.wav — thư mục đó
+    mất sau mỗi lần thoát; lần mở sau phải trỏ lại file đóng gói."""
+    from ui.components.sfx_button_area import SfxButtonArea
+    sfx_dir = tmp_path / "app" / "sfx"
+    sfx_dir.mkdir(parents=True)
+    (sfx_dir / "sfx_applause.wav").write_bytes(b"RIFF")
+    stale = str(tmp_path / "_MEI999" / "sfx" / "sfx_applause.wav")
+    user_file = tmp_path / "rieng.wav"
+    user_file.write_bytes(b"RIFF")
+    a = SfxButtonArea(sfx_list=[
+        {"id": "sfx_002", "label": "👏", "name": "Vỗ tay", "file_path": stale, "color": "#14B8A6"},
+        {"id": "sfx_001", "label": "😂", "name": "Cười", "file_path": str(user_file), "color": "#F97316"},
+    ], app_dir=str(tmp_path / "app"))
+    qtbot.addWidget(a)
+    paths = {d["id"]: d["file_path"] for d in a.get_sfx_list()}
+    assert paths["sfx_002"] == str(sfx_dir / "sfx_applause.wav")
+    # file người dùng tự chọn (vẫn tồn tại) giữ nguyên
+    assert paths["sfx_001"] == str(user_file)
+
+
+def test_file_nguoi_dung_mat_khong_bi_doi_sang_mac_dinh(qapp, qtbot, tmp_path):
+    from ui.components.sfx_button_area import SfxButtonArea
+    sfx_dir = tmp_path / "app" / "sfx"
+    sfx_dir.mkdir(parents=True)
+    (sfx_dir / "sfx_laugh.wav").write_bytes(b"RIFF")
+    gone = str(tmp_path / "nhac_rieng" / "cuoi_to.wav")   # tên KHÁC tên mặc định
+    a = SfxButtonArea(sfx_list=[
+        {"id": "sfx_001", "label": "😂", "name": "Cười", "file_path": gone, "color": "#F97316"},
+    ], app_dir=str(tmp_path / "app"))
+    qtbot.addWidget(a)
+    assert a.get_sfx_list()[0]["file_path"] == gone
