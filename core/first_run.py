@@ -7,6 +7,7 @@ Module này KHÔNG đụng Qt để test được.
 """
 import base64
 import glob
+import json
 import logging
 import os
 import shutil
@@ -14,6 +15,7 @@ import subprocess
 import sys
 
 from core import config as _cfg
+from core.legacy_app_config_defaults import SHIPPED_SUB_VALUES, SHIPPED_VALUES
 from core.utils import atomic_write_json
 
 log = logging.getLogger(__name__)
@@ -203,10 +205,40 @@ def find_legacy_install():
     return loc.rstrip("\\/")
 
 
+# Khoá không bao giờ chuyển từ bản cũ: ytdlp_auto_update do QLS_VaNhanh172 ghi tạm.
+_KHONG_CHUYEN = ("ytdlp_auto_update",)
+
+
+def _was_shipped(shipped, value):
+    """value trùng một giá trị từng đóng gói? So dạng JSON để True ≠ 1, 1.0 ≠ 1."""
+    dump = json.dumps(value, sort_keys=True)
+    return any(json.dumps(v, sort_keys=True) == dump for v in shipped)
+
+
+def _drop_shipped_defaults(diff):
+    """Bỏ khỏi diff các giá trị trùng mặc định từng đóng gói (không phải khách chọn)
+    và các khoá trong _KHONG_CHUYEN. Sửa tại chỗ."""
+    for key in list(diff):
+        value = diff[key]
+        if key in _KHONG_CHUYEN:
+            del diff[key]
+        elif isinstance(value, dict):
+            subs = SHIPPED_SUB_VALUES.get(key, {})
+            kept = {k: v for k, v in value.items() if not _was_shipped(subs.get(k, ()), v)}
+            if kept:
+                diff[key] = kept
+            else:
+                del diff[key]
+        elif _was_shipped(SHIPPED_VALUES.get(key, ()), value):
+            del diff[key]
+
+
 def migrate_legacy_app_config(legacy_dir):
     """Gộp phần khác biệt của <legacy_dir>\\app_config.json (so với mặc định + bản
-    đóng gói hiện tại) vào lớp người dùng: khoá calibration → calibration_overrides.json, accessibility →
-    accessibility_overrides.json, còn lại → app_config_overrides.json. Giá trị đã có ở đích được GIỮ. True nếu có ghi."""
+    đóng gói hiện tại, bỏ giá trị trùng mặc định từng đóng gói, bỏ khoá cân chỉnh mà hồ sơ
+    DAW đang chọn đã có) vào lớp người dùng: khoá calibration → calibration_overrides.json,
+    accessibility → accessibility_overrides.json, còn lại → app_config_overrides.json.
+    Giá trị đã có ở đích được GIỮ. True nếu có ghi."""
     path = os.path.join(legacy_dir, "app_config.json")
     if not os.path.isfile(path):
         return False
@@ -216,6 +248,9 @@ def migrate_legacy_app_config(legacy_dir):
         log.warning("app_config.json cũ hỏng, bỏ qua: %s", e)
         return False
     diff = _cfg.config_diff(_cfg.AppConfig._load_base(), old)
+    # {app}\app_config.json là bản của LẦN CÀI ĐẦU (Inno onlyifdoesntexist): giá trị trùng
+    # mặc định cũ nào đó không phải khách chọn → mặc định hiện tại thắng.
+    _drop_shipped_defaults(diff)
     cal = {k: diff.pop(k) for k in list(diff) if k in _cfg.CALIBRATION_KEYS}
     # Bộ cài Inno xếp app_config.json DƯỚI hồ sơ DAW, còn calibration_overrides.json thì
     # TRÊN (AppConfig._daw_calibrated) → khoá hồ sơ DAW đang chọn có định nghĩa thì không chuyển.

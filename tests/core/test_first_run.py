@@ -241,13 +241,38 @@ def test_migrate_cau_hinh_cu_accessibility_sang_file_rieng(_cfg_iso, monkeypatch
     legacy = _cfg_iso / "legacy"
     legacy.mkdir()
     (legacy / "app_config.json").write_text(json.dumps({
-        "accessibility": {"tts_enabled": True, "tts_rate": 200},
+        "accessibility": {"tts_voice": "vi-giong-rieng", "tts_rate": 200},
     }), encoding="utf-8")
     # giá trị đã có ở file đích được giữ
     (_cfg_iso / "acc.json").write_text(json.dumps({"tts_rate": 150}), encoding="utf-8")
     assert first_run.migrate_legacy_app_config(str(legacy)) is True
     acc = json.loads((_cfg_iso / "acc.json").read_text(encoding="utf-8"))
-    assert acc == {"tts_enabled": True, "tts_rate": 150}
+    assert acc == {"tts_voice": "vi-giong-rieng", "tts_rate": 150}
+    assert not (_cfg_iso / "ov.json").exists()
+
+
+def test_migrate_bo_gia_tri_mac_dinh_tung_dong_goi(_cfg_iso):
+    """{app}\\app_config.json là bản của LẦN CÀI ĐẦU (Inno onlyifdoesntexist): giá trị trùng
+    một mặc định từng đóng gói không phải khách chọn → không chuyển, mặc định hiện tại thắng."""
+    legacy = _cfg_iso / "legacy"
+    legacy.mkdir()
+    (legacy / "app_config.json").write_text(json.dumps({
+        "midi_cc": {"tone_music": 55, "tone_auto": 40, "fix_meo": 45},   # 40, 45: mặc định cũ
+        "mode_config": {"Dân Ca": {"cc": 30, "on_value": 127, "off_value": 0}},   # Dân Ca cũ CC 30
+        "accessibility": {"tts_enabled": True},   # từng đóng gói True
+    }), encoding="utf-8")
+    assert first_run.migrate_legacy_app_config(str(legacy)) is True
+    ov = json.loads((_cfg_iso / "ov.json").read_text(encoding="utf-8"))
+    assert ov == {"midi_cc": {"tone_music": 55}}
+    assert not (_cfg_iso / "cal.json").exists()
+
+
+def test_migrate_khong_chuyen_ytdlp_auto_update(_cfg_iso):
+    """ytdlp_auto_update do QLS_VaNhanh172 ghi tạm vào app_config.json — không chuyển."""
+    legacy = _cfg_iso / "legacy"
+    legacy.mkdir()
+    (legacy / "app_config.json").write_text(json.dumps({"ytdlp_auto_update": False}), encoding="utf-8")
+    assert first_run.migrate_legacy_app_config(str(legacy)) is False
     assert not (_cfg_iso / "ov.json").exists()
 
 
