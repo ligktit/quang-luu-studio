@@ -116,8 +116,8 @@ def test_cleanup_legacy_nhan_doi_gach_cuoi_goc_o(tmp_path):
     script.write_text("", encoding="utf-8")
     seen = []
     with patch("core.first_run.find_bundled", return_value=str(script)), \
-         patch("core.first_run._run_elevated_ps", side_effect=lambda inner, t: seen.append(inner) or False):
-        assert first_run.cleanup_legacy_elevated("D:\\") is False
+         patch("core.first_run._run_elevated_ps_code", side_effect=lambda inner, t: seen.append(inner) or 1):
+        assert first_run.cleanup_legacy_elevated("D:\\") == 1
     assert "'\"D:\\\\\"'" in seen[0]
 
 
@@ -129,11 +129,41 @@ def test_cleanup_legacy_truyen_protected_dirs(tmp_path):
     seen = []
     with patch("core.first_run.find_bundled", return_value=str(script)), \
          patch.object(cfg, "APP_DIR", str(app)), \
-         patch("core.first_run._run_elevated_ps", side_effect=lambda inner, t: seen.append(inner) or False):
-        assert first_run.cleanup_legacy_elevated("C:\\Program Files\\QuangLuuStudio") is False
+         patch("core.first_run._run_elevated_ps_code", side_effect=lambda inner, t: seen.append(inner) or 1):
+        assert first_run.cleanup_legacy_elevated("C:\\Program Files\\QuangLuuStudio") == 1
     assert "-ProtectedDirs" in seen[0]
     assert str(app) in seen[0]
     assert str(app.parent) in seen[0]
+
+
+def test_cleanup_legacy_tra_ma_thoat_cua_script(tmp_path):
+    """Mã thoát don_ban_cu.ps1 đi nguyên về app (0 xong, 2 xoá dở, 3 cần gỡ tay)."""
+    script = tmp_path / "tools" / "don_ban_cu.ps1"
+    script.parent.mkdir()
+    script.write_text("", encoding="utf-8")
+    with patch("core.first_run.find_bundled", return_value=str(script)), \
+         patch("core.first_run._run_elevated_ps_code", return_value=3):
+        assert first_run.cleanup_legacy_elevated("C:\\Program Files\\QuangLuuStudio") == 3
+
+
+def test_cleanup_legacy_thieu_script_tra_am_mot():
+    with patch("core.first_run.find_bundled", return_value=None):
+        assert first_run.cleanup_legacy_elevated("C:\\Program Files\\QuangLuuStudio") == -1
+
+
+def test_lenh_nang_quyen_tra_ma_thoat():
+    assert first_run._run_elevated_ps_code("exit 3", 30) == 3
+    with patch("core.first_run.subprocess.run", side_effect=OSError("x")):
+        assert first_run._run_elevated_ps_code("exit 0", 30) == -1
+    with patch("core.first_run.subprocess.run",
+               side_effect=subprocess.TimeoutExpired(cmd="x", timeout=1)):
+        assert first_run._run_elevated_ps_code("exit 0", 1) == -1
+
+
+def test_legacy_path_key_chuan_hoa():
+    k = first_run.legacy_path_key
+    assert k("C:\\Program Files\\QuangLuuStudio\\") == k("c:/program files/QUANGLUUSTUDIO")
+    assert k("D:\\") == k("d:\\")
 
 
 @pytest.fixture

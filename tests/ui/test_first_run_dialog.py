@@ -73,13 +73,63 @@ def test_ban_cu_de_sau_khong_don(qtbot, saved):
 def test_ban_cu_don_thi_chuyen_cau_hinh_roi_don(qtbot, saved):
     with patch("ui.dialogs.first_run_dialog.first_run.run_setup_all", return_value=0), \
          patch("ui.dialogs.first_run_dialog.first_run.migrate_legacy_app_config", return_value=True) as mig, \
-         patch("ui.dialogs.first_run_dialog.first_run.cleanup_legacy_elevated", return_value=True) as clean:
+         patch("ui.dialogs.first_run_dialog.first_run.cleanup_legacy_elevated", return_value=0) as clean:
         d = _make(qtbot, legacy="C:\\Program Files\\QuangLuuStudio")
         qtbot.waitUntil(lambda: d._btn_legacy.isVisible(), timeout=5000)
         qtbot.mouseClick(d._btn_legacy, Qt.LeftButton)
         qtbot.waitUntil(lambda: d.result() == QDialog.Accepted, timeout=5000)
     mig.assert_called_once_with("C:\\Program Files\\QuangLuuStudio")
     clean.assert_called_once_with("C:\\Program Files\\QuangLuuStudio")
+
+
+LEGACY = "C:\\Program Files\\QuangLuuStudio"
+
+
+def _don_ban_cu_voi_ma(qtbot, code):
+    with patch("ui.dialogs.first_run_dialog.first_run.run_setup_all", return_value=0), \
+         patch("ui.dialogs.first_run_dialog.first_run.migrate_legacy_app_config", return_value=False), \
+         patch("ui.dialogs.first_run_dialog.first_run.cleanup_legacy_elevated", return_value=code):
+        d = _make(qtbot, legacy=LEGACY)
+        qtbot.waitUntil(lambda: d._btn_legacy.isVisible(), timeout=5000)
+        qtbot.mouseClick(d._btn_legacy, Qt.LeftButton)
+        qtbot.waitUntil(lambda: d._btn_continue.isVisible() or d.result() == QDialog.Accepted, timeout=5000)
+    return d
+
+
+def test_don_ban_cu_ma_0_xong_khong_ghi_chu(qtbot, saved):
+    d = _don_ban_cu_voi_ma(qtbot, 0)
+    assert d.result() == QDialog.Accepted
+    assert "legacy_cleanup_skipped" not in saved["settings"]
+
+
+def test_don_ban_cu_ma_3_ghi_nho_va_huong_dan_go_tay(qtbot, saved):
+    from core import first_run
+    d = _don_ban_cu_voi_ma(qtbot, 3)
+    assert d._btn_continue.isVisible()
+    notes = d._lbl_notes.text()
+    assert "Gỡ cài đặt" in notes and "KHÔNG" in notes
+    assert "hỏi lại" not in notes
+    assert saved["settings"]["legacy_cleanup_skipped"] == first_run.legacy_path_key(LEGACY)
+
+
+@pytest.mark.parametrize("code", [2, 1, -1])
+def test_don_ban_cu_ma_khac_hoi_lai_lan_sau(qtbot, saved, code):
+    d = _don_ban_cu_voi_ma(qtbot, code)
+    assert d._btn_continue.isVisible()
+    assert "hỏi lại" in d._lbl_notes.text()
+    assert "legacy_cleanup_skipped" not in saved["settings"]
+
+
+def test_run_first_run_if_needed_bo_qua_ban_cu_da_danh_dau_go_tay():
+    from ui.dialogs import first_run_dialog as m
+    settings = {"first_run_done": True,
+                "legacy_cleanup_skipped": m.first_run.legacy_path_key(LEGACY.upper() + "\\")}
+    with patch.object(m.first_run, "is_velopack_install", return_value=True), \
+         patch.object(m.ConfigManager, "load_settings", return_value=settings), \
+         patch.object(m.first_run, "find_legacy_install", return_value=LEGACY), \
+         patch.object(m, "FirstRunDialog") as dlg:
+        m.run_first_run_if_needed()
+    dlg.assert_not_called()
 
 
 def test_dong_ngang_khong_danh_dau_xong(qtbot, saved):

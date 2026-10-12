@@ -172,8 +172,20 @@ class FirstRunDialog(QDialog):
             return first_run.cleanup_legacy_elevated(legacy)
         self._chay("Đang dọn bản cũ…", work, self._sau_don_ban_cu)
 
-    def _sau_don_ban_cu(self, ok):
-        if ok is not True:
+    def _sau_don_ban_cu(self, code):
+        if code == first_run.LEGACY_CLEANUP_OK:
+            pass
+        elif code == first_run.LEGACY_CLEANUP_SKIPPED:
+            # Script không dám xoá thư mục này (tên lạ, liên kết, thư mục được bảo vệ):
+            # hỏi lại cũng vô ích → ghi nhớ, không hỏi nữa; hướng dẫn gỡ tay an toàn
+            # (unins000 cũ hỏi xoá dữ liệu, mặc định Có).
+            settings = ConfigManager.load_settings()
+            settings["legacy_cleanup_skipped"] = first_run.legacy_path_key(self._legacy_dir)
+            ConfigManager.save_settings(settings)
+            self._notes.append(
+                "Thư mục cài cũ cần gỡ tay: Cài đặt → Ứng dụng → Quang Luu Studio → Gỡ cài đặt. "
+                "Khi được hỏi 'Bạn có muốn xóa dữ liệu cá nhân?' hãy bấm KHÔNG.")
+        else:
             self._notes.append(
                 "Chưa dọn được bản cũ (có thể đã bấm Không ở hộp hỏi quyền, hoặc thư mục cài cũ cần gỡ tay "
                 "trong Cài đặt → Ứng dụng). App sẽ hỏi lại lần mở sau.")
@@ -215,6 +227,8 @@ def run_first_run_if_needed():
     legacy = first_run.find_legacy_install() or None   # "" = khoá cũ không có đường dẫn → không có gì để dọn
     if legacy is not None and _la_thu_muc_dang_chay(legacy, APP_DIR):
         legacy = None
+    if legacy is not None and settings.get("legacy_cleanup_skipped") == first_run.legacy_path_key(legacy):
+        legacy = None   # đã báo khách gỡ tay — không hỏi mãi
     need_setup = not first_run.is_done(settings)
     if not need_setup and legacy is None:
         return

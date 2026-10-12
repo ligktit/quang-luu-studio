@@ -129,9 +129,13 @@ def find_loopmidi(env=None):
     return next((c for c in cands if os.path.isfile(c)), None)
 
 
-def _run_elevated_ps(inner, timeout):
-    """Chạy một lệnh PowerShell có nâng quyền (UAC) và chờ xong. True nếu mã thoát 0.
-    Từ chối UAC → Start-Process ném lỗi → mã khác 0."""
+ELEVATED_FAILED = -1
+
+
+def _run_elevated_ps_code(inner, timeout):
+    """Chạy một lệnh PowerShell có nâng quyền (UAC) và chờ xong. Trả mã thoát,
+    ELEVATED_FAILED (-1) nếu không chạy được/quá giờ. Từ chối UAC → Start-Process
+    ném lỗi → mã 1."""
     # Start-Process ném lỗi (người dùng từ chối UAC) → $p là $null → `exit $null` = 0:
     # phải ép lỗi dừng và bắt lại để trả mã khác 0.
     script = "$ErrorActionPreference='Stop'; try { " + inner + " } catch { exit 1 }"
@@ -139,10 +143,15 @@ def _run_elevated_ps(inner, timeout):
     try:
         r = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
                             "-EncodedCommand", enc], timeout=timeout, creationflags=_NO_WINDOW)
-        return r.returncode == 0
+        return r.returncode
     except (OSError, subprocess.TimeoutExpired) as e:
         log.warning("Lệnh nâng quyền lỗi: %s", e)
-        return False
+        return ELEVATED_FAILED
+
+
+def _run_elevated_ps(inner, timeout):
+    """Như _run_elevated_ps_code nhưng chỉ trả True khi mã thoát 0."""
+    return _run_elevated_ps_code(inner, timeout) == 0
 
 
 def install_loopmidi_elevated(timeout=600):
@@ -176,6 +185,12 @@ def _read_uninstall_location():
         except OSError:
             continue
     return None
+
+
+def legacy_path_key(path):
+    """Dạng chuẩn của đường dẫn bản cũ để ghi nhớ trong settings (không phân biệt
+    hoa/thường, gạch chéo, gạch cuối)."""
+    return os.path.normcase(os.path.normpath(path))
 
 
 def find_legacy_install():
@@ -244,12 +259,19 @@ def _quote_arg_tail(path):
     return path + "\\" * n
 
 
+# Mã thoát của tools/don_ban_cu.ps1
+LEGACY_CLEANUP_OK = 0
+LEGACY_CLEANUP_INCOMPLETE = 2   # xoá dở (file bị khoá) — giữ khoá, hỏi lại lần sau
+LEGACY_CLEANUP_SKIPPED = 3      # thư mục cài cũ không xoá tự động được — khách gỡ tay
+
+
 def cleanup_legacy_elevated(legacy_dir, timeout=300):
-    """Chạy tools/don_ban_cu.ps1 có nâng quyền để xoá bản Inno cũ. True nếu xong."""
+    """Chạy tools/don_ban_cu.ps1 có nâng quyền để xoá bản Inno cũ. Trả mã thoát của
+    script (LEGACY_CLEANUP_*; 1 = từ chối UAC/lỗi) hoặc ELEVATED_FAILED (-1)."""
     script = find_bundled(os.path.join("tools", "don_ban_cu.ps1"))
     if script is None:
         log.warning("Thiếu tools/don_ban_cu.ps1")
-        return False
+        return ELEVATED_FAILED
     q = lambda s: s.replace("'", "''")  # noqa: E731 — trích dẫn chuỗi PowerShell
     # Không bao giờ để script xoá chính thư mục app đang chạy hoặc gốc Velopack (cha của nó).
     protected = _cfg.APP_DIR + ";" + os.path.dirname(os.path.abspath(_cfg.APP_DIR))
@@ -258,4 +280,4 @@ def cleanup_legacy_elevated(legacy_dir, timeout=300):
              f"'\"{q(script)}\"','-LegacyDir','\"{q(_quote_arg_tail(legacy_dir))}\"',"
              f"'-ProtectedDirs','\"{q(_quote_arg_tail(protected))}\"'); "
              "if ($null -eq $p) { exit 1 }; exit $p.ExitCode")
-    return _run_elevated_ps(inner, timeout)
+    return _run_elevated_ps_code(inner, timeout)
