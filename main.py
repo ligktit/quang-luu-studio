@@ -407,6 +407,14 @@ def main():
     except Exception as e:
         log.debug("startup reconcile skipped: %s", e)
 
+    # Lần chạy đầu sau khi cài (bản Velopack): file mặc định, cổng MIDI,
+    # loopMIDI, dọn bản Inno cũ. Bản Inno/dev không có Update.exe → bỏ qua.
+    try:
+        from ui.dialogs.first_run_dialog import run_first_run_if_needed
+        run_first_run_if_needed()
+    except Exception:
+        log.exception("Bước lần chạy đầu lỗi — vẫn mở app")
+
     while True:
         # 1. Activation / trial gate
         if backend.ActivationManager.needs_activation():
