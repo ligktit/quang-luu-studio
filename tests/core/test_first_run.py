@@ -193,6 +193,24 @@ def test_migrate_cau_hinh_cu_midi_cc_va_calibration(_cfg_iso):
     assert cal == {"scale_midi_map": {"Major": 10}}
 
 
+@pytest.mark.parametrize("daw_kind,migrated", [("cubase", False), ("studio_one", True)])
+def test_migrate_bo_khoa_calibration_ma_ho_so_daw_co(_cfg_iso, daw_kind, migrated):
+    """Bộ cài Inno xếp app_config.json đóng gói DƯỚI hồ sơ DAW; chép khoá đó sang
+    calibration_overrides.json sẽ lật thứ tự (override thắng hồ sơ) → Cubase bỏ qua."""
+    from core import daw
+    daw.bind({"daw_kind": daw_kind})
+    legacy = _cfg_iso / "legacy"
+    legacy.mkdir()
+    (legacy / "app_config.json").write_text(json.dumps({
+        "scale_midi_map": {"Major": 10},
+        "key_midi_map": {"C": 99},
+    }), encoding="utf-8")
+    assert first_run.migrate_legacy_app_config(str(legacy)) is True
+    cal = json.loads((_cfg_iso / "cal.json").read_text(encoding="utf-8"))
+    assert cal["key_midi_map"] == {"C": 99}   # hồ sơ Cubase không định nghĩa key_midi_map
+    assert ("scale_midi_map" in cal) is migrated
+
+
 def test_migrate_cau_hinh_cu_khong_de_gia_tri_da_co(_cfg_iso):
     legacy = _cfg_iso / "legacy"
     legacy.mkdir()

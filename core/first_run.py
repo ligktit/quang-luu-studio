@@ -217,6 +217,17 @@ def migrate_legacy_app_config(legacy_dir):
         return False
     diff = _cfg.config_diff(_cfg.AppConfig._load_base(), old)
     cal = {k: diff.pop(k) for k in list(diff) if k in _cfg.CALIBRATION_KEYS}
+    # Bộ cài Inno xếp app_config.json DƯỚI hồ sơ DAW, còn calibration_overrides.json thì
+    # TRÊN (AppConfig._daw_calibrated) → khoá hồ sơ DAW đang chọn có định nghĩa thì không chuyển.
+    try:
+        from core import daw  # import trễ: core.daw import core.config
+        profile_cal = daw.active().calibration
+    except Exception:
+        profile_cal = {}
+    for k in list(cal):
+        if profile_cal.get(k) is not None:
+            log.info("Không chuyển %s từ bản cũ: hồ sơ DAW đang chọn đã có giá trị", k)
+            del cal[k]
     # accessibility có file riêng (phẳng: khoá → giá trị), save() không ghi nó vào overrides chung
     acc = diff.pop("accessibility", None)
     acc = acc if isinstance(acc, dict) else {}
