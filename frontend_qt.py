@@ -89,8 +89,23 @@ def add_shadow(widget, color="#000000", blur=20, offset=(0, 4)):
         pass
 
 
+def _find_widget_index(panel_list, widget_data):
+    """Vị trí entry của `widget_data` trong `panel_list`, None nếu không còn.
 
+    Entry có `id` thì khớp theo id. Entry không có `id` (sửa tay, file cũ, file
+    nhập) thì khớp nguyên nội dung — so `None == None` theo id sẽ luôn trúng
+    entry thiếu id ĐẦU TIÊN, Sửa/Ẩn lại nhắm nhầm kênh.
+    """
+    wid = widget_data.get("id")
+    if wid is not None:
+        return next((i for i, item in enumerate(panel_list)
+                     if item.get("id") == wid), None)
 
+    def _strip(d):
+        return {k: v for k, v in d.items() if k != "hidden"}
+    target = _strip(widget_data)
+    return next((i for i, item in enumerate(panel_list)
+                 if "id" not in item and _strip(item) == target), None)
 
 
 # ══════════════════════════════════════════════════════
@@ -208,6 +223,19 @@ class MainDashboard(QMainWindow):
         self._search_results_list = None
         self._func_buttons = {}
         self._mode_buttons = {}
+        # SFX sống cùng dashboard (không theo panel) — Dev Mode dựng lại panel
+        # vẫn giữ/tắt được SFX đang phát. Nút + fader do ui/panels/mode.py nối.
+        from ui.components.sfx_player import SfxPlayer
+        self._sfx_player = SfxPlayer(parent=self)
+        self._sfx_player.set_volume(self._sfx_volume_setting())
+        self._sfx_player.started.connect(lambda i: self._sfx_set_playing(i, True))
+        self._sfx_player.stopped.connect(lambda i: self._sfx_set_playing(i, False))
+        self._sfx_area = None
+        self._sfx_volume_slider = None
+        self._sfx_volume_save_timer = QTimer(self)
+        self._sfx_volume_save_timer.setSingleShot(True)
+        self._sfx_volume_save_timer.setInterval(400)
+        self._sfx_volume_save_timer.timeout.connect(self._save_sfx_volume)
         self._tone_value_labels = {}   # {"tone_music"/"tone_voice": QLabel số bán cung}
         self._marquee_text_value = ""
 
@@ -600,9 +628,43 @@ class MainDashboard(QMainWindow):
         # Nút vừa dựng lại chưa biết thiết lập hiệu ứng — áp lại.
         self._apply_effects_setting()
 
+    def _builder_context(self):
+        """Tham số chung cho Widget Builder: Gửi thử + cảnh báo CC trùng."""
+        return {"engine": self.engine, "midi_cc": self.MIDI_CC,
+                "ui_config": backend.UiConfigManager.load_ui_config()}
+
+    def _on_manage_widgets(self, panel_name):
+        from ui.dialogs.widget_manager import WidgetManagerDialog
+        dialog = WidgetManagerDialog(self, panel_name=panel_name, engine=self.engine,
+                                     midi_cc=self.MIDI_CC)
+        result = dialog.exec()
+        if dialog.restored:
+            self._after_backup_restore()
+            return
+        if result != QDialog.Accepted:
+            return
+        # Hộp đã tự ghi ui_config.json khi Lưu; còn calibration thì áp ở đây.
+        for calibration in dialog.calibrations:
+            self._apply_widget_calibration(calibration)
+        self.refresh_ui()
+
+    def _after_backup_restore(self):
+        """Vừa nhập file cấu hình: nạp lại config, vẽ lại, bắn lại trạng thái
+        mode/toggle theo cân chỉnh mới (như _apply_widget_calibration)."""
+        global SCALE_VALUES
+        backend.AppConfig.reload()
+        # Giá trị Major/Minor nằm trong calibration — nạp lại như wizard cân chỉnh.
+        SCALE_VALUES = backend.AppConfig.get_scale_values()
+        self.SCALE_VALUES = SCALE_VALUES
+        self.refresh_ui()
+        self._resend_calibrated_states(list(self.mode_states),
+                                       ("tone_auto", "fix_meo", "be", "tat_on"))
+        self._show_message("Đã nhập cấu hình giao diện")
+
     def _on_add_widget(self, panel_name, widget_type):
         from ui.dialogs.widget_builder import WidgetBuilderDialog
-        dialog = WidgetBuilderDialog(self, panel_name=panel_name, widget_type=widget_type)
+        dialog = WidgetBuilderDialog(self, panel_name=panel_name, widget_type=widget_type,
+                                     **self._builder_context())
         if dialog.exec() == QDialog.Accepted and dialog.result_data:
             ui_config = backend.UiConfigManager.load_ui_config()
             panel_list = ui_config.get(panel_name, [])
@@ -614,14 +676,21 @@ class MainDashboard(QMainWindow):
 
     def _on_edit_widget(self, panel_name, widget_data):
         from ui.dialogs.widget_builder import WidgetBuilderDialog
-        dialog = WidgetBuilderDialog(self, panel_name=panel_name, widget_type=widget_data.get("type", "slider"), existing_data=widget_data)
+        dialog = WidgetBuilderDialog(self, panel_name=panel_name,
+                                     widget_type=widget_data.get("type", "slider"),
+                                     existing_data=widget_data, **self._builder_context())
         if dialog.exec() == QDialog.Accepted and dialog.result_data:
             ui_config = backend.UiConfigManager.load_ui_config()
             panel_list = ui_config.get(panel_name, [])
-            for i, item in enumerate(panel_list):
-                if item.get("id") == widget_data.get("id"):
-                    panel_list[i] = dialog.result_data
-                    break
+            idx = _find_widget_index(panel_list, widget_data)
+            if idx is None:
+                # Entry đã đổi/mất từ lúc dựng panel (nhập file, migrate id…) —
+                # báo lỗi, không lưu nửa vời (calibration + MIDI mà bỏ mất bản sửa).
+                self._show_message("Không tìm thấy mục cần sửa — giao diện đã thay đổi, hãy thử lại",
+                                   is_error=True)
+                self.refresh_ui()
+                return
+            panel_list[idx] = dialog.result_data
             ui_config[panel_name] = panel_list
             backend.UiConfigManager.save_ui_config(ui_config)
             self._apply_widget_calibration(dialog.result_calibration)
@@ -641,7 +710,13 @@ class MainDashboard(QMainWindow):
             self._show_message("Không lưu được cấu hình MIDI của nút", is_error=True)
             return
 
-        for mode in calibration.get("mode_config", {}):
+        self._resend_calibrated_states(calibration.get("mode_config", {}),
+                                       calibration.get("toggle_invert", {}))
+
+    def _resend_calibrated_states(self, modes, toggles):
+        """Bắn lại trạng thái hiện tại của các mode / nút Bypass vừa đổi cân chỉnh —
+        không thì DAW giữ giá trị theo chiều cũ, đèn trên app ngược cho tới lần bấm sau."""
+        for mode in modes:
             self._set_mode(mode, self.mode_states.get(mode, False))
 
         states = {
@@ -650,7 +725,7 @@ class MainDashboard(QMainWindow):
             "be": ("be_state", False),
             "tat_on": ("tat_on_state", False),
         }
-        for key in calibration.get("toggle_invert", {}):
+        for key in toggles:
             if key not in states:
                 continue
             attr, default = states[key]
@@ -664,10 +739,13 @@ class MainDashboard(QMainWindow):
     def _on_hide_widget(self, panel_name, widget_data):
         ui_config = backend.UiConfigManager.load_ui_config()
         panel_list = ui_config.get(panel_name, [])
-        for i, item in enumerate(panel_list):
-            if item.get("id") == widget_data.get("id"):
-                panel_list[i]["hidden"] = True
-                break
+        idx = _find_widget_index(panel_list, widget_data)
+        if idx is None:
+            self._show_message("Không tìm thấy mục cần ẩn — giao diện đã thay đổi, hãy thử lại",
+                               is_error=True)
+            self.refresh_ui()
+            return
+        panel_list[idx]["hidden"] = True
         ui_config[panel_name] = panel_list
         backend.UiConfigManager.save_ui_config(ui_config)
         self.refresh_ui()
@@ -1134,8 +1212,32 @@ class MainDashboard(QMainWindow):
         if self._waveform is not None:
             self._waveform.set_midi_status(connected)
 
+    _MUSIC_UNAVAILABLE_TIP = (
+        "Thanh Nhạc chỉ chỉnh âm lượng YouTube — chưa có trình phát nào để điều khiển.\n"
+        "Bật màn hình karaoke nhúng, hoặc mở YouTube bằng trình duyệt đã kết nối (đèn trình duyệt xanh)."
+    )
+
+    def _update_music_channel_availability(self):
+        """Thanh Nhạc chỉ điều khiển player YouTube (nhúng hoặc CDP), không gửi
+        gì sang DAW — Studio One hay Cubase đều vậy. Không có player thì xám.
+        Vừa có player trở lại thì đẩy ngay mức đang hiển thị sang player đó:
+        lúc bị xám thanh trượt vẫn có thể đổi (preset, mức theo bài)."""
+        ch = (getattr(self, "_mixer_channels", None) or {}).get(panels.mixer.YOUTUBE_ONLY_KEY)
+        if ch is None:
+            return
+        try:
+            available = bool(self.engine.browser_volume_available())
+        except Exception:
+            available = False
+        was = ch.is_available()
+        ch.set_available(available, self._MUSIC_UNAVAILABLE_TIP)
+        if available and not was:
+            muted = self.mute_states.get(panels.mixer.YOUTUBE_ONLY_KEY, False)
+            self.engine.set_browser_volume(0 if muted else int(ch.slider.value()))
+
     def _update_browser_status(self):
         """Cập nhật đèn báo trạng thái trình duyệt (CDP/WinRT)."""
+        self._update_music_channel_availability()
         cdp_connected = getattr(self.engine.cdp_monitor, 'is_connected', False)
         
         # Check WinRT fallback logic
@@ -1177,8 +1279,9 @@ class MainDashboard(QMainWindow):
                 self._sync_scale_button(self.scale_is_major)
             
             # --- Xử lý phản hồi Mute từ MIDI ---
+            # Không có mute_music: thanh Nhạc chỉ điều khiển player YouTube, mute
+            # kênh nhạc trong DAW không liên quan tới nó.
             mute_cc_to_key = {
-                int(MIDI_CC.get("mute_music", 50)): "mix_music",
                 int(MIDI_CC.get("mute_mic", 51)): "mix_mic",
                 int(MIDI_CC.get("mute_reverb", 52)): "mix_reverb",
                 int(MIDI_CC.get("mute_backing", 53)): "mix_backing",
@@ -1432,6 +1535,7 @@ class MainDashboard(QMainWindow):
         # chạy ở thread nền nên callback chỉ được đọc thuộc tính thuần của cửa sổ
         # player (playback_state), tuyệt đối không gọi API Qt.
         self.engine.embedded_position_callback = self._embedded_playback_state
+        self._update_music_channel_availability()
 
     def _embedded_playback_state(self):
         """(vị trí giây, có đang phát không) cho engine. Cửa sổ đã đóng → (0, False)
@@ -1456,6 +1560,7 @@ class MainDashboard(QMainWindow):
             except Exception:
                 pass
             self._player_window = None
+        self._update_music_channel_availability()
 
     def _set_embedded_volume(self, volume: int):
         if self._player_window is not None:
@@ -3433,59 +3538,39 @@ class MainDashboard(QMainWindow):
         for m in known:
             self._set_mode(m, m in wanted)
 
-    def _on_sfx_play(self, file_path: str):
-        """Phát sound effect theo đường dẫn file (hỗ trợ wav, mp3, ogg, flac...)."""
-        if not file_path:
-            return
-        if not os.path.exists(file_path):
+    def _on_sfx_toggle(self, sfx_id: str, file_path: str):
+        """Bấm nút SFX: chưa phát → phát, đang phát → fade rồi dừng."""
+        if not self._sfx_player.is_playing(sfx_id) and not os.path.exists(file_path):
             print(f"[SFX] Khong tim thay file SFX: {file_path}")
             return
+        self._sfx_player.toggle(sfx_id, file_path)
+
+    def _sfx_set_playing(self, sfx_id: str, on: bool):
+        area = self._sfx_area
+        if area is None:
+            return
         try:
-            from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-            from PySide6.QtCore import QUrl
+            area.set_playing(sfx_id, on)
+        except RuntimeError:
+            pass   # panel vừa bị dựng lại, widget cũ đã xoá
 
-            # Tạo player mới mỗi lần (cho phép chồng tiếng)
-            player = QMediaPlayer(self)
-            audio_out = QAudioOutput(self)
-            player.setAudioOutput(audio_out)
-            audio_out.setVolume(1.0)
-            player.setSource(QUrl.fromLocalFile(file_path))
-            player.play()
+    def _sfx_volume_setting(self) -> int:
+        try:
+            return max(0, min(100, int(self.settings.get("sfx_volume", 100))))
+        except (TypeError, ValueError):
+            return 100
 
-            # Dọn dẹp khi phát xong HOẶC khi media lỗi — nếu chỉ dọn ở
-            # EndOfMedia thì file hỏng/decode lỗi sẽ leak player tích lũy dần.
-            _disposed = {"done": False}
+    def _on_sfx_volume_changed(self, value: int):
+        self._sfx_player.set_volume(value)
+        self.settings["sfx_volume"] = int(value)
+        # Ghi file sau khi ngừng kéo, không ghi mỗi nấc fader.
+        self._sfx_volume_save_timer.start()
 
-            def _dispose():
-                if _disposed["done"]:
-                    return
-                _disposed["done"] = True
-                player.deleteLater()
-                audio_out.deleteLater()
-
-            def _cleanup(status):
-                if status in (QMediaPlayer.EndOfMedia, QMediaPlayer.InvalidMedia):
-                    _dispose()
-
-            def _on_media_error(error, error_string=""):
-                print(f"[SFX] Loi media: {error_string or error}")
-                _dispose()
-
-            player.mediaStatusChanged.connect(_cleanup)
-            player.errorOccurred.connect(_on_media_error)
-
-            print(f"[SFX] Playing: {os.path.basename(file_path)}")
+    def _save_sfx_volume(self):
+        try:
+            backend.ConfigManager.save_settings(self.settings)
         except Exception as e:
-            print(f"[SFX] Loi phat SFX: {e}")
-            # Fallback: winsound cho file .wav
-            if file_path.lower().endswith(".wav"):
-                def _play_fallback():
-                    try:
-                        import winsound
-                        winsound.PlaySound(file_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-                    except Exception:
-                        pass
-                threading.Thread(target=_play_fallback, daemon=True).start()
+            print(f"[SFX] Khong luu duoc am luong SFX: {e}")
 
     def _on_sfx_config_changed(self, sfx_list: list):
         """Lưu danh sách SFX buttons vào settings.json khi thay đổi."""
@@ -3896,6 +3981,9 @@ class MainDashboard(QMainWindow):
             if ch is None or not getattr(ch, "mute_btn", None):
                 self._a11y_speak(f"Kênh {label} không có nút tắt âm")
                 return
+            if not ch.is_available():
+                self._a11y_speak(f"{label} chưa điều khiển được — chưa có trình phát YouTube")
+                return
             ch.mute_btn.click()
             is_muted = ch.is_muted()
             self._a11y_speak(f"{label} {'đã tắt âm' if is_muted else 'đã bật lại'}")
@@ -3960,6 +4048,10 @@ class MainDashboard(QMainWindow):
         try:
             sl = self._mixer_sliders.get(cc_key) if hasattr(self, "_mixer_sliders") else None
             if sl is None:
+                return
+            ch = (getattr(self, "_mixer_channels", None) or {}).get(cc_key)
+            if ch is not None and not ch.is_available():
+                self._a11y_speak("Chưa điều khiển được — chưa có trình phát YouTube")
                 return
             new = max(sl.minimum(), min(sl.maximum(), sl.value() + delta))
             sl.setValue(new)
@@ -4180,10 +4272,6 @@ class MainDashboard(QMainWindow):
             self.is_recording = False
 
         # ── BƯỚC 4: Cleanup tức thì (non-blocking COM/MIDI calls) ──────────────
-        try:
-            self.engine.restore_browser_volume()
-        except Exception:
-            pass
         try:
             self.engine.disconnect_midi()
         except Exception:

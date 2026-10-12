@@ -12,15 +12,9 @@ pytest.importorskip("PySide6.QtWebEngineWidgets",
                     reason="Bản Light không bundle QtWebEngine")
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication, QMainWindow
+from PySide6.QtWidgets import QMainWindow
 
 from ui.karaoke_player import KaraokePlayerWindow
-
-
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
 
 
 @pytest.fixture

@@ -5,17 +5,9 @@ tảng khác test vẫn chạy nhưng không có gì để bắt.
 """
 import pytest
 from unittest.mock import patch
-from PySide6.QtWidgets import QApplication, QComboBox, QWidget, QVBoxLayout
+from PySide6.QtWidgets import QComboBox, QWidget, QVBoxLayout
 
 from core.config import DEFAULT_MODE_CONFIG, DEFAULT_TOGGLE_INVERT
-
-
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    yield app
 
 
 @pytest.fixture
@@ -72,14 +64,18 @@ def test_widget_builder_doi_kieu_khong_canh_bao_geometry(qapp, qtbot, qtlog, cfg
     dlg.show()
     qtbot.waitExposed(dlg)
 
-    dlg.type_combo.setCurrentText("button")
+    dlg.type_combo.setCurrentIndex(dlg.type_combo.findData("button"))
     qtbot.wait(150)
     dlg.cc_input.setValue(20)
     qtbot.wait(150)
     for i in range(dlg.so_type_combo.count()):
         dlg.so_type_combo.setCurrentIndex(i)
         qtbot.wait(150)
-    dlg.type_combo.setCurrentText("slider")
+    dlg.type_combo.setCurrentIndex(dlg.type_combo.findData("slider"))
+    qtbot.wait(150)
+    dlg.label_input.setText("")
+    qtbot.wait(150)
+    dlg.label_input.setText("X")
     qtbot.wait(150)
 
     bad = [m for m in _messages(qtlog) if "QWindowsWindow::setGeometry" in m]

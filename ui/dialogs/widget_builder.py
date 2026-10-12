@@ -3,8 +3,8 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QWidget, QFrame,
     QComboBox, QPushButton, QSpinBox, QDoubleSpinBox, QCheckBox, QColorDialog
 )
-from PySide6.QtCore import Qt
-from core import so_values
+from PySide6.QtCore import Qt, QTimer
+from core import so_values, ui_layout
 from ui.design_tokens import C, FONT
 from ui import responsive as rp
 
@@ -13,6 +13,12 @@ def _config():
     """AppConfig + mặc định — import muộn để dialog dựng được cả khi test."""
     from core.config import AppConfig, DEFAULT_MODE_CONFIG, DEFAULT_TOGGLE_INVERT
     return AppConfig, DEFAULT_MODE_CONFIG, DEFAULT_TOGGLE_INVERT
+
+
+# (data, chữ hiển thị) của combo loại widget.
+TYPE_LABELS = (("slider", "Thanh trượt"), ("button", "Nút"))
+# Ô màu nhanh — token có thật trong ui/design_tokens.C.
+SWATCH_TOKENS = ("primary", "creative", "accent", "green", "orange", "pink", "deep_purple", "blue")
 
 
 class WidgetBuilderDialog(QDialog):
@@ -29,7 +35,8 @@ class WidgetBuilderDialog(QDialog):
     calibration_overrides.json (DATA_DIR, không cần quyền admin).
     """
 
-    def __init__(self, parent=None, panel_name="mixer", widget_type="slider", existing_data=None):
+    def __init__(self, parent=None, panel_name="mixer", widget_type="slider", existing_data=None,
+                 engine=None, ui_config=None, midi_cc=None, pending_calibration=None):
         super().__init__(parent)
         self.panel_name = panel_name
         self.widget_type = widget_type
@@ -37,6 +44,13 @@ class WidgetBuilderDialog(QDialog):
         self.result_data = None
         self.result_calibration = None
         self._loading = False
+        # Gửi thử cần engine; dashboard truyền vào, hoặc lấy từ parent.
+        self._engine = engine if engine is not None else getattr(parent, "engine", None)
+        self._ui_config = ui_config   # None → đọc ui_config.json lúc cần
+        self._midi_cc = midi_cc       # None → AppConfig.get_midi_cc()
+        # Calibration đã sửa trong hộp Quản lý nhưng chưa Lưu xuống đĩa — đọc
+        # trước AppConfig, không thì sửa lần hai hiện giá trị cũ rồi ghi đè mất.
+        self._pending = pending_calibration or {}
 
         title = "Sửa Widget" if existing_data else "Thêm Widget Mới"
         self.setWindowTitle(f"{title} - {panel_name.capitalize()}")
@@ -50,7 +64,9 @@ class WidgetBuilderDialog(QDialog):
         self._build_buttons()
 
         self._load_data()
-        self._on_type_changed(self.type_combo.currentText())
+        self._on_type_changed(self.type_combo.currentData())
+        self._refresh_cc_info()
+        self._update_save_state()
 
     def _add_row(self, label_text, widget, layout=None):
         hl = QHBoxLayout()
@@ -61,24 +77,42 @@ class WidgetBuilderDialog(QDialog):
         (layout or self.vl).addLayout(hl)
         return widget
 
+    def _section(self, text, layout=None):
+        lbl = QLabel(text)
+        lbl.setStyleSheet(f"font-weight: 700; color: {C['text_muted']}; margin-top: 4px;")
+        (layout or self.vl).addWidget(lbl)
+        return lbl
+
     def _build_fields(self):
-        # Type
+        # Loại — chỉ chọn được khi THÊM ở Mixer. Sửa thì loại đã cố định;
+        # Tools/Mode chỉ có Nút.
         self.type_combo = QComboBox()
-        self.type_combo.addItems(["slider", "button"])
-        self.type_combo.setCurrentText(self.widget_type)
-        self.type_combo.currentTextChanged.connect(self._on_type_changed)
-        self._add_row("Loại Widget:", self.type_combo)
+        for key, text in TYPE_LABELS:
+            self.type_combo.addItem(text, key)
+        self.type_combo.setCurrentIndex(max(0, self.type_combo.findData(self.widget_type)))
+        self.type_combo.currentIndexChanged.connect(
+            lambda _i: self._on_type_changed(self.type_combo.currentData()))
+        self.type_row = QWidget()
+        trl = QHBoxLayout(self.type_row)
+        trl.setContentsMargins(0, 0, 0, 0)
+        tlbl = QLabel("Loại:")
+        tlbl.setFixedWidth(100)
+        trl.addWidget(tlbl)
+        trl.addWidget(self.type_combo)
+        self.vl.addWidget(self.type_row)
+        self.type_row.setVisible(not self.existing_data and self.panel_name == "mixer")
 
-        # Label
+        self._section("Hiển thị")
         self.label_input = QLineEdit()
-        self._add_row("Tên (Label):", self.label_input)
+        self.label_input.setPlaceholderText("Chữ hiện trên nút / kênh")
+        self.label_input.textChanged.connect(lambda _t: self._update_save_state())
+        self._add_row("Tên:", self.label_input)
 
-        # Color
         self.color_input = QLineEdit()
-        self.color_input.setPlaceholderText("#HexColor")
+        self.color_input.setPlaceholderText("#HexColor — để trống = trắng")
+        self.color_input.textChanged.connect(lambda _t: self._update_save_state())
         self.color_btn = QPushButton("Chọn màu")
         self.color_btn.clicked.connect(self._pick_color)
-
         chl = QHBoxLayout()
         lbl = QLabel("Màu sắc:")
         lbl.setFixedWidth(100)
@@ -87,6 +121,36 @@ class WidgetBuilderDialog(QDialog):
         chl.addWidget(self.color_btn)
         self.vl.addLayout(chl)
 
+        swl = QHBoxLayout()
+        pad = QLabel("")
+        pad.setFixedWidth(100)
+        swl.addWidget(pad)
+        self.swatches = {}
+        for token in SWATCH_TOKENS:
+            b = QPushButton()
+            b.setFixedSize(22, 22)
+            b.setToolTip(token)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setStyleSheet(f"background-color: {C[token]}; border: 1px solid {C['border']};"
+                            " border-radius: 4px;")
+            b.clicked.connect(lambda _c=False, tk=token: self.color_input.setText(C[tk]))
+            swl.addWidget(b)
+            self.swatches[token] = b
+        swl.addStretch()
+        self.vl.addLayout(swl)
+
+        self.icon_input = QLineEdit()
+        self.icon_input.setPlaceholderText("♪, ☉, ≡")
+        self.icon_row = QWidget()
+        irl = QHBoxLayout(self.icon_row)
+        irl.setContentsMargins(0, 0, 0, 0)
+        ilbl = QLabel("Icon:")
+        ilbl.setFixedWidth(100)
+        irl.addWidget(ilbl)
+        irl.addWidget(self.icon_input)
+        self.vl.addWidget(self.icon_row)
+
+        self._section("MIDI")
         # CC — giá trị -1 = "không gán" (special value), phân biệt với CC 0 hợp lệ.
         # Nhờ vậy nút built-in chỉ bị override khi kỹ thuật viên chủ động chọn một CC.
         self.cc_input = QSpinBox()
@@ -94,24 +158,44 @@ class WidgetBuilderDialog(QDialog):
         self.cc_input.setSpecialValueText("— (không gán)")
         self.cc_input.setValue(-1)
         self.cc_input.valueChanged.connect(lambda _v: self._refresh_value_section())
-        self._add_row("MIDI CC:", self.cc_input)
+        self.cc_input.valueChanged.connect(lambda _v: self._refresh_cc_info())
+        self.test_btn = QPushButton("Gửi thử")
+        self.test_btn.setToolTip("Gửi giá trị BẬT rồi TẮT trên CC này — dùng để MIDI Learn "
+                                 "hoặc kiểm tra trong DAW mà chưa cần Lưu.")
+        self.test_btn.clicked.connect(self._on_test_send)
+        ccl = QHBoxLayout()
+        cclbl = QLabel("MIDI CC:")
+        cclbl.setFixedWidth(100)
+        ccl.addWidget(cclbl)
+        ccl.addWidget(self.cc_input, 1)
+        ccl.addWidget(self.test_btn)
+        self.vl.addLayout(ccl)
+
+        # Hai nhãn đổi nội dung theo CC: luôn hiện + dành sẵn chiều cao (geometry).
+        self.cc_note = QLabel()
+        self.cc_note.setWordWrap(True)
+        self.cc_note.setStyleSheet(f"color: {C['orange']}; font-size: 11px;")
+        self.cc_note.ensurePolished()
+        self.cc_note.setMinimumHeight(self.cc_note.fontMetrics().lineSpacing() * 2 + 4)
+        self.vl.addWidget(self.cc_note)
+        self.test_status = QLabel()
+        self.test_status.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px;")
+        self.test_status.ensurePolished()
+        self.test_status.setMinimumHeight(self.test_status.fontMetrics().lineSpacing() + 2)
+        self.vl.addWidget(self.test_status)
 
         # --- Slider Specific ---
         self.slider_widget = QVBoxLayout()
         self.slider_widget.setContentsMargins(0, 0, 0, 0)
+        self._section("Giá trị", self.slider_widget)
 
-        self.icon_input = QLineEdit()
-        self.icon_input.setPlaceholderText("♪, ☉, ≡")
         self.min_val = QSpinBox()
         self.min_val.setRange(-127, 127)
         self.max_val = QSpinBox()
         self.max_val.setRange(-127, 127)
         self.max_val.setValue(100)
-
-        hl1 = QHBoxLayout()
-        hl1.addWidget(QLabel("Icon:"))
-        hl1.addWidget(self.icon_input)
-        self.slider_widget.addLayout(hl1)
+        for sb in (self.min_val, self.max_val):
+            sb.valueChanged.connect(lambda _v: self._update_save_state())
 
         hl2 = QHBoxLayout()
         hl2.addWidget(QLabel("Min:"))
@@ -251,7 +335,10 @@ class WidgetBuilderDialog(QDialog):
         self.error_label = QLabel()
         self.error_label.setStyleSheet(f"color: {C['accent']};")
         self.error_label.setWordWrap(True)
-        self.error_label.setVisible(False)
+        # Luôn hiện, dành sẵn 2 dòng: ẩn/hiện nhãn đổi cỡ tối thiểu của dialog
+        # → Qt in cảnh báo setGeometry (xem value_note).
+        self.error_label.ensurePolished()
+        self.error_label.setMinimumHeight(self.error_label.fontMetrics().lineSpacing() * 2 + 4)
         self.vl.addWidget(self.error_label)
 
         hl = QHBoxLayout()
@@ -273,11 +360,14 @@ class WidgetBuilderDialog(QDialog):
         if color.isValid():
             self.color_input.setText(color.name())
 
-    def _on_type_changed(self, text):
-        self._set_layout_visible(self.slider_widget, text == "slider")
-        self.button_box.setVisible(text != "slider")
-        if text != "slider":
+    def _on_type_changed(self, t):
+        is_slider = t == "slider"
+        self._set_layout_visible(self.slider_widget, is_slider)
+        self.icon_row.setVisible(is_slider)
+        self.button_box.setVisible(not is_slider)
+        if not is_slider:
             self._refresh_value_section()
+        self._update_save_state()
         self.adjustSize()
 
     def _set_layout_visible(self, layout, visible):
@@ -308,6 +398,9 @@ class WidgetBuilderDialog(QDialog):
         return None
 
     def _mode_cfg(self, label):
+        pending = (self._pending.get("mode_config") or {}).get(label)
+        if pending:
+            return pending
         app_config, default_modes, _ = _config()
         try:
             modes = app_config.get_mode_config() or {}
@@ -321,8 +414,12 @@ class WidgetBuilderDialog(QDialog):
         target = self._value_target()
         if target == "toggle_invert":
             app_config, _, _ = _config()
+            pending = self._pending.get("toggle_invert") or {}
             try:
-                invert = bool(app_config.get_toggle_invert().get(self._action(), False))
+                if self._action() in pending:
+                    invert = bool(pending[self._action()])
+                else:
+                    invert = bool(app_config.get_toggle_invert().get(self._action(), False))
             except Exception:
                 invert = False
             return {"type": "switch", "bypass": invert}
@@ -385,6 +482,109 @@ class WidgetBuilderDialog(QDialog):
         if t == "list" and len(spec["options"]) < 2:
             return "Danh sách lựa chọn cần ít nhất 2 mục (cách nhau bởi dấu phẩy)."
         return None
+
+    def _validate(self):
+        """Lý do chưa Lưu được (None = hợp lệ). Chạy mỗi khi một trường đổi."""
+        if not self.label_input.text().strip():
+            return "Chưa nhập tên."
+        color = self.color_input.text().strip()
+        if color and not ui_layout.is_valid_color(color, C.keys()):
+            return "Màu không hợp lệ — dùng mã #rgb / #rrggbb hoặc bấm một ô màu."
+        if self.type_combo.currentData() == "slider":
+            if self.min_val.value() >= self.max_val.value():
+                return "Min phải nhỏ hơn Max."
+            if self.panel_name == "mixer":
+                cc = self._current_cc()
+                if cc >= 0:
+                    self._load_cc_context()
+                    owner = ui_layout.mixer_slider_on_cc(
+                        cc, self._ui_config, self._midi_cc,
+                        exclude_id=(self.existing_data or {}).get("id"))
+                    if owner:
+                        return f"CC {cc} đã dùng cho slider “{owner}” — mỗi slider MIXER cần CC riêng."
+            return None
+        if self._value_target() is not None:
+            return self._validation_error(self._current_spec())
+        return None
+
+    def _update_save_state(self):
+        if self._loading or not hasattr(self, "save_btn"):
+            return None
+        err = self._validate()
+        self.error_label.setText(err or "")
+        self.save_btn.setEnabled(err is None)
+        self.save_btn.setToolTip(err or "")
+        return err
+
+    # ── CC: cảnh báo trùng + gửi thử ────────────────────────
+    def _current_cc(self):
+        return self.cc_input.value() if self.cc_input.isEnabled() else -1
+
+    def _load_cc_context(self):
+        """Nạp (một lần) ui_config + bảng MIDI_CC để tra CC trùng."""
+        app_config, _, _ = _config()
+        if self._ui_config is None:
+            try:
+                from core.config import UiConfigManager
+                self._ui_config = UiConfigManager.load_ui_config()
+            except Exception:
+                self._ui_config = {}
+        if self._midi_cc is None:
+            try:
+                self._midi_cc = app_config.get_midi_cc() or {}
+            except Exception:
+                self._midi_cc = {}
+        return app_config
+
+    def _cc_conflicts(self, cc):
+        if cc < 0:
+            return []
+        app_config = self._load_cc_context()
+        try:
+            modes = app_config.get_mode_config() or {}
+        except Exception:
+            modes = {}
+        return ui_layout.find_cc_conflicts(
+            cc, self._ui_config, self._midi_cc,
+            exclude_id=(self.existing_data or {}).get("id"), mode_config=modes)
+
+    def _refresh_cc_info(self):
+        cc = self._current_cc()
+        self.test_btn.setEnabled(self._engine is not None and cc >= 0)
+        hits = self._cc_conflicts(cc)
+        self.cc_note.setText(f"⚠ CC {cc} đang dùng bởi: {', '.join(hits)}" if hits else "")
+
+    def _test_values(self):
+        """(bật, tắt) theo MIDI để gửi thử; None nếu form chưa hợp lệ."""
+        if self.type_combo.currentData() == "slider":
+            return 64, 0   # giữa dải rồi về mức thấp nhất
+        spec = self._current_spec()
+        if self._validation_error(spec):
+            return None
+        return so_values.midi_pair(spec)
+
+    def _on_test_send(self):
+        cc = self._current_cc()
+        values = self._test_values()
+        if self._engine is None or cc < 0:
+            return
+        if values is None:
+            self.test_status.setText("Giá trị chưa hợp lệ — sửa phần Giá trị rồi gửi lại.")
+            return
+        on, off = int(values[0]), int(values[1])
+        try:
+            self._engine.send_midi(cc, on)
+        except Exception as e:
+            self.test_status.setText(f"Gửi lỗi: {e}")
+            return
+        self.test_status.setText(f"Đã gửi CC {cc} = {on}, sau đó {off}")
+        QTimer.singleShot(300, lambda: self._send_quiet(cc, off))
+
+    def _send_quiet(self, cc, value):
+        try:
+            self._engine.send_midi(cc, value)
+        except Exception as e:
+            self.test_status.setText(f"Gửi lỗi: {e}")
 
     def _rebuild_option_combos(self):
         options = self._options()
@@ -468,8 +668,7 @@ class WidgetBuilderDialog(QDialog):
         spec = self._current_spec()
         has_values = self._value_target() is not None
         err = self._validation_error(spec) if has_values else None
-        self.error_label.setText(err or "")
-        self.error_label.setVisible(bool(err))
+        self._update_save_state()
 
         if not has_values or err:
             for lbl in (self.on_preview, self.off_preview):
@@ -498,7 +697,7 @@ class WidgetBuilderDialog(QDialog):
         if not d:
             self._apply_spec(self._stored_spec())
             return
-        self.type_combo.setCurrentText(d.get("type", "slider"))
+        self.type_combo.setCurrentIndex(max(0, self.type_combo.findData(d.get("type", "slider"))))
         self.label_input.setText(d.get("label", ""))
         self.color_input.setText(d.get("color", ""))
 
@@ -525,7 +724,11 @@ class WidgetBuilderDialog(QDialog):
         self._apply_spec(self._stored_spec())
 
     def _on_save(self):
-        t = self.type_combo.currentText()
+        err = self._validate()
+        if err:
+            self.error_label.setText(err)
+            return
+        t = self.type_combo.currentData()
         # Khi sửa widget có sẵn: xuất phát từ bản copy của entry gốc để giữ nguyên
         # các field dialog không quản lý (action, desc, unit, has_inf_bottom, ...).
         base = dict(self.existing_data) if self.existing_data else {"hidden": False}
@@ -558,12 +761,6 @@ class WidgetBuilderDialog(QDialog):
         else:
             target = self._value_target()
             spec = self._current_spec()
-            if target is not None:
-                err = self._validation_error(spec)
-                if err:
-                    self.error_label.setText(err)
-                    self.error_label.setVisible(True)
-                    return
             on_midi, off_midi = so_values.midi_pair(spec)
 
             if target == "custom":

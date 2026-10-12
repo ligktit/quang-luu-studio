@@ -81,79 +81,39 @@ class _RecordingMixin:
             else:
                 self.quick_score_active = False
 
-    # ── Browser Volume Control (pycaw) ──────────────────────────────────────────
+    # ── Âm lượng player YouTube (thanh Nhạc) ────────────────────────────────────
 
     BROWSER_PROCESS_NAMES = [
         "chrome.exe", "msedge.exe", "opera.exe", "firefox.exe",
         "brave.exe", "vivaldi.exe", "chromium.exe",
     ]
-    _original_browser_volume = None
 
     def set_browser_volume(self, volume_percent):
+        """Đặt âm lượng player YouTube. Thanh Nhạc CHỈ điều khiển player — không
+        gửi CC cho DAW, cũng không hạ cả ứng dụng trình duyệt trong Volume Mixer
+        (pycaw) nữa. Trả False khi không có player nào nghe lệnh — giao diện dựa
+        vào `browser_volume_available()` để làm xám thanh Nhạc."""
         # Ưu tiên 0: màn hình karaoke nhúng (nếu đang dùng) — dashboard gán callback.
         cb = getattr(self, 'embedded_volume_callback', None)
         if cb is not None:
             try:
                 cb(volume_percent)
-                self._release_pycaw_fallback()
                 return True
             except Exception as e:
                 print(f"[VOL] embedded player lỗi: {e}")
 
         # Ưu tiên 1: CDP (Điều khiển trực tiếp thanh volume trên YouTube)
-        if hasattr(self, 'cdp_monitor') and self.cdp_monitor.is_connected:
-            if self.cdp_monitor.set_player_volume(volume_percent):
-                self._release_pycaw_fallback()
-                return True
+        cdp = getattr(self, 'cdp_monitor', None)
+        if cdp is not None and cdp.is_connected:
+            return bool(cdp.set_player_volume(volume_percent))
+        return False
 
-        # Ưu tiên 2: pycaw (Điều khiển volume toàn bộ trình duyệt - fallback)
-        # Chỉ là tạm thời khi chưa có CDP (lúc khởi động `_sync_midi_states`
-        # đẩy mức thanh Nhạc sang đây). Mức này nằm trong Volume Mixer của
-        # Windows và được Windows nhớ theo app, nên khi CDP/player nhúng tiếp
-        # quản ở trên phải trả lại ngay — không thì trình duyệt kẹt ở mức thấp
-        # trong khi thanh trượt chỉ còn chỉnh player YouTube.
-        try:
-            from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
-        except ImportError:
-            return False
-
-        volume = max(0.0, min(1.0, volume_percent / 100.0))
-        found  = False
-        try:
-            sessions = AudioUtilities.GetAllSessions()
-            for session in sessions:
-                if session.Process:
-                    process_name = session.Process.name().lower()
-                    if process_name in self.BROWSER_PROCESS_NAMES:
-                        vc = session._ctl.QueryInterface(ISimpleAudioVolume)
-                        if self._original_browser_volume is None:
-                            self._original_browser_volume = vc.GetMasterVolume()
-                        vc.SetMasterVolume(volume, None)
-                        found = True
-        except Exception:
-            pass
-        return found
-
-    def _release_pycaw_fallback(self):
-        """Trả session trình duyệt về mức gốc nếu nhánh pycaw từng hạ nó."""
-        if self._original_browser_volume is not None:
-            self.restore_browser_volume()
-
-    def restore_browser_volume(self):
-        if self._original_browser_volume is None:
-            return
-        try:
-            from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
-            for session in AudioUtilities.GetAllSessions():
-                if session.Process and session.Process.name().lower() in self.BROWSER_PROCESS_NAMES:
-                    session._ctl.QueryInterface(ISimpleAudioVolume).SetMasterVolume(
-                        self._original_browser_volume, None
-                    )
-            print(f"[BROWSER VOL] Đã restore volume về {int(self._original_browser_volume * 100)}%")
-        except Exception as e:
-            print(f"[BROWSER VOL] Lỗi restore volume: {e}")
-        finally:
-            self._original_browser_volume = None
+    def browser_volume_available(self):
+        """Có player YouTube nào để thanh Nhạc điều khiển không (nhúng hoặc CDP)."""
+        if getattr(self, 'embedded_volume_callback', None) is not None:
+            return True
+        cdp = getattr(self, 'cdp_monitor', None)
+        return bool(cdp is not None and getattr(cdp, 'is_connected', False))
 
     def get_browser_volume(self):
         try:

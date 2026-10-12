@@ -14,13 +14,6 @@ from ui.components.painter_button import PainterButton
 from ui.components.mode_button import ModeToggleButton
 
 
-@pytest.fixture(scope="session")
-def qapp():
-    from PySide6.QtWidgets import QApplication
-    app = QApplication.instance() or QApplication([])
-    yield app
-
-
 _TOOLS = [
     {"id": "btn_fast_mode", "type": "button", "label": "Chế độ: Nhanh", "color": "#f97316",
      "action": "toggle_scan_mode", "desc": "", "hidden": False},

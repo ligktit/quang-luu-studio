@@ -1,18 +1,10 @@
 """Dev Mode: nhập giá trị theo Studio One, app tự đổi sang MIDI (+ Bypass)."""
 import pytest
 from unittest.mock import patch
-from PySide6.QtWidgets import QApplication
+
 
 from core.config import DEFAULT_MODE_CONFIG, DEFAULT_TOGGLE_INVERT
 from ui.dialogs.widget_builder import WidgetBuilderDialog
-
-
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    yield app
 
 
 @pytest.fixture
@@ -46,6 +38,7 @@ def test_nut_moi_gan_bypass(qapp, qtbot, cfg):
 def test_nut_moi_phan_tram(qapp, qtbot, cfg):
     dlg = WidgetBuilderDialog(None, panel_name="tools", widget_type="button")
     qtbot.addWidget(dlg)
+    dlg.label_input.setText("Nút thử")
     dlg.cc_input.setValue(61)
     _set_type(dlg, "percent")
     dlg.on_num.setValue(75)
@@ -58,6 +51,7 @@ def test_nut_moi_phan_tram(qapp, qtbot, cfg):
 def test_nut_moi_danh_sach(qapp, qtbot, cfg):
     dlg = WidgetBuilderDialog(None, panel_name="mode", widget_type="button")
     qtbot.addWidget(dlg)
+    dlg.label_input.setText("Nút thử")
     dlg.cc_input.setValue(62)
     _set_type(dlg, "list")
     dlg.options_input.setText("Tắt, Nhẹ, Vừa, Mạnh")
@@ -137,3 +131,23 @@ def test_nut_khong_gui_midi_khong_ghi_gia_tri(qapp, qtbot, cfg):
     dlg._on_save()
     assert "on_value" not in dlg.result_data
     assert dlg.result_calibration is None
+
+
+def test_calibration_cho_luu_uu_tien_hon_tren_dia(qapp, qtbot, cfg):
+    _, invert = cfg
+    invert["be"] = False
+    entry = {"id": "btn_be", "type": "button", "label": "Bè", "action": "be"}
+    dlg = WidgetBuilderDialog(None, panel_name="tools", widget_type="button", existing_data=entry,
+                              pending_calibration={"toggle_invert": {"be": True}})
+    qtbot.addWidget(dlg)
+    assert dlg.bypass_cb.isChecked()
+
+
+def test_mode_config_cho_luu_uu_tien_hon_tren_dia(qapp, qtbot, cfg):
+    modes, _ = cfg
+    lofi = dict(modes["Lofi"], on_value=0, off_value=127)
+    entry = {"id": "mode_lofi", "type": "button", "label": "Lofi", "action": "set_mode_lofi"}
+    dlg = WidgetBuilderDialog(None, panel_name="mode", widget_type="button", existing_data=entry,
+                              pending_calibration={"mode_config": {"Lofi": lofi}})
+    qtbot.addWidget(dlg)
+    assert dlg.bypass_cb.isChecked()

@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt
 from ui.design_tokens import C
 from ui.components.painter_panel import GlassPanel
 from ui.components.hmixer_channel import HMixerChannel
+from ui.panels._dev_buttons import attach_dev_ctx_menu, build_dev_row
 
 
 def _resolve_cc_number(dashboard, cc_key):
@@ -13,10 +14,21 @@ def _resolve_cc_number(dashboard, cc_key):
     return dashboard.MIDI_CC.get(cc_key)
 
 
+# Kênh chỉ điều khiển player YouTube (nhúng hoặc CDP), không gửi CC nào cho DAW
+# — Studio One lẫn Cubase. Không có player thì frontend làm xám kênh.
+YOUTUBE_ONLY_KEY = "mix_music"
+
+
 def _make_mute_callback(dashboard, cc_key, mute_cc_map, val_range=(0, 100)):
     min_v, max_v = val_range
     def toggle(is_muted):
         dashboard.mute_states[cc_key] = is_muted
+        if cc_key == YOUTUBE_ONLY_KEY:
+            if is_muted:
+                dashboard.engine.set_browser_volume(0)
+            else:
+                dashboard.engine.set_browser_volume(int(dashboard._mixer_sliders[cc_key].value()))
+            return
         mute_cc = mute_cc_map.get(cc_key)
         if mute_cc is not None:
             dashboard.engine.send_midi(dashboard.MIDI_CC[mute_cc], 127 if is_muted else 0)
@@ -32,14 +44,6 @@ def _make_mute_callback(dashboard, cc_key, mute_cc_map, val_range=(0, 100)):
                     val = slider.value() if slider is not None else min_v
                     normalized = (val - min_v) / (max_v - min_v) if max_v > min_v else 0
                     dashboard.engine.send_midi(cc_num, max(0, min(127, int(normalized * 127))))
-
-        # Mute browser volume if it's the music channel
-        if cc_key == "mix_music":
-            if is_muted:
-                dashboard.engine.set_browser_volume(0)
-            else:
-                val = dashboard._mixer_sliders["mix_music"].value()
-                dashboard.engine.set_browser_volume(int(val))
 
         try:
             multi_cc_map = backend.AppConfig.get_mute_multi_cc()
@@ -66,6 +70,9 @@ def db_to_midi(db, min_v, unity):
 def _make_value_changed_callback(dashboard, cc_key, range_tuple, unit):
     min_v, max_v = range_tuple
     def cb(raw_value):
+        if cc_key == YOUTUBE_ONLY_KEY:
+            dashboard.engine.set_browser_volume(int(raw_value))
+            return
         cc_num = _resolve_cc_number(dashboard, cc_key)
         if cc_num is None:
             return
@@ -74,14 +81,12 @@ def _make_value_changed_callback(dashboard, cc_key, range_tuple, unit):
             from core import daw
             midi = db_to_midi(raw_value, min_v, daw.active().fader_unity_cc)
         else:
-            # voice_fx, mix_music và slider custom: tuyến tính min..max -> 0..127
+            # voice_fx và slider custom: tuyến tính min..max -> 0..127
             normalized = (raw_value - min_v) / (max_v - min_v) if max_v > min_v else 0
             midi = int(normalized * 127)
             midi = max(0, min(127, midi))
 
         dashboard.engine.send_midi(cc_num, midi)
-        if cc_key == "mix_music":
-            dashboard.engine.set_browser_volume(int(raw_value))
     return cb
 
 
@@ -113,19 +118,17 @@ def build_panel_mixer(dashboard) -> GlassPanel:
     ui_config = backend.UiConfigManager.load_ui_config()
     channels_config = ui_config.get("mixer", [])
 
-    channels = []
-    for ch_cfg in channels_config:
-        if ch_cfg.get("hidden", False):
-            continue
-        
+    def _channel_spec(ch_cfg):
         # Resolve dynamic color if it's a token name
         c_val = ch_cfg.get("color", "#ffffff")
         if c_val in C:
             c_val = C[c_val]
 
-        cc_key = ch_cfg.get("cc", "mix_music")
-        
-        channels.append({
+        # Slider custom bỏ CC ("không gán") thì khoá theo id của nó và không gửi
+        # MIDI — trước đây rơi về "mix_music", chiếm chỗ kênh Nhạc và chỉnh
+        # luôn âm lượng nhạc.
+        cc_key = ch_cfg.get("cc", ch_cfg.get("id", "mix_music"))
+        return {
             "label": ch_cfg.get("label", ""),
             "icon": ch_cfg.get("icon", ""),
             "color": c_val,
@@ -135,8 +138,7 @@ def build_panel_mixer(dashboard) -> GlassPanel:
             "unit": ch_cfg.get("unit", ""),
             "has_mute": ch_cfg.get("has_mute", False),
             "has_inf_bottom": ch_cfg.get("has_inf_bottom", False),
-            "id": ch_cfg.get("id", cc_key)
-        })
+        }
 
     dashboard._mixer_sliders = {}
     dashboard._mixer_val_labels = {}
@@ -147,7 +149,18 @@ def build_panel_mixer(dashboard) -> GlassPanel:
     # phép quy đổi dB -> MIDI ở chỗ khác.
     dashboard._mixer_senders = {}
 
-    for ch in channels:
+    # Một vòng duy nhất trên entry cấu hình: `ch_cfg` trong thân vòng luôn là
+    # kênh đang dựng. (Trước đây chép sang list trung gian rồi dựng ở vòng thứ
+    # hai — `ch_cfg` lọt vào vòng sau là entry cuối, menu Sửa/Ẩn nhắm nhầm Giọng.)
+    for ch_cfg in channels_config:
+        if ch_cfg.get("hidden", False):
+            continue
+        ch = _channel_spec(ch_cfg)
+        if ch["cc"] in dashboard._mixer_channels:
+            # Các bảng _mixer_* (và mixer_levels/mute_states) khoá theo CC — kênh
+            # thứ hai cùng CC sẽ đè kênh đầu, không đồng bộ được. Bỏ qua kênh trùng.
+            print(f"[MIXER] Bỏ kênh '{ch['label']}': trùng CC {ch['cc']!r} với kênh đã có")
+            continue
         ch_view = HMixerChannel(
             icon=ch["icon"],
             label=ch["label"],
@@ -197,28 +210,7 @@ def build_panel_mixer(dashboard) -> GlassPanel:
 
         # --- Dev Mode Context Menu ---
         if getattr(dashboard, "is_dev_mode", False):
-            ch_view.setContextMenuPolicy(Qt.CustomContextMenu)
-            
-            # Using default argument for early binding
-            def make_ctx_cb(cfg=ch_cfg):
-                def show_ctx(pos):
-                    from PySide6.QtWidgets import QMenu
-                    from PySide6.QtGui import QAction
-                    menu = QMenu(ch_view)
-                    menu.setStyleSheet("QMenu { background: #1e1e1e; color: white; }")
-                    
-                    edit_act = QAction("Sửa", menu)
-                    edit_act.triggered.connect(lambda: dashboard._on_edit_widget("mixer", cfg))
-                    
-                    hide_act = QAction("Ẩn", menu)
-                    hide_act.triggered.connect(lambda: dashboard._on_hide_widget("mixer", cfg))
-                    
-                    menu.addAction(edit_act)
-                    menu.addAction(hide_act)
-                    menu.exec(ch_view.mapToGlobal(pos))
-                return show_ctx
-                
-            ch_view.customContextMenuRequested.connect(make_ctx_cb())
+            attach_dev_ctx_menu(dashboard, "mixer", ch_view, ch_cfg)
 
         vl.addWidget(ch_view)
         dashboard._mixer_sliders[ch["cc"]] = ch_view.slider
@@ -226,16 +218,15 @@ def build_panel_mixer(dashboard) -> GlassPanel:
         dashboard._mixer_icon_btns[ch["cc"]] = ch_view.mute_btn
         dashboard._mixer_channels[ch["cc"]] = ch_view
 
-    # --- Dev Mode Add Button ---
+    # --- Dev Mode: + Thêm / ⚙ Quản lý ---
     if getattr(dashboard, "is_dev_mode", False):
-        # KHÔNG import Qt cục bộ ở đây — sẽ shadow import module-level
-        # và gây UnboundLocalError ở block context-menu phía trên.
-        from PySide6.QtWidgets import QPushButton
-        add_btn = QPushButton("+ Thêm")
-        add_btn.setStyleSheet(f"background-color: transparent; border: 1px dashed {C['teal']}; color: {C['teal']};")
-        add_btn.setCursor(Qt.PointingHandCursor)
-        add_btn.clicked.connect(lambda: dashboard._on_add_widget("mixer", "slider"))
-        vl.addWidget(add_btn)
+        vl.addLayout(build_dev_row(dashboard, "mixer", "+ Thêm", "slider"))
 
     vl.addStretch()
+
+    # Kênh mới dựng mặc định sáng — xám ngay nếu chưa có player YouTube, khỏi
+    # chờ nhịp kiểm tra trình duyệt 2.5s.
+    update_music = getattr(dashboard, "_update_music_channel_availability", None)
+    if callable(update_music):
+        update_music()
     return panel
