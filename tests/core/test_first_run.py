@@ -104,6 +104,23 @@ def test_find_legacy_install_co_khoa():
         assert first_run.find_legacy_install() == "C:\\Program Files\\QuangLuuStudio"
 
 
+def test_find_legacy_install_goc_o_giu_gach():
+    for loc in ("D:\\", "D:/", "d:\\\\"):
+        with patch("core.first_run._read_uninstall_location", return_value=loc):
+            assert first_run.find_legacy_install() == loc[0] + ":\\"
+
+
+def test_cleanup_legacy_nhan_doi_gach_cuoi_goc_o(tmp_path):
+    script = tmp_path / "tools" / "don_ban_cu.ps1"
+    script.parent.mkdir()
+    script.write_text("", encoding="utf-8")
+    seen = []
+    with patch("core.first_run.find_bundled", return_value=str(script)), \
+         patch("core.first_run._run_elevated_ps", side_effect=lambda inner, t: seen.append(inner) or False):
+        assert first_run.cleanup_legacy_elevated("D:\\") is False
+    assert "'\"D:\\\\\"'" in seen[0]
+
+
 @pytest.fixture
 def _cfg_iso(tmp_path, monkeypatch):
     bundled = tmp_path / "bundled.json"

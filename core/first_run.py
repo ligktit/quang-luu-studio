@@ -182,6 +182,9 @@ def find_legacy_install():
     loc = _read_uninstall_location()
     if loc is None:
         return None
+    # Gốc ổ ("D:\\") giữ nguyên dấu gạch: "D:" là "thư mục hiện hành trên ổ D", không phải gốc ổ.
+    if len(loc.rstrip("\\/")) == 2 and loc[1:2] == ":" and loc[:1].isalpha():
+        return loc[:2] + "\\"
     return loc.rstrip("\\/")
 
 
@@ -234,6 +237,13 @@ def find_bundled(rel_path):
     return None
 
 
+def _quote_arg_tail(path):
+    """Gạch ngược cuối đường dẫn đứng trước dấu nháy đóng sẽ "escape" nháy
+    ("D:\\" → D:"): nhân đôi để dòng lệnh Windows hiểu đúng."""
+    n = len(path) - len(path.rstrip("\\"))
+    return path + "\\" * n
+
+
 def cleanup_legacy_elevated(legacy_dir, timeout=300):
     """Chạy tools/don_ban_cu.ps1 có nâng quyền để xoá bản Inno cũ. True nếu xong."""
     script = find_bundled(os.path.join("tools", "don_ban_cu.ps1"))
@@ -243,6 +253,6 @@ def cleanup_legacy_elevated(legacy_dir, timeout=300):
     q = lambda s: s.replace("'", "''")  # noqa: E731 — trích dẫn chuỗi PowerShell
     inner = ("$p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden "
              "-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',"
-             f"'\"{q(script)}\"','-LegacyDir','\"{q(legacy_dir)}\"'); "
+             f"'\"{q(script)}\"','-LegacyDir','\"{q(_quote_arg_tail(legacy_dir))}\"'); "
              "if ($null -eq $p) { exit 1 }; exit $p.ExitCode")
     return _run_elevated_ps(inner, timeout)

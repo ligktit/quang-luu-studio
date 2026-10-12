@@ -35,13 +35,13 @@ def ctx(tmp_path):
             pass
 
 
-def _run(legacy, key, sc, protected=None):
+def _run(legacy, key, sc, protected=None, cwd=None):
     extra = ["-ProtectedDirs", str(protected)] if protected else []
     return subprocess.run(
         ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", SCRIPT,
          "-LegacyDir", str(legacy), "-UninstallKey", key, "-ShortcutDirs", str(sc)] + extra,
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=60)
+        timeout=60, cwd=cwd)
 
 
 def _key_exists(sub):
@@ -84,10 +84,11 @@ def test_khong_xoa_goc_o_dia(ctx):
     """Thư mục nằm trong danh sách bảo vệ (đại diện gốc ổ / thư mục hệ thống) thì
     không bị xoá dù có QuangLuuStudio.exe bên trong. Không đụng ổ thật."""
     r = _run(ctx["legacy"], ctx["key"], ctx["sc"], protected=ctx["legacy"])
-    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.returncode == 3, r.stdout + r.stderr   # bỏ qua dù có dấu hiệu → báo chưa dọn
     assert (ctx["legacy"] / "QuangLuuStudio.exe").exists()
     assert (ctx["legacy"] / "sfx" / "a.wav").exists()
     assert "BO QUA" in r.stdout
+    assert _key_exists(ctx["sub"])
 
 
 def test_xoa_chua_het_giu_khoa_va_ma_2(ctx):
@@ -96,4 +97,45 @@ def test_xoa_chua_het_giu_khoa_va_ma_2(ctx):
         r = _run(ctx["legacy"], ctx["key"], ctx["sc"])
     assert r.returncode == 2, r.stdout + r.stderr
     assert ctx["legacy"].exists()
+    assert _key_exists(ctx["sub"])
+    # dấu hiệu xoá SAU CÙNG: còn file khoá thì exe vẫn còn → lần sau chạy lại được
+    assert (ctx["legacy"] / "QuangLuuStudio.exe").exists()
+
+
+def test_ten_thu_muc_khac_khong_xoa_giu_khoa_ma_3(ctx, tmp_path):
+    khac = tmp_path / "Program Files" / "QuangLuuStudio Custom"
+    khac.mkdir()
+    (khac / "QuangLuuStudio.exe").write_bytes(b"MZ")
+    r = _run(khac, ctx["key"], ctx["sc"])
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert (khac / "QuangLuuStudio.exe").exists()
+    assert _key_exists(ctx["sub"])
+    assert sorted(os.listdir(ctx["sc"])) == ["Trình duyệt khác.lnk"]   # shortcut vẫn dọn
+
+
+def test_junction_khong_xoa(ctx, tmp_path):
+    target = tmp_path / "DichJunction"
+    target.mkdir()
+    (target / "quan_trong.txt").write_text("x", encoding="utf-8")
+    junction = ctx["legacy"] / "lien_ket"
+    m = subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(junction), str(target)],
+                       capture_output=True, text=True)
+    assert m.returncode == 0, m.stdout + m.stderr
+    try:
+        r = _run(ctx["legacy"], ctx["key"], ctx["sc"])
+        assert r.returncode == 3, r.stdout + r.stderr
+        assert (ctx["legacy"] / "QuangLuuStudio.exe").exists()
+        assert (target / "quan_trong.txt").exists()
+        assert _key_exists(ctx["sub"])
+    finally:
+        os.rmdir(junction)
+
+
+def test_duong_dan_tuong_doi_bo_qua(ctx, tmp_path):
+    cwd = tmp_path / "cwd"
+    (cwd / "QuangLuuStudio").mkdir(parents=True)
+    (cwd / "QuangLuuStudio" / "QuangLuuStudio.exe").write_bytes(b"MZ")
+    r = _run("QuangLuuStudio", ctx["key"], ctx["sc"], cwd=cwd)
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert (cwd / "QuangLuuStudio" / "QuangLuuStudio.exe").exists()
     assert _key_exists(ctx["sub"])

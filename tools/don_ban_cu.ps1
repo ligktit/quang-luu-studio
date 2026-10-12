@@ -30,14 +30,32 @@ $oldShortcuts = @(
     "Quang Luu Studio Recordings.lnk"
 )
 
-# 1. Thư mục cài — chỉ xoá khi đúng là thư mục của app (người dùng có thể đã chọn
-#    thư mục khác lúc cài; khoá registry có thể trỏ sai) VÀ không phải gốc ổ đĩa /
-#    thư mục hệ thống / hồ sơ người dùng: bản Inno cũ cho chọn thư mục tuỳ ý
-#    (DisableDirPage=no), có thể là "D:\" — xoá đệ quy bằng quyền admin ở đó là thảm hoạ.
+# 1. Thư mục cài — DANH SÁCH CHO PHÉP, vì bản Inno cũ cho chọn thư mục tuỳ ý
+#    (DisableDirPage=no) và đây là xoá đệ quy bằng quyền admin. Chỉ xoá khi TẤT CẢ:
+#      - đường dẫn tuyệt đối (không theo thư mục hiện hành của tiến trình);
+#      - tên thư mục cuối đúng "QuangLuuStudio" (DefaultDirName cũ), không phải gốc ổ;
+#      - có QuangLuuStudio.exe hoặc unins000.exe bên trong;
+#      - không phải thư mục hệ thống / hồ sơ (danh sách đen + -ProtectedDirs);
+#      - không có reparse point (junction/symlink) ở chính nó hay bên trong.
+#    Có dấu hiệu bản cũ mà bị bỏ qua → $skipped: giữ khoá gỡ cài đặt, mã thoát 3
+#    để người dùng gỡ tay qua "Apps & features".
 $dirIncomplete = $false
+$skipped = $false
+$markers = @("QuangLuuStudio.exe", "unins000.exe", "unins000.dat")
+$raw = $LegacyDir.Trim()
+$checkPath = $raw
 $dir = ""
-try { $dir = [IO.Path]::GetFullPath($LegacyDir).TrimEnd('\') } catch { $dir = "" }
+$reason = ""
+if ($raw -match '^[A-Za-z]:[\\/]?$') {
+    $reason = "goc o dia"
+    $checkPath = $raw.Substring(0, 2) + "\"
+} elseif ($raw -match '^[A-Za-z]:[\\/]' -or $raw -match '^\\\\[^\\]') {
+    try { $dir = [IO.Path]::GetFullPath($raw).TrimEnd('\') } catch { $reason = "duong dan loi" }
+} else {
+    $reason = "duong dan khong tuyet doi"
+}
 if ($dir) {
+    $checkPath = $dir
     $protected = @()
     foreach ($p in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:SystemRoot,
                      $env:SystemDrive, $env:USERPROFILE, $env:PUBLIC, $env:ProgramData) +
@@ -47,23 +65,51 @@ if ($dir) {
     }
     $root = [IO.Path]::GetPathRoot($dir + '\').TrimEnd('\')
     # Split-Path -Parent "D:" ném lỗi nên dùng GetDirectoryName (trả $null cho gốc ổ / gốc UNC).
-    $isRoot = ($dir -ieq $root) -or (-not [IO.Path]::GetDirectoryName($dir))
-    $isProtected = $isRoot -or ($protected -contains $dir)   # -contains không phân biệt hoa/thường
-    if ($isProtected) {
-        Write-Output "[BO QUA] $dir la goc o dia / thu muc he thong, khong xoa"
-    } elseif (Test-Path -LiteralPath $dir) {
-        $isApp = (Test-Path -LiteralPath (Join-Path $dir "QuangLuuStudio.exe")) -or
-                 (Test-Path -LiteralPath (Join-Path $dir "unins000.exe"))
-        if ($isApp) {
-            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
-            if (Test-Path -LiteralPath $dir) {
-                $dirIncomplete = $true
-                Write-Output "[CANH BAO] Chua xoa het $dir (file dang bi khoa?)"
-            } else { Write-Output "[OK] Da xoa $dir" }
-        } else {
-            Write-Output "[BO QUA] $dir khong phai thu muc cai Quang Luu Studio"
-        }
+    if (($dir -ieq $root) -or (-not [IO.Path]::GetDirectoryName($dir))) { $reason = "goc o dia" }
+    elseif ($protected -contains $dir) { $reason = "thu muc he thong / duoc bao ve" }   # -contains không phân biệt hoa/thường
+    elseif ((Split-Path -Leaf $dir) -ine "QuangLuuStudio") { $reason = "ten thu muc khong phai QuangLuuStudio" }
+}
+$hasMarker = $false
+if ($checkPath -and (Test-Path -LiteralPath $checkPath -PathType Container)) {
+    foreach ($m in $markers) {
+        if (Test-Path -LiteralPath (Join-Path $checkPath $m)) { $hasMarker = $true; break }
     }
+}
+if (-not $reason -and $hasMarker) {
+    # reparse point ở chính thư mục hoặc bất kỳ đâu bên trong → không đụng
+    $item = Get-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue
+    if (-not $item -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $reason = "la lien ket (reparse point)" }
+    else {
+        $rp = @(Get-ChildItem -LiteralPath $dir -Recurse -Force -Attributes ReparsePoint -ErrorAction SilentlyContinue -ErrorVariable rpErr)
+        if ($rp.Count -gt 0 -or $rpErr.Count -gt 0) { $reason = "chua lien ket (reparse point) hoac khong duyet duoc" }
+    }
+}
+if ($reason) {
+    if ($hasMarker) {
+        $skipped = $true
+        Write-Output "[BO QUA] $checkPath ($reason) - xoa tay qua Apps & features"
+    } else {
+        Write-Output "[BO QUA] $checkPath khong phai thu muc cai Quang Luu Studio ($reason)"
+    }
+} elseif (-not $hasMarker) {
+    if (Test-Path -LiteralPath $dir) { Write-Output "[BO QUA] $dir khong phai thu muc cai Quang Luu Studio" }
+} else {
+    # Xoá hết trừ dấu hiệu; dấu hiệu đi SAU CÙNG để xoá dở vẫn nhận ra được ở lần chạy lại.
+    Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue |
+        Where-Object { $markers -notcontains $_.Name } |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    $others = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue |
+                Where-Object { $markers -notcontains $_.Name })
+    if ($others.Count -eq 0) {
+        foreach ($m in $markers) {
+            Remove-Item -LiteralPath (Join-Path $dir $m) -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $dir) {
+        $dirIncomplete = $true
+        Write-Output "[CANH BAO] Chua xoa het $dir (file dang bi khoa?)"
+    } else { Write-Output "[OK] Da xoa $dir" }
 }
 
 # 2. Shortcut cũ — đúng 5 tên, chỉ trong các thư mục dùng chung.
@@ -83,6 +129,10 @@ foreach ($d in ($ShortcutDirs -split ';')) {
 if ($dirIncomplete) {
     Write-Output "[CANH BAO] Giu khoa go cai dat cu vi thu muc cai chua xoa het"
     exit 2
+}
+if ($skipped) {
+    Write-Output "[CANH BAO] Giu khoa go cai dat cu: thu muc cai bi bo qua, can go tay"
+    exit 3
 }
 if (Test-Path -LiteralPath $UninstallKey) {
     Remove-Item -LiteralPath $UninstallKey -Recurse -Force -ErrorAction SilentlyContinue
