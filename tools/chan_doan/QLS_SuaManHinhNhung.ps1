@@ -168,6 +168,8 @@ if ($AppDir) { [void]$cands.Add($AppDir.TrimEnd('\')) }
 $runningProc = @(Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue)
 foreach ($p in $runningProc) { if ($p.Path) { [void]$cands.Add((Split-Path $p.Path -Parent)) } }
 [void]$cands.Add($PSScriptRoot)
+# Bản cài Velopack (từ 1.9.0) — dò TRƯỚC Program Files: máy có thể còn cả bản Inno cũ.
+[void]$cands.Add((Join-Path $env:LOCALAPPDATA "QuangLuuStudio\current"))
 foreach ($hive in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
                     "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
                     "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")) {
@@ -181,8 +183,6 @@ foreach ($hive in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
         if ($reg.DisplayVersion -and -not $installedVer) { $installedVer = [string]$reg.DisplayVersion }
     }
 }
-# Bản cài Velopack (từ 1.9.0) — dò TRƯỚC Program Files: máy có thể còn cả bản Inno cũ.
-[void]$cands.Add((Join-Path $env:LOCALAPPDATA "QuangLuuStudio\current"))
 foreach ($c in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, (Join-Path $env:LOCALAPPDATA "Programs"))) {
     if ($c) { [void]$cands.Add((Join-Path $c "QuangLuuStudio")) }
 }

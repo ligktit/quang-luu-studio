@@ -329,6 +329,8 @@ if ($AppDir) { [void]$candidates.Add($AppDir.TrimEnd('\')) }
 [void]$candidates.Add($PSScriptRoot)                      # bat/ps1 chép cạnh exe
 $proc0 = Get-Process -Name "QuangLuuStudio" -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($proc0 -and $proc0.Path) { [void]$candidates.Add((Split-Path $proc0.Path -Parent)) }
+# Bản cài Velopack (từ 1.9.0) — dò TRƯỚC Program Files: máy có thể còn cả bản Inno cũ.
+[void]$candidates.Add((Join-Path $env:LOCALAPPDATA "QuangLuuStudio\current"))
 foreach ($hive in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
                     "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
                     "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")) {
@@ -338,8 +340,6 @@ foreach ($hive in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
         if ($p.InstallLocation) { [void]$candidates.Add($p.InstallLocation.TrimEnd('\')) }
     }
 }
-# Bản cài Velopack (từ 1.9.0) — dò TRƯỚC Program Files: máy có thể còn cả bản Inno cũ.
-[void]$candidates.Add((Join-Path $env:LOCALAPPDATA "QuangLuuStudio\current"))
 foreach ($c in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, (Join-Path $env:LOCALAPPDATA "Programs"))) {
     if ($c) { [void]$candidates.Add((Join-Path $c "QuangLuuStudio")) }
 }

@@ -25,6 +25,17 @@ def test_do_duong_dan_velopack_truoc_program_files(name):
     assert i < j, "bản Velopack phải được dò trước Program Files"
 
 
+@pytest.mark.parametrize("name", [n for n in SCRIPTS if n != "KiemTraManHinhNhung.ps1"])
+def test_velopack_truoc_vong_lap_registry_inno(name):
+    """Máy giữ cả hai bản: khoá Uninstall của Inno cũ không được thắng bản Velopack."""
+    _, src = _read(name)
+    reg = src.find("CurrentVersion\\Uninstall")
+    assert reg != -1, "script này phải đọc registry Uninstall để dựng danh sách ứng viên"
+    assert src.count("CurrentVersion\\Uninstall") == 3, "chỉ có vòng lặp 3 hive"
+    i = src.find("QuangLuuStudio\\current")
+    assert i != -1 and i < reg, "bản Velopack phải được thêm trước vòng lặp registry Inno"
+
+
 @pytest.mark.parametrize("name", SCRIPTS)
 def test_giu_bom_utf8(name):
     raw, src = _read(name)

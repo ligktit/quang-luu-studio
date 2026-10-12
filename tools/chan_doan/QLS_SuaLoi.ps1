@@ -185,6 +185,8 @@ W ""
 $script:AppRoot = ""
 $candidates = New-Object System.Collections.ArrayList
 if ($AppDir) { [void]$candidates.Add($AppDir) }
+# Bản cài Velopack (từ 1.9.0) — dò TRƯỚC Program Files: máy có thể còn cả bản Inno cũ.
+[void]$candidates.Add((JP $env:LOCALAPPDATA "QuangLuuStudio\current"))
 foreach ($hive in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
                     "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
                     "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")) {
@@ -194,8 +196,6 @@ foreach ($hive in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
         if ($p.InstallLocation) { [void]$candidates.Add($p.InstallLocation.TrimEnd('\')) }
     }
 }
-# Bản cài Velopack (từ 1.9.0) — dò TRƯỚC Program Files: máy có thể còn cả bản Inno cũ.
-[void]$candidates.Add((JP $env:LOCALAPPDATA "QuangLuuStudio\current"))
 [void]$candidates.Add((JP $env:ProgramFiles "QuangLuuStudio"))
 [void]$candidates.Add((JP ${env:ProgramFiles(x86)} "QuangLuuStudio"))
 [void]$candidates.Add((JP $env:LOCALAPPDATA "Programs\QuangLuuStudio"))
