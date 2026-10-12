@@ -32,3 +32,19 @@ def test_ten_mei_nhung_khong_nam_trong_temp_thi_none(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "x" / "_MEI99"), raising=False)
     assert frozen_paths.onefile_extract_dir() is None
+
+
+def test_temp_dang_ten_ngan_8_3_van_nhan(monkeypatch, tmp_path):
+    """%TEMP% có thể ở dạng 8.3 (C:\\Users\\GRANTT~1\\...) trong khi _MEIPASS dạng dài
+    — hoặc ngược lại. Hai dạng phải được coi là cùng một thư mục."""
+    import ctypes
+    temp_long = tmp_path / "Thu Muc Tam Dai"
+    mei = temp_long / "_MEI4242"
+    mei.mkdir(parents=True)
+    buf = ctypes.create_unicode_buffer(1024)
+    ctypes.windll.kernel32.GetShortPathNameW(str(temp_long), buf, 1024)
+    assert buf.value and buf.value != str(temp_long), "ổ đĩa không bật tên 8.3 — test vô nghĩa"
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: buf.value)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(mei), raising=False)
+    assert frozen_paths.onefile_extract_dir() == str(mei)
