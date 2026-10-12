@@ -11,6 +11,7 @@ dist/
 dist_heavy/
 build/
 installer_output/
+releases/
 *.spec
 !QuangLuuStudio.spec
 
