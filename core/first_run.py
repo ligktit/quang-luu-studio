@@ -7,7 +7,6 @@ Module này KHÔNG đụng Qt để test được.
 """
 import base64
 import glob
-import json
 import logging
 import os
 import shutil
@@ -89,7 +88,7 @@ def run_setup_all(app_dir, timeout=300):
         log.warning("Thiếu %s", bat)
         return SETUP_ALL_FAILED
     try:
-        r = subprocess.run(["cmd.exe", "/c", bat, "/auto"], cwd=app_dir, timeout=timeout,
+        r = subprocess.run(["cmd.exe", "/c", "setup_all.bat", "/auto"], cwd=app_dir, timeout=timeout,
                            creationflags=_NO_WINDOW)
         log.info("setup_all.bat /auto -> %s", r.returncode)
         return r.returncode
@@ -133,7 +132,10 @@ def find_loopmidi(env=None):
 def _run_elevated_ps(inner, timeout):
     """Chạy một lệnh PowerShell có nâng quyền (UAC) và chờ xong. True nếu mã thoát 0.
     Từ chối UAC → Start-Process ném lỗi → mã khác 0."""
-    enc = base64.b64encode(inner.encode("utf-16-le")).decode("ascii")
+    # Start-Process ném lỗi (người dùng từ chối UAC) → $p là $null → `exit $null` = 0:
+    # phải ép lỗi dừng và bắt lại để trả mã khác 0.
+    script = "$ErrorActionPreference='Stop'; try { " + inner + " } catch { exit 1 }"
+    enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     try:
         r = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
                             "-EncodedCommand", enc], timeout=timeout, creationflags=_NO_WINDOW)
@@ -149,7 +151,8 @@ def install_loopmidi_elevated(timeout=600):
         return False
     inner = ("$p = Start-Process winget -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList "
              "'install --id TobiasErichsen.loopMIDI --exact --silent "
-             "--accept-package-agreements --accept-source-agreements'; exit $p.ExitCode")
+             "--accept-package-agreements --accept-source-agreements'; "
+             "if ($null -eq $p) { exit 1 }; exit $p.ExitCode")
     _run_elevated_ps(inner, timeout)
     return find_loopmidi() is not None
 
@@ -240,5 +243,6 @@ def cleanup_legacy_elevated(legacy_dir, timeout=300):
     q = lambda s: s.replace("'", "''")  # noqa: E731 — trích dẫn chuỗi PowerShell
     inner = ("$p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden "
              "-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',"
-             f"'\"{q(script)}\"','-LegacyDir','\"{q(legacy_dir)}\"'); exit $p.ExitCode")
+             f"'\"{q(script)}\"','-LegacyDir','\"{q(legacy_dir)}\"'); "
+             "if ($null -eq $p) { exit 1 }; exit $p.ExitCode")
     return _run_elevated_ps(inner, timeout)

@@ -169,3 +169,17 @@ def test_migrate_cau_hinh_cu_accessibility_sang_file_rieng(_cfg_iso, monkeypatch
     acc = json.loads((_cfg_iso / "acc.json").read_text(encoding="utf-8"))
     assert acc == {"tts_enabled": True, "tts_rate": 150}
     assert not (_cfg_iso / "ov.json").exists()
+
+
+def test_lenh_nang_quyen_loi_tra_false():
+    # Start-Process lỗi (tương tự từ chối UAC) → $p là $null → exit $null = 0 nếu không chặn
+    assert first_run._run_elevated_ps(
+        "$p = Start-Process 'khong_ton_tai_xyz_qls' -Wait -PassThru; exit $p.ExitCode", 30) is False
+    assert first_run._run_elevated_ps("exit 0", 30) is True
+
+
+def test_setup_all_duong_dan_co_ngoac_va_va(tmp_path):
+    d = tmp_path / "thu muc (x86) &t"
+    d.mkdir()
+    (d / "setup_all.bat").write_text("@exit /b 5\r\n", encoding="ascii")
+    assert first_run.run_setup_all(str(d)) == 5
