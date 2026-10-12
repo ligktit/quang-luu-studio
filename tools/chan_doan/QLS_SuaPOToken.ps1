@@ -379,15 +379,32 @@ Section "1. KIỂM TRA HIỆN TRẠNG"
 $appConfig = ""
 if ($AppRoot) { $appConfig = Join-Path $AppRoot "app_config.json" } elseif ($RepoRoot) { $appConfig = Join-Path $RepoRoot "app_config.json" }
 $potDisabled = $false
+# Cấu hình HIỆU LỰC = app_config.json (đi kèm bản cài) phủ lên bởi app_config_overrides.json (phần người dùng đổi, ở DataDir).
+$overridesPath = Join-Path $DataDir "app_config_overrides.json"
+$cfg = New-Object psobject
+$potSource = ""
 if ($appConfig -and (Test-Path -LiteralPath $appConfig)) {
     try {
-        $cfg = [System.IO.File]::ReadAllText($appConfig).TrimStart([char]0xFEFF) | ConvertFrom-Json
-        if ($cfg.PSObject.Properties["youtube_pot_enabled"] -and $cfg.youtube_pot_enabled -eq $false) {
-            $potDisabled = $true
-            Say-Bad "app_config.json đang TẮT PO Token (youtube_pot_enabled = false)."
-            Say-Need ("Sửa ""youtube_pot_enabled"": true trong " + $appConfig + " (cần quyền admin nếu cài ở Program Files).")
-        }
+        $base = [System.IO.File]::ReadAllText($appConfig).TrimStart([char]0xFEFF) | ConvertFrom-Json
+        if ($null -ne $base) { $cfg = $base }
+        if ($cfg.PSObject.Properties["youtube_pot_enabled"]) { $potSource = "app_config.json" }
     } catch { Say-Info ("Không đọc được app_config.json: " + $_.Exception.Message) }
+}
+if (Test-Path -LiteralPath $overridesPath) {
+    try {
+        $ov = [System.IO.File]::ReadAllText($overridesPath).TrimStart([char]0xFEFF) | ConvertFrom-Json
+        if ($null -ne $ov) {
+            foreach ($prop in $ov.PSObject.Properties) {
+                $cfg | Add-Member -NotePropertyName $prop.Name -NotePropertyValue $prop.Value -Force
+                if ($prop.Name -eq "youtube_pot_enabled") { $potSource = "app_config_overrides.json" }
+            }
+        }
+    } catch { Say-Info ("Không đọc được app_config_overrides.json: " + $_.Exception.Message) }
+}
+if ($cfg.PSObject.Properties["youtube_pot_enabled"] -and $cfg.youtube_pot_enabled -eq $false) {
+    $potDisabled = $true
+    Say-Bad ("PO Token đang bị TẮT (youtube_pot_enabled = false, lấy từ " + $potSource + ").")
+    Say-Need ("Sửa ""youtube_pot_enabled"": true trong " + $overridesPath + " (hoặc xoá khoá đó khỏi file).")
 }
 
 $plugOk = Test-Path -LiteralPath $POT_MARKER
@@ -1043,8 +1060,8 @@ if (-not $KhongThuTai) {
     } elseif ($hotfix -and $hotfix.Ok) {
         W ("   KẾT LUẬN: nấc đầu của app " + $(if ($first -and $first.Ok) { "chậm (" + $first.Sec + "s)" } else { "HỎNG" }) + ", nhưng BẢN VÁ NHANH tải được (" + $hotfix.Sec + "s).") "Yellow"
         if (-not $AppRoot) {
-            Say-Info "(Chế độ dev: không ép app_config.json — thang client đã sửa trong core/ytdlp_support.py.)"
-        } elseif (Ask "Áp bản vá nhanh vào app_config.json (ép client web_embedded, android, android_vr)?") {
+            Say-Info "(Chế độ dev: không ép app_config_overrides.json — thang client đã sửa trong core/ytdlp_support.py.)"
+        } elseif (Ask "Áp bản vá nhanh vào app_config_overrides.json (ép client web_embedded, android, android_vr)?") {
             if (Set-ClientHotfix) {
                 Say-Need "TẮT HẲN rồi mở lại app để bản vá có hiệu lực khi dò tone."
             }
