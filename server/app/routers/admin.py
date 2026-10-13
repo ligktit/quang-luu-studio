@@ -1,13 +1,16 @@
 """Admin web UI — đăng nhập mật khẩu, quản lý user / license / version / crash."""
 import json
+import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -24,6 +27,7 @@ from app.models import (
     SupportTicket,
     ToneDetection,
     User,
+    VelopackRelease,
 )
 from app.security import (
     SESSION_COOKIE,
@@ -31,7 +35,7 @@ from app.security import (
     make_session,
     verify_password,
 )
-from app.services import codegen, storage, tonelib
+from app.services import codegen, storage, tonelib, velopack_feed, velopack_import
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -423,7 +427,9 @@ def delete_device(device_id: int, admin: str = Depends(current_admin), db: Sessi
 @router.get("/versions", response_class=HTMLResponse)
 def versions_page(request: Request, admin: str = Depends(current_admin), db: Session = Depends(get_db)):
     versions = db.scalars(select(AppVersion).order_by(AppVersion.published_at.desc())).all()
-    return templates.TemplateResponse(request, "versions.html", {"admin": admin, "versions": versions})
+    velopack = db.scalars(select(VelopackRelease).order_by(VelopackRelease.published_at.desc())).all()
+    return templates.TemplateResponse(request, "versions.html",
+                                      {"admin": admin, "versions": versions, "velopack": velopack})
 
 
 @router.post("/versions/upload")
@@ -470,6 +476,107 @@ def toggle_version(ver_id: int, admin: str = Depends(current_admin), db: Session
     av = db.get(AppVersion, ver_id)
     if av:
         av.is_active = not av.is_active
+        db.commit()
+    return _redirect("/admin/versions")
+
+
+# ── Velopack: nhập từ GitHub Release, bật/tắt, chỉnh % phát ──
+_IMPORT_STALE_AFTER = timedelta(minutes=30)
+_VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?")
+
+
+@router.post("/velopack/import")
+def velopack_import_release(
+    background: BackgroundTasks,
+    version: str = Form(...),
+    admin: str = Depends(current_admin),
+    db: Session = Depends(get_db),
+):
+    v = version.strip().lstrip("v")
+    if len(v) > 40 or not _VERSION_RE.fullmatch(v):
+        return _redirect("/admin/versions")
+    row = db.scalar(select(VelopackRelease).where(VelopackRelease.version == v))
+    now = datetime.now(timezone.utc)
+    if row is not None:
+        if row.status == "xong":
+            # Bản đã nhập xong đang được feed phục vụ — không đặt lại, tránh feed ngừng phát nó.
+            return _redirect("/admin/versions")
+        if row.status == "dang_nhap" and _import_still_running(row, now):
+            # Một lần nhập đang chạy: chạy thêm lần nữa sẽ giẫm lên file của nó.
+            return _redirect("/admin/versions")
+    else:
+        row = VelopackRelease(version=v)
+        db.add(row)
+    # Nhập lại được: dòng "loi", hoặc "dang_nhap" kẹt (worker khởi động lại) quá 30 phút.
+    row.status = "dang_nhap"
+    row.import_error = None
+    row.import_started_at = now
+    row.import_token = uuid.uuid4().hex
+    try:
+        db.commit()
+    except IntegrityError:  # bấm đúp: request kia vừa tạo dòng cùng phiên bản
+        db.rollback()
+        return _redirect("/admin/versions")
+    background.add_task(velopack_import.import_release, row.id, row.import_token)
+    return _redirect("/admin/versions")
+
+
+def _import_still_running(row, now):
+    started = row.import_started_at
+    if started is None:
+        return False
+    if started.tzinfo is None:  # SQLite trả datetime không múi giờ
+        started = started.replace(tzinfo=timezone.utc)
+    return now - started < _IMPORT_STALE_AFTER
+
+
+@router.post("/velopack/{rid}/toggle")
+def velopack_toggle(rid: int, admin: str = Depends(current_admin), db: Session = Depends(get_db)):
+    row = db.get(VelopackRelease, rid)
+    if row and row.status == "xong":
+        row.is_active = not row.is_active
+        db.commit()
+    return _redirect("/admin/versions")
+
+
+@router.post("/velopack/{rid}/delete")
+def velopack_delete(rid: int, admin: str = Depends(current_admin), db: Session = Depends(get_db)):
+    """Xoá bản đang tắt: dòng + file gói/bộ cài trên đĩa (~1 GB/bản), trừ file dòng khác còn dùng."""
+    row = db.get(VelopackRelease, rid)
+    if row is None or row.is_active:
+        return _redirect("/admin/versions")
+    mine = _velopack_files(row)
+    db.delete(row)
+    db.commit()
+    still_used = set()
+    for other in db.scalars(select(VelopackRelease)).all():
+        still_used |= _velopack_files(other)
+    for name in mine - still_used:
+        velopack_feed.velopack_dir().joinpath(name).unlink(missing_ok=True)
+    return _redirect("/admin/versions")
+
+
+def _velopack_files(row):
+    names = set()
+    try:
+        names.update(a.get("FileName", "") for a in json.loads(row.assets_json or "[]"))
+    except (ValueError, AttributeError):
+        pass
+    if row.setup_filename:
+        names.add(row.setup_filename)
+    return {n for n in names if velopack_feed.valid_filename(n)}
+
+
+@router.post("/velopack/{rid}/rollout")
+def velopack_rollout(
+    rid: int,
+    rollout_percent: int = Form(...),
+    admin: str = Depends(current_admin),
+    db: Session = Depends(get_db),
+):
+    row = db.get(VelopackRelease, rid)
+    if row:
+        row.rollout_percent = max(0, min(rollout_percent, 100))
         db.commit()
     return _redirect("/admin/versions")
 

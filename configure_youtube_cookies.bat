@@ -1,16 +1,21 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
+REM Roi thu muc cai: cmd va moi tien trinh no mo (loopMIDI...) giu CWD o day thi
+REM Update.exe khong doi ten duoc thu muc cai, ban cap nhat khong ap dung duoc.
+REM Moi duong dan trong file nay deu la duong dan tuyet doi.
+cd /d "%USERPROFILE%"
 
 set "SCRIPT_DIR=%~dp0"
-set "APP_CONFIG=%SCRIPT_DIR%app_config.json"
+set "QLS_DATA=%APPDATA%\QuangLuuStudio"
+set "APP_CONFIG=%QLS_DATA%\app_config_overrides.json"
 set "INTERACTIVE=1"
 
+REM Phan nguoi dung doi cua app_config nam o %APPDATA% (thu muc cai co the
+REM read-only va bi thay moi lan cap nhat). Chua co thi tao file rong.
+if not exist "%QLS_DATA%" mkdir "%QLS_DATA%"
 if not exist "%APP_CONFIG%" (
-    echo [ERROR] Khong tim thay app_config.json:
-    echo         %APP_CONFIG%
-    pause
-    exit /b 1
+    powershell -NoProfile -Command "[IO.File]::WriteAllText('%APP_CONFIG%', '{}', (New-Object Text.UTF8Encoding($false)))"
 )
 
 set "MODE="
@@ -175,11 +180,11 @@ goto :apply
 
 :apply
 echo.
-echo [INFO] Dang cap nhat app_config.json...
+echo [INFO] Dang cap nhat app_config_overrides.json...
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$path = [System.IO.Path]::GetFullPath('%APP_CONFIG%');" ^
-    "$config = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json;" ^
+    "$config = [IO.File]::ReadAllText($path).TrimStart([char]0xFEFF) | ConvertFrom-Json;" ^
     "if (-not $config.PSObject.Properties['youtube_cookie_browser']) { $config | Add-Member -NotePropertyName youtube_cookie_browser -NotePropertyValue '' };" ^
     "if (-not $config.PSObject.Properties['youtube_cookie_profile']) { $config | Add-Member -NotePropertyName youtube_cookie_profile -NotePropertyValue '' };" ^
     "if (-not $config.PSObject.Properties['youtube_cookie_file']) { $config | Add-Member -NotePropertyName youtube_cookie_file -NotePropertyValue '' };" ^
@@ -196,7 +201,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "Write-Host ('  youtube_cookie_file    = ' + $config.youtube_cookie_file)"
 
 if errorlevel 1 (
-    echo [ERROR] Cap nhat app_config.json that bai.
+    echo [ERROR] Cap nhat app_config_overrides.json that bai.
     pause
     exit /b 1
 )

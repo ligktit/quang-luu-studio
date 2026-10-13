@@ -148,6 +148,26 @@ function Prop {
     return $p.Value
 }
 
+function Merge-Config {
+    # Gộp lớp người dùng (app_config_overrides.json) lên app_config.json GIỐNG app
+    # (core/config.py merge_config): mục dạng object thì gộp nông từng khoá con, còn lại thay hẳn.
+    param($Base, $Extra)
+    if ($null -eq $Extra) { return $Base }
+    if ($null -eq $Base) { $Base = New-Object psobject }
+    foreach ($p in $Extra.PSObject.Properties) {
+        $cur = $Base.PSObject.Properties[$p.Name]
+        if (($p.Value -is [System.Management.Automation.PSCustomObject]) -and $cur -and
+            ($cur.Value -is [System.Management.Automation.PSCustomObject])) {
+            foreach ($q in $p.Value.PSObject.Properties) {
+                $cur.Value | Add-Member -NotePropertyName $q.Name -NotePropertyValue $q.Value -Force
+            }
+        } else {
+            $Base | Add-Member -NotePropertyName $p.Name -NotePropertyValue $p.Value -Force
+        }
+    }
+    return $Base
+}
+
 # ══════════════════════════════════════════════════════════════════════════
 #  Mở đầu
 # ══════════════════════════════════════════════════════════════════════════
@@ -278,6 +298,8 @@ Safe "Tìm thư mục cài đặt" {
     $candidates = New-Object System.Collections.ArrayList
     if ($AppDir) { [void]$candidates.Add($AppDir) }
 
+    # Bản cài Velopack (từ 1.9.0) — dò TRƯỚC Program Files: máy có thể còn cả bản Inno cũ.
+    [void]$candidates.Add((JP $env:LOCALAPPDATA "QuangLuuStudio\current"))
     foreach ($hive in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
                         "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
                         "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")) {
@@ -464,11 +486,23 @@ if ($script:AppRoot) {
 # ══════════════════════════════════════════════════════════════════════════
 #  3. CẤU HÌNH app_config.json
 # ══════════════════════════════════════════════════════════════════════════
-Section "3. CẤU HÌNH MIDI (app_config.json)"
+Section "3. CẤU HÌNH MIDI (app_config.json + app_config_overrides.json)"
 
 $script:MidiCC = $null
 $script:MidiPortName = "QuangLuuMIDI"
 $script:ServerUrl = $DEFAULT_SERVER
+
+# Cấu hình HIỆU LỰC = app_config.json (đi kèm bản cài) phủ lên bởi app_config_overrides.json
+# (phần người dùng đổi, ở DATA_DIR) — app đọc đúng như vậy, nên kiểm trên bản đã gộp.
+$ovPath = Join-Path $DATA_DIR "app_config_overrides.json"
+$ov = Read-JsonFile $ovPath   # Get-Content -Encoding UTF8 chấp nhận BOM, app cũng vậy
+$ovData = $null
+if ($ov.Exists -and -not $ov.Valid) {
+    Chk "app_config_overrides.json" "FAIL" ("hỏng JSON — " + $ov.Error) "App bỏ qua CẢ tệp này (mất các chỉnh cookie/MIDI đã lưu). Sửa lại cú pháp hoặc xoá tệp."
+} elseif ($ov.Valid) {
+    $ovData = $ov.Data
+    Chk "app_config_overrides.json" "OK" ("hợp lệ, sửa lần cuối " + $ov.Modified.ToString("dd/MM/yyyy HH:mm"))
+}
 
 if ($script:AppRoot) {
     $cfgPath = Join-Path $script:AppRoot "app_config.json"
@@ -480,7 +514,7 @@ if ($script:AppRoot) {
         Chk "app_config.json" "FAIL" ("hỏng JSON — " + $cfg.Error) "Ai đó sửa tay hỏng cú pháp. Chép lại file từ bộ cài (hoặc xoá đi, app dùng mặc định)."
     } else {
         Chk "app_config.json" "OK" ("hợp lệ, sửa lần cuối " + $cfg.Modified.ToString("dd/MM/yyyy HH:mm"))
-        $d = $cfg.Data
+        $d = Merge-Config $cfg.Data $ovData
         $script:MidiPortName = [string](Prop $d "midi_port_name" "QuangLuuMIDI")
         $srv = [string](Prop $d "license_server_url" "")
         if ($srv) { $script:ServerUrl = $srv.TrimEnd('/') }
@@ -507,7 +541,7 @@ if ($script:AppRoot) {
                 else { $seen[$v] = $p.Name }
             }
             if ($bad.Count -gt 0) {
-                Chk "Giá trị CC" "FAIL" (($bad -join "; ")) "CC phải là số 0–127. Sửa lại app_config.json."
+                Chk "Giá trị CC" "FAIL" (($bad -join "; ")) "CC phải là số 0–127. Sửa lại app_config_overrides.json (hoặc app_config.json)."
             }
             if ($dups.Count -gt 0) {
                 Chk "CC trùng nhau" "FAIL" (($dups -join "; ")) "Hai nút khác nhau gửi cùng một CC → bấm nút này lại đổi thứ khác. Đặt mỗi chức năng một số CC riêng."

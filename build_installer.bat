@@ -105,64 +105,33 @@ if not exist "QuangLuuStudio.spec" (
     exit /b 1
 )
 
-echo [INFO] Dang xoa thu muc build cu...
 if exist build rd /s /q build
 if exist dist rd /s /q dist
-
-echo [INFO] Dang build EXE...
-echo.
-PyInstaller QuangLuuStudio.spec
-
+PyInstaller QuangLuuStudio.spec --noconfirm
 if %errorlevel% neq 0 (
-    echo.
-    echo [ERROR] Build EXE that bai!
+    echo [LOI] PyInstaller that bai
     pause
     exit /b 1
 )
-
-echo.
-echo [OK] Build EXE thanh cong: dist\QuangLuuStudio.exe
-echo.
-
-REM Kiểm tra file EXE đã được tạo
-if not exist "dist\QuangLuuStudio.exe" (
-    echo [ERROR] Khong tim thay file dist\QuangLuuStudio.exe!
+if not exist "dist\QuangLuuStudio\QuangLuuStudio.exe" (
+    echo [LOI] Khong thay dist\QuangLuuStudio\QuangLuuStudio.exe
     pause
     exit /b 1
 )
-
-REM === Bước 3: Build Installer bằng Inno Setup ===
-echo ----------------------------------------
-echo  Buoc 3: Build Installer bang Inno Setup
-echo ----------------------------------------
-echo.
-
-if not exist "QuangLuuStudio_Setup.iss" (
-    echo [ERROR] Khong tim thay file QuangLuuStudio_Setup.iss!
-    pause
-    exit /b 1
-)
-
-echo [INFO] Dang tao file cai dat...
-echo.
-"%ISCC_PATH%" QuangLuuStudio_Setup.iss
-
+for /f "delims=" %%V in ('python -c "from core.version import __version__;print(__version__)"') do set "QLS_VER=%%V"
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build_velopack.ps1 -Version %QLS_VER% -OutputDir releases
 if %errorlevel% neq 0 (
-    echo.
-    echo [ERROR] Tao installer that bai!
+    echo [LOI] Dong goi Velopack that bai
     pause
     exit /b 1
 )
-
+"%ISCC_PATH%" /DVelopackDir=releases QuangLuuStudio_Bridge.iss
+if %errorlevel% neq 0 (
+    echo [LOI] Build bo cai cau noi that bai
+    pause
+    exit /b 1
+)
 echo.
-echo ========================================
-echo  THANH CONG!
-echo ========================================
-echo.
-echo  File cai dat: installer_output\Setup_QuangLuuStudio_v1.8.0.exe
-echo.
-echo  Ban co the gui file nay cho nguoi khac
-echo  de ho cai dat Quang Luu Studio.
-echo ========================================
-echo.
+echo [OK] releases\QuangLuuStudio-CaiDat.exe  (cai moi)
+echo [OK] installer_output\Setup_QuangLuuStudio_v%QLS_VER%.exe  (cau noi cho may 1.8.x)
 pause

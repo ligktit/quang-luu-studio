@@ -1,10 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs
 
 import os
 
 # ── Biến thể build: Heavy (có QtWebEngine → màn hình karaoke nhúng) vs Light ──
-# Đặt env QLS_WEBENGINE=1 để build bản Heavy (xem build_installer_heavy.bat).
+# Đặt env QLS_WEBENGINE=1 để build bản Heavy.
 # Bản Light (mặc định) loại QtWebEngine để giảm ~250MB cho máy yếu.
 INCLUDE_WEBENGINE = os.environ.get("QLS_WEBENGINE") == "1"
 
@@ -80,8 +80,11 @@ hiddenimports = [
     'ui.dialogs.premium_dialog',
     'ui.dialogs.progress_dialog',
     'ui.dialogs.setlist_dialog',
+    'ui.dialogs.first_run_dialog',
+    # Velopack: import trong khối try ở đầu main.py + import trễ trong core/updater
+    'velopack',
+    'core.updater.velopack_updater',
     'ui.dialogs.audio_doctor_dialog',
-    'ui.dialogs.update_dialog',
     # Khoá kỹ thuật / chế độ khách — lazy import từ header + settings dialog
     'ui.dialogs.tech_unlock',
     'ui.dialogs.shutdown_dialog',
@@ -148,6 +151,14 @@ except Exception as _exc:
     print(f"[spec] CANH BAO: khong gom duoc yt_dlp_ejs ({_exc}) - "
           f"chay: pip install -U \"yt-dlp[default]\"")
 
+# vosk nạp libvosk.dll (+ libgcc/libstdc++/libwinpthread) từ thư mục của chính package
+# (_internal\vosk). PyInstaller không tự gom các DLL này → bản cài báo "vosk không khả
+# dụng" và lệnh giọng nói không chạy.
+try:
+    binaries += collect_dynamic_libs('vosk')
+except Exception as _exc:
+    print(f"[spec] CANH BAO: khong gom duoc DLL cua vosk ({_exc})")
+
 tmp_ret = collect_all('PySide6')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('shiboken6')
@@ -200,19 +211,18 @@ def _toc_should_exclude(name):
 a.binaries = [item for item in a.binaries if not _toc_should_exclude(item[0]) and not _toc_should_exclude(item[1])]
 a.datas = [item for item in a.datas if not _toc_should_exclude(item[0]) and not _toc_should_exclude(item[1])]
 
+# ONEDIR (bản cài Velopack): exe + thư mục _internal\ cạnh nhau, không giải nén ra
+# %TEMP%\_MEI mỗi lần mở (onefile 7,9 s → onedir 1,4 s, đo ở spike 2026-10-12).
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='QuangLuuStudio',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -220,4 +230,13 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['app_icon.ico'] if os.path.exists('app_icon.ico') else [],
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='QuangLuuStudio',
 )

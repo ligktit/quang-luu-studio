@@ -1,6 +1,10 @@
 @echo off
 setlocal EnableExtensions
 chcp 65001 >nul
+REM Roi thu muc cai: cmd va moi tien trinh no mo (loopMIDI...) giu CWD o day thi
+REM Update.exe khong doi ten duoc thu muc cai, ban cap nhat khong ap dung duoc.
+REM Moi duong dan trong file nay deu la duong dan tuyet doi.
+cd /d "%USERPROFILE%"
 title Quang Luu Studio - Thu tai audio tu YouTube
 
 rem ============================================================================

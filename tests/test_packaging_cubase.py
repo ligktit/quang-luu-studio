@@ -9,21 +9,6 @@ def _read(name):
         return f.read()
 
 
-def test_iss_chep_script_cubase():
-    iss = _read("QuangLuuStudio_Setup.iss")
-    assert 'Source: "cubase\\QuangLuu_QuangLuuMIDI.js"; DestDir: "{app}\\cubase"' in iss
-    # Quy trình cài đặt đi kèm bộ cài để kỹ thuật viên đọc tại máy khách.
-    assert 'Source: "cubase\\HUONG_DAN_CAI_DAT_CUBASE.md"; DestDir: "{app}\\cubase"' in iss
-    assert os.path.exists(os.path.join(ROOT, "cubase", "HUONG_DAN_CAI_DAT_CUBASE.md"))
-
-
-def test_iss_chon_san_daw_cubase_khi_may_chi_co_cubase():
-    iss = _read("QuangLuuStudio_Setup.iss")
-    assert "function DawMacDinh(): String;" in iss
-    assert "Steinberg\\Cubase*" in iss and "PreSonus\\Studio One*" in iss
-    assert "\"daw_kind\": \"' + DawMacDinh() + '\"" in iss, "settings.json lần đầu phải ghi daw_kind"
-
-
 def test_spec_dong_goi_thu_muc_cubase():
     assert "('cubase', 'cubase')" in _read("QuangLuuStudio.spec")
 
@@ -65,11 +50,6 @@ def test_setup_all_co_che_do_tu_dong():
     assert bat.index('if "!QLS_AUTO!"=="1" (\n    echo [INFO] Che do tu dong: bo qua') < bat.index("FFMPEG_URL_1=")
 
 
-def test_iss_chay_setup_all_tu_dong_voi_quyen_nguoi_dung_goc():
-    iss = _read("QuangLuuStudio_Setup.iss")
-    assert "ExecAsOriginalUser(ExpandConstant('{app}\\setup_all.bat'), '/auto'" in iss, "chạy dưới admin thì script ghi nhầm Documents/HKCU của admin"
-    assert "ewWaitUntilTerminated" in iss
-    assert "ChayCaiDatTuDong();" in iss.split("procedure CurStepChanged")[1]
-    assert "SuppressibleMsgBox" in iss, "cài im lặng không được treo ở hộp thoại"
-    # Ô tích chạy bản tương tác vẫn còn nhưng không tích sẵn.
-    assert 'Filename: "{app}\\setup_all.bat"; Description:' in iss and "postinstall skipifsilent unchecked" in iss
+def test_huong_dan_cubase_di_kem_ban_cai():
+    # Quy trình cài đặt đi kèm bản cài (build_velopack.ps1 chép cả thư mục cubase\).
+    assert os.path.exists(os.path.join(ROOT, "cubase", "HUONG_DAN_CAI_DAT_CUBASE.md"))

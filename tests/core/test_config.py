@@ -81,15 +81,19 @@ def test_appconfig_get_mode_midi_map():
         mm = AppConfig.get_mode_midi_map()
         assert "Fix Méo" in mm
 
-def test_appconfig_update_and_save(tmp_path):
-    # C-11: `update(key, value)` + `save()`
+def test_appconfig_update_and_save(tmp_path, monkeypatch):
+    # C-11: `update(key, value)` + `save()` — ghi vào overrides, không vào app_config.json
+    import core.config as cfg
     config_file = tmp_path / "app_config.json"
+    ov_file = tmp_path / "app_config_overrides.json"
+    monkeypatch.setattr(cfg, "APP_CONFIG_OVERRIDES_FILE", str(ov_file))
     with patch("core.config.AppConfig._get_config_path", return_value=str(config_file)):
         AppConfig.update("midi_port_name", "NewPort")
         AppConfig.save()
-        
-        saved_data = json.loads(config_file.read_text(encoding="utf-8"))
+
+        saved_data = json.loads(ov_file.read_text(encoding="utf-8"))
         assert saved_data["midi_port_name"] == "NewPort"
+        assert not config_file.exists()
 
 def test_appconfig_reload(tmp_path):
     # C-12: `reload()`

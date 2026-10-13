@@ -2,7 +2,7 @@ import backend
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox,
     QLineEdit, QFileDialog, QWidget, QFrame, QTabWidget,
-    QSlider, QComboBox,
+    QSlider, QComboBox, QMessageBox,
 )
 from PySide6.QtCore import Qt, QSize, QByteArray
 from PySide6.QtGui import QIcon, QPixmap, QPainter
@@ -18,6 +18,7 @@ from ui.components.svg_icons import (
     SVG_SAVE,
     SVG_SEARCH,
     SVG_SETTINGS,
+    SVG_TRASH,
     SVG_UPLOAD,
     SVG_WRENCH,
     SVG_EYE_OPEN,
@@ -745,6 +746,8 @@ class SettingsDialog(QDialog):
         left.addWidget(self._section_card(self._build_cookie_tools))
         left.addWidget(self._section_header(SVG_GLOBE, "Thư viện tone cộng đồng"))
         left.addWidget(self._section_card(self._build_tone_share))
+        left.addWidget(self._section_header(SVG_WRENCH, "Công cụ chẩn đoán"))
+        left.addWidget(self._section_card(self._build_diag_tools))
         left.addStretch()
 
         right_col = QWidget()
@@ -1361,138 +1364,83 @@ class SettingsDialog(QDialog):
 
     def _build_update_tools(self, vl):
         from core.version import __version__
+        from core.updater import get_updater, status_text
 
         version_lbl = QLabel(f"Phiên bản hiện tại: <b>{__version__}</b>")
         version_lbl.setStyleSheet(self._field_label_qss(size=12, weight=600))
         version_lbl.setTextFormat(Qt.RichText)
         vl.addWidget(version_lbl)
-        vl.addSpacing(2)
 
-        # Last check timestamp
-        last_check_text = self._format_last_update_check()
-        self._update_last_check_lbl = QLabel(last_check_text)
-        self._update_last_check_lbl.setStyleSheet(
-            self._field_label_qss(size=11, weight=500, italic=True)
-        )
-        vl.addWidget(self._update_last_check_lbl)
-        vl.addSpacing(8)
-
-        # Action row
-        action_row = QHBoxLayout()
-        action_row.setContentsMargins(0, 4, 0, 4)
-        action_row.setSpacing(10)
-        check_btn = QPushButton("Kiểm tra cập nhật")
-        check_btn.setIcon(self._svg_icon(SVG_SEARCH, "white", 16))
-        check_btn.setIconSize(QSize(16, 16))
-        check_btn.setCursor(Qt.PointingHandCursor)
-        check_btn.setFixedHeight(38)
-        check_btn.setFixedWidth(180)
-        check_btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 12, 14))
-        add_shadow(check_btn, C["teal"], 8, (0, 2))
-        check_btn.clicked.connect(self._action_check_for_updates)
-        self._update_check_btn = check_btn
-
-        self._update_status_lbl = QLabel("")
-        self._update_status_lbl.setStyleSheet(
-            f"color: {C['teal']}; font-size: 11px; font-family: {FONT};"
-            " background:transparent; border:none;"
-        )
+        # Cập nhật chạy ngầm (core/updater): không nút, không hộp thoại — chỉ báo trạng thái.
+        auto = bool(((self._dashboard.settings or {}).get("update") or {}).get("auto_check", True))
+        self._update_status_lbl = QLabel(status_text(__version__, get_updater(), auto_check=auto))
+        self._update_status_lbl.setStyleSheet(self._field_label_qss(size=11, weight=500, italic=True))
         self._update_status_lbl.setWordWrap(True)
+        vl.addWidget(self._update_status_lbl)
 
-        action_row.addWidget(check_btn)
-        action_row.addSpacing(10)
-        action_row.addWidget(self._update_status_lbl, 1)
-        vl.addLayout(action_row)
+    def _build_diag_tools(self, vl):
+        """Thay shortcut Start Menu của bộ cài cũ: Velopack chỉ tạo shortcut cho exe chính."""
+        from core import app_tools
+        from core.config import APP_DIR, _get_recordings_dir
 
-    def _format_last_update_check(self):
-        try:
-            settings = self._dashboard.settings or {}
-            ts = settings.get("update", {}).get("last_check_timestamp", 0)
-            if not ts:
-                return "Lần kiểm tra cuối: chưa có"
-            from datetime import datetime
-            return f"Lần kiểm tra cuối: {datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M')}"
-        except Exception:
-            return "Lần kiểm tra cuối: chưa có"
+        def _btn(text, color, slot):
+            b = QPushButton(text)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedHeight(36)
+            b.setStyleSheet(pill_btn_qss(color, _lighten(color, 0.1), 12, 12))
+            b.clicked.connect(slot)
+            return b
 
-    def _action_check_for_updates(self):
-        import threading
-        from PySide6.QtCore import QTimer
+        def _run_bat(name):
+            if app_tools.launch_bat(APP_DIR, name):
+                self._lbl_cong_cu.setText("")
+            else:
+                self._lbl_cong_cu.setText(f"Không mở được {name} — thiếu file trong thư mục cài đặt.")
 
-        self._update_check_btn.setEnabled(False)
-        self._update_status_lbl.setText("Đang kết nối GitHub...")
-        self._update_status_lbl.setStyleSheet(
-            f"color: {C['teal']}; font-size: 11px; font-family: {FONT};"
-            " background:transparent; border:none;"
-        )
+        def _open_recordings():
+            if app_tools.open_folder(_get_recordings_dir()):
+                self._lbl_cong_cu.setText("")
+            else:
+                self._lbl_cong_cu.setText("Không mở được thư mục bản thu.")
 
-        def _run():
-            result = {"release": None, "error": None}
-            try:
-                from core.updater import check_latest_release, is_newer
-                release = check_latest_release()
-                if release is None:
-                    result["error"] = "Không kết nối được GitHub hoặc chưa có release nào."
-                elif not is_newer(release.version):
-                    result["release"] = release
-                    result["up_to_date"] = True
-                else:
-                    result["release"] = release
-                    result["up_to_date"] = False
-            except Exception as exc:
-                result["error"] = f"Lỗi khi kiểm tra: {exc}"
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self._btn_kiem_tra_tone = _btn("Kiểm tra dò tone", C["blue"],
+                                       lambda: _run_bat("kiem_tra_tone.bat"))
+        self._btn_thu_tai = _btn("Thử tải YouTube", C["blue"],
+                                 lambda: _run_bat("thu_tai_youtube.bat"))
+        row.addWidget(self._btn_kiem_tra_tone)
+        row.addWidget(self._btn_thu_tai)
+        vl.addLayout(row)
 
-            QTimer.singleShot(0, lambda: self._on_update_check_done(result))
+        self._btn_mo_ban_thu = _btn("Mở thư mục bản thu", C["teal"], _open_recordings)
+        vl.addWidget(self._btn_mo_ban_thu)
+        self._lbl_cong_cu = QLabel("")
+        self._lbl_cong_cu.setWordWrap(True)
+        self._lbl_cong_cu.setStyleSheet(self._field_label_qss(size=11, weight=500, italic=True))
+        vl.addWidget(self._lbl_cong_cu)
 
-        threading.Thread(target=_run, daemon=True, name="update-check").start()
+        self._btn_xoa_du_lieu = _btn("Xoá dữ liệu…", C["accent"], self._action_wipe_data)
+        self._btn_xoa_du_lieu.setIcon(self._svg_icon(SVG_TRASH, "white", 16))
+        vl.addWidget(self._btn_xoa_du_lieu)
+        self._lbl_xoa_du_lieu = QLabel("")
+        self._lbl_xoa_du_lieu.setWordWrap(True)
+        self._lbl_xoa_du_lieu.setStyleSheet(self._field_label_qss(size=11, weight=500, italic=True))
+        vl.addWidget(self._lbl_xoa_du_lieu)
 
-    def _on_update_check_done(self, result):
-        self._update_check_btn.setEnabled(True)
-
-        # Update last_check timestamp regardless
-        try:
-            import time as _t
-            settings = self._dashboard.settings
-            update_cfg = settings.get("update", {}) or {}
-            update_cfg["last_check_timestamp"] = _t.time()
-            settings["update"] = update_cfg
-            backend.ConfigManager.save_settings(settings)
-            self._update_last_check_lbl.setText(self._format_last_update_check())
-        except Exception:
-            pass
-
-        if result.get("error"):
-            self._update_status_lbl.setText(result["error"])
-            self._update_status_lbl.setStyleSheet(
-                f"color: {C['accent']}; font-size: 11px; font-family: {FONT};"
-                " background:transparent; border:none;"
-            )
+    def _action_wipe_data(self):
+        import sys
+        from core import app_tools
+        from core.config import DATA_DIR, _get_recordings_dir
+        ok, include_recordings = _ask_wipe(self)
+        if not ok:
             return
-
-        release = result.get("release")
-        if result.get("up_to_date"):
-            self._update_status_lbl.setText(f"Đã là phiên bản mới nhất ({release.version}).")
-            self._update_status_lbl.setStyleSheet(
-                f"color: {C['green']}; font-size: 11px; font-family: {FONT};"
-                " background:transparent; border:none;"
-            )
+        targets = app_tools.wipe_targets(DATA_DIR, _get_recordings_dir(), include_recordings,
+                                         frozen=getattr(sys, "frozen", False))
+        if not targets or not app_tools.schedule_wipe_after_exit(targets):
+            self._lbl_xoa_du_lieu.setText("Không xoá được: bản chạy từ mã nguồn hoặc thư mục dữ liệu lạ.")
             return
-
-        # New version available — show update dialog
-        self._update_status_lbl.setText(f"Có phiên bản mới: {release.version}")
-        self._update_status_lbl.setStyleSheet(
-            f"color: {C['orange']}; font-size: 11px; font-family: {FONT};"
-            " background:transparent; border:none;"
-        )
-        try:
-            from ui.dialogs.update_dialog import UpdateDialog
-            UpdateDialog(release).exec()
-        except Exception as exc:
-            self._update_status_lbl.setText(f"Không mở được hộp thoại cập nhật: {exc}")
-            self._update_status_lbl.setStyleSheet(
-                f"color: {C['accent']}; font-size: 11px; font-family: {FONT};"
-                " background:transparent; border:none;"
-            )
+        self._lbl_xoa_du_lieu.setText("Dữ liệu sẽ bị xoá ngay sau khi bạn đóng app.")
 
     # ── Accessibility tab ────────────────────────────────────
 
@@ -2041,3 +1989,18 @@ class SettingsDialog(QDialog):
             self._dashboard._show_message("Đang chạy chế độ dự phòng")
         else:
             self._dashboard._show_message("Chưa kết nối — hãy mở YouTube trên Chrome/Edge", is_error=True)
+
+
+def _ask_wipe(parent):
+    """Hỏi xác nhận xoá dữ liệu. Trả (đồng ý, xoá cả bản thu)."""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Warning)
+    box.setWindowTitle("Xoá dữ liệu")
+    box.setText("Xoá toàn bộ bài hát đã lưu, cài đặt, kích hoạt và bộ nhớ đệm của Quang Lưu Studio?")
+    box.setInformativeText("Việc xoá diễn ra ngay sau khi bạn đóng app và KHÔNG khôi phục được. "
+                           "Sau đó app cần kích hoạt lại.")
+    cb = QCheckBox("Xoá cả các bản thu âm trong Documents\\QuangLuuStudio")
+    box.setCheckBox(cb)
+    box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+    box.setDefaultButton(QMessageBox.No)
+    return box.exec() == QMessageBox.Yes, cb.isChecked()

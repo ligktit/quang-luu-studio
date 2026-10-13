@@ -112,6 +112,29 @@ class AppVersion(Base):
     __table_args__ = (UniqueConstraint("version", "channel", name="uq_version_channel"),)
 
 
+class VelopackRelease(Base):
+    """Một bản Velopack nhập từ GitHub Release — nguồn của feed cập nhật ngầm.
+
+    assets_json: các phần tử "Assets" của releases.win.json CHỈ của bản này
+    (gói Full + Delta). Bản nhập mới chưa phát: is_active=False, rollout 0%.
+    """
+    __tablename__ = "velopack_releases"
+
+    id:              Mapped[int] = mapped_column(Integer, primary_key=True)
+    version:         Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    assets_json:     Mapped[str] = mapped_column(Text, default="[]")
+    setup_filename:  Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status:          Mapped[str] = mapped_column(String(20), default="dang_nhap", index=True)
+    import_error:    Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Chống hai lần nhập cùng bản chạy chồng: mỗi lần nhập có token riêng, chỉ token
+    # còn khớp mới được ghi trạng thái cuối.
+    import_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    import_token:    Mapped[str | None] = mapped_column(String(32), nullable=True)
+    rollout_percent: Mapped[int] = mapped_column(Integer, default=0)
+    is_active:       Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    published_at:    Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class CrashReport(Base):
     __tablename__ = "crash_reports"
 

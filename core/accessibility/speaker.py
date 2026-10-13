@@ -29,9 +29,6 @@ except Exception as e:  # pragma: no cover — môi trường không cài pyttsx
     log.info("pyttsx3 không khả dụng (%s) — TTS sẽ là no-op", e)
 
 
-# Sentinel cho việc flush queue.
-_FLUSH = object()
-
 
 class Speaker:
     """
@@ -136,8 +133,10 @@ class Speaker:
         if not self._enabled or not text:
             return
         if priority == "high":
-            # Flush queue: đẩy sentinel để worker bỏ qua các item cũ.
-            self._queue.put(_FLUSH)
+            # Bỏ các câu cũ đang chờ NGAY tại đây. (Sentinel cho worker tự xoá thì
+            # worker xoá luôn cả câu vừa đưa vào ngay sau nó — câu ưu tiên cao không
+            # bao giờ được đọc.)
+            self._drain_queue()
         # Tránh đọc trùng câu liên tiếp (vd: focus đi-về cùng widget).
         if text == self._last_text and priority != "high":
             return
@@ -150,12 +149,7 @@ class Speaker:
         Dùng cho lệnh "im lặng": speaker vẫn sống, các announce sau vẫn
         hoạt động bình thường. stop() chỉ dành cho shutdown thật.
         """
-        # Xoá các câu đang chờ
-        try:
-            while True:
-                self._queue.get_nowait()
-        except queue.Empty:
-            pass
+        self._drain_queue()
         # Ngắt câu đang phát (SAPI5 engine.stop() an toàn gọi từ thread khác)
         eng = self._engine
         if eng is not None:
@@ -170,6 +164,14 @@ class Speaker:
             except Exception as e:
                 log.debug("Piper interrupt error: %s", e)
         self._last_text = ""
+
+    def _drain_queue(self):
+        """Xoá các câu đang chờ (không đụng câu đang đọc)."""
+        try:
+            while True:
+                self._queue.get_nowait()
+        except queue.Empty:
+            pass
 
     def stop(self):
         """Dừng hẳn worker thread + engine (shutdown). Idempotent."""
@@ -287,14 +289,6 @@ class Speaker:
                 continue
             if item is None:
                 break
-            if item is _FLUSH:
-                # Drain các text còn trong queue trước khi nói item mới.
-                try:
-                    while True:
-                        self._queue.get_nowait()
-                except queue.Empty:
-                    pass
-                continue
             # Engine có thể đổi giữa chừng (set_engine) — kiểm tra mỗi câu.
             if self._engine_name == "piper" and self._piper is None:
                 self._init_piper()

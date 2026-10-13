@@ -105,3 +105,55 @@ def test_intent_sua_am_thanh():
     from core.accessibility.voice_input import match_intent
     for text in ("sửa âm thanh", "sua am thanh", "mất tiếng rồi"):
         assert match_intent(text).name == "fix_audio"
+
+
+class _PiperGia:
+    available = True
+
+    def __init__(self):
+        self.da_doc = []
+
+    def speak_blocking(self, text):
+        self.da_doc.append(text)
+
+    def stop(self):
+        pass
+
+
+def _speaker_piper_gia(monkeypatch):
+    from core.accessibility.speaker import Speaker
+    s = Speaker(enabled=False, engine="piper")
+    s._enabled = True   # bỏ qua dò backend thật (máy test không có piper)
+    piper = _PiperGia()
+    monkeypatch.setattr(s, "_init_piper", lambda: setattr(s, "_piper", piper))
+    return s, piper
+
+
+def _chay_worker(s):
+    """Chạy worker tới sentinel dừng; worker kẹt quá 5 giây là lỗi (không treo cả suite)."""
+    import threading
+    s._queue.put(None)
+    t = threading.Thread(target=s._run, daemon=True)
+    t.start()
+    t.join(5)
+    s._stop_flag.set()
+    t.join(1)
+
+
+def test_cau_uu_tien_cao_duoc_doc_va_bo_cau_cu(monkeypatch):
+    """Nút "Thử giọng nói" và thông báo lỗi dùng priority="high": phải đọc ngay câu đó,
+    bỏ các câu cũ đang chờ — không được xoá luôn chính câu vừa đưa vào."""
+    s, piper = _speaker_piper_gia(monkeypatch)
+    s.speak("câu cũ 1")
+    s.speak("câu cũ 2")
+    s.speak("Xin chào, đây là Quang Lưu Studio.", priority="high")
+    _chay_worker(s)
+    assert piper.da_doc == ["Xin chào, đây là Quang Lưu Studio."]
+
+
+def test_cau_thuong_doc_theo_thu_tu(monkeypatch):
+    s, piper = _speaker_piper_gia(monkeypatch)
+    s.speak("một")
+    s.speak("hai")
+    _chay_worker(s)
+    assert piper.da_doc == ["một", "hai"]
