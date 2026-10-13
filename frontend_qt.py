@@ -131,6 +131,7 @@ class MainDashboard(QMainWindow):
     _embedded_volume_signal = Signal(int)   # set âm lượng player nhúng (thread-safe)
     _search_results_signal = Signal(list)   # kết quả tìm kiếm YouTube (thread-safe)
     _stream_resolved_signal = Signal(str, str, str, str)  # (video_id, url, title, loi)
+    _audio_doctor_report_signal = Signal(object, str)   # (RunReport, "run"/"rerun"/"button")
 
     @property
     def _marquee_text(self):
@@ -315,6 +316,19 @@ class MainDashboard(QMainWindow):
         self._midi_status_signal.connect(self._update_midi_status)
         self._browser_status_signal.connect(self._update_browser_status)
         self._so_ready_signal.connect(self._on_studio_one_ready)
+        # Tự sửa âm thanh: lúc mở app chỉ KIỂM TRA (chờ DAW sẵn sàng) rồi báo.
+        self._audio_doctor_report_signal.connect(self._on_audio_doctor_report)
+        self._audio_doctor_speak_next = True
+        try:
+            from ui.audio_doctor_bridge import build_service
+            self._audio_doctor = build_service(self)
+        except Exception as e:
+            print(f"[AUDIO DOCTOR] Không khởi tạo được: {e}")
+            self._audio_doctor = None
+        self._audio_doctor_timer = QTimer(self)
+        self._audio_doctor_timer.setSingleShot(True)
+        self._audio_doctor_timer.timeout.connect(self._start_audio_doctor_watch)
+        self._audio_doctor_timer.start(1000)
         # Đổi bài (trình duyệt, Danh sách bài hát, Setlist, ô tìm kiếm) → reset
         # thiết lập theo bài rồi khôi phục preset nếu bài đã lưu.
         self._song_changed_signal.connect(self._on_song_changed)
@@ -1120,20 +1134,33 @@ class MainDashboard(QMainWindow):
             self.engine.send_midi(tat_on_cc, tat_on_val)
             print(f"[TAT ON] Đồng bộ -> {'ON' if tat_on else 'OFF'} (CC {tat_on_cc} Value {tat_on_val})")
 
-            # 4. Tắt Vang (Mute Vang / mix_reverb)
-            is_reverb_muted = self.mute_states.get("mix_reverb", False)
-            mute_reverb_cc = int(MIDI_CC.get("mute_reverb", 52))
-            mute_val = 127 if is_reverb_muted else 0
-            self.engine.send_midi(mute_reverb_cc, mute_val)
-            print(f"[MUTE REVERB] Đồng bộ -> {'MUTED' if is_reverb_muted else 'ACTIVE'} (CC {mute_reverb_cc} Value {mute_val})")
+            # 4. Mute Mic / Vang / Bè theo đúng nút trên app. Thiếu Mic/Bè thì
+            # DAW mở lại giữ trạng thái mute của bản mẫu — khách thấy nút Mic
+            # sáng mà không có tiếng.
+            mute_cc_keys = (("mix_mic", "mute_mic", 51),
+                            ("mix_reverb", "mute_reverb", 52),
+                            ("mix_backing", "mute_backing", 53))
+            multi_cc_map = {}
             try:
                 multi_cc_map = backend.AppConfig.get_mute_multi_cc()
-                for entry in multi_cc_map.get("mix_reverb", []):
-                    cc_num = int(entry["cc"])
-                    val = int(entry["on_value"]) if is_reverb_muted else int(entry["off_value"])
-                    self.engine.send_midi(cc_num, val)
             except Exception as e:
                 print(f"[MIDI SYNC] Multi CC sync error: {e}")
+            channels = getattr(self, "_mixer_channels", None) or {}
+            for key, cc_name, cc_default in mute_cc_keys:
+                if key not in channels:
+                    # App không có kênh này (vd Bè là nút, không phải thanh trượt)
+                    # → không có trạng thái mute nào của app để ép sang DAW.
+                    continue
+                is_muted = self.mute_states.get(key, False)
+                cc = int(MIDI_CC.get(cc_name, cc_default))
+                self.engine.send_midi(cc, 127 if is_muted else 0)
+                print(f"[MUTE] Đồng bộ {key} -> {'MUTED' if is_muted else 'ACTIVE'} (CC {cc})")
+                for entry in multi_cc_map.get(key, []):
+                    try:
+                        val = int(entry["on_value"]) if is_muted else int(entry["off_value"])
+                        self.engine.send_midi(int(entry["cc"]), val)
+                    except Exception as e:
+                        print(f"[MIDI SYNC] Multi CC {key} lỗi: {e}")
 
             # 5. Tone + thể (key_root / scale_type)
             # Gửi CC thẳng chứ KHÔNG gọi _on_tone_selected: hàm đó kéo theo
@@ -1189,6 +1216,63 @@ class MainDashboard(QMainWindow):
         if senders:
             print(f"[MIXER] Đồng bộ {len(senders)} kênh")
 
+    def _start_audio_doctor_watch(self):
+        if self._audio_doctor is None:
+            return
+        from core import so_windows
+        wait_s = float(self.settings.get("audio_doctor_startup_wait_s", 180) or 180)
+        self._audio_doctor.start_startup_watch(
+            on_report=lambda rep, act: self._audio_doctor_report_signal.emit(rep, act),
+            is_daw_ready=lambda: bool(so_windows.main_windows()),
+            wait_s=wait_s,
+        )
+
+    def _open_audio_doctor(self):
+        if getattr(self, "_audio_doctor", None) is None:
+            self._show_message("Không mở được Tự sửa âm thanh", is_error=True)
+            return
+        from ui.dialogs.audio_doctor_dialog import AudioDoctorDialog
+        dlg = getattr(self, "_audio_doctor_dialog", None)
+        if dlg is not None and dlg.isVisible():
+            dlg.raise_()
+            dlg.activateWindow()
+            return
+        self._audio_doctor_dialog = AudioDoctorDialog(self, self._audio_doctor, auto_fix=True)
+        self._audio_doctor_dialog.show()
+
+    def _on_audio_doctor_report(self, report, action):
+        """Cập nhật dải cảnh báo header. Chỉ đọc TTS ở lượt khởi động đầu tiên."""
+        problems = report.problems()
+        btn = getattr(self, "_audio_warn_btn", None)
+        if btn is None:
+            return
+        if not problems:
+            btn.hide()
+            return
+        _, first = problems[0]
+        extra = f" · +{len(problems) - 1} vấn đề khác" if len(problems) > 1 else ""
+        btn.setText(f"⚠ {first.message}{extra} · Bấm để tự sửa")
+        btn.setToolTip("\n".join(f"• {f.message}" for _, f in problems))
+        btn.show()
+        if action == "run" and self._audio_doctor_speak_next:
+            self._audio_doctor_speak_next = False
+            self._a11y_speak(f"Có {len(problems)} vấn đề âm thanh. {first.message}. "
+                             "Nhấn Control Shift A để tự sửa.")
+
+    def _daw_running_cached(self) -> bool:
+        """so_windows.is_running() quét process — gọi tối đa 5 s/lần từ timer UI."""
+        import time as _t
+        from core import so_windows
+        now = _t.monotonic()
+        at = getattr(self, "_daw_running_at", None)
+        if at is None or now - at > 5.0:
+            try:
+                self._daw_running_val = bool(so_windows.is_running())
+            except Exception:
+                self._daw_running_val = False
+            self._daw_running_at = now
+        return self._daw_running_val
+
     def _update_midi_status(self):
         try:
             connected = self.engine.is_midi_connected()
@@ -1198,16 +1282,29 @@ class MainDashboard(QMainWindow):
             if not getattr(self, '_has_synced_initial_midi', False):
                 self._has_synced_initial_midi = True
                 self._sync_midi_states()
+            # Giữ cổng phản hồi (QLS_PhanHoi) luôn mở — loopMIDI có thể khởi
+            # động lại mà cổng gửi vẫn chạy được.
             try:
-                name = self.engine.get_midi_port_name()
-                if "QuangLuuMIDI" not in name:
-                    self._midi_dot.setStyleSheet(f"color: {C['accent']}; font-size: 10px;")
-                else:
-                    self._midi_dot.setStyleSheet(f"color: {C['teal']}; font-size: 10px;")
-            except Exception:
-                pass
+                self.engine.midi_handler.ensure_listening()
+            except Exception as e:
+                print(f"[MIDI IN] ensure_listening lỗi: {e}")
+            from core import daw
+            daw_name = daw.active().display_name
+            if not self._daw_running_cached():
+                # Cổng loopMIDI mở được cả khi DAW chưa chạy — đừng báo xanh giả.
+                self._midi_dot.setStyleSheet(f"color: {C['orange']}; font-size: 10px;")
+                self._midi_dot.setToolTip(f"Cổng MIDI đã mở nhưng {daw_name} chưa chạy")
+            else:
+                try:
+                    name = self.engine.get_midi_port_name()
+                    color = C['teal'] if "QuangLuuMIDI" in name else C['accent']
+                except Exception:
+                    color = C['teal']
+                self._midi_dot.setStyleSheet(f"color: {color}; font-size: 10px;")
+                self._midi_dot.setToolTip(f"Đã kết nối {daw_name}")
         else:
             self._midi_dot.setStyleSheet(f"color: {C['accent']}; font-size: 10px;")
+            self._midi_dot.setToolTip("Chưa mở được cổng MIDI (loopMIDI)")
         # Sync waveform hero MIDI status
         if self._waveform is not None:
             self._waveform.set_midi_status(connected)
@@ -4012,6 +4109,7 @@ class MainDashboard(QMainWindow):
             # interrupt() chỉ ngắt câu đang đọc + xoá queue — KHÔNG kill worker
             # thread (stop() sẽ làm các announce sau bị kẹt vĩnh viễn).
             "stop_tts":         lambda: self._a11y_speaker and self._a11y_speaker.interrupt(),
+            "fix_audio":        self._open_audio_doctor,
             "mute_music":       self._a11y_toggle_mute_music,
             "mute_mic":         self._a11y_toggle_mute_mic,
             "volume_up_music":  lambda: self._a11y_step_volume("mix_music", +5),
@@ -4211,6 +4309,9 @@ class MainDashboard(QMainWindow):
             except Exception:
                 pass
             self._player_window = None
+
+        if getattr(self, "_audio_doctor", None) is not None:
+            self._audio_doctor.stop()
 
         # Vòng chờ Studio One — dừng trước khi widget bị huỷ, kẻo nó còn emit
         # signal vào một cửa sổ đã chết.

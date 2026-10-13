@@ -99,3 +99,9 @@ def test_app_config_accessibility_round_trip(tmp_path, monkeypatch):
     cfg2 = cfg_mod.AppConfig.get_accessibility()
     assert cfg2["tts_enabled"] is True
     assert cfg2["font_scale"] == 1.5
+
+
+def test_intent_sua_am_thanh():
+    from core.accessibility.voice_input import match_intent
+    for text in ("sửa âm thanh", "sua am thanh", "mất tiếng rồi"):
+        assert match_intent(text).name == "fix_audio"

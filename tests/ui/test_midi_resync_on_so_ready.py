@@ -158,3 +158,57 @@ def test_dong_bo_loi_o_mot_nhom_khong_chan_nhom_khac(qapp, mock_engine, qtbot):
     dashboard._sync_midi_states()
 
     assert ok == keys[1:]
+
+
+def test_phan_hoi_mute_tu_daw_chi_cap_nhat_ui_khong_gui_lai(qapp, mock_engine, qtbot):
+    dashboard = _make_dashboard(qtbot)
+    dashboard._so_ready_watcher.stop()
+    mock_engine.send_midi.reset_mock()
+    dashboard._on_midi_cc_received(51, 127)      # Cubase báo Mic đang mute
+    assert dashboard.mute_states["mix_mic"] is True
+    assert dashboard._mixer_channels["mix_mic"].is_muted() is True
+    mock_engine.send_midi.assert_not_called()
+
+
+def test_dong_bo_gui_lai_mute_mic_va_be(qapp, mock_engine, qtbot):
+    dashboard = _make_dashboard(qtbot)
+    dashboard._so_ready_watcher.stop()
+    dashboard.mute_states["mix_mic"] = True
+    dashboard.mute_states["mix_backing"] = False
+    mock_engine.send_midi.reset_mock()
+    dashboard._sync_midi_states()
+    sent = [c.args for c in mock_engine.send_midi.call_args_list]
+    assert (51, 127) in sent
+    # Mixer mặc định không có kênh Bè → app không giữ trạng thái mute Bè,
+    # không được ép bỏ mute Bè trong DAW.
+    assert "mix_backing" not in dashboard._mixer_channels
+    assert not [a for a in sent if a[0] == 53]
+
+
+def test_cham_midi_vang_khi_cong_mo_ma_daw_chua_chay(qapp, mock_engine, qtbot):
+    from ui.design_tokens import C
+    dashboard = _make_dashboard(qtbot)
+    dashboard._so_ready_watcher.stop()
+    mock_engine.is_midi_connected.return_value = True
+    mock_engine.get_midi_port_name.return_value = "QuangLuuMIDI"
+    dashboard._has_synced_initial_midi = True
+    with patch("core.so_windows.is_running", return_value=False):
+        dashboard._daw_running_at = None
+        dashboard._update_midi_status()
+    # PaintedMidiDot tự vẽ: setStyleSheet chỉ đổi _color.
+    assert dashboard._midi_dot._color.name().upper() == C["orange"].upper()
+    assert "chưa chạy" in dashboard._midi_dot.toolTip()
+    with patch("core.so_windows.is_running", return_value=True):
+        dashboard._daw_running_at = None
+        dashboard._update_midi_status()
+    assert dashboard._midi_dot._color.name().upper() == C["teal"].upper()
+
+
+def test_timer_trang_thai_midi_giu_cong_phan_hoi(qapp, mock_engine, qtbot):
+    dashboard = _make_dashboard(qtbot)
+    dashboard._so_ready_watcher.stop()
+    mock_engine.is_midi_connected.return_value = True
+    dashboard._has_synced_initial_midi = True
+    mock_engine.midi_handler.ensure_listening.reset_mock()
+    dashboard._update_midi_status()
+    mock_engine.midi_handler.ensure_listening.assert_called_once()

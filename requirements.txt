@@ -20,7 +20,7 @@ numpy>=1.24,<2.3
 velopack==1.2.161
 scipy>=1.10
 # Điều khiển âm lượng thiết bị Windows (core/engine/_recording.py)
-pycaw>=20240210
+pycaw>=20260927
 
 # YouTube
 # [default] kéo theo yt-dlp-ejs — bộ script giải "n challenge" của YouTube.

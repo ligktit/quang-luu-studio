@@ -84,6 +84,7 @@ hiddenimports = [
     # Velopack: import trong khối try ở đầu main.py + import trễ trong core/updater
     'velopack',
     'core.updater.velopack_updater',
+    'ui.dialogs.audio_doctor_dialog',
     # Khoá kỹ thuật / chế độ khách — lazy import từ header + settings dialog
     'ui.dialogs.tech_unlock',
     'ui.dialogs.shutdown_dialog',

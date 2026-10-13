@@ -13,6 +13,12 @@ class _MidiMixin:
         return self.midi_handler.outport
 
     def _handle_midi_in(self, cc, value):
+        fb = getattr(self, "daw_feedback", None)
+        if fb is not None:
+            try:
+                fb.on_cc(cc, value)
+            except Exception as e:
+                print(f"[MIDI IN] DawFeedback lỗi: {e}")
         if self.on_midi_cc_callback:
             self.on_midi_cc_callback(cc, value)
 
@@ -32,6 +38,12 @@ class _MidiMixin:
 
     def connect_midi(self, retry_count=3, delay=1.0, on_connected=None, on_failed=None):
         result = self.midi_handler.connect()
+        if result:
+            # Nghe phản hồi DAW cùng lúc với mở cổng gửi; reconnect cũng mở lại.
+            try:
+                self.midi_handler.ensure_listening()
+            except Exception as e:
+                print(f"[MIDI IN] Không mở được cổng phản hồi: {e}")
         if result and on_connected:
             try:
                 on_connected(
