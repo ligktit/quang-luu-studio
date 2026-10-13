@@ -24,8 +24,7 @@ try:
     import velopack
     if getattr(sys, "frozen", False):
         from core.instance_guard import (
-            auto_apply_on_startup_allowed, leave_install_dir, other_instances_running,
-            wait_for_update_exe,
+            auto_apply_on_startup_allowed, other_instances_running, wait_for_update_exe,
         )
         if not any(a.startswith("--veloapp-") for a in sys.argv[1:]):
             wait_for_update_exe(os.path.dirname(sys.executable))
@@ -33,11 +32,13 @@ try:
         if not auto_apply_on_startup_allowed(sys.argv, other_instances_running()):
             _velopack_app = _velopack_app.set_auto_apply_on_startup(False)
         _velopack_app.run()
-        leave_install_dir(os.path.dirname(sys.executable), os.path.expanduser("~"))
     else:
         velopack.App().run()
 except Exception:
     pass
+if getattr(sys, "frozen", False):
+    from core.instance_guard import leave_install_dir
+    leave_install_dir(os.path.dirname(sys.executable), os.path.expanduser("~"))
 
 # ── PyInstaller _MEI cleanup ──────────────────────────────────────────────────
 def _cleanup_mei():

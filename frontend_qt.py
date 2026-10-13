@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, Signal, QSignalBlocker
 from PySide6.QtGui import QColor, QIcon, QFontDatabase, QKeySequence
 import backend
+from core.config import APP_ICON_FILE
 
 # ─── Design System (Single Source of Truth) ───
 from ui.design_tokens import C, SP, FONT, FONT_MONO, load_qss, lighten, darken
@@ -256,7 +257,7 @@ class MainDashboard(QMainWindow):
 
         # Window — cỡ đi theo tỉ lệ màn hình (xem ui/responsive.py), không fix cứng
         self.setWindowTitle("Quang Lưu Studio")
-        self.setWindowIcon(QIcon("app_icon.ico"))
+        self.setWindowIcon(QIcon(APP_ICON_FILE))
         rp.set_min_size(self, 780, 200)
         self._autotune_on = False
         self.setStyleSheet(APP_QSS)
@@ -4465,7 +4466,7 @@ class ActivationDialog(QDialog):
         self.needs_renewal = needs_renewal
         self.activated = False
         self.setWindowTitle("Kích hoạt Quang Lưu Studio")
-        self.setWindowIcon(QIcon("app_icon.ico"))
+        self.setWindowIcon(QIcon(APP_ICON_FILE))
         # Khối gia hạn thêm một đoạn chữ + nút Thử lại nên cần cao hơn.
         rp.apply_dialog_size(self, 520, 640 if needs_renewal else 510,
                              fixed=True, max_scale=1.25)
@@ -4720,7 +4721,7 @@ class SetupView(QDialog):
         existing = backend.ConfigManager.load_settings() or {}
 
         self.setWindowTitle("Cài đặt Quang Lưu Studio")
-        self.setWindowIcon(QIcon("app_icon.ico"))
+        self.setWindowIcon(QIcon(APP_ICON_FILE))
         rp.apply_dialog_size(self, 580, 460, fixed=True, max_scale=1.25)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 

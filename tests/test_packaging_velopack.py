@@ -67,3 +67,29 @@ def test_spec_gom_dll_cua_vosk():
     giọng nói báo "vosk không khả dụng" trên bản cài."""
     spec = _read("QuangLuuStudio.spec")
     assert re.search(r"collect_dynamic_libs\(\s*['\"]vosk['\"]\s*\)", spec)
+
+
+def test_icon_cua_so_lay_theo_thu_muc_cai_khong_theo_cwd():
+    """Bản cài rời CWD sang thư mục người dùng ngay khi mở (main.py) → QIcon("app_icon.ico")
+    tên trần không còn thấy file, cửa sổ mất icon."""
+    from core.config import APP_DIR, APP_ICON_FILE
+    assert APP_ICON_FILE == os.path.join(APP_DIR, "app_icon.ico")
+    bare = re.compile(r"""Q(?:Icon|Pixmap)\(\s*['"]app_icon\.ico['"]""")
+    for dirpath, dirs, files in os.walk(ROOT):
+        dirs[:] = [d for d in dirs if not d.startswith(".")
+                   and d not in ("dist", "build", "tests", "server", "node_modules")]
+        for fn in files:
+            if fn.endswith(".py"):
+                p = os.path.join(dirpath, fn)
+                with open(p, encoding="utf-8", errors="ignore") as f:
+                    assert not bare.search(f.read()), os.path.relpath(p, ROOT)
+
+
+def test_sualoi_bat_loopmidi_ngoai_thu_muc_cai():
+    """tools\\chan_doan được đóng gói; SuaLoi.bat chạy ngay trong thư mục cài — loopMIDI nó
+    bật chạy mãi, giữ CWD đó thì bản chờ không áp dụng được (os error 32)."""
+    ps = _read("tools", "chan_doan", "QLS_SuaLoi.ps1")
+    starts = [ln for ln in ps.splitlines() if "Start-Process -FilePath $loopExe" in ln]
+    assert starts
+    for ln in starts:
+        assert "-WorkingDirectory $env:USERPROFILE" in ln, ln.strip()

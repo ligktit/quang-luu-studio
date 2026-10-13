@@ -63,6 +63,8 @@ def _get_recordings_dir():
 APP_DIR = _get_app_dir()
 DATA_DIR = _get_data_dir()
 RECORDINGS_DIR = _get_recordings_dir()
+# Tuyệt đối: bản cài rời CWD khỏi thư mục cài ngay khi mở (main.py)
+APP_ICON_FILE = os.path.join(APP_DIR, "app_icon.ico")
 
 # --- CẤU HÌNH CỐT LÕI (user-writable → DATA_DIR) ---
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")

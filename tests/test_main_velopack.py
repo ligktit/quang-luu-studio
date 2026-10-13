@@ -1,5 +1,6 @@
 """main.py: Velopack phải xử lý hook --veloapp-* trước mọi import nặng; không còn bộ cập nhật cũ."""
 import os
+import re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -76,6 +77,15 @@ def test_ban_cai_roi_thu_muc_cai_truoc_khi_mo_tien_trinh_con():
     """Velopack mở app với CWD = thư mục cài; con cháu (loopMIDI, trình duyệt, DAW) thừa
     hưởng CWD đó và chặn Update.exe đổi tên thư mục khi áp dụng bản chờ."""
     src = _main()
-    frozen = src[src.index('if getattr(sys, "frozen", False):'):src.index("except Exception:")]
-    assert "leave_install_dir(" in frozen
+    assert "leave_install_dir(" in src
     assert src.index("leave_install_dir(") < src.index("import backend")
+
+
+def test_loi_velopack_khong_bo_qua_buoc_roi_thu_muc_cai():
+    """velopack.App().run() ném lỗi (khối try nuốt im) vẫn phải rời thư mục cài."""
+    src = _main()
+    block = src[src.index("import velopack"):src.index("except Exception:")]
+    assert "leave_install_dir(" not in block
+    after = src[src.index("except Exception:"):src.index("import backend")]
+    assert re.search(r'if getattr\(sys, "frozen", False\):\s*\n\s*from core\.instance_guard import leave_install_dir'
+                     r'\s*\n\s*leave_install_dir\(os\.path\.dirname\(sys\.executable\), os\.path\.expanduser\("~"\)\)', after)

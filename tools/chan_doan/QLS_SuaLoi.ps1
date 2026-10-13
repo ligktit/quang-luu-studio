@@ -854,7 +854,7 @@ if (-not $loopExe) {
                     Stop-Process -Name "loopMIDI" -Force -ErrorAction SilentlyContinue
                     Start-Sleep -Seconds 2
                 }
-                Start-Process -FilePath $loopExe
+                Start-Process -FilePath $loopExe -WorkingDirectory $env:USERPROFILE
                 Start-Sleep -Seconds 3
                 Say-Ok "Đã khởi động lại loopMIDI để nhận cổng mới"
             } catch { Say-Fail ("Thêm cổng thất bại: " + $_.Exception.Message) }
@@ -867,7 +867,7 @@ if (-not $loopExe) {
     if (-not (Get-Process -Name "loopMIDI" -ErrorAction SilentlyContinue)) {
         W "[ LỖI   ] loopMIDI chưa chạy → cổng MIDI không tồn tại" "Red"
         if (Ask "Khởi động loopMIDI ngay?") {
-            try { Start-Process -FilePath $loopExe; Start-Sleep -Seconds 3; Say-Ok "Đã khởi động loopMIDI" }
+            try { Start-Process -FilePath $loopExe -WorkingDirectory $env:USERPROFILE; Start-Sleep -Seconds 3; Say-Ok "Đã khởi động loopMIDI" }
             catch { Say-Fail ("Không khởi động được: " + $_.Exception.Message) }
         } else { Say-Skip "Khởi động loopMIDI" }
     } else {
