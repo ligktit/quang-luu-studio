@@ -2,6 +2,8 @@
 import os
 import re
 
+import pytest
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -41,3 +43,27 @@ def test_build_velopack_co_bom():
 def test_khong_con_bo_cai_inno_chinh():
     assert not os.path.exists(os.path.join(ROOT, "QuangLuuStudio_Setup.iss"))
     assert not os.path.exists(os.path.join(ROOT, "build_installer_heavy.bat"))
+
+
+BATS_CHAY_TIEN_TRINH = ("setup_all.bat", "kiem_tra_tone.bat", "thu_tai_youtube.bat",
+                        "configure_youtube_cookies.bat")
+
+
+@pytest.mark.parametrize("name", BATS_CHAY_TIEN_TRINH)
+def test_bat_roi_thu_muc_cai_truoc_moi_lenh(name):
+    """App mở các .bat với CWD = thư mục cài (đường dẫn có ( ) & không vỡ dòng lệnh).
+    cmd giữ CWD đó (console chờ "Press any key", loopMIDI do setup_all bật chạy mãi) thì
+    Update.exe không đổi tên được thư mục cài → bản chờ không bao giờ được áp dụng."""
+    lines = [ln.strip() for ln in _read(name).splitlines()]
+    cd = next(i for i, ln in enumerate(lines) if ln.lower() == 'cd /d "%userprofile%"')
+    first_cmd = next(i for i, ln in enumerate(lines)
+                     if ln and not ln.lower().startswith(("@echo", "setlocal", "chcp", "rem", "title", "::"))
+                     and i != cd)
+    assert cd < first_cmd, f"{name}: cd /d \"%USERPROFILE%\" phải đứng trước dòng {first_cmd + 1}"
+
+
+def test_spec_gom_dll_cua_vosk():
+    """vosk nạp libvosk.dll từ thư mục của chính package (_internal\\vosk); thiếu thì lệnh
+    giọng nói báo "vosk không khả dụng" trên bản cài."""
+    spec = _read("QuangLuuStudio.spec")
+    assert re.search(r"collect_dynamic_libs\(\s*['\"]vosk['\"]\s*\)", spec)

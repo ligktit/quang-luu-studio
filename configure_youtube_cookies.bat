@@ -1,6 +1,10 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
+REM Roi thu muc cai: cmd va moi tien trinh no mo (loopMIDI...) giu CWD o day thi
+REM Update.exe khong doi ten duoc thu muc cai, ban cap nhat khong ap dung duoc.
+REM Moi duong dan trong file nay deu la duong dan tuyet doi.
+cd /d "%USERPROFILE%"
 
 set "SCRIPT_DIR=%~dp0"
 set "QLS_DATA=%APPDATA%\QuangLuuStudio"

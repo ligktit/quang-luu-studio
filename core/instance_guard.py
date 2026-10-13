@@ -70,3 +70,22 @@ def wait_for_update_exe(app_dir, timeout=300, poll=1.0, process_iter=None,
     except Exception as e:
         log.warning("Không kiểm được Update.exe: %s", e)
         return False
+
+
+def leave_install_dir(app_dir, target):
+    """Velopack mở app với CWD = thư mục cài; mọi tiến trình app mở (loopMIDI, trình duyệt,
+    DAW, cmd) thừa hưởng CWD đó và giữ nó tới khi chúng tắt. Update.exe phải đổi tên thư
+    mục cài khi áp dụng bản chờ — còn tiến trình nào giữ CWD ở đó là hỏng (os error 32),
+    mà Velopack chỉ dò tiến trình theo đường dẫn exe nên không tắt được chúng.
+    Chuyển CWD sang target (thư mục người dùng — không phải thư mục dữ liệu, vì "Xoá dữ
+    liệu" xoá nó). True nếu đã chuyển. Lỗi → False (giữ nguyên, không chặn app mở)."""
+    try:
+        cwd, app = _norm(os.getcwd()), _norm(app_dir)
+        if cwd != app and not cwd.startswith(app.rstrip(os.sep) + os.sep):
+            return False
+        os.chdir(target)
+        log.info("Chuyển thư mục làm việc ra khỏi thư mục cài: %s", target)
+        return True
+    except Exception as e:
+        log.warning("Không chuyển được thư mục làm việc ra khỏi thư mục cài: %s", e)
+        return False

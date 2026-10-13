@@ -9,6 +9,7 @@ Ghi kết quả (Đạt/Không + ghi chú) vào từng dòng. Mọi mục phải
 - [ ] Ghi âm 5 giây → đóng app → mở lại → app chạy (thư mục `current\_internal` còn nguyên).
 - [ ] Cài đặt → Cập nhật phần mềm: dòng trạng thái đúng; Cài đặt → Công cụ: Kiểm tra dò tone / Thử tải YouTube mở console, Mở thư mục bản thu đúng chỗ.
 - [ ] Có bản chờ → bấm Kiểm tra dò tone / Thử tải YouTube / bấm đúp shortcut khi app đang mở → app đang chạy KHÔNG bị tắt; bản chờ áp dụng khi đóng app (đóng bản cuối cùng).
+- [ ] Lần chạy đầu khi loopMIDI chưa chạy (để `setup_all` tự bật nó) + để nguyên console của Kiểm tra dò tone / Thử tải YouTube ở "Press any key" → đóng app → bản chờ VẪN áp dụng được (Update.exe đổi tên được `current`; không tiến trình nào có thư mục làm việc trong thư mục cài). Log: `%LocalAppData%\velopack\velopack_QuangLuuStudio.log` không có "os error 32".
 
 ## B. Máy ảo Windows sạch, tên người dùng **có dấu và dấu cách** (ví dụ `Nguyễn Văn A`)
 - [ ] Cài `QuangLuuStudio-CaiDat.exe`: SmartScreen một lần, không UAC, app tự mở, có shortcut Desktop + Start Menu.

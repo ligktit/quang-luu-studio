@@ -129,3 +129,35 @@ def test_loi_liet_ke_khi_cho_thi_khong_treo():
         raise OSError("x")
     clk = _Clock()
     assert ig.wait_for_update_exe(APP_DIR, process_iter=boom, sleep=clk.sleep, clock=clk.now) is False
+
+
+# ── leave_install_dir ──
+# Update.exe phải đổi tên thư mục cài khi áp dụng bản chờ. Tiến trình nào còn lấy nó
+# làm thư mục làm việc (CWD) — kể cả con cháu của app thừa hưởng CWD: loopMIDI, trình
+# duyệt, DAW — làm việc áp dụng hỏng "os error 32" mà Velopack không dò ra.
+def test_cwd_trong_thu_muc_cai_thi_chuyen_ra_ngoai(tmp_path, monkeypatch):
+    app_dir = tmp_path / "QuangLuuStudio" / "current"
+    (app_dir / "_internal").mkdir(parents=True)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.chdir(app_dir / "_internal")
+    assert ig.leave_install_dir(str(app_dir), str(home)) is True
+    assert os.path.samefile(os.getcwd(), home)
+
+
+def test_cwd_ngoai_thu_muc_cai_thi_giu_nguyen(tmp_path, monkeypatch):
+    app_dir = tmp_path / "QuangLuuStudio" / "current"
+    app_dir.mkdir(parents=True)
+    other = tmp_path / "khac"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    assert ig.leave_install_dir(str(app_dir), str(tmp_path / "home")) is False
+    assert os.path.samefile(os.getcwd(), other)
+
+
+def test_thu_muc_dich_khong_ton_tai_thi_khong_loi(tmp_path, monkeypatch):
+    app_dir = tmp_path / "current"
+    app_dir.mkdir()
+    monkeypatch.chdir(app_dir)
+    assert ig.leave_install_dir(str(app_dir), str(tmp_path / "khong_co")) is False
+    assert os.path.samefile(os.getcwd(), app_dir)

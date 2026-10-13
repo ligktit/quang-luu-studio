@@ -70,3 +70,12 @@ def test_khoi_velopack_chi_dung_stdlib_va_instance_guard():
     for heavy in ("PySide6", "import backend", "core.logger", "numba", "frontend_qt"):
         assert heavy not in blk, heavy
     assert "from core.instance_guard import" in blk
+
+
+def test_ban_cai_roi_thu_muc_cai_truoc_khi_mo_tien_trinh_con():
+    """Velopack mở app với CWD = thư mục cài; con cháu (loopMIDI, trình duyệt, DAW) thừa
+    hưởng CWD đó và chặn Update.exe đổi tên thư mục khi áp dụng bản chờ."""
+    src = _main()
+    frozen = src[src.index('if getattr(sys, "frozen", False):'):src.index("except Exception:")]
+    assert "leave_install_dir(" in frozen
+    assert src.index("leave_install_dir(") < src.index("import backend")

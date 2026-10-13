@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs
 
 import os
 
@@ -150,6 +150,14 @@ try:
 except Exception as _exc:
     print(f"[spec] CANH BAO: khong gom duoc yt_dlp_ejs ({_exc}) - "
           f"chay: pip install -U \"yt-dlp[default]\"")
+
+# vosk nạp libvosk.dll (+ libgcc/libstdc++/libwinpthread) từ thư mục của chính package
+# (_internal\vosk). PyInstaller không tự gom các DLL này → bản cài báo "vosk không khả
+# dụng" và lệnh giọng nói không chạy.
+try:
+    binaries += collect_dynamic_libs('vosk')
+except Exception as _exc:
+    print(f"[spec] CANH BAO: khong gom duoc DLL cua vosk ({_exc})")
 
 tmp_ret = collect_all('PySide6')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
