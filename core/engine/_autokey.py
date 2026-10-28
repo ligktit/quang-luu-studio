@@ -9,7 +9,7 @@ from core.memory import MemoryProfiler, MemoryGuard
 from core.tone_cache import ToneCacheManager, ManualToneTimeline
 from core.tone_detector import ToneDetector
 from core.media_monitor import _WIN_MEDIA_AVAILABLE
-from core.engine._youtube import _extract_key_root
+from core.engine._youtube import _extract_key_root, _same_song
 
 
 class _AutokeyMixin:
@@ -492,6 +492,8 @@ class _AutokeyMixin:
         print(f"[CACHE REPLAY] primary={primary_key}, {len(timeline)} segments")
         timeline = sorted(timeline, key=lambda x: x['time'])
 
+        song_url = getattr(self._tone_session, "url", None)
+
         def _replay():
             current_key   = None
             last_idx      = -1
@@ -500,7 +502,7 @@ class _AutokeyMixin:
 
             while not cancel_event.is_set():
                 is_playing, elapsed, sync_src = self._playback_sync_source()
-                if not is_playing:
+                if not is_playing or self._tab_dang_phat_bai_khac(song_url, sync_src):
                     cancel_event.wait(0.1)
                     continue
 
@@ -538,6 +540,20 @@ class _AutokeyMixin:
             print("[CACHE REPLAY] Kết thúc replay")
 
         threading.Thread(target=_replay, daemon=True).start()
+
+    def _tab_dang_phat_bai_khac(self, song_url, sync_src):
+        """CDP báo tab đã sang video KHÁC bài đang replay (chưa kịp bị watcher huỷ).
+
+        Vị trí phát của video mới tụt về ~0 → vòng replay tưởng người dùng tua
+        ngược và gửi tone mốc đầu của BÀI CŨ. CDP đọc URL cùng lượt với vị trí
+        nên so được; nguồn khác (player nhúng, WinRT) không có URL → không chặn.
+        """
+        if sync_src != "CDP" or not song_url:
+            return False
+        tab_url = getattr(self.cdp_monitor, "target_url", "") or ""
+        if "watch" not in tab_url and "/shorts/" not in tab_url:
+            return False
+        return not _same_song(tab_url, song_url)
 
     def _playback_sync_source(self):
         """(dang_phat, vi_tri_giay, ten_nguon) — thứ tự ưu tiên player nhúng → CDP → WinRT.
@@ -580,6 +596,8 @@ class _AutokeyMixin:
         timeline = sorted(timeline, key=lambda x: x['time'])
         print(f"[MANUAL REPLAY] Bắt đầu replay: {len(timeline)} entries")
 
+        song_url = getattr(self._tone_session, "url", None)
+
         def _replay():
             current_key   = None
             last_idx      = -1
@@ -588,7 +606,7 @@ class _AutokeyMixin:
 
             while not cancel_event.is_set():
                 is_playing, elapsed, sync_src = self._playback_sync_source()
-                if not is_playing:
+                if not is_playing or self._tab_dang_phat_bai_khac(song_url, sync_src):
                     cancel_event.wait(0.1)
                     continue
 
