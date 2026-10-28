@@ -97,6 +97,11 @@ class SystemEngine(
         # tone GỐC của bài; nhạc đã bị dịch thì Auto-Tune phải nhận tone gốc +
         # độ dịch — _send_tone_midi cộng vào ở MỘT chỗ duy nhất.
         self.tone_transpose           = 0
+        # Tone GỐC gửi gần nhất của bài đang xem: Tone Nhạc đổi do reset/preset
+        # thì gửi lại (resend_tone_midi). Khoá chung với _send_tone_midi → luồng
+        # dò và luồng GUI chạy trước/sau thế nào Key cuối cùng cũng đúng.
+        self._last_tone_result        = None
+        self._tone_midi_lock          = threading.RLock()
         # Người dùng đã chốt tone tay (hoặc preset của bài khôi phục tone chốt
         # tay) → mọi lượt dò/replay KHÔNG được gửi tone đè lên. UI bật/tắt cờ.
         self.key_locked               = False

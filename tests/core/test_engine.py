@@ -642,6 +642,65 @@ class TestSendToneMidi:
 
 
 # ──────────────────────────────────────────────────────────────
+# E-32 — Tone Nhạc đổi lúc sang bài: Key cuối cùng phải là tone gốc + độ dịch MỚI
+#        dù lượt dò (luồng watcher) gửi trước hay sau khi GUI reset Tone Nhạc.
+#        Máy 3, 2026-10-28: bài trước Tone Nhạc +1, sang bài Dm → Cubase giữ D#.
+# ──────────────────────────────────────────────────────────────
+
+URL_TRUOC = "https://www.youtube.com/watch?v=aaaaaaaaaaa"
+URL_SAU = "https://www.youtube.com/watch?v=bbbbbbbbbbb"
+
+
+class TestToneNhacKhiDoiBai:
+
+    @pytest.fixture
+    def eng(self, engine, mocker):
+        mocker.patch("core.config.AppConfig.get_key_midi_map",
+                     return_value={"C": 0, "C#": 11, "D": 23, "D#": 34, "E": 46, "F": 57, "F#": 69,
+                                   "G": 80, "G#": 92, "A": 103, "A#": 115, "B": 127})
+        mocker.patch("core.config.AppConfig.get_scale_midi_map",
+                     return_value={"Major": 43, "Minor": 85})
+        mocker.patch("core.config.AppConfig.get_midi_cc",
+                     return_value={"key_root": 33, "scale_type": 35})
+        engine.send_midi_pair = MagicMock()
+        engine.on_song_changed = None
+        engine.note_current_song(URL_TRUOC)
+        engine._send_tone_midi({"key_index": 9, "scale": "Major"})   # bài trước: A
+        engine.tone_transpose = 1                                   # khách bấm Tone Nhạc +1
+        engine.send_midi_pair.reset_mock()
+        return engine
+
+    def test_luot_do_gui_truoc_khi_reset_thi_gui_lai_tone_dung(self, eng):
+        eng.note_current_song(URL_SAU)
+        eng._send_tone_midi({"key_index": 2, "scale": "Minor"})     # Dm, độ dịch cũ +1 → D#
+        eng.tone_transpose = 0                                      # GUI reset Tone Nhạc khi sang bài
+        eng.resend_tone_midi()
+        assert eng.send_midi_pair.call_args_list[-1] == call(33, 23, 35, 85)   # D Minor
+
+    def test_reset_truoc_luot_do_thi_khong_gui_lai_tone_bai_cu(self, eng):
+        eng.note_current_song(URL_SAU)
+        eng.tone_transpose = 0
+        eng.resend_tone_midi()
+        eng.send_midi_pair.assert_not_called()                      # không gửi lại A của bài trước
+        eng._send_tone_midi({"key_index": 2, "scale": "Minor"})
+        assert eng.send_midi_pair.call_args_list == [call(33, 23, 35, 85)]
+
+    def test_preset_bai_da_luu_ap_sau_luot_do_thi_cong_do_dich(self, eng):
+        eng.note_current_song(URL_SAU)
+        eng.tone_transpose = 0
+        eng._send_tone_midi({"key_index": 11, "scale": "Minor"})    # Bm
+        eng.tone_transpose = -2                                     # preset của bài: Tone Nhạc -2
+        eng.resend_tone_midi()
+        assert eng.send_midi_pair.call_args_list[-1] == call(33, 103, 35, 85)  # A Minor
+
+    def test_tone_chot_tay_thi_khong_gui_lai(self, eng):
+        eng.key_locked = True
+        eng.tone_transpose = 0
+        eng.resend_tone_midi()
+        eng.send_midi_pair.assert_not_called()
+
+
+# ──────────────────────────────────────────────────────────────
 # E-31 — primary_key tiêu biểu (theo thời lượng, không thiên vị intro)
 # ──────────────────────────────────────────────────────────────
 

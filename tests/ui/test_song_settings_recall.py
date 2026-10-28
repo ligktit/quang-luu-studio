@@ -115,6 +115,48 @@ def test_sang_bai_moi_go_khoa_tone_chinh_tay_va_timeline_cu(qapp, mock_engine, q
     assert dash._tone_timeline == []
 
 
+def _ghi_do_dich_luc_gui_lai(engine):
+    """Độ dịch engine đang giữ ở MỖI lần app nhờ gửi lại tone."""
+    seen = []
+    engine.resend_tone_midi.side_effect = lambda: seen.append(engine.tone_transpose)
+    return seen
+
+
+def test_sang_bai_moi_reset_tone_nhac_thi_nho_engine_gui_lai_tone(qapp, mock_engine, qtbot):
+    # Máy 3, 2026-10-28: lượt dò (luồng watcher) gửi Key bằng độ dịch +1 của bài trước
+    # TRƯỚC khi GUI reset Tone Nhạc → Cubase giữ D# trong khi app hiện D. Reset xong
+    # phải nhờ engine gửi lại tone gốc của bài với độ dịch mới.
+    dash = _make_dashboard(qtbot)
+    dash._set_tone_offset("tone_music", 1)
+    seen = _ghi_do_dich_luc_gui_lai(mock_engine)
+
+    dash._on_song_changed(URL_B)
+
+    assert seen == [0]
+
+
+def test_bam_nut_tone_nhac_khong_nho_gui_lai(qapp, mock_engine, qtbot):
+    # Bấm núm: _shift_key_by đã tự gửi Key dịch theo — gửi lại thêm là thừa.
+    dash = _make_dashboard(qtbot)
+    seen = _ghi_do_dich_luc_gui_lai(mock_engine)
+
+    dash._set_tone_offset("tone_music", 1)
+
+    assert seen == []
+
+
+def test_khoi_phuc_preset_tone_nhac_thi_nho_engine_gui_lai_tone(qapp, mock_engine, qtbot, premium):
+    dash = _make_dashboard(qtbot)
+    dash._set_tone_offset("tone_music", -2)
+    _save_current_as(dash, URL_A)
+    dash._on_song_changed(URL_B)
+    seen = _ghi_do_dich_luc_gui_lai(mock_engine)
+
+    dash._on_song_changed(URL_A)                    # mở lại bài đã lưu (Tone Nhạc -2)
+
+    assert seen == [-2]
+
+
 # ── R-04..R-07 — lưu rồi khôi phục ────────────────────────────────────────
 
 def _setup_song_state(dash):

@@ -1,4 +1,5 @@
 """YouTube URL detection, watcher, open_youtube_url, and monitoring for SystemEngine."""
+import contextlib
 import gc
 import os
 import re
@@ -485,6 +486,9 @@ class _YouTubeMixin:
         if prev is not None and _same_song(prev, url):
             return
         self._current_song_url = url
+        # Tone bài cũ không được gửi lại khi Tone Nhạc reset cho bài mới (resend_tone_midi).
+        with getattr(self, "_tone_midi_lock", None) or contextlib.nullcontext():
+            self._last_tone_result = None
         cb = getattr(self, "on_song_changed", None)
         if cb is not None:
             try:

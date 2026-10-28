@@ -1022,8 +1022,13 @@ class MainDashboard(QMainWindow):
         if send:
             self.engine.send_midi(MIDI_CC.get(which, 10 if which == "tone_music" else 11),
                                   int(((value + 12) / 24) * 127))
-        if which == "tone_music" and shift_key and value != old:
-            self._shift_key_by(value - old)
+        if which == "tone_music" and value != old:
+            if shift_key:
+                self._shift_key_by(value - old)
+            else:
+                # Reset lúc sang bài / preset: lượt dò có thể đã gửi Key bằng độ dịch
+                # cũ (luồng khác, chạy trước) → engine gửi lại tone gốc với độ dịch mới.
+                self.engine.resend_tone_midi()
         return value
 
     def _shift_key_by(self, delta):
