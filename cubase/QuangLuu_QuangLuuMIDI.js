@@ -11,7 +11,7 @@
 // Log xem o: Lower Zone -> MIDI Remote -> Scripting Tools -> Script Console.
 //
 // QLS_SCRIPT_VERSION: setup_all.bat va QLS_ChanDoan doc dong nay (va log 'driver active') de biet may khach chay ban nao.
-var QLS_SCRIPT_VERSION = '2026-10-08'
+var QLS_SCRIPT_VERSION = '2026-10-28'
 //
 // Ban dau day la ban tham do, do 5 dieu truoc khi viet adapter Cubase trong app:
 //   1. Cubase co nhan cong va TRA LOI ping (CC 49) khong, tre bao lau.
@@ -398,6 +398,9 @@ function datHoSo(hoSo, lyDo) {
     hoSoHienTai = hoSo
 }
 function chonHoSoTheoChiSoKey(idx) {
+    // Ho so da chon theo ten plugin ma Key cung o idx thi giu: nhieu plugin cung Key = 2 (Auto-Tune Pro/Artist),
+    // lay ho so DAU BANG se ghi Scale nham tham so (may 3, 2026-10-28: Scale vao tham so 3 "Detune" cua Auto-Tune Pro).
+    if (hoSoHienTai.key_root === idx) return
     for (var i = 0; i < HO_SO_PLUGIN.length; i++) {
         if (HO_SO_PLUGIN[i].key_root === idx) { datHoSo(HO_SO_PLUGIN[i], 'Key o tham so ' + idx); return }
     }

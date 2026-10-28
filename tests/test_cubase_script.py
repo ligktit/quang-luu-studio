@@ -5,6 +5,10 @@ DAW không đổi theo thì nút bấm trên app im lặng không tác dụng.
 """
 import os
 import re
+import shutil
+import subprocess
+
+import pytest
 
 from core.config import AppConfig
 
@@ -109,6 +113,43 @@ def test_js_gan_cc_app_vao_tham_so_plugin():
     assert "function scaleTheoHoSo(value)" in src
     assert "datScale(activeDevice, scaleTheoHoSo(scaleApp), null)" in src
     assert "if (k === 'scale_type') { scaleApp = value; apScale(activeDevice); return }" in src, "giữ giá trị thô, quy đổi lúc áp"
+
+
+def _js_ham(src, ten):
+    """Nguyên văn `function ten(...) { ... }` (hàm cấp đầu file, đóng bằng `}` ở cột 0)."""
+    m = re.search(r"^function " + ten + r"\(.*?^\}", src, re.S | re.M)
+    assert m, f"không thấy hàm {ten} trong script"
+    return m.group(0)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="cần node để chạy code JS thật")
+@pytest.mark.parametrize("bang, ten_plugin, chi_so_key, mong_doi", [
+    # Máy 3 (2026-10-28): hồ sơ Artist (Scale = tham số 3) bị chèn TRƯỚC Auto-Tune Pro. Tham số "Key" báo
+    # tên ở chỉ số 2 -> lấy hồ sơ đầu bảng có Key = 2 -> Scale ghi vào tham số 3 "Detune" của Auto-Tune Pro.
+    (["Pitch Correct:6", "Auto-Tune Artist:2", "Auto-Tune Pro:2"], "Auto-Tune Pro", 2, "Auto-Tune Pro"),
+    (["Pitch Correct:6", "Auto-Tune Pro:2", "Auto-Tune Artist:2"], "Auto-Tune Artist", 2, "Auto-Tune Artist"),
+    # Không có tên plugin (Cubase 13 không gọi mOnChangePluginIdentity sau Reload): chọn theo chỉ số Key như cũ.
+    (["Pitch Correct:6", "Auto-Tune Pro:2", "Auto-Tune Artist:2"], None, 2, "Auto-Tune Pro"),
+    (["Pitch Correct:6", "Auto-Tune Pro:2"], None, 6, "Pitch Correct"),
+])
+def test_ho_so_chon_theo_ten_plugin_khong_bi_chi_so_key_de(bang, ten_plugin, chi_so_key, mong_doi):
+    with open(JS_PATH, encoding="utf-8") as f:
+        src = f.read()
+    ho_so = ", ".join("{ ten: '%s', key_root: %s }" % tuple(x.split(":")) for x in bang)
+    goi_ten = f"chonHoSoPlugin('{ten_plugin}')\n" if ten_plugin else ""
+    js = (
+        "function log(s) {}\n"
+        f"var HO_SO_PLUGIN = [{ho_so}]\n"
+        "var hoSoHienTai = HO_SO_PLUGIN[0]\n"
+        + "\n".join(_js_ham(src, t) for t in ("datHoSo", "chonHoSoTheoChiSoKey", "chonHoSoPlugin"))
+        + "\n" + goi_ten
+        + f"chonHoSoTheoChiSoKey({chi_so_key})\n"
+        + f"chonHoSoTheoChiSoKey({chi_so_key})\n"   # Cubase báo tên tham số nhiều lần
+        + "console.log(hoSoHienTai.ten)\n"
+    )
+    out = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == mong_doi
 
 
 def test_js_co_phien_ban_de_kiem_tra():
