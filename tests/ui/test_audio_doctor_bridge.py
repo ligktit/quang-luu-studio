@@ -89,3 +89,66 @@ def test_build_service_tao_context(qapp, mock_engine, qtbot):
     assert ctx.feedback is mock_engine.daw_feedback
     assert ctx.daw.kind in ("studio_one", "cubase")
     assert ctx.ask("?") is False
+
+
+# ── hai mic (Studio One) ────────────────────────────────────────────────────
+def _dashboard_2mic(qtbot, mic_count=2):
+    with patch("frontend_qt.backend.ConfigManager.save_settings"):
+        with patch("frontend_qt.backend.SongManager.load_songs", return_value=[]), \
+             patch("frontend_qt.backend.ActivationManager.is_activated", return_value=True), \
+             patch("frontend_qt.backend.ActivationManager.needs_activation", return_value=False), \
+             patch("frontend_qt.QTimer.start"):
+            d = MainDashboard({"studio_one_path": "", "auto_close_studio_one": False,
+                               "mic_count": mic_count})
+            qtbot.addWidget(d)
+            if d._so_ready_watcher is not None:
+                d._so_ready_watcher.stop()
+        return d
+
+
+def test_mic_check_ok_when_one_mic_on(qapp, mock_engine, qtbot):
+    d = _dashboard_2mic(qtbot)
+    acts = _actions(d)
+    d._mixer_mute_setters["mix_mic"](True)
+    d._mixer_mute_setters["mix_mic_2"](False)
+    d._mixer_sliders["mix_mic_2"].setValue(0)
+    assert acts.app_mic_state() == (False, 0.0)
+
+
+def test_mic_check_all_off(qapp, mock_engine, qtbot):
+    d = _dashboard_2mic(qtbot)
+    acts = _actions(d)
+    d._mixer_mute_setters["mix_mic"](True)
+    d._mixer_mute_setters["mix_mic_2"](True)
+    muted, _level = acts.app_mic_state()
+    assert muted is True
+
+
+def test_mic_check_level_is_max_of_unmuted(qapp, mock_engine, qtbot):
+    d = _dashboard_2mic(qtbot)
+    acts = _actions(d)
+    d._mixer_mute_setters["mix_mic"](False)
+    d._mixer_mute_setters["mix_mic_2"](False)
+    d._mixer_sliders["mix_mic"].setValue(-3)
+    d._mixer_sliders["mix_mic_2"].setValue(2)
+    assert acts.app_mic_state() == (False, 2.0)
+
+
+def test_ensure_mic_on_opens_both(qapp, mock_engine, qtbot):
+    d = _dashboard_2mic(qtbot)
+    acts = _actions(d)
+    for k in ("mix_mic", "mix_mic_2"):
+        d._mixer_mute_setters[k](True)
+        d._mixer_sliders[k].setValue(d._mixer_sliders[k].minimum())
+    acts.ensure_app_mic_on()
+    for k in ("mix_mic", "mix_mic_2"):
+        assert d._mixer_channels[k].is_muted() is False
+        assert d._mixer_sliders[k].value() == 0
+
+
+def test_hai_mic_chua_bat_thi_nhu_mot_mic(qapp, mock_engine, qtbot):
+    d = _dashboard_2mic(qtbot, mic_count=1)
+    assert "mix_mic_2" not in d._mixer_sliders
+    acts = _actions(d)
+    d._mixer_mute_setters["mix_mic"](True)
+    assert acts.app_mic_state()[0] is True
