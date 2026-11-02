@@ -1305,6 +1305,28 @@ class TestMic2Mirror:
         assert (mic2.midi_handler.send_messages.call_args_list[0]
                 == mic2.midi_handler.send_messages.call_args_list[1])
 
+    def test_midi_learn_khong_phat_doi(self, mic2, mocker):
+        # MIDI learn chỉ nhắm control kênh 1: bật phát đôi vẫn không có tin kênh 2.
+        mic2.settings["mic_count"] = 2
+        mic2.refresh_mic2_mirror()
+        mocker.patch("core.engine._midi.time.sleep")
+        started = []
+
+        class _SyncThread:
+            def __init__(self, target=None, daemon=None, **_kw):
+                self._target = target
+
+            def start(self):
+                started.append(True)
+                self._target()
+
+        mocker.patch("core.engine._midi.threading.Thread", _SyncThread)
+        mic2.trigger_midi_learn([33, 35, 21])
+        assert started == [True]
+        mic2.midi_handler.send_messages.assert_not_called()
+        assert [c.args for c in mic2.midi_handler.send_cc.call_args_list] == [
+            (33, 64), (33, 0), (35, 64), (35, 0), (21, 64), (21, 0)]
+
     def test_refresh_never_raises(self, mic2, mocker):
         mic2.settings["mic_count"] = 2
         mocker.patch("core.config.AppConfig.get_midi_cc",

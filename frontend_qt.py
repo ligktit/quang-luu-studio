@@ -1215,12 +1215,31 @@ class MainDashboard(QMainWindow):
         for key in (mic2.MIC_KEY, mic2.MIC2_KEY):
             self.mute_states[key] = self._saved_mic_mute(key)
 
+    def _mute_mic2_in_daw(self):
+        """Gửi lệnh tắt Mic 2 (mute_mic + CC phụ mute_multi_cc của Mic) trên kênh MIDI 2."""
+        try:
+            base_key, send = panels.mixer.midi_route(self, mic2.MIC2_KEY)
+            send(int(MIDI_CC.get("mute_mic", 51)), 127)
+            for entry in backend.AppConfig.get_mute_multi_cc().get(base_key, []):
+                try:
+                    send(int(entry["cc"]), int(entry["on_value"]))
+                except Exception as e:
+                    print(f"[MIC2] CC phụ tắt Mic 2 lỗi: {e}")
+            print("[MIC2] Tắt hai mic -> đã tắt Mic 2 trên kênh MIDI 2")
+        except Exception as e:
+            print(f"[MIC2] Không tắt được Mic 2: {e}")
+
     def _apply_mic_count_setting(self):
         """Áp ngay thiết lập hai mic (số mic / tên) vừa lưu ở Cài đặt.
 
         Thứ tự: engine bật/tắt phát đôi → dựng lại mixer (thêm/bỏ kênh Mic 2,
         đổi nhãn) → bắn lại toàn bộ trạng thái để kênh MIDI 2 khớp giao diện.
+        Tắt hai mic: tắt Mic 2 trong Studio One TRƯỚC khi ngừng điều khiển kênh
+        MIDI 2 — mic không dây không dùng không được để mở (spec 5.3).
         """
+        had_mic2 = mic2.MIC2_KEY in (getattr(self, "_mixer_sliders", None) or {})
+        if had_mic2 and not mic2.is_enabled(self.settings):
+            self._mute_mic2_in_daw()
         self.engine.refresh_mic2_mirror()
         # Mixer dựng lại lấy mức từ mixer_levels — chốt mức đang chỉnh trước,
         # không thì thanh trượt nhảy về mức lúc mở app.

@@ -93,8 +93,13 @@ class DashboardDoctorActions:
 
     def ensure_app_mic_on(self):
         def do():
-            # Audio Doctor không biết khách cầm mic nào → mở cả hai.
-            for key in self._mic_keys():
+            # Hai mic: còn mic nào đang mở thì chỉ đẩy lại mức các mic đang
+            # mở — mic đang tắt là KTV/khách cố ý tắt (mic không dây nằm trên
+            # bàn), mở ra là hú/lọt tiếng. Chỉ khi MỌI mic đều tắt mới mở hết
+            # (không biết khách cầm mic nào).
+            keys = self._mic_keys()
+            on = [k for k in keys if not self._d.mute_states.get(k, False)]
+            for key in (on or keys):
                 self._ensure_mic(key)
         self._inv.call(do)
 

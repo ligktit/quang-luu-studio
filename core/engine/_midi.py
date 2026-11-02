@@ -152,12 +152,19 @@ class _MidiMixin:
         if cc_list is None:
             cc_list = [10, 11, 20, 21, 22, 23, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 50, 51, 52, 53]
 
+        # MIDI learn chỉ gán control kênh 1 — không phát đôi sang Mic 2, không
+        # thì Studio One "chạm sau cùng" là control kênh 2. Đúng đường gửi của
+        # send_midi khi không phát đôi (máy một mic giữ nguyên từng byte).
+        def send_ch1(cc, value):
+            return self._send_with_reconnect(
+                lambda: self.midi_handler.send_cc(cc, value), f"cc={cc}", True)
+
         def run_learn():
             print(f"[MIDI LEARN] Bắt đầu gửi {len(cc_list)} tín hiệu MIDI...")
             for cc in cc_list:
-                self.send_midi(cc, 64)
+                send_ch1(cc, 64)
                 time.sleep(0.2)
-                self.send_midi(cc, 0)
+                send_ch1(cc, 0)
                 time.sleep(0.1)
             print("[MIDI LEARN] Hoàn tất gửi chuỗi tín hiệu.")
 

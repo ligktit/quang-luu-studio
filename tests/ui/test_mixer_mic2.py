@@ -185,8 +185,47 @@ def test_toggle_mic_count_rebuilds_and_rewires(qapp, mock_engine, save_settings,
     assert "mix_mic_2" not in dash._mixer_sliders
     assert "mix_mic_2" not in dash._mixer_channels
     mock_engine.refresh_mic2_mirror.assert_called()
-    mock_engine.send_midi_on_channel.assert_not_called()
+    # Tắt hai mic: kênh 2 chỉ nhận lệnh tắt Mic 2 (rồi CC phụ của Mic), không
+    # còn gửi mức hay đồng bộ gì khác.
+    assert _channel_calls(mock_engine)[0] == (1, 51, 127)
+    assert (1, 21, 0) not in _channel_calls(mock_engine)
     assert dash._mixer_channels["mix_mic"]._name_text == "Mic"
+
+
+def test_disable_two_mics_mutes_mic2_on_ch2(qapp, mock_engine, save_settings, qtbot):
+    # Spec 5.3: tắt "Phòng có 2 micro" thì app thôi điều khiển kênh MIDI 2 —
+    # phải tắt Mic 2 trong Studio One TRƯỚC, không thì mic không dây bỏ ngỏ.
+    multi = {"mix_mic": [{"cc": 60, "on_value": 127, "off_value": 0},
+                         {"cc": 61, "on_value": 100, "off_value": 5}],
+             "mix_reverb": [{"cc": 70, "on_value": 127, "off_value": 0}]}
+    with patch("frontend_qt.backend.AppConfig.get_mute_multi_cc", return_value=multi), \
+         patch("ui.panels.mixer.backend.AppConfig.get_mute_multi_cc", return_value=multi):
+        dash = _make_dashboard(qtbot, {"mic_count": 2,
+                                       "mic_mutes": {"mix_mic": False, "mix_mic_2": False}})
+        assert dash.mute_states["mix_mic_2"] is False
+        mock_engine.reset_mock()
+        dash.settings["mic_count"] = 1
+        dash._apply_mic_count_setting()
+
+    names = [c[0] for c in mock_engine.method_calls]
+    ch2 = [c.args[:3] for c in mock_engine.send_midi_on_channel.call_args_list]
+    assert ch2 == [(1, 51, 127), (1, 60, 127), (1, 61, 100)]
+    # Lệnh tắt đi trước khi engine ngừng phát kênh 2.
+    assert names.index("send_midi_on_channel") < names.index("refresh_mic2_mirror")
+    assert "mix_mic_2" not in dash._mixer_channels
+
+
+def test_bat_lai_hai_mic_khong_gui_tat_mic2_thua(qapp, mock_engine, save_settings, qtbot):
+    # Chuyển 1 → 2 mic (hoặc lưu lại khi vẫn 2 mic) không đi nhánh tắt Mic 2.
+    dash = _make_dashboard(qtbot, {"mic_count": 2,
+                                   "mic_mutes": {"mix_mic": False, "mix_mic_2": False}})
+    with patch.object(dash, "_mute_mic2_in_daw") as mute2:
+        dash._apply_mic_count_setting()
+        mute2.assert_not_called()
+    one = _make_dashboard(qtbot)
+    with patch.object(one, "_mute_mic2_in_daw") as mute2:
+        one._apply_mic_count_setting()
+        mute2.assert_not_called()
 
 
 def test_toggle_mic_count_giu_trang_thai_tat_mic(qapp, mock_engine, save_settings, qtbot):
@@ -309,7 +348,10 @@ def test_hai_mic_noi_cot_ten_cho_vua_mic_khong_day(qapp, mock_engine, save_setti
     lbl = dash._mixer_channels["mix_mic_2"]._name_lbl
     widths = {ch._name_lbl.minimumWidth() for ch in dash._mixer_channels.values()}
     assert len(widths) == 1
-    assert widths.pop() >= lbl.fontMetrics().horizontalAdvance("Mic Không Dây")
+    # Cột tên chặn ở 110px (mixer._MIC_NAME_MAX_W); font CI rộng hơn thì chỉ
+    # đòi đủ 110px — test hình học Qt nhạy font trên máy build.
+    advance = lbl.fontMetrics().horizontalAdvance("Mic Không Dây")
+    assert widths.pop() >= min(110, advance)
 
 
 def test_lan_dau_bat_2_mic_mic2_tat_san(qapp, mock_engine, save_settings, qtbot):
