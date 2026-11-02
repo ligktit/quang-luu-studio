@@ -88,6 +88,8 @@ def migrate(settings: dict) -> bool:
 
     Trả True nếu có thay đổi (caller lưu xuống đĩa).
     """
+    if _OLD_KEY not in settings:
+        return False        # máy mới: mặc định đọc từ _DEFAULTS, không cần ghi
     changed = False
     if not isinstance(settings.get(_KEY), dict):
         old = settings.get(_OLD_KEY)

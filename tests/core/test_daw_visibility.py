@@ -61,10 +61,12 @@ def test_migrate_co_ca_hai_thi_chi_xoa_tech_lock():
     assert s["daw_windows"] == {"auto_hide": False, "restore_template": False}
 
 
-def test_migrate_may_moi_khong_co_gi():
+def test_migrate_may_moi_khong_co_gi_thi_khong_ghi():
+    # Không có khoá cũ → không cần lưu gì: mặc định đọc từ _DEFAULTS. Dựng
+    # dashboard không được ghi settings.json chỉ vì chạy lần đầu.
     s = {}
-    assert daw_visibility.migrate(s) is True
-    assert s["daw_windows"] == {"auto_hide": True, "restore_template": False}
+    assert daw_visibility.migrate(s) is False
+    assert s == {}
 
 
 def test_daw_windows_hong_thi_dung_mac_dinh(isolated_settings):
