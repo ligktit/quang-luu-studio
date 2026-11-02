@@ -2,7 +2,7 @@
 Quang Lưu Studio — Thao tác cửa sổ Studio One (thuần win32, không phụ thuộc Qt).
 
 Gom một chỗ mọi thứ liên quan tới việc tìm / ẩn / hiện / đưa lên trước cửa sổ
-Studio One, để cả UI (nút mắt, khoá kỹ thuật) lẫn engine (đóng an toàn lúc thoát)
+Studio One, để cả UI (tự ẩn DAW, Cài đặt → Cửa sổ DAW) lẫn engine (đóng an toàn lúc thoát)
 dùng chung một cách hiểu về "cửa sổ nào là của Studio One".
 
 Nguyên tắc: tìm theo **PID của process** chứ không theo tiêu đề cửa sổ — plugin,
@@ -441,8 +441,7 @@ def hide_when_ready(timeout=180.0, follow_seconds=60.0, on_done=None):
 
     Ẩn một phát là chưa đủ: trong lúc nạp bài, Studio One còn bật thêm cửa sổ
     plugin/mixer sau đó. Bám theo thêm `follow_seconds` để ẩn nốt những cửa sổ
-    mọc lên muộn, rồi mới buông (watchdog thường trực là tuỳ chọn riêng —
-    xem HideGuard).
+    mọc lên muộn, rồi mới buông.
     """
     def _run():
         hwnd = wait_for_main_window(timeout=timeout)
@@ -464,49 +463,6 @@ def hide_when_ready(timeout=180.0, follow_seconds=60.0, on_done=None):
     return t
 
 
-# ── Watchdog giữ ẩn ──────────────────────────────────────────────────────────
-
-class HideGuard:
-    """Vòng nền ẩn lại bất kỳ cửa sổ Studio One nào bật lên khi đang khoá.
-
-    Bắt được cả trường hợp khách tự mở Studio One từ Start Menu/desktop. Mặc
-    định TẮT (tech_lock.keep_hidden) vì mỗi vòng quét đều duyệt process list.
-    """
-
-    def __init__(self, should_hide, interval=1.5):
-        self._should_hide = should_hide
-        self._interval = interval
-        self._stop = threading.Event()
-        self._thread = None
-
-    def start(self):
-        if self.is_running():
-            return
-        # Vòng cũ vừa bị stop() có thể còn thoi thóp — phải chờ nó chết hẳn, nếu
-        # không cờ _stop sẽ bị clear ngay dưới rồi vòng cũ chạy tiếp thành hai vòng.
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=3.0)
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True, name="so-hide-guard")
-        self._thread.start()
-        log.info("Bật watchdog giữ ẩn %s", _profile().display_name)
-
-    def stop(self):
-        self._stop.set()
-        log.info("Tắt watchdog giữ ẩn %s", _profile().display_name)
-
-    def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive() and not self._stop.is_set())
-
-    def _loop(self):
-        while not self._stop.wait(self._interval):
-            try:
-                if self._should_hide():
-                    hide_all()
-            except Exception as e:
-                log.debug("HideGuard lỗi: %s", e)
-
-
 # ── Chờ Studio One sẵn sàng nhận MIDI ────────────────────────────────────────
 #
 # Vấn đề: cổng MIDI ảo (QuangLuuMIDI, loopMIDI) mở được ngay cả khi Studio One
@@ -522,7 +478,7 @@ class HideGuard:
 #      tuỳ máy, tuỳ số plugin. CC là lệnh idempotent nên gửi thừa hoàn toàn vô
 #      hại, rẻ hơn nhiều so với đoán trượt một lần rồi lệch cả buổi.
 #
-# Studio One tắt rồi mở lại giữa phiên (KTV mở khoá kỹ thuật) thì lịch được nạp
+# Studio One tắt rồi mở lại giữa phiên (KTV hoặc Tự sửa âm thanh) thì lịch được nạp
 # lại từ đầu — cửa sổ mới nghĩa là bài mới nạp, phải đồng bộ lại.
 
 # Mốc bắn lại, tính từ lúc THẤY cửa sổ chính (giây).

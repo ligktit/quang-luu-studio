@@ -116,3 +116,10 @@ def test_nut_va_phim_tat_mo_hop_thoai(qapp, mock_engine, qtbot):
     assert "Tự sửa âm thanh" in dashboard._func_buttons["Tự sửa âm thanh"].toolTip()
     from core.accessibility import shortcuts
     assert any(k == "Ctrl+Shift+A" and t == "_open_audio_doctor" for k, t, _ in shortcuts._DEFAULT_BINDINGS)
+
+
+def test_header_khong_con_nut_mat_va_ho_tro_luon_hien(qapp, mock_engine, qtbot):
+    d = _make_dashboard(qtbot)
+    assert getattr(d, "_eye_btn", None) is None
+    assert getattr(d, "_tech_badge", None) is None
+    assert d._support_btn.isVisibleTo(d)

@@ -160,17 +160,17 @@ class MainDashboard(QMainWindow):
         # Cùng MỘT dict settings với dashboard — engine đọc mic_count từ đây.
         self.engine = backend.SystemEngine(self.settings)
 
-        # Khoá kỹ thuật đọc/ghi trên chính dict settings này — phải gắn TRƯỚC khi
-        # dựng header, vì header hỏi kiosk.is_locked() để quyết định hiện nút mắt.
+        # Tự ẩn DAW đọc/ghi trên chính dict settings này. Máy cũ còn cấu hình
+        # khoá kỹ thuật (tech_lock) được chuyển một lần, rồi lưu ngay.
         try:
-            from core import kiosk
-            kiosk.bind(self.settings)
+            from core import daw_visibility
+            daw_visibility.bind(self.settings)
+            if daw_visibility.migrate(self.settings):
+                backend.ConfigManager.save_settings(self.settings)
         except Exception as e:
-            print(f"[KIOSK] bind lỗi: {e}")
-        self._so_hide_guard = None
+            print(f"[DAW-HIDE] bind/migrate lỗi: {e}")
         self._so_shutdown_done = False
         self._so_ready_watcher = None
-        self._kiosk_timer = None
 
         # State
         self.tone_music_value = 0
@@ -389,11 +389,6 @@ class MainDashboard(QMainWindow):
         self._dev_mode_shortcut = QShortcut(QKeySequence("Ctrl+Shift+D"), self)
         self._dev_mode_shortcut.activated.connect(self._toggle_dev_mode)
 
-        # Khoá kỹ thuật — phím tắt không ghi ở đâu trong giao diện khách.
-        self._tech_shortcut = QShortcut(QKeySequence("Ctrl+Alt+Shift+T"), self)
-        self._tech_shortcut.activated.connect(self._toggle_tech_session)
-        self._apply_kiosk_visibility()
-
         # Hiệu ứng chuyển động (lấp lánh theo nhạc, nhấp nháy…) — sau khi toàn
         # bộ UI đã dựng, theo thiết lập "Tắt hiệu ứng bắt mắt".
         self._apply_effects_setting()
@@ -509,103 +504,6 @@ class MainDashboard(QMainWindow):
         # tạo lại, hoặc lần đầu hiện khi __init__ chưa có HWND để ghim.
         if self.settings.get("always_on_top", False):
             QTimer.singleShot(0, self, lambda: self._set_always_on_top(True))
-
-    # ── Khoá kỹ thuật (chế độ khách) ─────────────────────────────────────────
-
-    def _apply_kiosk_visibility(self):
-        """Đồng bộ giao diện + watchdog với trạng thái khoá hiện tại.
-
-        Gọi mỗi khi trạng thái khoá đổi (mở/đóng phiên kỹ thuật, bật/tắt chế độ
-        khách trong Thiết lập) và một lần lúc khởi động.
-        """
-        from core import kiosk, so_windows
-
-        locked = kiosk.is_locked()
-        if self._eye_btn is not None:
-            self._eye_btn.setVisible(not locked)
-        support_btn = getattr(self, "_support_btn", None)
-        if support_btn is not None:
-            support_btn.setVisible(not locked)
-        if getattr(self, "_tech_badge", None) is not None:
-            self._tech_badge.setVisible(kiosk.is_enabled() and kiosk.session_active())
-
-        # Watchdog giữ ẩn (tuỳ chọn) — chỉ chạy khi đang khoá.
-        want_guard = locked and kiosk.keep_hidden()
-        if want_guard:
-            if self._so_hide_guard is None:
-                self._so_hide_guard = so_windows.HideGuard(
-                    should_hide=lambda: kiosk.is_locked() and kiosk.keep_hidden()
-                )
-            self._so_hide_guard.start()
-        elif self._so_hide_guard is not None:
-            self._so_hide_guard.stop()
-
-        # Đồng hồ tự khoá lại khi hết phiên — KTV hay quên bấm khoá.
-        timer = getattr(self, "_kiosk_timer", None)
-        if kiosk.is_enabled() and kiosk.session_active():
-            if timer is None:
-                self._kiosk_timer = QTimer(self)
-                self._kiosk_timer.timeout.connect(self._kiosk_session_tick)
-                self._kiosk_timer.start(5000)
-        elif timer is not None:
-            timer.stop()
-            self._kiosk_timer = None
-
-    def _kiosk_session_tick(self):
-        from core import kiosk
-        if kiosk.session_active():
-            return
-        from core import daw
-        self._lock_studio_one(f"Hết phiên kỹ thuật — đã khoá lại {daw.active().display_name}")
-
-    def _lock_studio_one(self, message):
-        from core import kiosk, so_windows
-        kiosk.end_session()
-        try:
-            so_windows.hide_all()
-        except Exception as e:
-            print(f"[KIOSK] ẩn Studio One lỗi: {e}")
-        self._studio_one_visible = False
-        self._apply_kiosk_visibility()
-        self._show_message(message)
-
-    def _toggle_tech_session(self):
-        """Ctrl+Alt+Shift+T — mở/đóng phiên kỹ thuật."""
-        from core import kiosk, so_windows
-
-        if not kiosk.is_enabled():
-            self._show_message("Chế độ khách chưa bật (Thiết lập → Hệ thống)")
-            return
-
-        if kiosk.session_active():
-            from core import daw
-            self._lock_studio_one(f"Đã khoá lại — {daw.active().display_name} ẩn khỏi khách")
-            return
-
-        if not kiosk.has_pin():
-            self._show_message("Chưa đặt mã PIN kỹ thuật", is_error=True)
-            return
-
-        from ui.dialogs.tech_unlock import TechUnlockDialog
-        if TechUnlockDialog(self).exec() != QDialog.Accepted:
-            return
-
-        self._apply_kiosk_visibility()
-        try:
-            shown = so_windows.show_all()
-        except Exception as e:
-            shown = 0
-            print(f"[KIOSK] hiện Studio One lỗi: {e}")
-        self._studio_one_visible = True
-        if self._eye_btn is not None:
-            from ui.components.svg_icons import SVG_EYE_OPEN
-            self._eye_btn.setSvg(SVG_EYE_OPEN)
-        from core import daw
-        if shown or so_windows.is_running():
-            self._show_message(f"Mở khoá kỹ thuật {kiosk.session_minutes()} phút")
-        else:
-            self._show_message(
-                f"Mở khoá kỹ thuật {kiosk.session_minutes()} phút — {daw.active().display_name} chưa chạy")
 
     def refresh_ui(self):
         # Gỡ dải visualizer TRƯỚC khi dọn layout: xoá widget qua layout thôi thì
@@ -1515,14 +1413,14 @@ class MainDashboard(QMainWindow):
 
     def _auto_launch_apps(self):
         """Tự động mở Studio One và/hoặc YouTube browser khi khởi động (theo settings)."""
-        from core import daw, kiosk, so_windows
+        from core import daw, daw_visibility, so_windows
 
         studio_one_path = self.settings.get("studio_one_path", "")
 
         # Phục hồi bản mẫu .song TRƯỚC khi mở Studio One — mọi thứ khách chỉnh
         # buổi trước biến mất, kỹ thuật viên không phải sửa lại tay.
         closed_for_restore = False
-        if kiosk.is_enabled() and kiosk.restore_template_enabled():
+        if daw_visibility.restore_template_enabled():
             try:
                 from core import so_template
                 # Studio One còn sống từ phiên trước (lần thoát bị timeout hoặc
@@ -1537,11 +1435,11 @@ class MainDashboard(QMainWindow):
 
                 result = so_template.restore(studio_one_path)
                 if result["restored"]:
-                    print(f"[KIOSK] Đã phục hồi bản mẫu {daw.active().display_name}")
+                    print(f"[DAW-HIDE] Đã phục hồi bản mẫu {daw.active().display_name}")
                 elif so_template.has_template() and so_template.is_song_file(studio_one_path):
-                    print(f"[KIOSK] CHƯA phục hồi bản mẫu: {result['reason']}")
+                    print(f"[DAW-HIDE] CHƯA phục hồi bản mẫu: {result['reason']}")
             except Exception as e:
-                print(f"[KIOSK] phục hồi bản mẫu lỗi: {e}")
+                print(f"[DAW-HIDE] phục hồi bản mẫu lỗi: {e}")
 
         # Studio One — mở lại cả khi tắt auto-launch, nếu vừa đóng nó để phục hồi
         # bản mẫu (nó đang chạy sẵn trước khi app khởi động).
@@ -1554,16 +1452,16 @@ class MainDashboard(QMainWindow):
                 except Exception:
                     pass
 
-        # Chế độ khách: giấu Studio One đi. Vừa khởi chạy thì phải chờ nó dựng
-        # xong cửa sổ (nạp bài + quét plugin mất hàng chục giây) rồi mới ẩn được.
-        if kiosk.is_locked():
+        # Tự ẩn DAW khỏi khách. Vừa khởi chạy thì phải chờ nó dựng xong cửa sổ
+        # (nạp bài + quét plugin mất hàng chục giây) rồi mới ẩn được.
+        if daw_visibility.auto_hide():
             try:
                 if launched:
                     so_windows.hide_when_ready()
                 elif so_windows.is_running():
                     so_windows.hide_all()
             except Exception as e:
-                print(f"[KIOSK] ẩn Studio One lúc khởi động lỗi: {e}")
+                print(f"[DAW-HIDE] ẩn {daw.active().display_name} lúc khởi động lỗi: {e}")
         # Browser YouTube
         if self.settings.get("auto_launch_browser", False):
             browser_path = self.settings.get("browser_path", "")
@@ -3415,28 +3313,9 @@ class MainDashboard(QMainWindow):
 
         threading.Thread(target=_task, daemon=True).start()
 
-    def _on_eye_toggle_studio_one(self):
-        """Nút mắt: Ẩn/Hiện Studio One + cập nhật icon mắt nhắm/mở."""
-        from ui.components.svg_icons import SVG_EYE_OPEN, SVG_EYE_CLOSED
-        # Gọi logic ẩn/hiện PID-based
-        self._on_toggle_studio_one()
-        # Đọc lại trạng thái thật thay vì đảo cờ: lệnh trên có thể đã bỏ qua
-        # (đang khoá, Studio One chưa chạy) — đảo mù sẽ làm icon lệch thực tế.
-        from core import so_windows
-        self._studio_one_visible = so_windows.any_visible()
-        if self._eye_btn is not None:
-            new_svg = SVG_EYE_OPEN if self._studio_one_visible else SVG_EYE_CLOSED
-            self._eye_btn.setSvg(new_svg)
-
     def _on_toggle_studio_one(self):
         """Ẩn/Hiện Studio One + tất cả plugin windows (theo PID, không theo title)."""
-        from core import daw, kiosk, so_windows
-
-        # Chốt chặn cuối: nút mắt đã bị ẩn khi khoá, nhưng lệnh này còn tới được
-        # từ MIDI/giọng nói/nút custom nên phải chặn ngay tại đây.
-        if kiosk.is_locked():
-            self._show_message(f"{daw.active().display_name} đang khoá — cần mở khoá kỹ thuật", is_error=True)
-            return
+        from core import daw, so_windows
 
         if so_windows.win32_modules() is None:
             self._show_message("Thiếu thành phần hệ thống — báo kỹ thuật", is_error=True)
@@ -3859,7 +3738,7 @@ class MainDashboard(QMainWindow):
         """Thiết lập Tab order rõ ràng cho điều hướng bằng bàn phím."""
         # Header → Tools → Mixer → Mode → Bottom
         chain = []
-        for attr in ("tone_combo", "scale_combo", "_pin_btn", "_support_btn", "_settings_btn", "_eye_btn"):
+        for attr in ("tone_combo", "scale_combo", "_pin_btn", "_support_btn", "_settings_btn"):
             w = getattr(self, attr, None)
             if w is not None:
                 chain.append(w)
@@ -4272,7 +4151,7 @@ class MainDashboard(QMainWindow):
         """
         from ui.dialogs.shutdown_dialog import StudioOneShutdownDialog
         from core import daw
-        print(f"[KIOSK] {daw.active().display_name} còn chạy từ phiên trước — đóng lại để phục hồi bản mẫu")
+        print(f"[DAW-HIDE] {daw.active().display_name} còn chạy từ phiên trước — đóng lại để phục hồi bản mẫu")
         try:
             dlg = StudioOneShutdownDialog(
                 self.engine,
@@ -4290,9 +4169,9 @@ class MainDashboard(QMainWindow):
             status = (dlg.result_data or {}).get("status")
             if status in ("closed", "not_running"):
                 return True
-            print(f"[KIOSK] Không đóng được {daw.active().display_name} ({status}) — bỏ qua phục hồi bản mẫu")
+            print(f"[DAW-HIDE] Không đóng được {daw.active().display_name} ({status}) — bỏ qua phục hồi bản mẫu")
         except Exception as e:
-            print(f"[KIOSK] đóng Studio One để phục hồi lỗi: {e}")
+            print(f"[DAW-HIDE] đóng Studio One để phục hồi lỗi: {e}")
         return False
 
     def _has_song_template(self) -> bool:
@@ -4335,11 +4214,11 @@ class MainDashboard(QMainWindow):
             status = (dlg.result_data or {}).get("status")
             if status not in ("closed", "not_running"):
                 print(f"[STUDIO ONE] Thoát app khi chưa đóng xong ({status})")
-                # Studio One ở lại thì phải chắc nó vẫn đang ẩn: hộp thoại hỏi
-                # lưu có thể đã kéo cửa sổ lên, app thoát xong khách ngồi trước
-                # một cửa sổ Studio One đang mở là hỏng chế độ khách.
-                from core import kiosk, so_windows
-                if kiosk.is_locked():
+                # DAW ở lại thì phải chắc nó vẫn đang ẩn: hộp thoại hỏi lưu có
+                # thể đã kéo cửa sổ lên, app thoát xong khách ngồi trước một cửa
+                # sổ DAW đang mở.
+                from core import daw_visibility, so_windows
+                if daw_visibility.auto_hide():
                     so_windows.hide_all()
         except Exception as e:
             print(f"[STUDIO ONE] Đóng an toàn lỗi: {e}")

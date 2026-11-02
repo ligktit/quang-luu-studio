@@ -29,6 +29,11 @@ class DashboardDoctorActions:
         if not path or not os.path.exists(path):
             return False
         self._d.engine.launch_app(path)
+        # Tự sửa mở/mở lại DAW giữa buổi (khách bấm) — DAW mới bật lên cũng phải
+        # ẩn như lúc mở app.
+        from core import daw_visibility, so_windows
+        if daw_visibility.auto_hide():
+            so_windows.hide_when_ready()
         return True
 
     def reconnect_midi(self):

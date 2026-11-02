@@ -218,3 +218,28 @@ def test_hai_mic_chua_bat_thi_nhu_mot_mic(qapp, mock_engine, qtbot):
     acts = _actions(d)
     d._mixer_mute_setters["mix_mic"](True)
     assert acts.app_mic_state()[0] is True
+
+
+# ── Tự sửa mở/mở lại DAW giữa buổi: DAW mới bật lên phải bị ẩn ───────────────
+
+def _launch(qtbot, auto_hide):
+    dashboard = _make_dashboard(qtbot)
+    dashboard.settings["studio_one_path"] = r"D:\QLS\mau.cpr"
+    with patch("os.path.exists", return_value=True), \
+         patch("core.daw_visibility.auto_hide", return_value=auto_hide), \
+         patch("core.so_windows.hide_when_ready") as hide_when_ready:
+        ok = _actions(dashboard).launch_daw()
+    return dashboard, ok, hide_when_ready
+
+
+def test_launch_daw_an_khi_tu_an_bat(qapp, mock_engine, qtbot):
+    _, ok, hide_when_ready = _launch(qtbot, auto_hide=True)
+    assert ok is True
+    mock_engine.launch_app.assert_called_with(r"D:\QLS\mau.cpr")
+    hide_when_ready.assert_called_once()
+
+
+def test_launch_daw_khong_an_khi_tu_an_tat(qapp, mock_engine, qtbot):
+    _, ok, hide_when_ready = _launch(qtbot, auto_hide=False)
+    assert ok is True
+    hide_when_ready.assert_not_called()

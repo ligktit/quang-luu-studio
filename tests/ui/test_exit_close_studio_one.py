@@ -30,7 +30,7 @@ def _shutdown(has_template=True, song_path=r"C:\bai\mau.song", status="closed"):
     with patch("ui.dialogs.shutdown_dialog.StudioOneShutdownDialog",
                return_value=dlg) as Dlg, \
          patch("core.so_template.has_template", return_value=has_template), \
-         patch("core.kiosk.is_locked", return_value=False), \
+         patch("core.daw_visibility.auto_hide", return_value=False), \
          patch("frontend_qt.QTimer"):
         MainDashboard._run_studio_one_shutdown(self)
         yield self, Dlg.call_args.kwargs
@@ -69,7 +69,7 @@ def test_khong_dong_duoc_thi_giau_lai_studio_one():
     dlg.result_data = {"status": "no_save_button", "saved": False}
 
     with patch("ui.dialogs.shutdown_dialog.StudioOneShutdownDialog", return_value=dlg), \
-         patch("core.kiosk.is_locked", return_value=True), \
+         patch("core.daw_visibility.auto_hide", return_value=True), \
          patch("core.so_windows.hide_all") as hide, \
          patch("frontend_qt.QTimer"):
         MainDashboard._run_studio_one_shutdown(self)
@@ -85,7 +85,7 @@ def test_dong_sach_thi_khong_dung_toi_cua_so():
     dlg.result_data = {"status": "closed", "saved": False}
 
     with patch("ui.dialogs.shutdown_dialog.StudioOneShutdownDialog", return_value=dlg), \
-         patch("core.kiosk.is_locked", return_value=True), \
+         patch("core.daw_visibility.auto_hide", return_value=True), \
          patch("core.so_windows.hide_all") as hide, \
          patch("frontend_qt.QTimer"):
         MainDashboard._run_studio_one_shutdown(self)
