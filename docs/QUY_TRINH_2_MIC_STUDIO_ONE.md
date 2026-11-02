@@ -24,20 +24,25 @@ Hai rủi ro phải loại trừ trên máy khách thật. Nếu một trong hai
 2. **Chép đè** `studio_one\QuangLuuMIDI.surface.xml` mới vào thư mục trên. **Không** Remove/Add device. Khởi động lại Studio One.
 3. **Mở bài cũ** (bài một mic đã lưu trước đây) và xác nhận các Control Link cũ vẫn ăn: gửi từ app một lần Key, Mute Mic, mute Vang và thấy track/FX phản ứng.
 4. **Kiểm Studio One có nhận control kênh 2**: trong bài mẫu, gán `keyRoot2` → tham số 2 (Key) của Auto-Tune Pro trên `MIC KG`; từ app/công cụ MIDI gửi **CC 33 trên MIDI channel 2**. Chỉ Key của `MIC KG` đổi, `MIC  P420` không đổi.
-5. Cả bước 3 và 4 đạt mới đi tiếp. Hỏng bước 3 = chép đè làm mất gán cũ; hỏng bước 4 = Studio One không nhận `#B1` (phương án lùi: bộ CC riêng cho mic 2, quay lại bàn với người thiết kế).
+5. Cả bước 3 và 4 đạt mới đi tiếp. Hỏng bước 4 = Studio One không nhận `#B1` (phương án lùi: bộ CC riêng cho mic 2, quay lại bàn với người thiết kế).
+   **Hỏng bước 3** (chép đè làm mất gán cũ): đóng Studio One → chép **trả lại** thư mục `User Devices\QuangLuuMIDI\` và file bài (`vp.song`) từ bản sao lưu ở bước 1 → mở lại Studio One, mở bài cũ, xác nhận các Control Link cũ đã về (gửi lại Key, Mute Mic, mute Vang) → **DỪNG, không làm tiếp, báo lại** người thiết kế.
 
-## 1. Bật tính năng trong app
+## 1. Cập nhật app (CHƯA bật 2 micro)
 
 1. Cập nhật app lên bản có tính năng 2 mic (Velopack, theo `docs/QUY_TRINH_PHAT_HANH.md`).
-2. **Cài đặt → Âm thanh → "Phòng có 2 micro (Studio One)"**: tích chọn. (Bị khoá/xám khi đang dùng Cubase — chỉ chạy được trên Studio One.)
-3. Đặt hai tên hiển thị (mặc định "Mic Dây" / "Mic Không Dây"), lưu.
-4. Lần bật đầu tiên **Mic 2 khởi động ở trạng thái tắt (mute)**; trạng thái bật/tắt từng mic được nhớ cho các lần mở sau.
-5. Mixer có thêm kênh Mic 2 (phần mở rộng). Bỏ tích thì mixer về như một mic.
+2. **Cài đặt → Âm thanh → "Phòng có 2 micro (Studio One)" phải đang TẮT** (bỏ tích) suốt mục 2. Chỉ bật ở đầu mục 3.
 
-## 2. Gán Control Link cho Mic 1 (`MIC  P420`)
+> **Vì sao phải theo thứ tự này:** khi bật 2 micro, mỗi lần app chạm một control dùng chung (Key, Vang, MODE...) nó gửi kênh 1 **rồi** kênh 2.
+> Ô Control Link của Studio One hiện control **chạm sau cùng** — tức là bản `…2`. Gán Mic 1 lúc đang bật 2 micro thì rất dễ gán nhầm tham số
+> `MIC  P420` vào control `…2` (của Mic 2).
+
+## 2. Gán Control Link cho Mic 1 (`MIC  P420`) — "Phòng có 2 micro" TẮT
 
 Trong Studio One: chọn tham số → Control Link / gán cho control của thiết bị `QuangLuuMIDI`. Cột "Đích" của mục **chưa gán** là chỗ KTV điền
 tham số thực tế, **theo cách các bài mẫu một mic đang gán**.
+
+**Kiểm mỗi lần gán:** tên control Studio One hiện ở ô Control Link **KHÔNG được kết thúc bằng `2`** (đúng: `keyRoot`, sai: `keyRoot2`). Thấy `…2` là
+đang bật 2 micro — huỷ gán đó, tắt ô "Phòng có 2 micro", gán lại. Sau này cần gán thêm cho `MIC  P420` thì cũng tắt ô này trước.
 
 | Control (kênh 1) | CC | Trạng thái | Đích trên `MIC  P420` |
 |---|---|---|---|
@@ -67,10 +72,24 @@ tham số thực tế, **theo cách các bài mẫu một mic đang gán**.
 
 Control không theo mic, không gán vào track mic: `toneMusic` (CC 10) → `BEAT` SoundShifter tham số 2 (đã gán); mixMusic, mixBacking, autokey, scoreTrigger... giữ như bài mẫu một mic.
 
-## 3. Gán Control Link cho Mic 2 (`MIC KG`)
+## 3. Bật 2 micro, gán Control Link cho Mic 2 (`MIC KG`)
 
-Mỗi control kênh 2 gán vào **tham số tương ứng** của control kênh 1 ở bảng trên, nhưng trên track `MIC KG`. Hai riêng từng mic: `mixMic2`, `muteMic2`;
-còn lại app tự phát đôi (cùng giá trị sang kênh 2) nên chỉ cần gán đúng đích.
+Bật tính năng trong app trước:
+
+1. **Cài đặt → Âm thanh → "Phòng có 2 micro (Studio One)"**: tích chọn. (Bị khoá/xám khi đang dùng Cubase — chỉ chạy được trên Studio One.)
+2. Đặt hai tên hiển thị (mặc định "Mic Dây" / "Mic Không Dây"), lưu.
+3. Lần bật đầu tiên **Mic 2 khởi động ở trạng thái tắt (mute)**; trạng thái bật/tắt từng mic được nhớ cho các lần mở sau.
+4. Mixer có thêm kênh Mic 2 (phần mở rộng). Bỏ tích thì app tắt Mic 2 trong Studio One rồi mixer về như một mic.
+
+Sau đó gán: **MỌI control kênh 2 trong bảng dưới đều phải gán** vào **tham số tương ứng** của control kênh 1 ở bảng mục 2, nhưng trên track `MIC KG`
+— kể cả các control dùng chung (vd `mixReverb2` → mức Send01 Vang của `MIC KG`, `muteMulti*_2` → các send của `MIC KG`). Thiếu một dòng là nút đó
+trên app không tác động Mic 2.
+
+Khác nhau chỉ ở **giá trị** app gửi: riêng từng mic là `mixMic2`, `muteMic2` (mức/tắt Mic 2, chỉnh bằng kênh Mic 2 trên mixer); mọi control còn lại
+app gửi **cùng một giá trị** cho cả hai kênh (phát đôi).
+
+**Kiểm mỗi lần gán:** tên control Studio One hiện ở ô Control Link **PHẢI kết thúc bằng `2`** (`keyRoot2`, `muteMulti1_2`...). Không có `2` là
+đang gán nhầm control của Mic 1 — huỷ gán đó, gán lại.
 
 **Send khác tên giữa hai track** — gán theo tên, không theo số:
 
@@ -108,7 +127,12 @@ còn lại app tự phát đôi (cùng giá trị sang kênh 2) nên chỉ cần
 | modeRemix2 | 38 | ........ | |
 | modeDatheloai2 | 39 | ........ | |
 
-Mẹo: cột "Đích" điền xong ở bảng mục 2 thì chép nguyên sang đây, chỉ đổi track (và số send ở các dòng mute send). Thanh Vang chung cho cả hai mic (app phát đôi).
+Mẹo: cột "Đích" điền xong ở bảng mục 2 thì chép nguyên sang đây, chỉ đổi track (và số send ở các dòng mute send). Thanh Vang trên app chung cho cả
+hai mic (app gửi cùng giá trị) nhưng vẫn phải gán `mixReverb2` vào send Vang của `MIC KG`.
+
+**Thêm/bớt control dùng chung:** danh sách tên control (theo `midi_cc`) mà app phát đôi sang Mic 2 nằm ở key `mic2_shared_cc` trong `app_config.json`
+của app; thiếu key thì app dùng mặc định `core/mic2.py` → `DEFAULT_SHARED_NAMES`. Các CC trong `mode_config` và CC phụ `mute_multi_cc` (trừ của Mic)
+tự được phát đôi. `mix_mic`, `mute_mic` không bao giờ phát đôi. Sửa xong phải mở lại app mới áp.
 
 ## 4. Tắt sẵn track không dùng, lưu bài mẫu
 
@@ -124,7 +148,10 @@ Mẹo: cột "Đích" điền xong ở bảng mục 2 thì chép nguyên sang đ
 - [ ] Tắt/mở **Mic 2** từ app: chỉ `MIC KG` mute/mở.
 - [ ] Song ca: mở cả hai mic, cả hai cùng kêu, kéo thanh mức từng mic chỉ đổi fader của mic đó.
 - [ ] Mute Vang, Echo, Hall, Main, Vang 2: đúng send trên **cả hai** track (nhớ số send khác nhau).
-- [ ] Tắt Ồn, Auto-Tune, Fix Méo, Tone Giọng, Hiệu Ứng Giọng, các MODE: tác động cả hai mic.
-- [ ] Mở app lại: trạng thái bật/tắt từng mic được nhớ; tắt "Phòng có 2 micro" thì mixer về như một mic.
+- [ ] Tắt Ồn, Auto-Tune, Fix Méo, Tone Giọng, Hiệu Ứng Giọng: bấm từ app, thấy **cả hai** track phản ứng.
+- [ ] Từng MODE (Dân Ca, Lofi, Remix, Đa Thể Loại) và chế độ Live Tuner (CC 30): bấm từ app, kiểm **cả hai** track phản ứng (MODE nào chỉ ăn một track → thiếu gán `…2` hoặc CC không có trong danh sách phát đôi).
+- [ ] Không có tham số `MIC  P420` nào gán vào control `…2`, và mọi gán trên `MIC KG` đều là control `…2`.
+- [ ] Mở app lại: trạng thái bật/tắt từng mic được nhớ; tắt "Phòng có 2 micro" thì `MIC KG` bị mute và mixer về như một mic.
+- [ ] Mic 2 đang tắt, Mic 1 mở → chạy Audio Doctor "Tự sửa": Mic 2 vẫn tắt.
 - [ ] Audio Doctor không báo sai về mic 2 (sau khi chép surface mới).
 - [ ] Ghi kết quả vào memory máy khách.
