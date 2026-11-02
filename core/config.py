@@ -18,6 +18,7 @@ import copy
 import threading
 
 from core.utils import find_ffmpeg, atomic_write_json
+from core.mic2 import DEFAULT_SHARED_NAMES
 
 
 # ── Path Helpers ─────────────────────────────────────────
@@ -246,6 +247,9 @@ _DEFAULT_APP_CONFIG = {
         ],
         "mix_backing": []
     },
+    # Hai mic Studio One: tên CC (trong midi_cc) phát thêm sang kênh 2 (mic 2).
+    # Danh sách gốc ở core/mic2.py (DEFAULT_SHARED_NAMES).
+    "mic2_shared_cc": list(DEFAULT_SHARED_NAMES),
     "accessibility": {
         "tts_enabled": False,
         "tts_voice": "",
@@ -569,6 +573,11 @@ class AppConfig:
         Cấu hình trong app_config.json, key "mute_multi_cc".
         """
         return cls.load().get("mute_multi_cc", _DEFAULT_APP_CONFIG["mute_multi_cc"])
+
+    @classmethod
+    def get_mic2_shared_cc(cls):
+        """Tên CC phát đôi sang mic 2 (key "mic2_shared_cc")."""
+        return list(cls.load().get("mic2_shared_cc", _DEFAULT_APP_CONFIG["mic2_shared_cc"]))
 
     @classmethod
     def reload(cls):

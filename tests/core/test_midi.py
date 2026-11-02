@@ -98,3 +98,34 @@ def test_ensure_listening_mo_lai_khi_cong_phan_hoi_bien_mat(mock_mido):
         assert mock_mido.open_input.call_count == 2
     finally:
         handler.stop_listening()
+
+
+def test_send_messages_one_lock_all_channels(mock_mido):
+    mock_mido.get_output_names.return_value = ["QuangLuuMIDI"]
+    mock_mido.open_output.return_value = MagicMock()
+    handler = MidiHandler()
+    assert handler.send_messages([(0, 33, 2)]) is False      # chưa kết nối
+    handler.connect()
+    mock_mido.Message.reset_mock()
+    assert handler.send_messages([(0, 33, 2), (1, 33, 2)]) is True
+    calls = mock_mido.Message.call_args_list
+    assert len(calls) == 2
+    assert calls[0].kwargs["channel"] == 0 and calls[1].kwargs["channel"] == 1
+
+
+def test_listen_loop_ignores_other_channels(mock_mido):
+    handler = MidiHandler()
+    got = []
+    handler.on_cc_received = lambda cc, v: got.append((cc, v))
+    m1 = MagicMock(type="control_change", channel=1, control=49, value=5)
+    m0 = MagicMock(type="control_change", channel=0, control=49, value=7)
+    inport = MagicMock()
+
+    def pending():
+        handler._is_listening = False
+        return [m1, m0]
+    inport.iter_pending.side_effect = pending
+    handler.inport = inport
+    handler._is_listening = True
+    handler._listen_loop()
+    assert got == [(49, 7)]
