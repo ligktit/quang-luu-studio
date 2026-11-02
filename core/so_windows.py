@@ -54,6 +54,14 @@ INTERNAL_WINDOW_CLASSES = ("IME", "MSCTFIME UI", "USB Change Listener", "Steinbe
 # Cửa sổ ngầm 133×38 của plugin JUCE (Auto-Tune, Waves…) — đo trên Studio One 5.
 INTERNAL_WINDOW_TITLES = ("JUCEWindow", "Default IME", "MSCTFIME UI")
 
+# Cửa sổ đang được giữ TOPMOST để nổi trên app đang "Ghim trên cùng" (show_window).
+# Phải bỏ cờ trước khi ẩn, nếu không lần hiện sau nó đè lên mọi thứ.
+_pinned_topmost = set()
+
+# KTV vừa tự hiện cửa sổ (show_all/show_window) → hide_when_ready ngừng bám ẩn:
+# "không tự ẩn lại" cái KTV vừa bật.
+_user_shown = threading.Event()
+
 # Công cụ ASIO chạy tiến trình riêng (bảng ASIO mở từ trong DAW đã thuộc tiến trình DAW).
 ASIO_PROCESS_NAMES = (
     "asiolink.exe", "asio link pro.exe", "asio link tool.exe",
@@ -195,6 +203,7 @@ def hide_all() -> int:
     if not mods:
         return 0
     win32gui = mods[0]
+    _unpin_all(win32gui)
     count = 0
     for hwnd in all_windows():
         try:
@@ -214,6 +223,7 @@ def show_all(focus_main=True) -> int:
     if not mods:
         return 0
     win32gui = mods[0]
+    _user_shown.set()
     hwnds = all_windows()
     count = 0
     for hwnd in hwnds:
@@ -243,6 +253,20 @@ class WindowEntry:
     is_main: bool
     visible: bool
     source: str  # "daw" | "asio"
+
+
+def _unpin(win32gui, hwnd):
+    if hwnd in _pinned_topmost:
+        _pinned_topmost.discard(hwnd)
+        try:
+            win32gui.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, _SWP_NOMOVE_NOSIZE_NOACTIVATE)
+        except Exception as e:
+            log.debug("bỏ topmost %s lỗi: %s", hwnd, e)
+
+
+def _unpin_all(win32gui):
+    for hwnd in list(_pinned_topmost):
+        _unpin(win32gui, hwnd)
 
 
 def _is_internal(win32gui, hwnd) -> bool:
@@ -329,8 +353,9 @@ def list_windows() -> list:
 def show_window(hwnd, above_topmost=False) -> bool:
     """Hiện đúng một cửa sổ và đưa lên trước. False nếu cửa sổ không còn.
 
-    above_topmost: app đang "Ghim trên cùng" thì cửa sổ thường bị app che —
-    đặt topmost rồi bỏ ngay để nó lên trên app một lần.
+    above_topmost: app đang "Ghim trên cùng" (cửa sổ topmost) thì cửa sổ thường
+    luôn nằm dưới app — giữ cửa sổ này TOPMOST cho tới khi ẩn lại (hide_window /
+    hide_all bỏ cờ). Đặt rồi bỏ ngay không đủ: NOTOPMOST = sau mọi cửa sổ topmost.
     """
     mods = win32_modules()
     if not mods:
@@ -339,10 +364,11 @@ def show_window(hwnd, above_topmost=False) -> bool:
     try:
         if not win32gui.IsWindow(hwnd):
             return False
+        _user_shown.set()
         win32gui.ShowWindow(hwnd, SW_SHOW)
         if above_topmost:
             win32gui.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, _SWP_NOMOVE_NOSIZE_NOACTIVATE)
-            win32gui.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, _SWP_NOMOVE_NOSIZE_NOACTIVATE)
+            _pinned_topmost.add(hwnd)
     except Exception as e:
         log.debug("show_window(%s) lỗi: %s", hwnd, e)
         return False
@@ -358,7 +384,9 @@ def hide_window(hwnd) -> bool:
     win32gui = mods[0]
     try:
         if not win32gui.IsWindow(hwnd):
+            _pinned_topmost.discard(hwnd)
             return False
+        _unpin(win32gui, hwnd)
         win32gui.ShowWindow(hwnd, SW_HIDE)
         return True
     except Exception as e:
@@ -596,8 +624,11 @@ def hide_when_ready(timeout=180.0, follow_seconds=60.0, on_done=None):
 
     Ẩn một phát là chưa đủ: trong lúc nạp bài, Studio One còn bật thêm cửa sổ
     plugin/mixer sau đó. Bám theo thêm `follow_seconds` để ẩn nốt những cửa sổ
-    mọc lên muộn, rồi mới buông.
+    mọc lên muộn, rồi mới buông. KTV tự hiện cửa sổ (Cài đặt) giữa chừng thì
+    ngừng bám ngay — không ẩn lại cái KTV vừa bật.
     """
+    _user_shown.clear()
+
     def _run():
         hwnd = wait_for_main_window(timeout=timeout)
         if hwnd is None:
@@ -605,10 +636,12 @@ def hide_when_ready(timeout=180.0, follow_seconds=60.0, on_done=None):
             if on_done:
                 on_done(0)
             return
-        total = hide_all()
+        total = 0 if _user_shown.is_set() else hide_all()
         deadline = time.monotonic() + follow_seconds
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and not _user_shown.is_set():
             time.sleep(1.5)
+            if _user_shown.is_set():
+                break
             total += hide_all()
         if on_done:
             on_done(total)

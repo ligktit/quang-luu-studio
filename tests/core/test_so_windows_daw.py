@@ -189,9 +189,42 @@ def test_hide_window_chi_an_dung_cua_so(fake_gui):
 
 
 def test_show_window_tren_ca_app_dang_ghim(fake_gui):
+    # App ghim là cửa sổ topmost: đặt TOPMOST rồi bỏ ngay thì plugin lại nằm dưới
+    # app (MSDN: NOTOPMOST = sau mọi cửa sổ topmost). Phải giữ TOPMOST khi hiện.
     assert so_windows.show_window(21, above_topmost=True) is True
     assert ("pos", 21, so_windows.HWND_TOPMOST) in fake_gui.shown
+    assert ("pos", 21, so_windows.HWND_NOTOPMOST) not in fake_gui.shown
+
+
+def test_an_lai_thi_bo_topmost_truoc(fake_gui):
+    so_windows.show_window(21, above_topmost=True)
+    fake_gui.shown.clear()
+    assert so_windows.hide_window(21) is True
+    assert fake_gui.shown == [("pos", 21, so_windows.HWND_NOTOPMOST), (21, so_windows.SW_HIDE)]
+
+
+def test_hide_all_bo_topmost_cua_so_da_ghim(fake_gui):
+    so_windows.show_window(21, above_topmost=True)
+    fake_gui.shown.clear()
+    so_windows.hide_all()
     assert ("pos", 21, so_windows.HWND_NOTOPMOST) in fake_gui.shown
+
+
+def test_bam_an_dung_khi_ktv_vua_hien_cua_so():
+    # "Không tự ẩn lại": trong lúc hide_when_ready còn bám ẩn (60 s sau khi DAW
+    # mở, hoặc sau khi Tự sửa mở lại DAW), KTV bật plugin thì vòng bám phải dừng.
+    calls = []
+
+    def fake_sleep(_):
+        if len(calls) == 1:
+            so_windows.show_window(21)          # KTV bật plugin giữa chừng
+    with patch.object(so_windows, "wait_for_main_window", return_value=23), \
+         patch.object(so_windows, "hide_all", side_effect=lambda: calls.append(1) or 0), \
+         patch.object(so_windows, "win32_modules", return_value=(_FakeGui(_CUBASE_WINS), MagicMock(), MagicMock())), \
+         patch.object(so_windows, "force_foreground", return_value=True), \
+         patch.object(so_windows.time, "sleep", side_effect=fake_sleep):
+        so_windows.hide_when_ready(follow_seconds=2.0).join(timeout=5)
+    assert len(calls) == 1
 
 
 def test_show_all_bo_qua_cua_so_noi_bo_va_asio(fake_gui):
