@@ -1045,13 +1045,32 @@ class SettingsDialog(QDialog):
             pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 12, 14))
         self._btn_toggle_all.clicked.connect(self._on_toggle_all_daw_windows)
         row_toggle.addWidget(self._btn_toggle_all)
+        self._btn_refresh_windows = QPushButton("Làm mới")
+        self._btn_refresh_windows.setCursor(Qt.PointingHandCursor)
+        self._btn_refresh_windows.setFixedHeight(38)
+        self._btn_refresh_windows.setToolTip("Quét lại các cửa sổ đang có")
+        self._btn_refresh_windows.setStyleSheet(
+            pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 12, 14))
+        self._btn_refresh_windows.clicked.connect(self._refresh_daw_windows_ui)
+        row_toggle.addWidget(self._btn_refresh_windows)
         row_toggle.addStretch()
         vl.addLayout(row_toggle)
 
         # Danh sách từng cửa sổ (plugin, ASIO…) — điền ở _refresh_daw_windows_ui.
+        # Plugin phải mở sẵn trong bài mẫu: app chỉ ẩn/hiện được cửa sổ đã có.
+        hint = QLabel(f"Bật riêng từng cửa sổ (Auto-Tune, bảng ASIO…) mà không hiện cả {name}:")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(self._field_label_qss(size=11))
+        vl.addWidget(hint)
+        self._window_switches = {}
         self._daw_list_box = QVBoxLayout()
-        self._daw_list_box.setSpacing(4)
+        self._daw_list_box.setSpacing(2)
         vl.addLayout(self._daw_list_box)
+        self._windows_empty_lbl = QLabel(
+            f"{name} chưa chạy hoặc không có cửa sổ nào. Plugin phải để mở sẵn trong bài mẫu.")
+        self._windows_empty_lbl.setWordWrap(True)
+        self._windows_empty_lbl.setStyleSheet(self._field_label_qss(11, C["text_muted"], 600, True))
+        vl.addWidget(self._windows_empty_lbl)
 
         self._cb_restore_tpl = QCheckBox(f"Phục hồi bản mẫu {ext} mỗi lần khởi động")
         self._cb_restore_tpl.setStyleSheet(self._checkbox_qss)
@@ -1099,6 +1118,7 @@ class SettingsDialog(QDialog):
         except Exception:
             visible = False
         self._btn_toggle_all.setText(f"Ẩn {name} + plugin" if visible else f"Hiện {name} + plugin")
+        self._refresh_window_list()
 
         info = so_template.info()
         if info:
@@ -1109,6 +1129,45 @@ class SettingsDialog(QDialog):
             self._template_lbl.setText(
                 f"Chưa chốt bản mẫu. Tinh chỉnh xong trong {name}, lưu bài, đóng"
                 f" {name} rồi bấm \"Chốt bản mẫu {daw.active().template_extension}\".")
+
+    def _refresh_window_list(self):
+        from core import so_windows
+        while self._daw_list_box.count():
+            w = self._daw_list_box.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        self._window_switches = {}
+        try:
+            entries = so_windows.list_windows()
+        except Exception as e:
+            print(f"[SETTINGS] liệt kê cửa sổ lỗi: {e}")
+            entries = []
+        for e in entries:
+            label = e.title
+            if e.is_main:
+                label += " (cửa sổ chính)"
+            if e.source == "asio":
+                label += " · ASIO"
+            cb = QCheckBox(label)
+            cb.setStyleSheet(self._checkbox_qss)
+            cb.setMinimumHeight(30)
+            cb.setChecked(e.visible)
+            cb.setToolTip("Bật: hiện cửa sổ này · Tắt: ẩn")
+            cb.clicked.connect(lambda checked, h=e.hwnd: self._on_window_switch(h, checked))
+            self._daw_list_box.addWidget(cb)
+            self._window_switches[e.hwnd] = cb
+        self._windows_empty_lbl.setVisible(not entries)
+
+    def _on_window_switch(self, hwnd, checked):
+        from core import so_windows
+        if checked:
+            ontop = bool((self._dashboard.settings or {}).get("always_on_top"))
+            ok = so_windows.show_window(hwnd, above_topmost=ontop)
+        else:
+            ok = so_windows.hide_window(hwnd)
+        if not ok:
+            self._dashboard._show_message("Cửa sổ không còn — đã quét lại", is_error=True)
+        self._refresh_daw_windows_ui()
 
     def _daw_windows_apply(self, fn, value):
         try:
