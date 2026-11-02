@@ -1222,3 +1222,84 @@ def test_auto_timeline_tai_du_ca_bai(engine, mocker):
     dl = se.return_value.download_youtube_audio
     dl.assert_called_once()
     assert dl.call_args.kwargs.get("max_seconds") == ToneDetector.TIMELINE_MAX_SECONDS
+
+
+# ──────────────────────────────────────────────────────────────
+# Hai mic Studio One — engine tự phát đôi CC dùng chung sang kênh 2
+# ──────────────────────────────────────────────────────────────
+
+class TestMic2Mirror:
+
+    @pytest.fixture
+    def mic2(self, engine, mocker):
+        mocker.patch("core.config.AppConfig.get_midi_cc",
+                     return_value={"key_root": 33, "scale_type": 35,
+                                   "mix_mic": 21, "mute_mic": 51})
+        mocker.patch("core.config.AppConfig.get_mic2_shared_cc",
+                     return_value=["key_root", "scale_type"])
+        mocker.patch("core.config.AppConfig.get_mode_config", return_value={})
+        mocker.patch("core.config.AppConfig.get_mute_multi_cc", return_value={})
+        engine.midi_handler.send_cc.return_value = True
+        engine.midi_handler.send_messages.return_value = True
+        return engine
+
+    def test_mirror_off_by_default(self, mic2):
+        mic2.refresh_mic2_mirror()
+        mic2.send_midi(33, 2)
+        mic2.midi_handler.send_cc.assert_called_once_with(33, 2)
+        mic2.midi_handler.send_messages.assert_not_called()
+
+    def test_mirror_shared_cc(self, mic2):
+        mic2.settings["mic_count"] = 2
+        mic2.refresh_mic2_mirror()
+        mic2.send_midi(33, 2)
+        mic2.midi_handler.send_messages.assert_called_once_with(
+            [(0, 33, 2), (1, 33, 2)])
+        mic2.midi_handler.send_cc.assert_not_called()
+
+    def test_mirror_skips_mix_mic(self, mic2):
+        mic2.settings["mic_count"] = 2
+        mic2.refresh_mic2_mirror()
+        mic2.send_midi(21, 76)
+        mic2.midi_handler.send_cc.assert_called_once_with(21, 76)
+        mic2.midi_handler.send_messages.assert_not_called()
+
+    def test_pair_mirror_atomic_order(self, mic2):
+        mic2.settings["mic_count"] = 2
+        mic2.refresh_mic2_mirror()
+        mic2.send_midi_pair(33, 23, 35, 85)
+        mic2.midi_handler.send_messages.assert_called_once_with(
+            [(0, 33, 23), (0, 35, 85), (1, 33, 23), (1, 35, 85)])
+        mic2.midi_handler.send_cc_pair.assert_not_called()
+
+    def test_refresh_turns_off(self, mic2):
+        mic2.settings["mic_count"] = 2
+        mic2.refresh_mic2_mirror()
+        mic2.settings["mic_count"] = 1
+        mic2.refresh_mic2_mirror()
+        mic2.send_midi(33, 2)
+        mic2.midi_handler.send_cc.assert_called_once_with(33, 2)
+        mic2.midi_handler.send_messages.assert_not_called()
+
+    def test_send_midi_on_channel(self, mic2):
+        mic2.settings["mic_count"] = 2
+        mic2.refresh_mic2_mirror()
+        assert mic2.send_midi_on_channel(1, 51, 127) is True
+        mic2.midi_handler.send_messages.assert_called_once_with([(1, 51, 127)])
+
+    def test_reconnect_retries_same_messages(self, mic2):
+        mic2.settings["mic_count"] = 2
+        mic2.refresh_mic2_mirror()
+        mic2.midi_handler.send_messages.side_effect = [False, True]
+        mic2.midi_handler.connect.return_value = True
+        assert mic2.send_midi(33, 2) is True
+        assert mic2.midi_handler.send_messages.call_count == 2
+        assert (mic2.midi_handler.send_messages.call_args_list[0]
+                == mic2.midi_handler.send_messages.call_args_list[1])
+
+    def test_refresh_never_raises(self, mic2, mocker):
+        mic2.settings["mic_count"] = 2
+        mocker.patch("core.config.AppConfig.get_midi_cc",
+                     side_effect=RuntimeError("hỏng"))
+        mic2.refresh_mic2_mirror()
+        assert mic2._mic2_shared == frozenset()

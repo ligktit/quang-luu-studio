@@ -39,10 +39,13 @@ class SystemEngine(
 
     def __init__(self, settings=None):
         self.settings = settings or {}
+        # Hai mic Studio One: tập CC phát đôi sang kênh 2 (rỗng = tắt).
+        self._mic2_shared = frozenset()
 
         # MIDI
         self.midi_handler          = MidiHandler()
         self.midi_handler.on_cc_received = self._handle_midi_in
+        self.refresh_mic2_mirror()
         # Trạng thái kênh DAW báo về (Cubase) — Tự sửa âm thanh đọc ở đây.
         from core.audio_doctor.feedback import DawFeedback
         self.daw_feedback = DawFeedback(AppConfig.get_midi_cc() or {})
