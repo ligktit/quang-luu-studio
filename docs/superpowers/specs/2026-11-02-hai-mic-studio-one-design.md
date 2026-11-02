@@ -61,7 +61,7 @@ Cả hai track đều record-arm + monitor, không mute → mở bài là cả h
 
 ### 6.1 Kênh MIDI 2 = micro 2
 
-Micro 2 dùng **cùng số CC** với micro 1 nhưng trên **MIDI channel 2** (status `0xB1`).
+Micro 2 dùng **cùng số CC** với micro 1 nhưng trên **MIDI channel 2** (byte trạng thái `0xB1`).
 Không đụng bảng CC hiện có, không chiếm CC mới.
 
 - Mic 1 = kênh MIDI 1 (như hiện tại). Mic 2 = kênh MIDI 2.
@@ -69,7 +69,7 @@ Không đụng bảng CC hiện có, không chiếm CC mới.
 
 ### 6.2 Surface XML
 
-`studio_one/QuangLuuMIDI.surface.xml` thêm một bộ control `status="#B1"` (tên có hậu tố `2`,
+`studio_one/QuangLuuMIDI.surface.xml` thêm một bộ control `status="#B0" channel="1"` (tên có hậu tố `2`,
 vd `keyRoot2`, `muteMic2`) cho các CC liên quan tới mic:
 
 - riêng từng mic: `mix_mic` (21), `mute_mic` (51);
@@ -135,6 +135,16 @@ của mình.
 
 - **Chép đè surface XML có giữ Control Link của bài cũ không** (xem 6.2). Kiểm trên một máy
   Studio One thật cùng lúc với rủi ro dưới đây, trước khi viết code app.
+
+> **Kết quả kiểm trên máy thật (2026-11-02, DESKTOP-U46KFB8, Studio One 5.0.2, bản sao bài `vp`):**
+> - Control `status="#B0"` **không ghi `channel`** nhận CC đó trên **mọi kênh** — CC 51 kênh 2 cũng tắt P420.
+> - Control `status="#B1"` **không** được nhận (link `muteMic2` → KG không ăn).
+> - Dạng Studio One tự ghi khi learn, `status="#B0" channel="N"`, **đạt**: kênh 1 chỉ tắt P420, kênh 2 chỉ tắt
+>   KG, hai vòng liên tiếp. Surface XML chuyển sang dạng này; mọi control kênh 1 thêm `channel="0"`.
+> - Chép đè surface XML (không gỡ thiết bị) **giữ** Control Link: link lưu trong bài theo instance thiết bị +
+>   tên control; `muteMic` vẫn ăn qua cả ba bản XML (cũ, `#B1`, `channel`).
+> - Ghi chú phụ: bài `vp.song` hiện tại gán link cho một instance QuangLuuMIDI khác ({7E111DCC…}), không phải
+>   thiết bị của máy này ({DE36BFDC…}) → trên máy này bài chưa có link nào ăn; phải gán lại theo quy trình.
 
 - **Studio One có nhận control `status="#B1"` trong surface XML không.** Kiểm đầu tiên trên một
   máy Studio One thật (thêm một control kênh 2, gán thử, gửi CC kênh 2). Nếu không nhận:

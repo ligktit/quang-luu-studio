@@ -3,13 +3,15 @@
 Áp dụng cho **máy có hai micro** chạy Studio One. Máy một mic giữ bài mẫu của mình, không làm theo tài liệu này.
 Thiết kế gốc: `docs/superpowers/specs/2026-11-02-hai-mic-studio-one-design.md` (mục 2, 6.2, 6.5, 7).
 
-Nguyên tắc: **Mic 1 = MIDI channel 1 (status `#B0`), Mic 2 = MIDI channel 2 (status `#B1`)**, cùng số CC. Không đụng CC mới.
+Nguyên tắc: **Mic 1 = MIDI channel 1 (`channel="0"`), Mic 2 = MIDI channel 2 (`channel="1"`)**, cùng số CC. Không đụng CC mới.
+Trong surface XML mọi control đều là `status="#B0"` và ghi rõ `channel` — Studio One 5 không nhận `#B1`, và control không ghi
+`channel` nhận mọi kênh (đã kiểm trên máy khách 2026-11-02, spec mục 7).
 
 | | Mic 1 | Mic 2 |
 |---|---|---|
 | Track Studio One | `MIC  P420` (hai dấu cách; mic dây, Input L) | `MIC KG` (không dây, Input R) |
 | Tên mặc định trong app | Mic Dây | Mic Không Dây |
-| Kênh MIDI | 1 (`#B0`) | 2 (`#B1`) |
+| Kênh MIDI | 1 (`channel="0"`) | 2 (`channel="1"`) |
 | Control trong surface | tên gốc (`keyRoot`...) | hậu tố `2` (`keyRoot2`...) |
 
 Chuỗi insert hai track giống hệt thứ tự: RVox → Aphex Vintage Exciter → C1 → FabFilter Pro-Q 2 (bên KG đổi tên "Pro-Q 4") →
@@ -24,7 +26,7 @@ Hai rủi ro phải loại trừ trên máy khách thật. Nếu một trong hai
 2. **Chép đè** `studio_one\QuangLuuMIDI.surface.xml` mới vào thư mục trên. **Không** Remove/Add device. Khởi động lại Studio One.
 3. **Mở bài cũ** (bài một mic đã lưu trước đây) và xác nhận các Control Link cũ vẫn ăn: gửi từ app một lần Key, Mute Mic, mute Vang và thấy track/FX phản ứng.
 4. **Kiểm Studio One có nhận control kênh 2**: trong bài mẫu, gán `keyRoot2` → tham số 2 (Key) của Auto-Tune Pro trên `MIC KG`; từ app/công cụ MIDI gửi **CC 33 trên MIDI channel 2**. Chỉ Key của `MIC KG` đổi, `MIC  P420` không đổi.
-5. Cả bước 3 và 4 đạt mới đi tiếp. Hỏng bước 4 = Studio One không nhận `#B1` (phương án lùi: bộ CC riêng cho mic 2, quay lại bàn với người thiết kế).
+5. Cả bước 3 và 4 đạt mới đi tiếp. Hỏng bước 4 = Studio One không tách kênh 2 (phương án lùi: bộ CC riêng cho mic 2, quay lại bàn với người thiết kế).
    **Hỏng bước 3** (chép đè làm mất gán cũ): đóng Studio One → chép **trả lại** thư mục `User Devices\QuangLuuMIDI\` và file bài (`vp.song`) từ bản sao lưu ở bước 1 → mở lại Studio One, mở bài cũ, xác nhận các Control Link cũ đã về (gửi lại Key, Mute Mic, mute Vang) → **DỪNG, không làm tiếp, báo lại** người thiết kế.
 
 ## 1. Cập nhật app (CHƯA bật 2 micro)
@@ -101,7 +103,7 @@ app gửi **cùng một giá trị** cho cả hai kênh (phát đôi).
 | Main | Send04 | Send04 |
 | Vang 2 | Send02 | **Send05** |
 
-| Control (kênh 2, status `#B1`) | CC | Đích trên `MIC KG` | Ghi chú |
+| Control (kênh 2, `channel="1"`) | CC | Đích trên `MIC KG` | Ghi chú |
 |---|---|---|---|
 | keyRoot2 | 33 | Auto-Tune Pro, tham số 2 (Key) | |
 | keyScale2 | 34 | Auto-Tune Pro, tham số 162 | giống kênh 1 |

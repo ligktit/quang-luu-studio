@@ -21,14 +21,14 @@ SURFACE_XML = os.path.join(
 )
 
 
-def _declared_addresses(status="#B0"):
-    """{cc_number: [control_name, ...]} của các control có status `status`."""
+def _declared_addresses(channel="0"):
+    """{cc_number: [control_name, ...]} của các control trên kênh MIDI `channel` (0 = kênh 1)."""
     root = ET.parse(SURFACE_XML).getroot()
     out = {}
     for ctrl in root.iter("Control"):
         for msg in ctrl.iter("MidiMessage"):
             addr = msg.get("address")
-            if addr is not None and msg.get("status") == status:
+            if addr is not None and msg.get("channel") == channel:
                 out.setdefault(int(addr), []).append(ctrl.get("name"))
     return out
 
@@ -70,17 +70,29 @@ def test_no_orphan_controls():
     )
 
 
+def test_every_message_names_its_channel():
+    # Kiểm trên máy khách Studio One 5.0.2 (2026-11-02): control không ghi `channel`
+    # nhận CC đó trên MỌI kênh (lệnh Mic 2 rơi vào link Mic 1), còn status "#B1"
+    # không được nhận. Dạng Studio One tự ghi khi learn: status="#B0" channel="N".
+    root = ET.parse(SURFACE_XML).getroot()
+    bad = [
+        c.get("name") for c in root.iter("Control") for m in c.iter("MidiMessage")
+        if m.get("status") != "#B0" or m.get("channel") not in ("0", "1")
+    ]
+    assert not bad, f"MidiMessage phải là status=#B0 + channel 0/1: {bad}"
+
+
 def test_no_duplicate_control_addresses():
     # Hai control cùng address → Studio One nhận nhập nhằng, đúng kiểu lỗi
     # "shared CC" mà tone_auto/fix_meo từng mắc.
-    # Xét theo (status, address): cùng CC khác kênh MIDI là hợp lệ (mic 2).
+    # Xét theo (kênh, address): cùng CC khác kênh MIDI là hợp lệ (mic 2).
     dupes = {
-        (st, cc): n
-        for st in ("#B0", "#B1")
-        for cc, n in _declared_addresses(st).items()
+        (ch, cc): n
+        for ch in ("0", "1")
+        for cc, n in _declared_addresses(ch).items()
         if len(n) > 1
     }
-    assert not dupes, f"Nhiều control trùng (status, CC): {dupes}"
+    assert not dupes, f"Nhiều control trùng (kênh, CC): {dupes}"
 
 
 def test_no_duplicate_control_names():
@@ -129,14 +141,14 @@ def test_mic2_controls_match_shared_set():
         AppConfig.get_midi_cc(), AppConfig.get_mic2_shared_cc(),
         AppConfig.get_mode_config(), AppConfig.get_mute_multi_cc(),
     )) | {21, 51}
-    assert set(_declared_addresses("#B1")) == expected
+    assert set(_declared_addresses("1")) == expected
 
 
 def test_mic2_controls_receive_only():
     root = ET.parse(SURFACE_XML).getroot()
     bad = [
         c.get("name") for c in root.iter("Control")
-        if any(m.get("status") == "#B1" for m in c.iter("MidiMessage"))
+        if any(m.get("channel") == "1" for m in c.iter("MidiMessage"))
         and "transmit" in (c.get("options") or "")
     ]
     assert not bad, f"Control kênh 2 không được có transmit: {bad}"
