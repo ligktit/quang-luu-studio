@@ -154,6 +154,8 @@ _CUBASE_WINS = {
 @pytest.fixture
 def fake_gui():
     daw.bind({"daw_kind": "cubase"})
+    so_windows._hidden_by_us.clear()
+    so_windows._pinned_topmost.clear()
     gui = _FakeGui(_CUBASE_WINS)
     with patch.object(so_windows, "win32_modules", return_value=(gui, MagicMock(), MagicMock())), \
          patch.object(so_windows, "all_windows", return_value=[21, 22, 23, 24, 25, 26]), \
@@ -208,6 +210,36 @@ def test_hide_all_bo_topmost_cua_so_da_ghim(fake_gui):
     fake_gui.shown.clear()
     so_windows.hide_all()
     assert ("pos", 21, so_windows.HWND_NOTOPMOST) in fake_gui.shown
+
+
+def test_show_all_chi_hien_lai_cua_so_da_an(fake_gui):
+    # Đo máy 1: bảng ASIO Link Pro nằm sẵn (ẩn, chưa từng mở) trong tiến trình
+    # Studio One; "Hiện tất cả" bật nó lên thành khung trắng. Chỉ hiện lại cái
+    # hide_all đã ẩn.
+    fake_gui.wins[23]["vis"] = True                 # cửa sổ chính đang hiện
+    fake_gui.wins[21]["vis"] = False                # plugin chưa từng hiện
+    so_windows.hide_all()
+    fake_gui.shown.clear()
+    so_windows.show_all(focus_main=False)
+    assert {h for h, _ in fake_gui.shown} == {23}
+
+
+def test_show_all_khong_ghi_nhan_thi_hien_moi_cua_so_hop_le(fake_gui):
+    # App mở lại khi DAW đã bị ẩn từ phiên trước: không có ghi nhận nào.
+    so_windows._hidden_by_us.clear()
+    so_windows.show_all(focus_main=False)
+    assert {h for h, _ in fake_gui.shown} == {21, 23, 26}
+
+
+def test_show_all_luon_hien_cua_so_chinh(fake_gui):
+    # App mở lại khi DAW đã ẩn sẵn → KTV bật rồi tắt riêng plugin → "Hiện tất cả"
+    # vẫn phải hiện cửa sổ chính, không chỉ plugin.
+    so_windows._hidden_by_us.clear()
+    so_windows.show_window(21)
+    so_windows.hide_window(21)
+    fake_gui.shown.clear()
+    so_windows.show_all(focus_main=False)
+    assert {h for h, _ in fake_gui.shown} == {21, 23}
 
 
 def test_bam_an_dung_khi_ktv_vua_hien_cua_so():

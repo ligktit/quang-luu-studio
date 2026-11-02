@@ -62,6 +62,10 @@ _pinned_topmost = set()
 # "không tự ẩn lại" cái KTV vừa bật.
 _user_shown = threading.Event()
 
+# Cửa sổ do app ẩn (hide_all/hide_window). show_all chỉ hiện lại những cái này —
+# hiện "mọi cửa sổ đang ẩn" thì bật cả bảng ASIO Link chưa từng mở (khung trắng).
+_hidden_by_us = set()
+
 # Công cụ ASIO chạy tiến trình riêng (bảng ASIO mở từ trong DAW đã thuộc tiến trình DAW).
 ASIO_PROCESS_NAMES = (
     "asiolink.exe", "asio link pro.exe", "asio link tool.exe",
@@ -209,6 +213,7 @@ def hide_all() -> int:
         try:
             if win32gui.IsWindowVisible(hwnd):
                 win32gui.ShowWindow(hwnd, SW_HIDE)
+                _hidden_by_us.add(hwnd)
                 count += 1
         except Exception:
             continue
@@ -225,16 +230,25 @@ def show_all(focus_main=True) -> int:
     win32gui = mods[0]
     _user_shown.set()
     hwnds = all_windows()
+    # Có ghi nhận thì chỉ hiện lại cái app đã ẩn; không có (app mở lại khi DAW đã
+    # ẩn từ phiên trước) thì hiện mọi cửa sổ hợp lệ.
+    recorded = _hidden_by_us & set(hwnds)
+    if recorded:
+        recorded |= set(main_windows(hwnds))     # cửa sổ chính luôn hiện lại
     count = 0
     for hwnd in hwnds:
         try:
-            if _is_internal(win32gui, hwnd):
+            if recorded:
+                if hwnd not in recorded:
+                    continue
+            elif _is_internal(win32gui, hwnd):
                 continue
             if not win32gui.IsWindowVisible(hwnd):
                 win32gui.ShowWindow(hwnd, SW_SHOW)
                 count += 1
         except Exception:
             continue
+    _hidden_by_us.clear()
     if focus_main:
         for hwnd in main_windows(hwnds):
             if force_foreground(hwnd):
@@ -366,6 +380,7 @@ def show_window(hwnd, above_topmost=False) -> bool:
             return False
         _user_shown.set()
         win32gui.ShowWindow(hwnd, SW_SHOW)
+        _hidden_by_us.discard(hwnd)
         if above_topmost:
             win32gui.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, _SWP_NOMOVE_NOSIZE_NOACTIVATE)
             _pinned_topmost.add(hwnd)
@@ -388,6 +403,7 @@ def hide_window(hwnd) -> bool:
             return False
         _unpin(win32gui, hwnd)
         win32gui.ShowWindow(hwnd, SW_HIDE)
+        _hidden_by_us.add(hwnd)
         return True
     except Exception as e:
         log.debug("hide_window(%s) lỗi: %s", hwnd, e)
