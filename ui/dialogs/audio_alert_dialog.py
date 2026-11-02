@@ -14,10 +14,10 @@ from ui import responsive as rp
 from ui.design_tokens import C, FONT, lighten
 
 
-def _btn_qss(color: str) -> str:
+def _btn_qss(color: str, text: str = "#0F172A") -> str:
     return f"""
         QPushButton {{
-            background-color: {color}; color: #0F172A;
+            background-color: {color}; color: {text};
             border: none; border-radius: 12px;
             padding: 12px 22px; font-size: 18px; font-weight: 800;
             font-family: {FONT};
@@ -62,7 +62,7 @@ class AudioAlertDialog(QDialog):
         self.fix_btn.setDefault(True)
         self.later_btn = QPushButton("Để sau")
         self.later_btn.setCursor(Qt.PointingHandCursor)
-        self.later_btn.setStyleSheet(_btn_qss(C["card_hover"]))
+        self.later_btn.setStyleSheet(_btn_qss(C["card_hover"], C["text"]))
         btns.addWidget(self.fix_btn, 2)
         btns.addWidget(self.later_btn, 1)
         root.addLayout(btns)

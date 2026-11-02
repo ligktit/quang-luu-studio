@@ -182,3 +182,13 @@ def test_header_khong_con_nut_mat_va_ho_tro_luon_hien(qapp, mock_engine, qtbot):
     assert getattr(d, "_eye_btn", None) is None
     assert getattr(d, "_tech_badge", None) is None
     assert d._support_btn.isVisibleTo(d)
+
+
+def test_nut_de_sau_chu_sang_tren_nen_toi(qapp, mock_engine, qtbot):
+    """Chụp thật trên Windows: chữ "Để sau" màu tối trên nền xám tối — gần như không đọc được."""
+    from ui.design_tokens import C
+    from ui.dialogs.audio_alert_dialog import AudioAlertDialog
+    dashboard = _make_dashboard(qtbot)
+    dlg = AudioAlertDialog(dashboard)
+    qtbot.addWidget(dlg)
+    assert f"color: {C['text']}" in dlg.later_btn.styleSheet()
