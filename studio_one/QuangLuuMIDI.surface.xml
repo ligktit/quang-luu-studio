@@ -36,6 +36,13 @@
               bài đã nạp xong và bảng MIDI của bài đang chạy.
   - CC 50-53: Mute toggles (buttons)
   - CC 54:    Hiệu ứng giọng em bé ↔ robot (knob) — thanh "Giọng" ở mixer của app
+
+  MIC 2 (hai micro) — MIDI channel 2 (status #B1):
+  Control có hậu tố "2" (vd keyRoot2, muteMulti1_2) nhận trên kênh MIDI 2, cùng
+  số CC với kênh 1, tiêu đề thêm " (Mic 2)". Gán Control Link của chúng vào
+  track/FX của MIC 2. mixMic2 (CC 21) và muteMic2 (CC 51) là RIÊNG từng mic;
+  mọi control còn lại chỉ phản chiếu bản kênh 1 (app tự phát đôi).
+  Kênh 1 giữ nguyên — không đổi tên control cũ.
 -->
 <ControlSurface name="QuangLuuMIDI" 
                 manufacturer="QuangLuuStudio" 
@@ -242,6 +249,104 @@
          Chưa gán thì app không nhận được trả lời và tự quay về cách hẹn giờ. -->
     <Control name="readyPing" title="Ping San Sang" type="knob" options="transmit receive public">
       <MidiMessage status="#B0" address="49"/>
+    </Control>
+
+    <!-- ============================================ -->
+    <!-- MIC 2 — MIDI CHANNEL 2 (status #B1)          -->
+    <!-- ============================================ -->
+    <!-- Chỉ dùng khi bật 2 micro (mic_count=2). Cùng số CC với kênh 1,
+         nhưng tới từ MIDI channel 2. Gán Control Link vào track MIC 2. -->
+
+    <Control name="toneVoice2" title="Tone Giọng (Mic 2)" type="knob" options="receive public">
+      <MidiMessage status="#B1" address="11"/>
+    </Control>
+
+    <Control name="mixMic2" title="Mix Mic (Mic 2)" type="fader" options="receive public">
+      <MidiMessage status="#B1" address="21"/>
+    </Control>
+
+    <Control name="mixReverb2" title="Mix Vang (Mic 2)" type="fader" options="receive public">
+      <MidiMessage status="#B1" address="22"/>
+    </Control>
+
+    <Control name="liveTunerMode2" title="Mode (Live Tuner) (Mic 2)" type="knob" options="receive public">
+      <MidiMessage status="#B1" address="30"/>
+    </Control>
+
+    <Control name="modeDanca2" title="Mode Dân Ca (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B1" address="46"/>
+    </Control>
+
+    <Control name="modeLofi2" title="Mode Lofi (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B1" address="37"/>
+    </Control>
+
+    <Control name="modeRemix2" title="Mode Remix (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B1" address="38"/>
+    </Control>
+
+    <Control name="modeDatheloai2" title="Mode Đa Thể Loại (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B1" address="39"/>
+    </Control>
+
+    <Control name="keyRoot2" title="Key Root (Mic 2)" type="knob" options="receive public">
+      <MidiMessage status="#B1" address="33"/>
+    </Control>
+
+    <Control name="keyScale2" title="Key Scale (Mic 2)" type="knob" options="receive public">
+      <MidiMessage status="#B1" address="34"/>
+    </Control>
+
+    <Control name="scaleType2" title="Scale Type (Mic 2)" type="knob" options="receive public">
+      <MidiMessage status="#B1" address="35"/>
+    </Control>
+
+    <Control name="tuneOnOff2" title="Tune On/Off (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B1" address="36"/>
+    </Control>
+
+    <Control name="toneAuto2" title="Auto-Tune (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B1" address="40"/>
+    </Control>
+
+    <Control name="fixMeo2" title="Fix Méo (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B1" address="45"/>
+    </Control>
+
+    <Control name="be2" title="Bè (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B1" address="47"/>
+    </Control>
+
+    <Control name="tatOn2" title="Tắt Ồn (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B1" address="48"/>
+    </Control>
+
+    <Control name="muteMulti1_2" title="Mute Multi 1 (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B1" address="41"/>
+    </Control>
+
+    <Control name="muteMulti2_2" title="Mute Multi 2 (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B1" address="42"/>
+    </Control>
+
+    <Control name="muteMulti3_2" title="Mute Multi 3 (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B1" address="43"/>
+    </Control>
+
+    <Control name="muteMulti4_2" title="Mute Multi 4 (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B1" address="44"/>
+    </Control>
+
+    <Control name="muteMic2" title="Mute Mic (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B1" address="51"/>
+    </Control>
+
+    <Control name="muteReverb2" title="Mute Vang (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B1" address="52"/>
+    </Control>
+
+    <Control name="voiceFx2" title="Hiệu Ứng Giọng (Mic 2)" type="knob" options="receive public">
+      <MidiMessage status="#B1" address="54"/>
     </Control>
 
   </Controls>

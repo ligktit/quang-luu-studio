@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from core.config import AppConfig
+from core.mic2 import shared_cc_numbers
 
 SURFACE_XML = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -20,14 +21,14 @@ SURFACE_XML = os.path.join(
 )
 
 
-def _declared_addresses():
-    """{cc_number: [control_name, ...]} theo khai báo trong surface.xml."""
+def _declared_addresses(status="#B0"):
+    """{cc_number: [control_name, ...]} của các control có status `status`."""
     root = ET.parse(SURFACE_XML).getroot()
     out = {}
     for ctrl in root.iter("Control"):
         for msg in ctrl.iter("MidiMessage"):
             addr = msg.get("address")
-            if addr is not None:
+            if addr is not None and msg.get("status") == status:
                 out.setdefault(int(addr), []).append(ctrl.get("name"))
     return out
 
@@ -72,8 +73,14 @@ def test_no_orphan_controls():
 def test_no_duplicate_control_addresses():
     # Hai control cùng address → Studio One nhận nhập nhằng, đúng kiểu lỗi
     # "shared CC" mà tone_auto/fix_meo từng mắc.
-    dupes = {cc: n for cc, n in _declared_addresses().items() if len(n) > 1}
-    assert not dupes, f"Nhiều control trùng CC: {dupes}"
+    # Xét theo (status, address): cùng CC khác kênh MIDI là hợp lệ (mic 2).
+    dupes = {
+        (st, cc): n
+        for st in ("#B0", "#B1")
+        for cc, n in _declared_addresses(st).items()
+        if len(n) > 1
+    }
+    assert not dupes, f"Nhiều control trùng (status, CC): {dupes}"
 
 
 def test_no_duplicate_control_names():
@@ -114,3 +121,22 @@ def test_header_comment_lists_actual_ccs():
     }
     undocumented = set(_app_ccs()) - documented
     assert not undocumented, f"Comment đầu file chưa nhắc tới CC: {sorted(undocumented)}"
+
+
+def test_mic2_controls_match_shared_set():
+    # Kênh 2 = đúng tập CC phát đôi (config) + mix_mic/mute_mic riêng từng mic.
+    expected = set(shared_cc_numbers(
+        AppConfig.get_midi_cc(), AppConfig.get_mic2_shared_cc(),
+        AppConfig.get_mode_config(), AppConfig.get_mute_multi_cc(),
+    )) | {21, 51}
+    assert set(_declared_addresses("#B1")) == expected
+
+
+def test_mic2_controls_receive_only():
+    root = ET.parse(SURFACE_XML).getroot()
+    bad = [
+        c.get("name") for c in root.iter("Control")
+        if any(m.get("status") == "#B1" for m in c.iter("MidiMessage"))
+        and "transmit" in (c.get("options") or "")
+    ]
+    assert not bad, f"Control kênh 2 không được có transmit: {bad}"
