@@ -50,12 +50,14 @@ def premium():
         yield
 
 
-def _make_dashboard(qtbot):
+def _make_dashboard(qtbot, settings=None):
+    base = {"studio_one_path": "", "auto_close_studio_one": False}
+    base.update(settings or {})
     with patch("frontend_qt.backend.SongManager.load_songs", return_value=[]), \
          patch("frontend_qt.backend.ActivationManager.is_activated", return_value=True), \
          patch("frontend_qt.backend.ActivationManager.needs_activation", return_value=False), \
          patch("frontend_qt.QTimer.start"):
-        dash = MainDashboard({"studio_one_path": "", "auto_close_studio_one": False})
+        dash = MainDashboard(base)
         qtbot.addWidget(dash)
         if dash._so_ready_watcher is not None:
             dash._so_ready_watcher.stop()
@@ -302,6 +304,22 @@ def test_luu_bai_tu_hop_thoai_kem_thiet_lap(qapp, mock_engine, qtbot):
     assert saved["toggles"]["be"] is True
     assert saved["mixer"]["mic"] == 4
     assert saved["v"] == 2
+
+
+def test_mixer_recall_mic2(qapp, mock_engine, qtbot):
+    # Hai mic: mức Mic 2 lưu theo bài dưới tên ngắn "mic2" và áp lại được.
+    dash = _make_dashboard(qtbot, {"mic_count": 2})
+    dash._mixer_sliders["mix_mic_2"].setValue(-3)
+    preset = dash._capture_current_preset()
+    assert preset["mixer"]["mic2"] == -3
+    assert "mix_mic_2" not in preset["mixer"]
+
+    dash._mixer_sliders["mix_mic_2"].setValue(0)
+    mock_engine.reset_mock()
+    from ui import song_settings
+    song_settings._mixer_apply(dash, {"mixer": {"mic2": -3}})
+    assert dash._mixer_sliders["mix_mic_2"].value() == -3
+    mock_engine.send_midi_on_channel.assert_called_with(1, 21, 53)
 
 
 # ── R-08..R-10 — Tone Nhạc ≠ 0 ────────────────────────────────────────────

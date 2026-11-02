@@ -134,6 +134,14 @@ class HMixerChannel(QWidget):
     def is_muted(self) -> bool:
         return self._muted
 
+    def name_width_hint(self) -> int:
+        """Bề rộng cột tên đủ chứa cả tên lúc tắt ("⊘ tên")."""
+        self._name_lbl.ensurePolished()
+        return self._name_lbl.fontMetrics().horizontalAdvance(f"⊘ {self._name_text}") + 2
+
+    def set_name_width(self, px: int):
+        self._name_lbl.setFixedWidth(int(px))
+
     def set_muted(self, muted: bool):
         """
         Programmatically set mute state (e.g. from MIDI feedback).

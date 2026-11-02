@@ -38,7 +38,9 @@ class SystemEngine(
     _WNDENUMPROC = _WNDENUMPROC_TYPE
 
     def __init__(self, settings=None):
-        self.settings = settings or {}
+        # Giữ đúng dict được truyền (kể cả rỗng) — dashboard và engine phải dùng
+        # chung một dict để refresh_mic2_mirror đọc được mic_count vừa lưu.
+        self.settings = settings if settings is not None else {}
         # Hai mic Studio One: tập CC phát đôi sang kênh 2 (rỗng = tắt).
         self._mic2_shared = frozenset()
 

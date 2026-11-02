@@ -1230,6 +1230,14 @@ def test_auto_timeline_tai_du_ca_bai(engine, mocker):
 
 class TestMic2Mirror:
 
+    def test_engine_giu_dung_dict_settings_rong(self, engine):
+        # Dashboard và engine phải cùng MỘT dict settings — kể cả khi dict rỗng
+        # — để refresh_mic2_mirror đọc đúng mic_count vừa lưu từ Cài đặt.
+        from core.engine import SystemEngine
+        s = {}
+        assert SystemEngine(s).settings is s
+
+
     @pytest.fixture
     def mic2(self, engine, mocker):
         mocker.patch("core.config.AppConfig.get_midi_cc",

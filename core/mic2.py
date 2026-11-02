@@ -10,6 +10,9 @@ MIC2_CHANNEL = 1
 MIC_KEY = "mix_mic"
 MIC2_KEY = "mix_mic_2"
 
+# Tên hiển thị mặc định hai kênh mic (settings["mic_labels"] sửa được).
+DEFAULT_LABELS = {MIC_KEY: "Mic Dây", MIC2_KEY: "Mic Không Dây"}
+
 # Tên CC (trong midi_cc) cần phát cả hai kênh vì là trạng thái dùng chung
 # (tone, vang, chế độ...) — mỗi mic có một chuỗi FX riêng trong Studio One.
 DEFAULT_SHARED_NAMES = (
@@ -27,6 +30,19 @@ def is_enabled(settings) -> bool:
         return int(settings.get("mic_count")) == 2
     except (TypeError, ValueError):
         return False
+
+
+def labels(settings) -> dict:
+    """Tên hai mic theo settings["mic_labels"]; thiếu/trống/hỏng -> mặc định."""
+    saved = (settings or {}).get("mic_labels")
+    if not isinstance(saved, dict):
+        saved = {}
+    out = {}
+    for key, default in DEFAULT_LABELS.items():
+        name = saved.get(key)
+        name = name.strip() if isinstance(name, str) else ""
+        out[key] = name or default
+    return out
 
 
 def _as_cc(entry):

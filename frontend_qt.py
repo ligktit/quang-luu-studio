@@ -17,6 +17,7 @@ from core.config import APP_ICON_FILE
 from ui.design_tokens import C, SP, FONT, FONT_MONO, load_qss, lighten, darken
 from ui import responsive as rp
 import ui.panels as panels
+from core import mic2
 from ui.components.button import _make_pill_qss, _make_circle_qss
 from ui.components.waveform_hero import WaveformHeroPanel
 from ui.components.painter_button import PainterButton
@@ -156,7 +157,8 @@ class MainDashboard(QMainWindow):
         except Exception as e:
             print(f"[DAW] bind lỗi: {e}")
         # Backend
-        self.engine = backend.SystemEngine(settings)
+        # Cùng MỘT dict settings với dashboard — engine đọc mic_count từ đây.
+        self.engine = backend.SystemEngine(self.settings)
 
         # Khoá kỹ thuật đọc/ghi trên chính dict settings này — phải gắn TRƯỚC khi
         # dựng header, vì header hỏi kiosk.is_locked() để quyết định hiện nút mắt.
@@ -188,6 +190,7 @@ class MainDashboard(QMainWindow):
             "mix_music": False, "mix_mic": False,
             "mix_reverb": False, "mix_backing": False
         }
+        self._load_mic_mutes()
         self.autokey_active = False
         self.tune_state = True
         self.fix_meo_state = False
@@ -1143,9 +1146,12 @@ class MainDashboard(QMainWindow):
             # 4. Mute Mic / Vang / Bè theo đúng nút trên app. Thiếu Mic/Bè thì
             # DAW mở lại giữ trạng thái mute của bản mẫu — khách thấy nút Mic
             # sáng mà không có tiếng.
-            mute_cc_keys = (("mix_mic", "mute_mic", 51),
+            mute_cc_keys = [("mix_mic", "mute_mic", 51),
                             ("mix_reverb", "mute_reverb", 52),
-                            ("mix_backing", "mute_backing", 53))
+                            ("mix_backing", "mute_backing", 53)]
+            if mic2.is_enabled(self.settings):
+                # Mic 2: cùng CC tắt với Mic, đi kênh MIDI 2 (panels.mixer.midi_route).
+                mute_cc_keys.insert(1, (mic2.MIC2_KEY, "mute_mic", 51))
             multi_cc_map = {}
             try:
                 multi_cc_map = backend.AppConfig.get_mute_multi_cc()
@@ -1159,12 +1165,13 @@ class MainDashboard(QMainWindow):
                     continue
                 is_muted = self.mute_states.get(key, False)
                 cc = int(MIDI_CC.get(cc_name, cc_default))
-                self.engine.send_midi(cc, 127 if is_muted else 0)
+                base_key, send = panels.mixer.midi_route(self, key)
+                send(cc, 127 if is_muted else 0)
                 print(f"[MUTE] Đồng bộ {key} -> {'MUTED' if is_muted else 'ACTIVE'} (CC {cc})")
-                for entry in multi_cc_map.get(key, []):
+                for entry in multi_cc_map.get(base_key, []):
                     try:
                         val = int(entry["on_value"]) if is_muted else int(entry["off_value"])
-                        self.engine.send_midi(int(entry["cc"]), val)
+                        send(int(entry["cc"]), val)
                     except Exception as e:
                         print(f"[MIDI SYNC] Multi CC {key} lỗi: {e}")
 
@@ -1187,6 +1194,41 @@ class MainDashboard(QMainWindow):
                 self._set_tone_offset(which, self._tone_offset(which), shift_key=False)
         except Exception as e:
             print(f"[MIDI SYNC] Đồng bộ trạng thái MIDI lỗi: {e}")
+
+    def _load_mic_mutes(self):
+        """Hai mic: trạng thái tắt/mở hai mic đã ghi (thiếu = đang mở).
+
+        Chỉ đọc khi bật 2 mic — máy một mic khởi động y như trước.
+        """
+        if not mic2.is_enabled(self.settings):
+            return
+        saved = self.settings.get("mic_mutes")
+        if not isinstance(saved, dict):
+            saved = {}
+        for key in (mic2.MIC_KEY, mic2.MIC2_KEY):
+            self.mute_states[key] = bool(saved.get(key, False))
+
+    def _apply_mic_count_setting(self):
+        """Áp ngay thiết lập hai mic (số mic / tên) vừa lưu ở Cài đặt.
+
+        Thứ tự: engine bật/tắt phát đôi → dựng lại mixer (thêm/bỏ kênh Mic 2,
+        đổi nhãn) → bắn lại toàn bộ trạng thái để kênh MIDI 2 khớp giao diện.
+        """
+        self.engine.refresh_mic2_mirror()
+        # Mixer dựng lại lấy mức từ mixer_levels — chốt mức đang chỉnh trước,
+        # không thì thanh trượt nhảy về mức lúc mở app.
+        levels = dict(self.settings.get("mixer_levels") or {})
+        for cc_key, slider in (getattr(self, "_mixer_sliders", None) or {}).items():
+            levels[cc_key] = slider.value()
+        self.settings["mixer_levels"] = levels
+        if mic2.is_enabled(self.settings):
+            saved = self.settings.get("mic_mutes")
+            saved = saved if isinstance(saved, dict) else {}
+            self.mute_states.setdefault(mic2.MIC2_KEY, bool(saved.get(mic2.MIC2_KEY, False)))
+        else:
+            self.mute_states.pop(mic2.MIC2_KEY, None)
+        self.refresh_ui()
+        self._sync_midi_states()
 
     def _sync_tone_midi(self):
         """Gửi lại tone gốc + thể hiện hành (không đụng cờ chỉnh tay)."""

@@ -32,7 +32,9 @@ _TOGGLES = {
 
 # Kênh mixer quen thuộc: cc_key trên UI ↔ tên ngắn trong preset.
 _MIXER_NAMES = {"mix_music": "music", "mix_mic": "mic",
-                "mix_reverb": "reverb", "mix_backing": "backing"}
+                "mix_reverb": "reverb", "mix_backing": "backing",
+                # Hai mic Studio One — chỉ có thanh này khi bật 2 mic.
+                "mix_mic_2": "mic2"}
 # Kênh do setting riêng lo — không lưu 2 lần. ("tone_music" chỉ còn ở
 # ui_config.json kỹ thuật viên tự sửa tay; Tone Nhạc đã có setting riêng.)
 _MIXER_SKIP = {"tone_music"}

@@ -592,9 +592,17 @@ class SettingsDialog(QDialog):
         worker.start()
 
     def _build_audio_tab(self, settings):
-        tab = QWidget()
-        tab.setStyleSheet("background: transparent;")
-        lay = QVBoxLayout(tab)
+        # Bọc QScrollArea như tab Hệ thống/Công cụ: thêm thẻ "Micro" mà không
+        # cuộn thì màn 768px bóp các thẻ, chữ đè ô tích.
+        from PySide6.QtWidgets import QScrollArea
+        tab = QScrollArea()
+        tab.setWidgetResizable(True)
+        tab.setFrameShape(QFrame.NoFrame)
+        tab.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        inner = QWidget()
+        inner.setStyleSheet("background: transparent;")
+        tab.setWidget(inner)
+        lay = QVBoxLayout(inner)
         lay.setContentsMargins(22, 18, 22, 18)
         lay.setSpacing(12)
 
@@ -602,6 +610,11 @@ class SettingsDialog(QDialog):
         self._combo_lb, self._combo_mic = self._create_audio_combos(settings)
         self._combo_music_dev = self._create_music_device_combo(settings)
         lay.addWidget(self._section_card(self._build_audio))
+
+        # Hai micro (Studio One) — mỗi mic một chuỗi FX, mic 2 đi kênh MIDI 2
+        lay.addWidget(self._section_header(SVG_MIC, "Micro"))
+        self._build_mic_widgets(settings)
+        lay.addWidget(self._section_card(self._build_mic))
 
         # Vang tự động theo nhạc (Premium)
         lay.addWidget(self._section_header(SVG_MIC, "Vang tự động theo nhạc (Premium)"))
@@ -626,6 +639,78 @@ class SettingsDialog(QDialog):
 
         lay.addStretch()
         return tab
+
+    _MIC_STUDIO_ONLY_TIP = "Chỉ hỗ trợ Studio One"
+
+    def _build_mic_widgets(self, settings):
+        """Ô "2 micro" + tên hai mic. Cubase chưa có script kênh 2 → khoá ô."""
+        from core import mic2
+        names = mic2.labels(settings)
+        self._cb_two_mics = QCheckBox("Phòng có 2 micro (Studio One)")
+        self._cb_two_mics.setStyleSheet(self._checkbox_qss)
+        self._cb_two_mics.setChecked(mic2.is_enabled(settings))
+        self._inp_mic_label_1 = QLineEdit(names[mic2.MIC_KEY])
+        self._inp_mic_label_2 = QLineEdit(names[mic2.MIC2_KEY])
+        for inp, default in ((self._inp_mic_label_1, mic2.DEFAULT_LABELS[mic2.MIC_KEY]),
+                             (self._inp_mic_label_2, mic2.DEFAULT_LABELS[mic2.MIC2_KEY])):
+            inp.setStyleSheet(self._input_qss)
+            inp.setMinimumHeight(38)
+            inp.setMaxLength(24)
+            inp.setPlaceholderText(default)
+        self._cb_two_mics.toggled.connect(self._update_mic_widgets)
+        self._cmb_daw.currentIndexChanged.connect(self._update_mic_widgets)
+        self._update_mic_widgets()
+
+    def _update_mic_widgets(self, *_):
+        studio_one = self._collect_daw_kind() == "studio_one"
+        self._cb_two_mics.setEnabled(studio_one)
+        self._cb_two_mics.setToolTip(
+            "Mỗi mic một chuỗi hiệu ứng riêng trong bài mẫu Studio One" if studio_one
+            else self._MIC_STUDIO_ONLY_TIP)
+        names_on = studio_one and self._cb_two_mics.isChecked()
+        self._inp_mic_label_1.setEnabled(names_on)
+        self._inp_mic_label_2.setEnabled(names_on)
+
+    def _build_mic(self, vl):
+        vl.setSpacing(8)
+        self._cb_two_mics.setMinimumHeight(34)
+        vl.addWidget(self._cb_two_mics)
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        for text, inp in (("Tên mic 1:", self._inp_mic_label_1),
+                          ("Tên mic 2:", self._inp_mic_label_2)):
+            lbl = QLabel(text)
+            lbl.setStyleSheet(self._field_label_qss())
+            row.addWidget(lbl)
+            row.addWidget(inp, 1)
+        vl.addLayout(row)
+        note = QLabel(
+            "Bật khi phòng dùng cùng lúc mic dây và mic không dây: mixer có thêm "
+            "thanh Mic 2. Bài mẫu Studio One phải có sẵn hai track mic."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(self._field_label_qss(11, C["text_muted"], 600, True))
+        vl.addWidget(note)
+
+    def _collect_mic_settings(self, s) -> bool:
+        """Ghi mic_count / mic_labels; trả True nếu số mic hoặc tên đổi.
+
+        Ô bị khoá (đang chọn Cubase) thì giữ nguyên giá trị cũ, không ghi đè.
+        """
+        if not hasattr(self, "_cb_two_mics"):
+            return False
+        from core import mic2
+        before = (mic2.is_enabled(s), mic2.labels(s))
+        if self._cb_two_mics.isEnabled():
+            s["mic_count"] = 2 if self._cb_two_mics.isChecked() else 1
+        if self._inp_mic_label_1.isEnabled():
+            s["mic_labels"] = {
+                mic2.MIC_KEY: self._inp_mic_label_1.text().strip()
+                or mic2.DEFAULT_LABELS[mic2.MIC_KEY],
+                mic2.MIC2_KEY: self._inp_mic_label_2.text().strip()
+                or mic2.DEFAULT_LABELS[mic2.MIC2_KEY],
+            }
+        return (mic2.is_enabled(s), mic2.labels(s)) != before
 
     def _build_auto_echo_widgets(self, settings):
         """Ô bật "tự động bật/tắt Vang theo nhạc" — tính năng Premium.
@@ -1815,6 +1900,7 @@ class SettingsDialog(QDialog):
         if hasattr(self, "_cb_auto_echo"):
             s["auto_echo_enabled"]      = self._cb_auto_echo.isChecked()
             s["auto_noise_enabled"]     = self._cb_auto_noise.isChecked()
+        mic_changed = self._collect_mic_settings(s)
 
         acc = backend.AppConfig.get("accessibility") or {}
         if hasattr(self, "_cb_tts"):
@@ -1875,6 +1961,13 @@ class SettingsDialog(QDialog):
                 self._dashboard._apply_auto_noise_setting()
         except Exception as e:
             print(f"[SETTINGS] apply auto noise lỗi: {e}")
+
+        # Hai mic: thêm/bỏ kênh Mic 2, đổi nhãn, bật/tắt phát đôi kênh MIDI 2
+        if mic_changed:
+            try:
+                self._dashboard._apply_mic_count_setting()
+            except Exception as e:
+                print(f"[SETTINGS] apply mic count lỗi: {e}")
 
         # Đóng TRƯỚC rồi mới báo: toast bám vào cửa sổ modal đang hoạt động, mà
         # dialog này sắp biến mất — báo trước là khách không thấy gì.

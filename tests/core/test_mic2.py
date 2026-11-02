@@ -32,3 +32,12 @@ def test_shared_skips_malformed_entries():
 def test_expand_order():
     assert expand([(33, 2), (35, 13)], frozenset({33, 35})) == [(0, 33, 2), (0, 35, 13), (1, 33, 2), (1, 35, 13)]
     assert expand([(21, 76)], frozenset({33})) == [(0, 21, 76)]
+
+
+def test_labels_mac_dinh_va_ten_tu_dat():
+    from core.mic2 import labels
+    assert labels({}) == {"mix_mic": "Mic Dây", "mix_mic_2": "Mic Không Dây"}
+    assert labels(None) == {"mix_mic": "Mic Dây", "mix_mic_2": "Mic Không Dây"}
+    assert labels({"mic_labels": {"mix_mic": " Shure ", "mix_mic_2": ""}}) == {
+        "mix_mic": "Shure", "mix_mic_2": "Mic Không Dây"}
+    assert labels({"mic_labels": "rac"}) == {"mix_mic": "Mic Dây", "mix_mic_2": "Mic Không Dây"}
