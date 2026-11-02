@@ -323,6 +323,7 @@ class MainDashboard(QMainWindow):
         # Tự sửa âm thanh: lúc mở app chỉ KIỂM TRA (chờ DAW sẵn sàng) rồi báo.
         self._audio_doctor_report_signal.connect(self._on_audio_doctor_report)
         self._audio_doctor_speak_next = True
+        self._audio_alert_dialog = None
         try:
             from ui.audio_doctor_bridge import build_service
             self._audio_doctor = build_service(self)
@@ -1215,23 +1216,36 @@ class MainDashboard(QMainWindow):
         self._audio_doctor_dialog.show()
 
     def _on_audio_doctor_report(self, report, action):
-        """Cập nhật dải cảnh báo header. Chỉ đọc TTS ở lượt khởi động đầu tiên."""
+        """Lượt kiểm tra thấy lỗi → cửa sổ cảnh báo riêng + nút Tự sửa ở thanh dưới
+        sáng lên. Kết quả từ hộp thoại Tự sửa ("button") chỉ cập nhật nút, không
+        bật lại cảnh báo — kết quả đã hiện ngay trong hộp thoại. Chỉ đọc TTS ở lượt
+        khởi động đầu tiên."""
         problems = report.problems()
-        btn = getattr(self, "_audio_warn_btn", None)
-        if btn is None:
-            return
+        self._set_audio_fix_highlight(bool(problems))
+        dlg = getattr(self, "_audio_alert_dialog", None)
         if not problems:
-            btn.hide()
+            if dlg is not None:
+                dlg.close()
             return
+        if action in ("run", "rerun"):
+            if dlg is None:
+                from ui.dialogs.audio_alert_dialog import AudioAlertDialog
+                dlg = self._audio_alert_dialog = AudioAlertDialog(self)
+            dlg.set_report(report)
+            dlg.show_on_top()
         _, first = problems[0]
-        extra = f" · +{len(problems) - 1} vấn đề khác" if len(problems) > 1 else ""
-        btn.setText(f"⚠ {first.message}{extra} · Bấm để tự sửa")
-        btn.setToolTip("\n".join(f"• {f.message}" for _, f in problems))
-        btn.show()
         if action == "run" and self._audio_doctor_speak_next:
             self._audio_doctor_speak_next = False
             self._a11y_speak(f"Có {len(problems)} vấn đề âm thanh. {first.message}. "
                              "Nhấn Control Shift A để tự sửa.")
+
+    def _set_audio_fix_highlight(self, on: bool):
+        """Nút "Tự sửa âm thanh" ở thanh dưới đỏ lên + đèn khi còn lỗi âm thanh."""
+        btn = (getattr(self, "_func_buttons", None) or {}).get("Tự sửa âm thanh")
+        if btn is None:
+            return
+        btn.setColor(C["accent"] if on else C["orange"])
+        btn.setActive(bool(on))
 
     def _daw_running_cached(self) -> bool:
         """so_windows.is_running() quét process — gọi tối đa 5 s/lần từ timer UI."""
