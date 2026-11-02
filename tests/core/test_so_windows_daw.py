@@ -104,3 +104,113 @@ def test_quit_windows_studio_one_giu_nhu_main_windows():
                          {21: "Studio One 7 - BaiMau", 22: "Plugin"})
     with patch.object(so_windows, "win32_modules", return_value=(win32gui, MagicMock(), MagicMock())):
         assert so_windows.quit_windows([21, 22]) == so_windows.main_windows([21, 22]) == [21]
+
+
+# ── Ẩn/hiện từng cửa sổ (plugin, ASIO) ──────────────────────────────────────
+
+class _FakeGui:
+    """win32gui giả: mỗi hwnd có title/class/rect/visible; hwnd không có là đã chết."""
+
+    def __init__(self, wins):
+        self.wins = {h: dict(w) for h, w in wins.items()}
+        self.shown = []
+
+    def IsWindow(self, h):
+        return h in self.wins
+
+    def IsWindowVisible(self, h):
+        return self.wins[h]["vis"]
+
+    def GetWindowText(self, h):
+        return self.wins[h]["title"]
+
+    def GetClassName(self, h):
+        return self.wins[h].get("cls", "SteinbergWindowClass")
+
+    def GetWindowRect(self, h):
+        return self.wins[h].get("rect", (0, 0, 800, 600))
+
+    def ShowWindow(self, h, cmd):
+        if h not in self.wins:
+            raise Exception("invalid window handle")
+        self.shown.append((h, cmd))
+        self.wins[h]["vis"] = cmd != so_windows.SW_HIDE
+
+    def SetWindowPos(self, *a):
+        self.shown.append(("pos",) + a[:2])
+
+
+_CUBASE_WINS = {
+    21: {"title": "Mic: Ins. 1 - Auto-Tune Pro", "vis": False},
+    22: {"title": "", "vis": False},                                    # tooltip
+    23: {"title": "Cubase Pro Project - mau", "vis": False},
+    24: {"title": "USB Change Listener", "cls": "USB Change Listener", "vis": False},
+    25: {"title": "Default IME", "cls": "IME", "vis": False},
+    26: {"title": "Cubase Pro", "cls": "SmtgMain Cubase13", "vis": False, "rect": (0, 0, 0, 0)},
+    31: {"title": "ASIO Link Pro", "vis": True},
+}
+
+
+@pytest.fixture
+def fake_gui():
+    daw.bind({"daw_kind": "cubase"})
+    gui = _FakeGui(_CUBASE_WINS)
+    with patch.object(so_windows, "win32_modules", return_value=(gui, MagicMock(), MagicMock())), \
+         patch.object(so_windows, "all_windows", return_value=[21, 22, 23, 24, 25, 26]), \
+         patch.object(so_windows, "asio_windows", return_value=[31]), \
+         patch.object(so_windows, "force_foreground", return_value=True):
+        yield gui
+
+
+def test_list_windows_chinh_dau_tien_bo_cua_so_noi_bo(fake_gui):
+    entries = so_windows.list_windows()
+    assert [e.hwnd for e in entries] == [23, 21, 31]
+    assert entries[0].is_main and entries[0].source == "daw"
+    assert entries[1].title == "Mic: Ins. 1 - Auto-Tune Pro" and not entries[1].visible
+    assert entries[2].source == "asio" and entries[2].visible
+
+
+def test_show_window_chi_hien_dung_cua_so(fake_gui):
+    assert so_windows.show_window(21) is True
+    assert fake_gui.shown == [(21, so_windows.SW_SHOW)]
+    assert fake_gui.wins[23]["vis"] is False                  # cửa sổ chính vẫn ẩn
+
+
+def test_show_window_hwnd_chet_tra_false(fake_gui):
+    assert so_windows.show_window(99) is False
+    assert so_windows.hide_window(99) is False
+    assert fake_gui.shown == []
+
+
+def test_hide_window_chi_an_dung_cua_so(fake_gui):
+    fake_gui.wins[21]["vis"] = True
+    assert so_windows.hide_window(21) is True
+    assert fake_gui.shown == [(21, so_windows.SW_HIDE)]
+
+
+def test_show_window_tren_ca_app_dang_ghim(fake_gui):
+    assert so_windows.show_window(21, above_topmost=True) is True
+    assert ("pos", 21, so_windows.HWND_TOPMOST) in fake_gui.shown
+    assert ("pos", 21, so_windows.HWND_NOTOPMOST) in fake_gui.shown
+
+
+def test_show_all_bo_qua_cua_so_noi_bo_va_asio(fake_gui):
+    so_windows.show_all(focus_main=False)
+    shown = {h for h, _ in fake_gui.shown}
+    assert shown == {21, 23, 26}           # không USB Change Listener/IME/tooltip, không ASIO
+
+
+def test_asio_windows_theo_ten_tien_trinh():
+    gui = _FakeGui({41: {"title": "ASIO Link Pro", "vis": True},
+                    42: {"title": "ASIO4ALL download - Chrome", "vis": True},
+                    43: {"title": "", "vis": False}})
+    names = {1: "ASIOLinkPro.exe", 2: "chrome.exe"}
+    owner = {41: 1, 42: 2, 43: 1}
+    winproc = MagicMock()
+    winproc.GetWindowThreadProcessId.side_effect = lambda h: (0, owner[h])
+    gui.EnumWindows = lambda cb, extra: [cb(h, extra) for h in (41, 42, 43)]
+    fake_psutil = MagicMock()
+    fake_psutil.Process.side_effect = lambda pid: MagicMock(**{"name.return_value": names[pid]})
+    with patch.object(so_windows, "win32_modules", return_value=(gui, MagicMock(), winproc)), \
+         patch.dict("sys.modules", {"psutil": fake_psutil}):
+        assert so_windows.asio_windows() == [41]

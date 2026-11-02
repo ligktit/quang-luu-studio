@@ -13,6 +13,7 @@ import logging
 import re
 import threading
 import time
+from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +40,20 @@ def title_is_main(title) -> bool:
 SW_HIDE = 0
 SW_SHOW = 5
 SW_RESTORE = 9
+HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
+_SWP_NOMOVE_NOSIZE_NOACTIVATE = 0x0002 | 0x0001 | 0x0010
+
+# Cửa sổ nội bộ của DAW/Windows vốn ẩn từ đầu — hiện lên là rác trên màn hình
+# (đo trên Cubase 13: ô "USB Change Listener" 136×39 ở góc trái trên, bộ gõ IME).
+INTERNAL_WINDOW_CLASSES = ("IME", "MSCTFIME UI", "USB Change Listener", "SteinbergDevWnd")
+
+# Công cụ ASIO chạy tiến trình riêng (bảng ASIO mở từ trong DAW đã thuộc tiến trình DAW).
+ASIO_PROCESS_NAMES = (
+    "asiolink.exe", "asio link pro.exe", "asio link tool.exe",
+    "asio4all.exe", "asio4allv2.exe", "asiovadpro.exe",
+    "asiolink2.exe", "asiolinktool.exe", "asiolinkpro.exe",
+)
 
 
 def win32_modules():
@@ -197,6 +212,8 @@ def show_all(focus_main=True) -> int:
     count = 0
     for hwnd in hwnds:
         try:
+            if _is_internal(win32gui, hwnd):
+                continue
             if not win32gui.IsWindowVisible(hwnd):
                 win32gui.ShowWindow(hwnd, SW_SHOW)
                 count += 1
@@ -209,6 +226,137 @@ def show_all(focus_main=True) -> int:
     if count:
         log.info("Đã hiện %d cửa sổ %s", count, _profile().display_name)
     return count
+
+
+# ── Từng cửa sổ (plugin, bảng ASIO…) ─────────────────────────────────────────
+
+@dataclass(frozen=True)
+class WindowEntry:
+    hwnd: int
+    title: str
+    is_main: bool
+    visible: bool
+    source: str  # "daw" | "asio"
+
+
+def _is_internal(win32gui, hwnd) -> bool:
+    """Cửa sổ rác: không tiêu đề (tooltip, cửa sổ ngầm) hoặc lớp nội bộ đã biết."""
+    try:
+        if not win32gui.GetWindowText(hwnd):
+            return True
+        return win32gui.GetClassName(hwnd) in INTERNAL_WINDOW_CLASSES
+    except Exception:
+        return True
+
+
+def asio_windows() -> list:
+    """Cửa sổ có tiêu đề của các công cụ ASIO chạy tiến trình riêng.
+
+    Chỉ nhận theo TÊN TIẾN TRÌNH — khớp theo tiêu đề thì cửa sổ trình duyệt
+    đang mở trang "ASIO4ALL download" cũng bị tính là công cụ ASIO.
+    """
+    mods = win32_modules()
+    if not mods:
+        return []
+    win32gui, _, win32process = mods
+    try:
+        import psutil
+    except ImportError:
+        return []
+    names = {}
+    found = []
+
+    def _cb(hwnd, _):
+        try:
+            if not win32gui.IsWindow(hwnd) or not win32gui.GetWindowText(hwnd):
+                return True
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            if pid not in names:
+                try:
+                    names[pid] = psutil.Process(pid).name().lower()
+                except Exception:
+                    names[pid] = ""
+            if names[pid] in ASIO_PROCESS_NAMES:
+                found.append(hwnd)
+        except Exception:
+            pass
+        return True
+
+    try:
+        win32gui.EnumWindows(_cb, None)
+    except Exception as e:
+        log.debug("EnumWindows (ASIO) lỗi: %s", e)
+    return found
+
+
+def list_windows() -> list:
+    """Các cửa sổ KTV bật/tắt riêng được: cửa sổ DAW (chính đứng đầu) rồi tới ASIO.
+
+    Bỏ cửa sổ rác và cửa sổ kích thước 0 (SmtgMain của Cubase).
+    """
+    mods = win32_modules()
+    if not mods:
+        return []
+    win32gui = mods[0]
+    daw_hwnds = all_windows()
+    mains = set(main_windows(daw_hwnds))
+    entries = []
+    for source, hwnds in (("daw", daw_hwnds), ("asio", asio_windows())):
+        for hwnd in hwnds:
+            try:
+                if _is_internal(win32gui, hwnd):
+                    continue
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                if right - left <= 0 or bottom - top <= 0:
+                    continue
+                entries.append(WindowEntry(
+                    hwnd=hwnd, title=win32gui.GetWindowText(hwnd),
+                    is_main=source == "daw" and hwnd in mains,
+                    visible=bool(win32gui.IsWindowVisible(hwnd)), source=source))
+            except Exception:
+                continue
+    entries.sort(key=lambda e: (e.source != "daw", not e.is_main))
+    return entries
+
+
+def show_window(hwnd, above_topmost=False) -> bool:
+    """Hiện đúng một cửa sổ và đưa lên trước. False nếu cửa sổ không còn.
+
+    above_topmost: app đang "Ghim trên cùng" thì cửa sổ thường bị app che —
+    đặt topmost rồi bỏ ngay để nó lên trên app một lần.
+    """
+    mods = win32_modules()
+    if not mods:
+        return False
+    win32gui = mods[0]
+    try:
+        if not win32gui.IsWindow(hwnd):
+            return False
+        win32gui.ShowWindow(hwnd, SW_SHOW)
+        if above_topmost:
+            win32gui.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, _SWP_NOMOVE_NOSIZE_NOACTIVATE)
+            win32gui.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, _SWP_NOMOVE_NOSIZE_NOACTIVATE)
+    except Exception as e:
+        log.debug("show_window(%s) lỗi: %s", hwnd, e)
+        return False
+    force_foreground(hwnd)
+    return True
+
+
+def hide_window(hwnd) -> bool:
+    """Ẩn đúng một cửa sổ. False nếu cửa sổ không còn."""
+    mods = win32_modules()
+    if not mods:
+        return False
+    win32gui = mods[0]
+    try:
+        if not win32gui.IsWindow(hwnd):
+            return False
+        win32gui.ShowWindow(hwnd, SW_HIDE)
+        return True
+    except Exception as e:
+        log.debug("hide_window(%s) lỗi: %s", hwnd, e)
+        return False
 
 
 def force_foreground(hwnd) -> bool:
