@@ -648,7 +648,9 @@ class SettingsDialog(QDialog):
         names = mic2.labels(settings)
         self._cb_two_mics = QCheckBox("Phòng có 2 micro (Studio One)")
         self._cb_two_mics.setStyleSheet(self._checkbox_qss)
-        self._cb_two_mics.setChecked(mic2.is_enabled(settings))
+        # Ý định gốc (mic_count), kể cả khi đang Cubase — ô bị khoá vẫn hiện
+        # đúng, chuyển về Studio One rồi lưu không ghi mất số 2.
+        self._cb_two_mics.setChecked(mic2.two_mics_configured(settings))
         self._inp_mic_label_1 = QLineEdit(names[mic2.MIC_KEY])
         self._inp_mic_label_2 = QLineEdit(names[mic2.MIC2_KEY])
         for inp, default in ((self._inp_mic_label_1, mic2.DEFAULT_LABELS[mic2.MIC_KEY]),
@@ -692,15 +694,20 @@ class SettingsDialog(QDialog):
         note.setStyleSheet(self._field_label_qss(11, C["text_muted"], 600, True))
         vl.addWidget(note)
 
-    def _collect_mic_settings(self, s) -> bool:
-        """Ghi mic_count / mic_labels; trả True nếu số mic hoặc tên đổi.
+    @staticmethod
+    def _mic_state(s):
+        """Trạng thái hai mic thực chạy (gồm cả DAW) + tên — để biết có đổi."""
+        from core import mic2
+        return mic2.is_enabled(s), mic2.labels(s)
+
+    def _collect_mic_settings(self, s):
+        """Ghi mic_count / mic_labels.
 
         Ô bị khoá (đang chọn Cubase) thì giữ nguyên giá trị cũ, không ghi đè.
         """
         if not hasattr(self, "_cb_two_mics"):
-            return False
+            return
         from core import mic2
-        before = (mic2.is_enabled(s), mic2.labels(s))
         if self._cb_two_mics.isEnabled():
             s["mic_count"] = 2 if self._cb_two_mics.isChecked() else 1
         if self._inp_mic_label_1.isEnabled():
@@ -710,7 +717,6 @@ class SettingsDialog(QDialog):
                 mic2.MIC2_KEY: self._inp_mic_label_2.text().strip()
                 or mic2.DEFAULT_LABELS[mic2.MIC2_KEY],
             }
-        return (mic2.is_enabled(s), mic2.labels(s)) != before
 
     def _build_auto_echo_widgets(self, settings):
         """Ô bật "tự động bật/tắt Vang theo nhạc" — tính năng Premium.
@@ -1870,6 +1876,8 @@ class SettingsDialog(QDialog):
             s["studio_one_path"] = new_so
         if new_br:
             s["browser_path"] = new_br
+        # Chụp TRƯỚC khi ghi daw_kind: đổi DAW cũng bật/tắt hai mic.
+        mic_before = self._mic_state(s)
         old_daw = daw.kind_of(s)
         s["daw_kind"] = self._collect_daw_kind()
         daw_changed = s["daw_kind"] != old_daw
@@ -1900,7 +1908,8 @@ class SettingsDialog(QDialog):
         if hasattr(self, "_cb_auto_echo"):
             s["auto_echo_enabled"]      = self._cb_auto_echo.isChecked()
             s["auto_noise_enabled"]     = self._cb_auto_noise.isChecked()
-        mic_changed = self._collect_mic_settings(s)
+        self._collect_mic_settings(s)
+        mic_changed = self._mic_state(s) != mic_before
 
         acc = backend.AppConfig.get("accessibility") or {}
         if hasattr(self, "_cb_tts"):

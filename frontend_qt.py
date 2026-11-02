@@ -1195,18 +1195,25 @@ class MainDashboard(QMainWindow):
         except Exception as e:
             print(f"[MIDI SYNC] Đồng bộ trạng thái MIDI lỗi: {e}")
 
+    # Chưa ghi mic_mutes (lần đầu bật 2 mic): Mic 1 mở, Mic 2 TẮT sẵn — mic
+    # không dây không dùng không được để mở (spec 5.3).
+    _MIC_MUTE_DEFAULTS = {mic2.MIC_KEY: False, mic2.MIC2_KEY: True}
+
+    def _saved_mic_mute(self, key):
+        saved = self.settings.get("mic_mutes")
+        if not isinstance(saved, dict):
+            saved = {}
+        return bool(saved.get(key, self._MIC_MUTE_DEFAULTS[key]))
+
     def _load_mic_mutes(self):
-        """Hai mic: trạng thái tắt/mở hai mic đã ghi (thiếu = đang mở).
+        """Hai mic: trạng thái tắt/mở hai mic đã ghi.
 
         Chỉ đọc khi bật 2 mic — máy một mic khởi động y như trước.
         """
         if not mic2.is_enabled(self.settings):
             return
-        saved = self.settings.get("mic_mutes")
-        if not isinstance(saved, dict):
-            saved = {}
         for key in (mic2.MIC_KEY, mic2.MIC2_KEY):
-            self.mute_states[key] = bool(saved.get(key, False))
+            self.mute_states[key] = self._saved_mic_mute(key)
 
     def _apply_mic_count_setting(self):
         """Áp ngay thiết lập hai mic (số mic / tên) vừa lưu ở Cài đặt.
@@ -1222,12 +1229,14 @@ class MainDashboard(QMainWindow):
             levels[cc_key] = slider.value()
         self.settings["mixer_levels"] = levels
         if mic2.is_enabled(self.settings):
-            saved = self.settings.get("mic_mutes")
-            saved = saved if isinstance(saved, dict) else {}
-            self.mute_states.setdefault(mic2.MIC2_KEY, bool(saved.get(mic2.MIC2_KEY, False)))
+            self.mute_states.setdefault(mic2.MIC2_KEY, self._saved_mic_mute(mic2.MIC2_KEY))
         else:
             self.mute_states.pop(mic2.MIC2_KEY, None)
         self.refresh_ui()
+        # Kênh dựng lại mặc định "mở" — trả hình tắt cho MỌI kênh đang tắt
+        # (Vang, Bè...), không thì giao diện báo mở trong khi DAW vẫn tắt.
+        for cc_key, ch in (self._mixer_channels or {}).items():
+            ch.set_muted(bool(self.mute_states.get(cc_key, False)))
         self._sync_midi_states()
 
     def _sync_tone_midi(self):

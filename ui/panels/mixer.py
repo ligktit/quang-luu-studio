@@ -62,8 +62,6 @@ def _make_mute_callback(dashboard, cc_key, mute_cc_map, val_range=(0, 100)):
                 dashboard.engine.set_browser_volume(int(dashboard._mixer_sliders[cc_key].value()))
             return
         base_key, send = midi_route(dashboard, cc_key)
-        if cc_key in (mic2.MIC_KEY, mic2.MIC2_KEY):
-            _remember_mic_mutes(dashboard)
         mute_cc = mute_cc_map.get(base_key)
         if mute_cc is not None:
             send(dashboard.MIDI_CC[mute_cc], 127 if is_muted else 0)
@@ -89,6 +87,10 @@ def _make_mute_callback(dashboard, cc_key, mute_cc_map, val_range=(0, 100)):
                 print(f"[MUTE MULTI] {cc_key} -> CC {cc_num} = {val} ({'mute' if is_muted else 'unmute'})")
         except Exception as e:
             print(f"[MUTE MULTI] Lỗi gửi CC phụ cho {cc_key}: {e}")
+
+        # Ghi đĩa SAU khi đã gửi MIDI — không để việc ghi file làm chậm lệnh tắt.
+        if cc_key in (mic2.MIC_KEY, mic2.MIC2_KEY):
+            _remember_mic_mutes(dashboard)
     return toggle
 
 

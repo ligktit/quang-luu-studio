@@ -90,7 +90,8 @@ def test_single_mic_unchanged(qapp, mock_engine, save_settings, qtbot):
 
 
 def test_mic2_strip_sends_channel_2(qapp, mock_engine, save_settings, qtbot):
-    dash = _make_dashboard(qtbot, {"mic_count": 2, "mixer_levels": {"mix_mic_2": 3}})
+    dash = _make_dashboard(qtbot, {"mic_count": 2, "mixer_levels": {"mix_mic_2": 3},
+                                   "mic_mutes": {"mix_mic": False, "mix_mic_2": False}})
     keys = list(dash._mixer_channels)
     assert keys[keys.index("mix_mic") + 1] == "mix_mic_2"
     assert dash._mixer_channels["mix_mic"]._name_text == "Mic Dây"
@@ -118,7 +119,7 @@ def test_mic2_nhan_tu_cai_dat(qapp, mock_engine, save_settings, qtbot):
 
 
 def test_mic2_mute_gui_ca_cc_phu_cua_mic_tren_kenh_2(qapp, mock_engine, save_settings, qtbot):
-    dash = _make_dashboard(qtbot, {"mic_count": 2})
+    dash = _make_dashboard(qtbot, {"mic_count": 2, "mic_mutes": {"mix_mic": False, "mix_mic_2": False}})
     multi = {"mix_mic": [{"cc": 60, "on_value": 127, "off_value": 0}]}
     mock_engine.reset_mock()
     with patch("frontend_qt.backend.AppConfig.get_mute_multi_cc", return_value=multi):
@@ -128,7 +129,7 @@ def test_mic2_mute_gui_ca_cc_phu_cua_mic_tren_kenh_2(qapp, mock_engine, save_set
 
 
 def test_mic_mutes_persist_and_resync(qapp, mock_engine, save_settings, qtbot):
-    dash = _make_dashboard(qtbot, {"mic_count": 2})
+    dash = _make_dashboard(qtbot, {"mic_count": 2, "mic_mutes": {"mix_mic": False, "mix_mic_2": False}})
     dash._mixer_channels["mix_mic_2"].mute_btn.click()
     assert dash.settings["mic_mutes"]["mix_mic_2"] is True
     assert dash.settings["mic_mutes"]["mix_mic"] is False
@@ -167,8 +168,12 @@ def test_toggle_mic_count_rebuilds_and_rewires(qapp, mock_engine, save_settings,
     mock_engine.refresh_mic2_mirror.assert_called()
     # Mức đang chỉnh không bị nhảy về giá trị cũ khi dựng lại mixer.
     assert dash._mixer_sliders["mix_mic"].value() == 5
-    # Lượt đồng bộ sau khi đổi đã bắn mute + mức Mic 2 sang kênh 2.
-    assert (1, 51, 0) in _channel_calls(mock_engine)
+    # Lần đầu bật (chưa có mic_mutes): Mic 2 tắt sẵn, Mic 1 vẫn mở; lượt
+    # đồng bộ sau khi đổi đã bắn mute Mic 2 sang kênh 2.
+    assert dash.mute_states["mix_mic_2"] is True
+    assert dash._mixer_channels["mix_mic_2"].is_muted() is True
+    assert dash.mute_states["mix_mic"] is False
+    assert (1, 51, 127) in _channel_calls(mock_engine)
 
     mock_engine.reset_mock()
     dash._mixer_sliders["mix_mic_2"].setValue(-10)
@@ -276,8 +281,22 @@ def test_cai_dat_cubase_khong_ghi_de_mic_count(qapp, mock_engine, qtbot):
     dash = _make_dashboard(qtbot, {"mic_count": 2})
     dlg = _open_dialog(qtbot, dash)
     dlg._cmb_daw.setCurrentIndex(dlg._cmb_daw.findData("cubase"))
-    _save(dlg)
+    apply_mic = _save(dlg)
     assert dash.settings["mic_count"] == 2
+    # Chuyển sang Cubase làm tắt hai mic → phải dựng lại mixer / tắt phát đôi.
+    apply_mic.assert_called_once()
+
+
+def test_cai_dat_cubase_ve_studio_one_giu_o_2_mic(qapp, mock_engine, qtbot):
+    # Máy đang Cubase mà vẫn lưu mic_count=2: ô hiện tick (bị khoá); chuyển về
+    # Studio One rồi lưu thì không được ghi mất số 2.
+    dash = _make_dashboard(qtbot, {"mic_count": 2, "daw_kind": "cubase"})
+    dlg = _open_dialog(qtbot, dash)
+    assert dlg._cb_two_mics.isChecked() is True and dlg._cb_two_mics.isEnabled() is False
+    dlg._cmb_daw.setCurrentIndex(dlg._cmb_daw.findData("studio_one"))
+    apply_mic = _save(dlg)
+    assert dash.settings["mic_count"] == 2
+    apply_mic.assert_called_once()
 
 
 def test_hai_mic_noi_cot_ten_cho_vua_mic_khong_day(qapp, mock_engine, save_settings, qtbot):
@@ -291,3 +310,46 @@ def test_hai_mic_noi_cot_ten_cho_vua_mic_khong_day(qapp, mock_engine, save_setti
     widths = {ch._name_lbl.minimumWidth() for ch in dash._mixer_channels.values()}
     assert len(widths) == 1
     assert widths.pop() >= lbl.fontMetrics().horizontalAdvance("Mic Không Dây")
+
+
+def test_lan_dau_bat_2_mic_mic2_tat_san(qapp, mock_engine, save_settings, qtbot):
+    # Spec 5.3: mic không dây không dùng không được để mở.
+    dash = _make_dashboard(qtbot, {"mic_count": 2})
+    assert dash.mute_states["mix_mic_2"] is True
+    assert dash.mute_states["mix_mic"] is False
+    assert dash._mixer_channels["mix_mic_2"].is_muted() is True
+    mock_engine.reset_mock()
+    dash._sync_midi_states()
+    assert (1, 51, 127) in _channel_calls(mock_engine)
+
+
+def test_cubase_khong_co_mic2(qapp, mock_engine, save_settings, qtbot):
+    dash = _make_dashboard(qtbot, {"mic_count": 2, "daw_kind": "cubase"})
+    assert "mix_mic_2" not in dash._mixer_channels
+    assert "mix_mic_2" not in dash.mute_states
+    mock_engine.reset_mock()
+    dash._sync_midi_states()
+    mock_engine.send_midi_on_channel.assert_not_called()
+
+
+def test_dung_lai_mixer_giu_hinh_tat_moi_kenh(qapp, mock_engine, save_settings, qtbot):
+    # Trước đây dựng lại mixer thì Vang hiện "mở" trong khi DAW vẫn đang tắt.
+    dash = _make_dashboard(qtbot)
+    dash._mixer_channels["mix_reverb"].mute_btn.click()
+    dash.settings["mic_count"] = 2
+    dash._apply_mic_count_setting()
+    assert dash._mixer_channels["mix_reverb"].is_muted() is True
+    assert dash._mixer_channels["mix_mic"].is_muted() is False
+
+
+def test_tat_mic_gui_midi_truoc_roi_moi_ghi_dia(qapp, mock_engine, save_settings, qtbot):
+    dash = _make_dashboard(qtbot, {"mic_count": 2})
+    order = []
+    mock_engine.send_midi.side_effect = lambda *a, **k: order.append("midi")
+    mock_engine.send_midi_on_channel.side_effect = lambda *a, **k: order.append("midi")
+    save_settings.side_effect = lambda *a, **k: order.append("save")
+    for key in ("mix_mic", "mix_mic_2"):
+        order.clear()
+        dash._mixer_channels[key].mute_btn.click()
+        # Mọi lệnh MIDI của lần bấm đi trước, ghi đĩa sau cùng.
+        assert order[0] == "midi" and order[-1] == "save" and order.count("save") == 1

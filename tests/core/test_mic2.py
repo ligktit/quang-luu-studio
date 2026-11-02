@@ -41,3 +41,14 @@ def test_labels_mac_dinh_va_ten_tu_dat():
     assert labels({"mic_labels": {"mix_mic": " Shure ", "mix_mic_2": ""}}) == {
         "mix_mic": "Shure", "mix_mic_2": "Mic Không Dây"}
     assert labels({"mic_labels": "rac"}) == {"mix_mic": "Mic Dây", "mix_mic_2": "Mic Không Dây"}
+
+
+def test_is_enabled_chi_studio_one():
+    from core.mic2 import two_mics_configured
+    assert not is_enabled({"mic_count": 2, "daw_kind": "cubase"})
+    assert is_enabled({"mic_count": 2})                         # thiếu daw_kind = Studio One
+    assert is_enabled({"mic_count": 2, "daw_kind": "studio_one"})
+    assert is_enabled({"mic_count": 2, "daw_kind": "la_hoac"})  # lạ = Studio One (như daw.kind_of)
+    # Ô "2 micro" trong Cài đặt đọc ý định gốc, không phụ thuộc DAW.
+    assert two_mics_configured({"mic_count": 2, "daw_kind": "cubase"})
+    assert not two_mics_configured({"mic_count": 1}) and not two_mics_configured(None)

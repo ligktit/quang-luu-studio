@@ -22,14 +22,23 @@ DEFAULT_SHARED_NAMES = (
 )
 
 
-def is_enabled(settings) -> bool:
-    """Chỉ bật khi mic_count == 2 (chấp nhận cả chuỗi "2")."""
+def two_mics_configured(settings) -> bool:
+    """settings ghi mic_count == 2 (chấp nhận cả chuỗi "2"), bất kể DAW."""
     if not settings:
         return False
     try:
         return int(settings.get("mic_count")) == 2
     except (TypeError, ValueError):
         return False
+
+
+def is_enabled(settings) -> bool:
+    """Hai mic CHỈ chạy trên Studio One: mic_count == 2 và DAW không phải Cubase.
+
+    Thiếu/lạ daw_kind = Studio One, giống core.daw.kind_of (không import
+    core.daw để module này thuần).
+    """
+    return two_mics_configured(settings) and settings.get("daw_kind") != "cubase"
 
 
 def labels(settings) -> dict:
