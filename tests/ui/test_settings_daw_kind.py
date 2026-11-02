@@ -157,9 +157,9 @@ def test_nut_chot_ban_mau_theo_duoi_cubase(qapp, mock_engine, qtbot):
     try:
         daw.bind(dashboard.settings)
         dlg = _open_dialog(qtbot, dashboard)
-        assert ".cpr" in dlg._btn_kiosk_snapshot.text()
-        assert ".cpr" in dlg._btn_kiosk_snapshot.toolTip()
+        assert ".cpr" in dlg._btn_template_snapshot.text()
+        assert ".cpr" in dlg._btn_template_snapshot.toolTip()
         assert ".cpr" in dlg._cb_restore_tpl.text()
-        assert ".song" not in dlg._btn_kiosk_snapshot.text()
+        assert ".song" not in dlg._btn_template_snapshot.text()
     finally:
         daw.bind(None)

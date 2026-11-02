@@ -7,7 +7,7 @@ Tab "Hộp thư"    : xem lại các yêu cầu đã gửi + trả lời của d
 Mọi lời gọi mạng đều chạy trong QThread riêng — dialog KHÔNG bao giờ đứng hình
 khi quán mất mạng (urllib timeout 10s là quá đủ để người dùng tưởng app treo).
 
-Tự chứa về style (chỉ dùng design_tokens) như tech_unlock.py, để mở được từ cả
+Tự chứa về style (chỉ dùng design_tokens), để mở được từ cả
 header lẫn nơi khác mà không kéo theo frontend_qt.
 """
 from PySide6.QtCore import Qt, QThread, Signal

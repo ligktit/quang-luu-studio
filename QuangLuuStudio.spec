@@ -85,10 +85,9 @@ hiddenimports = [
     'velopack',
     'core.updater.velopack_updater',
     'ui.dialogs.audio_doctor_dialog',
-    # Khoá kỹ thuật / chế độ khách — lazy import từ header + settings dialog
-    'ui.dialogs.tech_unlock',
+    # Tự ẩn DAW + đóng an toàn — lazy import từ dashboard + settings dialog
     'ui.dialogs.shutdown_dialog',
-    'core.kiosk',
+    'core.daw_visibility',
     'core.so_windows',
     'core.so_template',
     # UI panels — new package extracted from frontend_qt.py (Phase C)
