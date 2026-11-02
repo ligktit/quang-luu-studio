@@ -35,7 +35,11 @@ def process_keywords() -> tuple:
 def title_is_main(title) -> bool:
     """Tiêu đề này có phải cửa sổ chính của DAW không (mọi từ bắt buộc đều có)."""
     t = (title or "").lower()
-    return all(word in t for word in _profile().main_title_requires)
+    words = _profile().main_title_requires
+    # Tiêu đề cửa sổ chính luôn BẮT ĐẦU bằng tên DAW ("Studio One - vp",
+    # "Cubase Pro Project - mau"). Chỉ "có chứa" thì bảng ASIO Link Pro mở trong
+    # tiến trình Studio One ("O Deus ASIO Link Pro … - Studio One.exe") bị nhận nhầm.
+    return bool(words) and t.startswith(words[0]) and all(word in t for word in words)
 
 SW_HIDE = 0
 SW_SHOW = 5
@@ -47,6 +51,8 @@ _SWP_NOMOVE_NOSIZE_NOACTIVATE = 0x0002 | 0x0001 | 0x0010
 # Cửa sổ nội bộ của DAW/Windows vốn ẩn từ đầu — hiện lên là rác trên màn hình
 # (đo trên Cubase 13: ô "USB Change Listener" 136×39 ở góc trái trên, bộ gõ IME).
 INTERNAL_WINDOW_CLASSES = ("IME", "MSCTFIME UI", "USB Change Listener", "SteinbergDevWnd")
+# Cửa sổ ngầm 133×38 của plugin JUCE (Auto-Tune, Waves…) — đo trên Studio One 5.
+INTERNAL_WINDOW_TITLES = ("JUCEWindow", "Default IME", "MSCTFIME UI")
 
 # Công cụ ASIO chạy tiến trình riêng (bảng ASIO mở từ trong DAW đã thuộc tiến trình DAW).
 ASIO_PROCESS_NAMES = (
@@ -242,7 +248,8 @@ class WindowEntry:
 def _is_internal(win32gui, hwnd) -> bool:
     """Cửa sổ rác: không tiêu đề (tooltip, cửa sổ ngầm) hoặc lớp nội bộ đã biết."""
     try:
-        if not win32gui.GetWindowText(hwnd):
+        title = win32gui.GetWindowText(hwnd)
+        if not title or title in INTERNAL_WINDOW_TITLES:
             return True
         return win32gui.GetClassName(hwnd) in INTERNAL_WINDOW_CLASSES
     except Exception:

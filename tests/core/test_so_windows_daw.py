@@ -200,6 +200,34 @@ def test_show_all_bo_qua_cua_so_noi_bo_va_asio(fake_gui):
     assert shown == {21, 23, 26}           # không USB Change Listener/IME/tooltip, không ASIO
 
 
+def test_bang_asio_link_trong_studio_one_khong_phai_cua_so_chinh():
+    # Đo máy 1 (Studio One 5, 2026-11-02): ASIO Link Pro mở bảng trong tiến trình
+    # Studio One với tiêu đề có chữ "Studio One" — trước đây bị nhận là cửa sổ chính
+    # (đóng an toàn gửi WM_CLOSE vào nó, danh sách Cài đặt ghi "(cửa sổ chính)").
+    daw.bind({})
+    assert so_windows.title_is_main("O Deus ASIO Link Pro 2.4.2.0 - Studio One.exe") is False
+    assert so_windows.title_is_main("Studio One - vp") is True
+
+
+def test_list_windows_bo_cua_so_ngam_juce():
+    # Plugin JUCE (Auto-Tune, Waves…) tạo cửa sổ ngầm 133×38 tiêu đề "JUCEWindow",
+    # vốn ẩn từ đầu — hiện lên là rác.
+    daw.bind({})
+    gui = _FakeGui({51: {"title": "Studio One - vp", "vis": False},
+                    52: {"title": "JUCEWindow", "cls": "JUCE_551dc4e427", "vis": False,
+                         "rect": (0, 0, 133, 38)},
+                    53: {"title": "O Deus ASIO Link Pro 2.4.2.0 - Studio One.exe",
+                         "cls": "ASIOLINKCLASS36559117", "vis": False}})
+    with patch.object(so_windows, "win32_modules", return_value=(gui, MagicMock(), MagicMock())), \
+         patch.object(so_windows, "all_windows", return_value=[53, 52, 51]), \
+         patch.object(so_windows, "asio_windows", return_value=[]), \
+         patch.object(so_windows, "force_foreground", return_value=True):
+        entries = so_windows.list_windows()
+        assert [(e.hwnd, e.is_main) for e in entries] == [(51, True), (53, False)]
+        so_windows.show_all(focus_main=False)
+        assert {h for h, _ in gui.shown} == {51, 53}
+
+
 def test_asio_windows_theo_ten_tien_trinh():
     gui = _FakeGui({41: {"title": "ASIO Link Pro", "vis": True},
                     42: {"title": "ASIO4ALL download - Chrome", "vis": True},
