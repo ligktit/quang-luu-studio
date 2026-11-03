@@ -136,11 +136,15 @@ def test_header_comment_lists_actual_ccs():
 
 
 def test_mic2_controls_match_shared_set():
-    # Kênh 2 = đúng tập CC phát đôi (config) + mix_mic/mute_mic riêng từng mic.
+    # Kênh 2 = đúng tập CC phát đôi (config) + CC riêng từng mic mà kênh Mic 2 /
+    # Vang Mic 2 gửi thẳng kênh 2: mức/tắt Mic, mức/tắt Vang, CC phụ của Vang.
+    midi_cc = AppConfig.get_midi_cc()
+    per_mic = {midi_cc[k] for k in ("mix_mic", "mute_mic", "mix_reverb", "mute_reverb")}
+    per_mic |= {e["cc"] for e in AppConfig.get_mute_multi_cc().get("mix_reverb", [])}
     expected = set(shared_cc_numbers(
-        AppConfig.get_midi_cc(), AppConfig.get_mic2_shared_cc(),
+        midi_cc, AppConfig.get_mic2_shared_cc(),
         AppConfig.get_mode_config(), AppConfig.get_mute_multi_cc(),
-    )) | {21, 51}
+    )) | per_mic
     assert set(_declared_addresses("1")) == expected
 
 

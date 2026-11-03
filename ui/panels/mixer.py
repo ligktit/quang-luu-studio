@@ -18,13 +18,14 @@ def _resolve_cc_number(dashboard, cc_key):
 def midi_route(dashboard, cc_key):
     """(khoá gốc, hàm gửi CC) của một kênh mixer.
 
-    Mic 2 dùng chung số CC (mức, tắt, CC phụ mute_multi_cc) với Mic nhưng đi
-    kênh MIDI 2 và không phát đôi; mọi kênh khác gửi thẳng engine.send_midi
-    như trước.
+    Mic 2 / Vang Mic 2 dùng chung số CC (mức, tắt, CC phụ mute_multi_cc) với
+    Mic / Vang nhưng đi kênh MIDI 2 và không phát đôi; mọi kênh khác gửi thẳng
+    engine.send_midi như trước.
     """
-    if cc_key == mic2.MIC2_KEY:
+    base = mic2.MIC2_CHANNELS.get(cc_key)
+    if base is not None:
         engine = dashboard.engine
-        return mic2.MIC_KEY, lambda cc, v: engine.send_midi_on_channel(mic2.MIC2_CHANNEL, cc, v)
+        return base, lambda cc, v: engine.send_midi_on_channel(mic2.MIC2_CHANNEL, cc, v)
     return cc_key, dashboard.engine.send_midi
 
 
@@ -274,6 +275,16 @@ def build_panel_mixer(dashboard) -> GlassPanel:
             # Các bảng _mixer_* (và mixer_levels/mute_states) khoá theo CC — kênh
             # thứ hai cùng CC sẽ đè kênh đầu, không đồng bộ được. Bỏ qua kênh trùng.
             print(f"[MIXER] Bỏ kênh '{ch['label']}': trùng CC {ch['cc']!r} với kênh đã có")
+            continue
+        if two_mics and ch["cc"] == mic2.REVERB_KEY:
+            # Vang Mic 2 ngay dưới Vang: cùng kiểu kênh, cùng số CC, kênh MIDI 2.
+            # Tên lấy từ mic_labels (frontend _on_edit_widget đổi tên vào đó).
+            rv2 = dict(ch, cc=mic2.MIC2_REVERB_KEY, label=mic2.reverb2_label(dashboard.settings),
+                       default=_get_level(mic2.MIC2_REVERB_KEY, 0))
+            cfg_rv2 = dict(ch_cfg, id=mic2.MIC2_REVERB_KEY, cc=mic2.MIC2_REVERB_KEY,
+                           label=rv2["label"])
+            for spec, cfg in ((ch, ch_cfg), (rv2, cfg_rv2)):
+                _add_channel(spec, cfg).set_muted(bool(mute_states.get(spec["cc"], False)))
             continue
         if not (two_mics and ch["cc"] == mic2.MIC_KEY):
             _add_channel(ch, ch_cfg)

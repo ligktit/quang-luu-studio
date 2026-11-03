@@ -711,12 +711,10 @@ class SettingsDialog(QDialog):
         if self._cb_two_mics.isEnabled():
             s["mic_count"] = 2 if self._cb_two_mics.isChecked() else 1
         if self._inp_mic_label_1.isEnabled():
-            s["mic_labels"] = {
-                mic2.MIC_KEY: self._inp_mic_label_1.text().strip()
-                or mic2.DEFAULT_LABELS[mic2.MIC_KEY],
-                mic2.MIC2_KEY: self._inp_mic_label_2.text().strip()
-                or mic2.DEFAULT_LABELS[mic2.MIC2_KEY],
-            }
+            labels = mic2.with_label(s, mic2.MIC_KEY, self._inp_mic_label_1.text())
+            # with_label giữ tên Vang Mic 2 tự đặt (Dev Mode) — ô Cài đặt không có nó.
+            s["mic_labels"] = mic2.with_label(dict(s, mic_labels=labels), mic2.MIC2_KEY,
+                                              self._inp_mic_label_2.text())
 
     def _build_auto_echo_widgets(self, settings):
         """Ô bật "tự động bật/tắt Vang theo nhạc" — tính năng Premium.
