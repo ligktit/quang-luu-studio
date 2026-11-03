@@ -52,3 +52,22 @@ def test_is_enabled_chi_studio_one():
     # Ô "2 micro" trong Cài đặt đọc ý định gốc, không phụ thuộc DAW.
     assert two_mics_configured({"mic_count": 2, "daw_kind": "cubase"})
     assert not two_mics_configured({"mic_count": 1}) and not two_mics_configured(None)
+
+
+def test_with_label_doi_mot_mic_giu_mic_kia():
+    from core.mic2 import with_label
+    s = {"mic_labels": {"mix_mic": "A", "mix_mic_2": "B"}}
+    assert with_label(s, "mix_mic", "  Mic P420 ") == {"mix_mic": "Mic P420", "mix_mic_2": "B"}
+    assert with_label({}, "mix_mic_2", "Mic KG") == {"mix_mic": "Mic Dây", "mix_mic_2": "Mic KG"}
+    # Tên trống / không phải chuỗi -> về tên mặc định, không lưu chuỗi rỗng.
+    assert with_label(s, "mix_mic", "  ")["mix_mic"] == "Mic Dây"
+    assert with_label(s, "mix_mic_2", None)["mix_mic_2"] == "Mic Không Dây"
+    # Không sửa dict settings gốc.
+    assert s["mic_labels"] == {"mix_mic": "A", "mix_mic_2": "B"}
+
+
+def test_with_label_tu_choi_khoa_la():
+    import pytest
+    from core.mic2 import with_label
+    with pytest.raises(ValueError):
+        with_label({}, "mix_reverb", "x")

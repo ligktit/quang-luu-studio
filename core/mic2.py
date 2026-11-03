@@ -54,6 +54,20 @@ def labels(settings) -> dict:
     return out
 
 
+def with_label(settings, key, name) -> dict:
+    """mic_labels mới sau khi đặt tên `key` = `name` (trống -> tên mặc định).
+
+    Giữ nguyên tên mic còn lại. Tên kênh hai mic chỉ đọc từ đây (labels()),
+    nên Dev Mode đổi tên kênh Mic/Mic 2 phải ghi vào đây, không phải ui_config.
+    """
+    if key not in DEFAULT_LABELS:
+        raise ValueError(f"không phải kênh mic: {key!r}")
+    out = labels(settings)
+    name = name.strip() if isinstance(name, str) else ""
+    out[key] = name or DEFAULT_LABELS[key]
+    return out
+
+
 def _as_cc(entry):
     if isinstance(entry, dict):
         cc = entry.get("cc")

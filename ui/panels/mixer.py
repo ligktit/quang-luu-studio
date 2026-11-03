@@ -190,8 +190,8 @@ def build_panel_mixer(dashboard) -> GlassPanel:
     dashboard._mixer_mute_setters = {}
 
     def _add_channel(ch, ch_cfg):
-        """Dựng một kênh. `ch_cfg` None = kênh không nằm trong ui_config (Mic 2)
-        → không có menu Dev Mode sửa/ẩn."""
+        """Dựng một kênh; `ch_cfg` là entry mà menu Dev Mode Sửa/Ẩn nhắm tới
+        (Mic 2 dùng entry giả id mix_mic_2 — frontend xử lý riêng)."""
         ch_view = HMixerChannel(
             icon=ch["icon"],
             label=ch["label"],
@@ -280,10 +280,16 @@ def build_panel_mixer(dashboard) -> GlassPanel:
             continue
         # Mic + Mic 2 liền nhau, cùng kiểu kênh; dựng lại (Cài đặt, Dev Mode)
         # vẫn hiện đúng trạng thái tắt đang giữ trong mute_states.
+        # Tên hai kênh lấy từ settings["mic_labels"], không từ ui_config: menu
+        # Dev Mode mang tên đang hiện để Sửa thấy đúng tên, và frontend ghi tên
+        # mới vào mic_labels (_on_edit_widget). Mic 2 không có entry ui_config —
+        # cfg giả id/cc = mix_mic_2 chỉ để menu biết đang bấm kênh nào.
         ch["label"] = mic_labels[mic2.MIC_KEY]
         ch2 = dict(ch, cc=mic2.MIC2_KEY, label=mic_labels[mic2.MIC2_KEY],
                    default=_get_level(mic2.MIC2_KEY, 0))
-        for spec, cfg in ((ch, ch_cfg), (ch2, None)):
+        cfg1 = dict(ch_cfg, label=ch["label"])
+        cfg2 = dict(ch_cfg, id=mic2.MIC2_KEY, cc=mic2.MIC2_KEY, label=ch2["label"])
+        for spec, cfg in ((ch, cfg1), (ch2, cfg2)):
             _add_channel(spec, cfg).set_muted(bool(mute_states.get(spec["cc"], False)))
 
     if two_mics and dashboard._mixer_channels:

@@ -591,7 +591,36 @@ class MainDashboard(QMainWindow):
             self._apply_widget_calibration(dialog.result_calibration)
             self.refresh_ui()
 
+    def _mic_channel_key(self, panel_name, widget_data):
+        """mix_mic / mix_mic_2 khi `widget_data` là kênh mic lúc đang bật 2 mic, ngược lại None.
+
+        Bật 2 mic thì tên hai kênh mic lấy từ settings["mic_labels"] (mixer.py),
+        nên Dev Mode đổi tên phải ghi vào đó — ghi vào ui_config thì app bỏ qua.
+        """
+        if panel_name != "mixer" or not mic2.is_enabled(self.settings):
+            return None
+        key = widget_data.get("cc")
+        return key if key in (mic2.MIC_KEY, mic2.MIC2_KEY) else None
+
+    def _save_mic_label(self, key, name):
+        self.settings["mic_labels"] = mic2.with_label(self.settings, key, name)
+        if not backend.ConfigManager.save_settings(self.settings):
+            self._show_message("Không lưu được tên mic", is_error=True)
+
+    def _rename_mic2(self, widget_data):
+        """Mic 2 không có entry ui_config (mọi thông số theo kênh Mic) → chỉ đổi tên."""
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Đổi tên mic 2", "Tên mic 2:",
+                                        text=widget_data.get("label", ""))
+        if ok:
+            self._save_mic_label(mic2.MIC2_KEY, name)
+            self.refresh_ui()
+
     def _on_edit_widget(self, panel_name, widget_data):
+        mic_key = self._mic_channel_key(panel_name, widget_data)
+        if mic_key == mic2.MIC2_KEY:
+            self._rename_mic2(widget_data)
+            return
         from ui.dialogs.widget_builder import WidgetBuilderDialog
         dialog = WidgetBuilderDialog(self, panel_name=panel_name,
                                      widget_type=widget_data.get("type", "slider"),
@@ -607,7 +636,13 @@ class MainDashboard(QMainWindow):
                                    is_error=True)
                 self.refresh_ui()
                 return
-            panel_list[idx] = dialog.result_data
+            new_data = dialog.result_data
+            if mic_key == mic2.MIC_KEY:
+                # Tên mới vào mic_labels; ui_config giữ tên cũ (dùng lại khi về 1 mic),
+                # các thông số khác (dải, màu…) vẫn lưu ui_config như mọi kênh.
+                self._save_mic_label(mic_key, new_data.get("label", ""))
+                new_data = dict(new_data, label=panel_list[idx].get("label", ""))
+            panel_list[idx] = new_data
             ui_config[panel_name] = panel_list
             backend.UiConfigManager.save_ui_config(ui_config)
             self._apply_widget_calibration(dialog.result_calibration)
@@ -654,6 +689,9 @@ class MainDashboard(QMainWindow):
             self.engine.send_midi(int(MIDI_CC.get(key)), val)
             
     def _on_hide_widget(self, panel_name, widget_data):
+        if self._mic_channel_key(panel_name, widget_data) == mic2.MIC2_KEY:
+            self._show_message("Muốn bỏ Mic 2: Cài đặt → Âm thanh → bỏ chọn \"Phòng có 2 micro\"")
+            return
         ui_config = backend.UiConfigManager.load_ui_config()
         panel_list = ui_config.get(panel_name, [])
         idx = _find_widget_index(panel_list, widget_data)
