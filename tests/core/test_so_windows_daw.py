@@ -440,3 +440,18 @@ def test_cua_so_ngam_driver_asio_link_khong_bao_gio_hien(fake_gui):
         fake_gui.shown.clear()
         so_windows.show_all(focus_main=False)
     assert {h for h, _ in fake_gui.shown} == {23, 28}
+
+
+@pytest.mark.parametrize("iconic, want_restore", [(False, False), (True, True)])
+def test_dua_len_truoc_khong_bo_phong_to(iconic, want_restore):
+    # Đo máy 1: Studio One đang phóng to, app ẩn rồi "Hiện" → cửa sổ về cỡ nhỏ.
+    # SW_RESTORE bỏ cả phóng to — chỉ dùng khi cửa sổ đang thu nhỏ.
+    gui = MagicMock()
+    gui.IsIconic.return_value = iconic
+    fake_ctypes = MagicMock()
+    fake_ctypes.windll.user32.GetForegroundWindow.return_value = 0
+    with patch.object(so_windows, "win32_modules", return_value=(gui, MagicMock(), MagicMock())), \
+         patch.object(so_windows, "ctypes", fake_ctypes):
+        so_windows.force_foreground(23)
+    restored = any(c.args == (23, so_windows.SW_RESTORE) for c in gui.ShowWindow.call_args_list)
+    assert restored is want_restore

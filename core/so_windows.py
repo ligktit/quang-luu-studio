@@ -520,7 +520,10 @@ def force_foreground(hwnd) -> bool:
     tid_me = tid_fg = 0
     try:
         try:
-            win32gui.ShowWindow(hwnd, SW_RESTORE)
+            # Chỉ khôi phục khi đang thu nhỏ: SW_RESTORE bỏ luôn trạng thái phóng to
+            # (đo máy 1: Studio One phóng to, "Hiện" xong về cỡ nhỏ).
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, SW_RESTORE)
         except Exception:
             pass
         fg = user32.GetForegroundWindow()
