@@ -1132,6 +1132,10 @@ class SettingsDialog(QDialog):
 
     def _refresh_window_list(self):
         from core import so_windows
+        # Dựng lại danh sách xoá mất công tắc đang giữ chỗ bàn phím — nhớ nó là
+        # cửa sổ nào để trao lại cho công tắc mới (mất hẳn thì về nút Làm mới).
+        focused = self.focusWidget()
+        focus_hwnd = next((h for h, cb in self._window_switches.items() if cb is focused), None)
         while self._daw_list_box.count():
             w = self._daw_list_box.takeAt(0).widget()
             if w is not None:
@@ -1157,6 +1161,8 @@ class SettingsDialog(QDialog):
             self._daw_list_box.addWidget(cb)
             self._window_switches[e.hwnd] = cb
         self._windows_empty_lbl.setVisible(not entries)
+        if focus_hwnd is not None:
+            (self._window_switches.get(focus_hwnd) or self._btn_refresh_windows).setFocus()
 
     def _on_window_switch(self, hwnd, checked):
         from core import so_windows

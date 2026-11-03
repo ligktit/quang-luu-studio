@@ -126,3 +126,24 @@ def test_lam_moi_va_hien_an_tat_ca_quet_lai(dlg):
         with patch.object(dlg._dashboard, "_on_toggle_studio_one"):
             dlg._btn_toggle_all.click()
         assert lw.call_count == 2
+
+
+def test_bat_cong_tac_giu_cho_ban_phim(dlg):
+    # KTV dùng phím Tab/Space đi qua danh sách: bật/tắt xong danh sách dựng lại,
+    # chỗ đang chọn phải nằm lại đúng cửa sổ vừa bật, không văng ra ngoài.
+    _refresh(dlg)
+    dlg._window_switches[2].setFocus()
+    with patch("core.so_windows.show_window", return_value=True), \
+         patch("core.so_windows.list_windows", return_value=_WINS):
+        dlg._window_switches[2].click()
+    assert dlg.focusWidget() is dlg._window_switches[2]
+
+
+def test_cua_so_vua_bat_bien_mat_thi_cho_ban_phim_ve_nut_lam_moi(dlg):
+    _refresh(dlg)
+    dlg._window_switches[2].setFocus()
+    with patch("core.so_windows.show_window", return_value=False), \
+         patch("core.so_windows.list_windows", return_value=[_WINS[0]]), \
+         patch.object(dlg._dashboard, "_show_message"):
+        dlg._window_switches[2].click()
+    assert dlg.focusWidget() is dlg._btn_refresh_windows

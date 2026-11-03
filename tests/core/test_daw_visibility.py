@@ -73,3 +73,36 @@ def test_daw_windows_hong_thi_dung_mac_dinh(isolated_settings):
     isolated_settings["daw_windows"] = "rác"
     assert daw_visibility.auto_hide() is True
     assert daw_visibility.restore_template_enabled() is False
+
+
+@pytest.fixture
+def fake_disk(monkeypatch):
+    """ConfigManager giả trong RAM — chạy _write THẬT mà không đụng settings.json."""
+    from core.config import ConfigManager
+    disk = {}
+    saved = []
+    monkeypatch.setattr(ConfigManager, "load_settings", staticmethod(lambda: dict(disk)))
+    monkeypatch.setattr(ConfigManager, "save_settings",
+                        staticmethod(lambda data: saved.append(data) or True))
+    yield disk, saved
+    daw_visibility.bind(None)
+
+
+def test_write_that_va_ca_file_lan_dict_dang_song(fake_disk):
+    # Giữ key khác trên đĩa, giữ trường cũ của daw_windows, và vá cả dict app
+    # đang giữ trong RAM (app ghi đè cả file lúc thoát).
+    disk, saved = fake_disk
+    disk.update({"volume": 70, "daw_windows": {"auto_hide": True, "restore_template": True}})
+    live = {"volume": 70, "daw_windows": {"auto_hide": True, "restore_template": True}}
+    daw_visibility.bind(live)
+    daw_visibility.set_auto_hide(False)
+    assert saved == [{"volume": 70, "daw_windows": {"auto_hide": False, "restore_template": True}}]
+    assert live["daw_windows"] == {"auto_hide": False, "restore_template": True}
+    assert daw_visibility.auto_hide() is False
+
+
+def test_write_that_khi_file_chua_co_muc(fake_disk):
+    _, saved = fake_disk
+    daw_visibility.bind(None)
+    daw_visibility.set_restore_template(True)
+    assert saved == [{"daw_windows": {"restore_template": True}}]
