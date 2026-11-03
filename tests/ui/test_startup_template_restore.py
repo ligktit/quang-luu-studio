@@ -69,7 +69,8 @@ def test_chua_chot_ban_mau_thi_khong_dong_studio_one():
 
 def test_tu_an_bat_thi_an_khi_daw_dang_chay():
     with _startup(so_running=True, restore_tpl=False, auto_hide=True) as (self, _):
-        self.hide_all.assert_called_once()
+        # Tự ẩn (không phải KTV bấm) → để nguyên hộp thoại DAW đang chờ trả lời.
+        self.hide_all.assert_called_once_with(keep_dialogs=True)
         self.hide_when_ready.assert_not_called()
 
 

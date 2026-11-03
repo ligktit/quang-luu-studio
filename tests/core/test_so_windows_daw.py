@@ -8,10 +8,14 @@ from core import daw, so_windows
 
 
 @pytest.fixture(autouse=True)
-def _unbind():
+def _unbind(tmp_path, monkeypatch):
     daw.bind(None)
+    # Ghi nhận "cửa sổ app đã ẩn" lưu ra file — không đụng thư mục dữ liệu thật.
+    monkeypatch.setattr(so_windows, "_RECORD_FILE", str(tmp_path / "daw_hidden.json"), raising=False)
+    so_windows._hidden_by_us.clear()
     yield
     daw.bind(None)
+    so_windows._hidden_by_us.clear()
 
 
 def test_mac_dinh_van_la_studio_one():
@@ -139,6 +143,12 @@ class _FakeGui:
     def SetWindowPos(self, *a):
         self.shown.append(("pos",) + a[:2])
 
+    def GetWindow(self, h, cmd):
+        return self.wins[h].get("owner", 0)
+
+    def IsWindowEnabled(self, h):
+        return self.wins[h].get("enabled", True)
+
 
 _CUBASE_WINS = {
     21: {"title": "Mic: Ins. 1 - Auto-Tune Pro", "vis": False},
@@ -160,6 +170,7 @@ def fake_gui():
     with patch.object(so_windows, "win32_modules", return_value=(gui, MagicMock(), MagicMock())), \
          patch.object(so_windows, "all_windows", return_value=[21, 22, 23, 24, 25, 26]), \
          patch.object(so_windows, "asio_windows", return_value=[31]), \
+         patch.object(so_windows, "studio_one_pids", return_value={7}), \
          patch.object(so_windows, "force_foreground", return_value=True):
         yield gui
 
@@ -251,7 +262,7 @@ def test_bam_an_dung_khi_ktv_vua_hien_cua_so():
         if len(calls) == 1:
             so_windows.show_window(21)          # KTV bật plugin giữa chừng
     with patch.object(so_windows, "wait_for_main_window", return_value=23), \
-         patch.object(so_windows, "hide_all", side_effect=lambda: calls.append(1) or 0), \
+         patch.object(so_windows, "hide_all", side_effect=lambda **kw: calls.append(1) or 0), \
          patch.object(so_windows, "win32_modules", return_value=(_FakeGui(_CUBASE_WINS), MagicMock(), MagicMock())), \
          patch.object(so_windows, "force_foreground", return_value=True), \
          patch.object(so_windows.time, "sleep", side_effect=fake_sleep):
@@ -307,3 +318,85 @@ def test_asio_windows_theo_ten_tien_trinh():
     with patch.object(so_windows, "win32_modules", return_value=(gui, MagicMock(), winproc)), \
          patch.dict("sys.modules", {"psutil": fake_psutil}):
         assert so_windows.asio_windows() == [41]
+
+
+def test_tien_to_cua_so_chinh_khai_bao_rieng_khong_theo_thu_tu_tu_khoa(monkeypatch):
+    # Quy tắc "tiêu đề BẮT ĐẦU bằng tên DAW" không được dựa vào thứ tự
+    # main_title_requires: đảo ("project", "cubase") vẫn phải nhận cửa sổ project.
+    import dataclasses
+    from core.daw import profiles
+    prof = dataclasses.replace(profiles.CUBASE, main_title_requires=("project", "cubase"))
+    monkeypatch.setattr(so_windows, "_profile", lambda: prof)
+    assert so_windows.title_is_main("Cubase Pro Project - mau") is True
+    assert so_windows.title_is_main("Project Logical Editor - Cubase") is False
+
+
+def test_show_all_nho_cua_so_da_an_qua_lan_mo_lai_app(fake_gui):
+    # App ẩn DAW, tắt app, mở lại: ghi nhận trong RAM mất nhưng DAW vẫn là tiến
+    # trình cũ → "Hiện tất cả" vẫn hiện lại đúng cái đã ẩn, kể cả cửa sổ không tiêu đề.
+    fake_gui.wins[22]["vis"] = True
+    fake_gui.wins[23]["vis"] = True
+    so_windows.hide_all()
+    so_windows._hidden_by_us.clear()            # app mở lại
+    fake_gui.shown.clear()
+    so_windows.show_all(focus_main=False)
+    assert {h for h, _ in fake_gui.shown} == {22, 23}
+
+
+def test_ghi_nhan_cua_tien_trinh_daw_khac_bi_bo_qua(fake_gui):
+    # DAW đã khởi động lại: HWND cũ có thể bị cửa sổ khác dùng lại → bỏ ghi nhận.
+    fake_gui.wins[22]["vis"] = True
+    so_windows.hide_all()
+    so_windows._hidden_by_us.clear()
+    fake_gui.shown.clear()
+    with patch.object(so_windows, "studio_one_pids", return_value={8}):
+        so_windows.show_all(focus_main=False)
+    assert {h for h, _ in fake_gui.shown} == {21, 23, 26}
+
+
+def test_asio_windows_khop_mot_phan_ten_tien_trinh():
+    # Bản ASIO Link 64-bit / bản cài khác tên exe vẫn là công cụ ASIO.
+    gui = _FakeGui({44: {"title": "ASIO Link Pro", "vis": True},
+                    45: {"title": "ASIO4ALL v2 Instruction Manual", "vis": True}})
+    names = {1: "ASIOLinkPro64.exe", 2: "msedge.exe"}
+    owner = {44: 1, 45: 2}
+    winproc = MagicMock()
+    winproc.GetWindowThreadProcessId.side_effect = lambda h: (0, owner[h])
+    gui.EnumWindows = lambda cb, extra: [cb(h, extra) for h in (44, 45)]
+    fake_psutil = MagicMock()
+    fake_psutil.Process.side_effect = lambda pid: MagicMock(**{"name.return_value": names[pid]})
+    with patch.object(so_windows, "win32_modules", return_value=(gui, MagicMock(), winproc)), \
+         patch.dict("sys.modules", {"psutil": fake_psutil}):
+        assert so_windows.asio_windows() == [44]
+
+
+def test_hide_all_giu_hop_thoai_dang_cho_tra_loi(fake_gui):
+    # DAW đang nạp bài bật hộp thoại (thiếu thiết bị âm thanh, thiếu plugin…):
+    # ẩn nó đi thì DAW kẹt chờ một hộp thoại không ai thấy.
+    fake_gui.wins[23].update(vis=True, enabled=False)          # cửa sổ chính bị khoá bởi hộp thoại
+    fake_gui.wins[27] = {"title": "Studio One", "cls": "#32770", "vis": True}
+    fake_gui.wins[28] = {"title": "Audio Device", "vis": True, "owner": 23}
+    fake_gui.wins[21]["vis"] = True
+    with patch.object(so_windows, "all_windows", return_value=[21, 23, 27, 28]):
+        so_windows.hide_all(keep_dialogs=True)
+    assert fake_gui.wins[27]["vis"] is True
+    assert fake_gui.wins[28]["vis"] is True
+    assert fake_gui.wins[21]["vis"] is False
+    assert fake_gui.wins[23]["vis"] is False
+
+
+def test_hide_all_mac_dinh_van_an_ca_hop_thoai(fake_gui):
+    # KTV bấm "Ẩn" là ý muốn rõ ràng — ẩn hết như trước.
+    fake_gui.wins[27] = {"title": "Studio One", "cls": "#32770", "vis": True}
+    with patch.object(so_windows, "all_windows", return_value=[27]):
+        so_windows.hide_all()
+    assert fake_gui.wins[27]["vis"] is False
+
+
+def test_bam_an_luc_mo_daw_giu_hop_thoai():
+    kwargs = []
+    with patch.object(so_windows, "wait_for_main_window", return_value=23), \
+         patch.object(so_windows, "hide_all", side_effect=lambda **kw: kwargs.append(kw) or 0), \
+         patch.object(so_windows.time, "sleep"):
+        so_windows.hide_when_ready(follow_seconds=0.0).join(timeout=5)
+    assert kwargs and all(kw.get("keep_dialogs") is True for kw in kwargs)

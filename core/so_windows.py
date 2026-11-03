@@ -9,7 +9,9 @@ Nguyên tắc: tìm theo **PID của process** chứ không theo tiêu đề c�
 mixer, cửa sổ nhạc cụ của Studio One có tiêu đề tuỳ ý, chỉ PID là chắc chắn.
 """
 import ctypes
+import json
 import logging
+import os
 import re
 import threading
 import time
@@ -35,11 +37,13 @@ def process_keywords() -> tuple:
 def title_is_main(title) -> bool:
     """Tiêu đề này có phải cửa sổ chính của DAW không (mọi từ bắt buộc đều có)."""
     t = (title or "").lower()
-    words = _profile().main_title_requires
+    prof = _profile()
+    words = prof.main_title_requires
     # Tiêu đề cửa sổ chính luôn BẮT ĐẦU bằng tên DAW ("Studio One - vp",
     # "Cubase Pro Project - mau"). Chỉ "có chứa" thì bảng ASIO Link Pro mở trong
     # tiến trình Studio One ("O Deus ASIO Link Pro … - Studio One.exe") bị nhận nhầm.
-    return bool(words) and t.startswith(words[0]) and all(word in t for word in words)
+    prefix = getattr(prof, "main_title_prefix", "") or (words[0] if words else "")
+    return bool(words) and t.startswith(prefix) and all(word in t for word in words)
 
 SW_HIDE = 0
 SW_SHOW = 5
@@ -66,12 +70,17 @@ _user_shown = threading.Event()
 # hiện "mọi cửa sổ đang ẩn" thì bật cả bảng ASIO Link chưa từng mở (khung trắng).
 _hidden_by_us = set()
 
+# Ghi nhận _hidden_by_us ra file (kèm PID DAW) để app mở lại vẫn biết cái nào
+# mình đã ẩn. None = DATA_DIR/daw_hidden.json (test đặt sang thư mục tạm).
+_RECORD_FILE = None
+
 # Công cụ ASIO chạy tiến trình riêng (bảng ASIO mở từ trong DAW đã thuộc tiến trình DAW).
-ASIO_PROCESS_NAMES = (
-    "asiolink.exe", "asio link pro.exe", "asio link tool.exe",
-    "asio4all.exe", "asio4allv2.exe", "asiovadpro.exe",
-    "asiolink2.exe", "asiolinktool.exe", "asiolinkpro.exe",
-)
+# So một phần với TÊN TIẾN TRÌNH (chữ thường): bản 64-bit/bản cài khác có tên exe khác
+# ("ASIOLinkPro64.exe"). Không so tiêu đề — trình duyệt mở trang ASIO4ALL không phải công cụ.
+ASIO_PROCESS_KEYWORDS = ("asiolink", "asio link", "asio4all", "asiovad")
+
+# Hộp thoại chuẩn Windows (MessageBox) — Studio One hỏi/báo lỗi bằng loại này.
+_GW_OWNER = 4
 
 
 def win32_modules():
@@ -197,11 +206,54 @@ def any_visible() -> bool:
 
 # ── Ẩn / hiện ────────────────────────────────────────────────────────────────
 
-def hide_all() -> int:
+def _record_path() -> str:
+    if _RECORD_FILE:
+        return _RECORD_FILE
+    from core.config import DATA_DIR
+    return os.path.join(DATA_DIR, "daw_hidden.json")
+
+
+def _save_record():
+    """Lưu _hidden_by_us kèm PID DAW hiện tại. Lỗi ghi chỉ mất khả năng nhớ qua lần mở app."""
+    try:
+        data = {"pids": sorted(studio_one_pids()), "hwnds": sorted(_hidden_by_us)}
+        with open(_record_path(), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception as e:
+        log.debug("Lưu ghi nhận cửa sổ đã ẩn lỗi: %s", e)
+
+
+def _load_record(hwnds) -> set:
+    """Ghi nhận của lần mở app trước — chỉ dùng khi DAW vẫn là đúng tiến trình đó."""
+    try:
+        with open(_record_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        if not set(data.get("pids") or ()) & studio_one_pids():
+            return set()
+        return {int(h) for h in data.get("hwnds") or ()} & set(hwnds)
+    except Exception:
+        return set()
+
+
+def _is_dialog(win32gui, hwnd) -> bool:
+    """Hộp thoại đang chờ trả lời: MessageBox chuẩn, hoặc cửa sổ có chủ đang bị khoá (modal)."""
+    try:
+        if win32gui.GetClassName(hwnd) == DIALOG_CLASS:
+            return True
+        owner = win32gui.GetWindow(hwnd, _GW_OWNER)
+        return bool(owner) and not win32gui.IsWindowEnabled(owner)
+    except Exception:
+        return False
+
+
+def hide_all(keep_dialogs=False) -> int:
     """Ẩn mọi cửa sổ Studio One (kể cả plugin). Trả số cửa sổ vừa ẩn.
 
     SW_HIDE gỡ luôn cửa sổ khỏi thanh tác vụ và khỏi Alt+Tab — khách không còn
     đường nào chạm tới.
+
+    keep_dialogs: để nguyên hộp thoại đang chờ trả lời (dùng khi tự ẩn lúc DAW
+    vừa mở — ẩn hộp thoại "thiếu thiết bị/plugin" thì DAW kẹt chờ mà không ai thấy).
     """
     mods = win32_modules()
     if not mods:
@@ -212,12 +264,15 @@ def hide_all() -> int:
     for hwnd in all_windows():
         try:
             if win32gui.IsWindowVisible(hwnd):
+                if keep_dialogs and _is_dialog(win32gui, hwnd):
+                    continue
                 win32gui.ShowWindow(hwnd, SW_HIDE)
                 _hidden_by_us.add(hwnd)
                 count += 1
         except Exception:
             continue
     if count:
+        _save_record()
         log.info("Đã ẩn %d cửa sổ %s", count, _profile().display_name)
     return count
 
@@ -232,7 +287,7 @@ def show_all(focus_main=True) -> int:
     hwnds = all_windows()
     # Có ghi nhận thì chỉ hiện lại cái app đã ẩn; không có (app mở lại khi DAW đã
     # ẩn từ phiên trước) thì hiện mọi cửa sổ hợp lệ.
-    recorded = _hidden_by_us & set(hwnds)
+    recorded = (_hidden_by_us & set(hwnds)) or _load_record(hwnds)
     if recorded:
         recorded |= set(main_windows(hwnds))     # cửa sổ chính luôn hiện lại
     count = 0
@@ -249,6 +304,7 @@ def show_all(focus_main=True) -> int:
         except Exception:
             continue
     _hidden_by_us.clear()
+    _save_record()
     if focus_main:
         for hwnd in main_windows(hwnds):
             if force_foreground(hwnd):
@@ -321,7 +377,7 @@ def asio_windows() -> list:
                     names[pid] = psutil.Process(pid).name().lower()
                 except Exception:
                     names[pid] = ""
-            if names[pid] in ASIO_PROCESS_NAMES:
+            if any(kw in names[pid] for kw in ASIO_PROCESS_KEYWORDS):
                 found.append(hwnd)
         except Exception:
             pass
@@ -380,7 +436,9 @@ def show_window(hwnd, above_topmost=False) -> bool:
             return False
         _user_shown.set()
         win32gui.ShowWindow(hwnd, SW_SHOW)
-        _hidden_by_us.discard(hwnd)
+        if hwnd in _hidden_by_us:
+            _hidden_by_us.discard(hwnd)
+            _save_record()
         if above_topmost:
             win32gui.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, _SWP_NOMOVE_NOSIZE_NOACTIVATE)
             _pinned_topmost.add(hwnd)
@@ -404,6 +462,7 @@ def hide_window(hwnd) -> bool:
         _unpin(win32gui, hwnd)
         win32gui.ShowWindow(hwnd, SW_HIDE)
         _hidden_by_us.add(hwnd)
+        _save_record()
         return True
     except Exception as e:
         log.debug("hide_window(%s) lỗi: %s", hwnd, e)
@@ -652,13 +711,13 @@ def hide_when_ready(timeout=180.0, follow_seconds=60.0, on_done=None):
             if on_done:
                 on_done(0)
             return
-        total = 0 if _user_shown.is_set() else hide_all()
+        total = 0 if _user_shown.is_set() else hide_all(keep_dialogs=True)
         deadline = time.monotonic() + follow_seconds
         while time.monotonic() < deadline and not _user_shown.is_set():
             time.sleep(1.5)
             if _user_shown.is_set():
                 break
-            total += hide_all()
+            total += hide_all(keep_dialogs=True)
         if on_done:
             on_done(total)
 

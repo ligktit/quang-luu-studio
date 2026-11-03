@@ -1473,7 +1473,7 @@ class MainDashboard(QMainWindow):
                 if launched:
                     so_windows.hide_when_ready()
                 elif so_windows.is_running():
-                    so_windows.hide_all()
+                    so_windows.hide_all(keep_dialogs=True)
             except Exception as e:
                 print(f"[DAW-HIDE] ẩn {daw.active().display_name} lúc khởi động lỗi: {e}")
         # Browser YouTube

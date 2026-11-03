@@ -30,6 +30,9 @@ class DawProfile:
     # Cubase: WM_CLOSE vào cửa sổ project chỉ đóng bài, app vẫn ở Steinberg Hub;
     # cửa sổ ứng dụng là class "SmtgMain Cubase13", tiêu đề "Cubase Pro" (đo 13.0.10).
     quit_window_class_prefix: str = ""
+    # Tiêu đề cửa sổ chính phải BẮT ĐẦU bằng chuỗi này ("" = từ đầu của main_title_requires).
+    # Bảng ASIO Link Pro trong tiến trình Studio One có tiêu đề "… - Studio One.exe".
+    main_title_prefix: str = ""
 
 
 STUDIO_ONE = DawProfile(
@@ -37,6 +40,7 @@ STUDIO_ONE = DawProfile(
     display_name="Studio One",
     process_keywords=("studio one",),
     main_title_requires=("studio one",),
+    main_title_prefix="studio one",
     project_extensions=(
         ".song", ".songversion", ".soundset", ".instrument",
         ".multiinstrument", ".pedalboard", ".channel", ".macro", ".fxchain",
@@ -58,6 +62,7 @@ CUBASE = DawProfile(
     # Cubase còn có cửa sổ "Checking Licenses..." và cửa sổ "Cubase Pro"
     # (class SmtgMain) — chỉ cửa sổ project mới có chữ "Project".
     main_title_requires=("cubase", "project"),
+    main_title_prefix="cubase",
     project_extensions=(".cpr",),
     template_extension=".cpr",
     file_dialog_filter=(
