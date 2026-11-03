@@ -442,6 +442,8 @@ if (-not $sRes.Valid) {
     }
 
     # ── 2.5 Khoá kỹ thuật bật nhưng không có PIN ──
+    # Chỉ gặp ở bản app cũ (còn khoá kỹ thuật); bản mới tự chuyển tech_lock sang
+    # daw_windows và xoá mục này khi mở lần đầu.
     $tl = Prop $s "tech_lock" $null
     if ($tl -and [bool](Prop $tl "enabled" $false) -and -not [string](Prop $tl "pin_hash" "")) {
         W "[ LỖI   ] Chế độ khách đang bật nhưng KHÔNG có mã PIN — không ai mở khoá được" "Red"

@@ -741,26 +741,40 @@ Safe "Cài đặt quan trọng trong settings.json" {
         Chk "Thiết bị thu đã lưu" "INFO" "app lưu theo SỐ THỨ TỰ thiết bị — cắm/rút míc hay tai nghe USB là số này đổi, phải chọn lại trong Cài đặt → Nguồn thu"
     }
 
-    # Khoá kỹ thuật / chế độ khách
+    # Ẩn cửa sổ DAW (daw_windows) — thay khoá kỹ thuật. Máy chưa mở bản app mới
+    # vẫn còn mục tech_lock cũ (app tự chuyển sang daw_windows lần mở đầu tiên).
+    $dwName = $(if ($dk -eq "cubase") { "Cubase" } else { "Studio One" })
+    $tplExt = $(if ($dk -eq "cubase") { "cpr" } else { "song" })
+    $dw = Prop $s "daw_windows" $null
     $tl = Prop $s "tech_lock" $null
-    if ($tl) {
+    $restore = $false
+    if ($dw) {
+        $autoHide = [bool](Prop $dw "auto_hide" $true)
+        $restore  = [bool](Prop $dw "restore_template" $false)
+        W ("        Cửa sổ DAW    : tự ẩn khi mở app=" + $autoHide + ", phục hồi bản mẫu=" + $restore)
+        if (-not $autoHide) {
+            Chk "Tự ẩn $dwName" "INFO" "đang tắt — mở app thì khách thấy cửa sổ $dwName" "Bật lại trong Cài đặt → Cửa sổ $dwName"
+        }
+    } elseif ($tl) {
         $enabled = [bool](Prop $tl "enabled" $false)
         $restore = [bool](Prop $tl "restore_template" $false)
         $hasPin  = [bool](Prop $tl "pin_hash" "")
-        W ("        Chế độ khách  : " + $(if ($enabled) { "ĐANG BẬT" } else { "tắt" }) + ", phục hồi bản mẫu=" + $restore)
+        W ("        Chế độ khách  : " + $(if ($enabled) { "ĐANG BẬT" } else { "tắt" }) + ", phục hồi bản mẫu=" + $restore + " (bản app cũ, còn khoá kỹ thuật)")
         if ($enabled -and -not $hasPin) {
-            Chk "Chế độ khách" "FAIL" "đang bật nhưng không có mã PIN" "Không ai mở khoá được. Xoá mục ""tech_lock"" trong settings.json để gỡ khoá."
+            Chk "Chế độ khách" "FAIL" "đang bật nhưng không có mã PIN" "Không ai mở khoá được. Xoá mục ""tech_lock"" trong settings.json để gỡ khoá, hoặc cập nhật app."
         } elseif ($enabled) {
             Chk "Chế độ khách" "OK" "đang bật, có PIN"
         }
-        if ($restore) {
-            $tpl = Join-Path $DATA_DIR "so_template\template.song"
-            if (Test-Path -LiteralPath $tpl) {
-                $t = Get-Item -LiteralPath $tpl
-                Chk "Bản mẫu Studio One" "OK" ((Fmt-Size $t.Length) + ", chốt lúc " + $t.LastWriteTime.ToString("dd/MM/yyyy HH:mm"))
-            } else {
-                Chk "Bản mẫu Studio One" "FAIL" "bật phục hồi nhưng chưa chốt bản mẫu nào" "Mỗi lần mở app sẽ KHÔNG phục hồi được gì. Vào Cài đặt → Chốt bản mẫu."
-            }
+    } else {
+        W "        Cửa sổ DAW    : mặc định (tự ẩn khi mở app, không phục hồi bản mẫu)"
+    }
+    if ($restore) {
+        $tpl = Join-Path $DATA_DIR ("so_template\template." + $tplExt)
+        if (Test-Path -LiteralPath $tpl) {
+            $t = Get-Item -LiteralPath $tpl
+            Chk "Bản mẫu $dwName" "OK" ((Fmt-Size $t.Length) + ", chốt lúc " + $t.LastWriteTime.ToString("dd/MM/yyyy HH:mm"))
+        } else {
+            Chk "Bản mẫu $dwName" "FAIL" "bật phục hồi nhưng chưa chốt bản mẫu nào" "Mỗi lần mở app sẽ KHÔNG phục hồi được gì. Vào Cài đặt → Cửa sổ $dwName → Chốt bản mẫu."
         }
     }
 }
