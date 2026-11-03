@@ -73,6 +73,7 @@ _hidden_by_us = set()
 # Ghi nhận _hidden_by_us ra file (kèm PID DAW) để app mở lại vẫn biết cái nào
 # mình đã ẩn. None = DATA_DIR/daw_hidden.json (test đặt sang thư mục tạm).
 _RECORD_FILE = None
+_record_loaded = False
 
 # Công cụ ASIO chạy tiến trình riêng (bảng ASIO mở từ trong DAW đã thuộc tiến trình DAW).
 # So một phần với TÊN TIẾN TRÌNH (chữ thường): bản 64-bit/bản cài khác có tên exe khác
@@ -235,6 +236,19 @@ def _load_record(hwnds) -> set:
         return set()
 
 
+def _adopt_record(hwnds=None):
+    """Lần đầu trong phiên app: nhận lại ghi nhận của lần mở trước (cùng tiến trình DAW).
+
+    Phải nạp TRƯỚC lần ghi đầu tiên — không thì ẩn thêm một cửa sổ là file bị
+    ghi đè, mất các cửa sổ đã ẩn từ lần mở app trước.
+    """
+    global _record_loaded
+    if _record_loaded:
+        return
+    _record_loaded = True
+    _hidden_by_us.update(_load_record(all_windows() if hwnds is None else hwnds))
+
+
 def _is_dialog(win32gui, hwnd) -> bool:
     """Hộp thoại đang chờ trả lời: MessageBox chuẩn, hoặc cửa sổ có chủ đang bị khoá (modal)."""
     try:
@@ -260,8 +274,10 @@ def hide_all(keep_dialogs=False) -> int:
         return 0
     win32gui = mods[0]
     _unpin_all(win32gui)
+    hwnds = all_windows()
+    _adopt_record(hwnds)
     count = 0
-    for hwnd in all_windows():
+    for hwnd in hwnds:
         try:
             if win32gui.IsWindowVisible(hwnd):
                 if keep_dialogs and _is_dialog(win32gui, hwnd):
@@ -287,7 +303,8 @@ def show_all(focus_main=True) -> int:
     hwnds = all_windows()
     # Có ghi nhận thì chỉ hiện lại cái app đã ẩn; không có (app mở lại khi DAW đã
     # ẩn từ phiên trước) thì hiện mọi cửa sổ hợp lệ.
-    recorded = (_hidden_by_us & set(hwnds)) or _load_record(hwnds)
+    _adopt_record(hwnds)
+    recorded = _hidden_by_us & set(hwnds)
     if recorded:
         recorded |= set(main_windows(hwnds))     # cửa sổ chính luôn hiện lại
     count = 0
@@ -434,6 +451,7 @@ def show_window(hwnd, above_topmost=False) -> bool:
     try:
         if not win32gui.IsWindow(hwnd):
             return False
+        _adopt_record()
         _user_shown.set()
         win32gui.ShowWindow(hwnd, SW_SHOW)
         if hwnd in _hidden_by_us:
@@ -459,6 +477,7 @@ def hide_window(hwnd) -> bool:
         if not win32gui.IsWindow(hwnd):
             _pinned_topmost.discard(hwnd)
             return False
+        _adopt_record()
         _unpin(win32gui, hwnd)
         win32gui.ShowWindow(hwnd, SW_HIDE)
         _hidden_by_us.add(hwnd)

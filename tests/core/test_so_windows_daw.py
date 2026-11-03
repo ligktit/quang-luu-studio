@@ -11,7 +11,8 @@ from core import daw, so_windows
 def _unbind(tmp_path, monkeypatch):
     daw.bind(None)
     # Ghi nhận "cửa sổ app đã ẩn" lưu ra file — không đụng thư mục dữ liệu thật.
-    monkeypatch.setattr(so_windows, "_RECORD_FILE", str(tmp_path / "daw_hidden.json"), raising=False)
+    monkeypatch.setattr(so_windows, "_RECORD_FILE", str(tmp_path / "daw_hidden.json"))
+    monkeypatch.setattr(so_windows, "_record_loaded", False)
     so_windows._hidden_by_us.clear()
     yield
     daw.bind(None)
@@ -337,7 +338,7 @@ def test_show_all_nho_cua_so_da_an_qua_lan_mo_lai_app(fake_gui):
     fake_gui.wins[22]["vis"] = True
     fake_gui.wins[23]["vis"] = True
     so_windows.hide_all()
-    so_windows._hidden_by_us.clear()            # app mở lại
+    _mo_lai_app()
     fake_gui.shown.clear()
     so_windows.show_all(focus_main=False)
     assert {h for h, _ in fake_gui.shown} == {22, 23}
@@ -347,7 +348,7 @@ def test_ghi_nhan_cua_tien_trinh_daw_khac_bi_bo_qua(fake_gui):
     # DAW đã khởi động lại: HWND cũ có thể bị cửa sổ khác dùng lại → bỏ ghi nhận.
     fake_gui.wins[22]["vis"] = True
     so_windows.hide_all()
-    so_windows._hidden_by_us.clear()
+    _mo_lai_app()
     fake_gui.shown.clear()
     with patch.object(so_windows, "studio_one_pids", return_value={8}):
         so_windows.show_all(focus_main=False)
@@ -400,3 +401,24 @@ def test_bam_an_luc_mo_daw_giu_hop_thoai():
          patch.object(so_windows.time, "sleep"):
         so_windows.hide_when_ready(follow_seconds=0.0).join(timeout=5)
     assert kwargs and all(kw.get("keep_dialogs") is True for kw in kwargs)
+
+
+def _mo_lai_app():
+    """Giả lập tắt rồi mở lại app: mọi thứ trong RAM mất, file ghi nhận còn."""
+    so_windows._hidden_by_us.clear()
+    so_windows._record_loaded = False
+
+
+def test_mo_lai_app_an_them_khong_lam_mat_ghi_nhan_cu(fake_gui):
+    # Đo máy 1: app mở lại, DAW bật thêm một cửa sổ, app ẩn nó → file ghi nhận
+    # bị ghi đè chỉ còn cửa sổ mới, plugin đã ẩn từ lần trước bị quên.
+    fake_gui.wins[21]["vis"] = True
+    fake_gui.wins[23]["vis"] = True
+    so_windows.hide_all()
+    _mo_lai_app()
+    fake_gui.wins[22]["vis"] = True                 # cửa sổ mới mọc lên
+    so_windows.hide_all()
+    _mo_lai_app()
+    fake_gui.shown.clear()
+    so_windows.show_all(focus_main=False)
+    assert {h for h, _ in fake_gui.shown} == {21, 22, 23}
