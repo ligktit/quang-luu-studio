@@ -57,6 +57,10 @@ _SWP_NOMOVE_NOSIZE_NOACTIVATE = 0x0002 | 0x0001 | 0x0010
 INTERNAL_WINDOW_CLASSES = ("IME", "MSCTFIME UI", "USB Change Listener", "SteinbergDevWnd")
 # Cửa sổ ngầm 133×38 của plugin JUCE (Auto-Tune, Waves…) — đo trên Studio One 5.
 INTERNAL_WINDOW_TITLES = ("JUCEWindow", "Default IME", "MSCTFIME UI")
+# Lớp có đuôi số đổi theo máy. ASIOLINKCLASS…: cửa sổ ngầm của driver ASIO Link Pro
+# ("O Deus ASIO Link Pro … - Studio One.exe") — không bao giờ vẽ gì, bật lên là khung
+# trắng, kể cả sau khi mở Control Panel (bảng thật mở ra là ASIO4ALL). Đo máy 1 2026-11-03.
+INTERNAL_WINDOW_CLASS_PREFIXES = ("ASIOLINKCLASS",)
 
 # Cửa sổ đang được giữ TOPMOST để nổi trên app đang "Ghim trên cùng" (show_window).
 # Phải bỏ cờ trước khi ẩn, nếu không lần hiện sau nó đè lên mọi thứ.
@@ -311,7 +315,8 @@ def show_all(focus_main=True) -> int:
     for hwnd in hwnds:
         try:
             if recorded:
-                if hwnd not in recorded:
+                # Cửa sổ không tiêu đề app từng ẩn thì hiện lại; cửa sổ ngầm đã biết thì không.
+                if hwnd not in recorded or _is_junk(win32gui, hwnd):
                     continue
             elif _is_internal(win32gui, hwnd):
                 continue
@@ -356,15 +361,25 @@ def _unpin_all(win32gui):
         _unpin(win32gui, hwnd)
 
 
-def _is_internal(win32gui, hwnd) -> bool:
-    """Cửa sổ rác: không tiêu đề (tooltip, cửa sổ ngầm) hoặc lớp nội bộ đã biết."""
+def _is_junk(win32gui, hwnd) -> bool:
+    """Cửa sổ ngầm đã biết (theo lớp/tiêu đề) — không bao giờ hiện, kể cả khi app từng ẩn nó."""
     try:
-        title = win32gui.GetWindowText(hwnd)
-        if not title or title in INTERNAL_WINDOW_TITLES:
+        if win32gui.GetWindowText(hwnd) in INTERNAL_WINDOW_TITLES:
             return True
-        return win32gui.GetClassName(hwnd) in INTERNAL_WINDOW_CLASSES
+        cls = win32gui.GetClassName(hwnd) or ""
+        return cls in INTERNAL_WINDOW_CLASSES or cls.startswith(INTERNAL_WINDOW_CLASS_PREFIXES)
     except Exception:
         return True
+
+
+def _is_internal(win32gui, hwnd) -> bool:
+    """Cửa sổ rác: không tiêu đề (tooltip, cửa sổ ngầm) hoặc cửa sổ ngầm đã biết."""
+    try:
+        if not win32gui.GetWindowText(hwnd):
+            return True
+    except Exception:
+        return True
+    return _is_junk(win32gui, hwnd)
 
 
 def asio_windows() -> list:

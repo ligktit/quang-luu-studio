@@ -300,9 +300,9 @@ def test_list_windows_bo_cua_so_ngam_juce():
          patch.object(so_windows, "asio_windows", return_value=[]), \
          patch.object(so_windows, "force_foreground", return_value=True):
         entries = so_windows.list_windows()
-        assert [(e.hwnd, e.is_main) for e in entries] == [(51, True), (53, False)]
+        assert [(e.hwnd, e.is_main) for e in entries] == [(51, True)]
         so_windows.show_all(focus_main=False)
-        assert {h for h, _ in gui.shown} == {51, 53}
+        assert {h for h, _ in gui.shown} == {51}
 
 
 def test_asio_windows_theo_ten_tien_trinh():
@@ -422,3 +422,21 @@ def test_mo_lai_app_an_them_khong_lam_mat_ghi_nhan_cu(fake_gui):
     fake_gui.shown.clear()
     so_windows.show_all(focus_main=False)
     assert {h for h, _ in fake_gui.shown} == {21, 22, 23}
+
+
+def test_cua_so_ngam_driver_asio_link_khong_bao_gio_hien(fake_gui):
+    # Đo máy 1 (2026-11-03): cửa sổ ASIOLINKCLASS… "O Deus ASIO Link Pro … - Studio
+    # One.exe" là cửa sổ ngầm của driver — bật lên chỉ ra khung trắng, kể cả sau khi
+    # mở Control Panel (bảng thật là ASIO4ALL). KTV lỡ bật/tắt nó thì nó nằm trong
+    # ghi nhận — "Hiện tất cả" vẫn không được bật nó.
+    fake_gui.wins[27] = {"title": "O Deus ASIO Link Pro 2.4.2.0 - Studio One.exe",
+                         "cls": "ASIOLINKCLASS91870054", "vis": False}
+    fake_gui.wins[28] = {"title": "\u266b ASIO4ALL v2.20.1", "cls": "#32770", "vis": True}
+    with patch.object(so_windows, "all_windows", return_value=[21, 23, 27, 28]):
+        assert [e.hwnd for e in so_windows.list_windows()] == [23, 21, 28, 31]
+        so_windows.show_window(27)
+        so_windows.hide_window(27)
+        so_windows.hide_all()
+        fake_gui.shown.clear()
+        so_windows.show_all(focus_main=False)
+    assert {h for h, _ in fake_gui.shown} == {23, 28}

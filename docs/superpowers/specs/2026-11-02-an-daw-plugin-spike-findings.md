@@ -63,8 +63,12 @@ Bài `F:\vp.song`, app build từ nhánh. Cửa sổ tiến trình `Studio One.e
 - Bài mẫu lúc mở **không có cửa sổ plugin nào**: Studio One không giữ cửa sổ plugin khi nạp bài (hoặc bài lưu
   lúc plugin đã đóng). KTV phải hiện Studio One → mở plugin → ẩn tất cả → bật riêng plugin. Bấm ✕ của plugin
   là **huỷ** cửa sổ (phải mở lại từ Studio One).
-- Bảng ASIO Link Pro chưa từng mở thì `SW_SHOW` chỉ ra khung trắng (không có cửa sổ con, tự vẽ) — app không
-  mở thay được bảng driver. `show_all` giờ chỉ hiện lại cửa sổ app đã ẩn (+ cửa sổ chính) nên không bật nó.
+- Cửa sổ `ASIOLINKCLASS…` ("O Deus ASIO Link Pro … - Studio One.exe") là **cửa sổ ngầm của driver**, không phải
+  bảng điều khiển: `SW_SHOW` (kể cả `RedrawWindow`) chỉ ra khung trắng, **cả sau khi** mở Studio One → Options →
+  Audio Setup → Control Panel (2026-11-03). Nút Control Panel mở bảng **ASIO4ALL v2.20.1** (`#32770`, driver Link Pro
+  chạy chồng lên ASIO4ALL) — đó mới là bảng ASIO KTV chỉnh; nó chỉ tồn tại khi đang mở và có trong danh sách cửa sổ.
+  Lớp `ASIOLINKCLASS` nay là cửa sổ ngầm (`INTERNAL_WINDOW_CLASS_PREFIXES`): không vào danh sách, `show_all` không
+  bật dù đã nằm trong ghi nhận.
 - Tiêu đề bảng ASIO Link có chữ "Studio One" → trước đây bị nhận là **cửa sổ chính** (cả luồng đóng an toàn).
   `title_is_main` nay đòi tiêu đề **bắt đầu** bằng tên DAW.
 - App **ghim trên cùng**: plugin bật từ danh sách nổi trên app (giữ TOPMOST tới khi ẩn). Plugin TOPMOST che
