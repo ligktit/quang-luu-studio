@@ -22,6 +22,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from core import net_tls
+
 log = logging.getLogger(__name__)
 
 _TIMEOUT = 10
@@ -120,7 +122,7 @@ def _post(payload: dict) -> bool:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+        with net_tls.urlopen(req, timeout=_TIMEOUT) as resp:
             return resp.status == 200
     except Exception as e:
         log.info("Crash report send failed: %s", e)
