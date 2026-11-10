@@ -16,6 +16,8 @@ script dò đường này trước Program Files. Máy còn bản cũ trong Prog
 | `QLS_SuaPOToken.ps1` | Toàn bộ phần sửa PO Token + tải thử |
 | `SuaManHinhNhung.bat` | Sửa lỗi **nạp QtWebEngine thất bại** (ô "Màn hình karaoke nhúng" bị mờ): đọc lỗi trong `app.log` → cài Heavy / loại trừ Defender / dọn `_MEI` / cập nhật VC++ → mở app xác nhận (`-Xem`, `-Auto`, `-LoaiTruTemp`, `-KhongMoApp`) |
 | `QLS_SuaManHinhNhung.ps1` | Toàn bộ phần sửa màn hình nhúng |
+| `SuaChungChi.bat` | Sửa lỗi **không kết nối được máy chủ** do thiếu chứng chỉ gốc (`app.log`: `CERTIFICATE_VERIFY_FAILED ... unable to get local issuer certificate`): kiểm giờ máy / chặn HTTPS / ISRG Root X1-X2 → nhờ Windows tự tải gốc → vẫn thiếu thì nạp gốc nhúng sẵn → tắt/mở lại app (`-ChiKiem`, `-Auto`, `-KhongMoLaiApp`, `-Server`) |
+| `QLS_SuaChungChi.ps1` | Toàn bộ phần sửa chứng chỉ |
 
 > Các tệp phải nằm **cùng một thư mục**. Gửi cho khách dạng file nén rồi bảo giải nén ra Desktop.
 > Quy trình chuẩn: chạy `ChanDoan.bat` → gửi báo cáo cho kỹ thuật → chạy `SuaLoi.bat` → chạy lại
@@ -103,6 +105,18 @@ Các mục nó xử lý:
 7. **Quyền micro** bị Deny → đặt lại Allow (kể cả mục `NonPackaged` dành cho app `.exe`);
    dịch vụ Windows Audio dừng → khởi động; Controlled Folder Access chặn ghi Documents →
    thêm ngoại lệ (cần Admin).
+
+### Về lỗi chứng chỉ SSL (`SuaChungChi.bat`)
+
+Gặp thật trên 2 máy (14/10 và 24/10/2026): máy Windows rút gọn hoặc mới cài **thiếu ISRG Root X1/X2**
+(gốc Let's Encrypt của máy chủ). Trình duyệt tự tải gốc còn thiếu nên vẫn vào mạng bình thường;
+Python trong app chỉ đọc kho có sẵn nên báo `CERTIFICATE_VERIFY_FAILED`. **Bẫy:** sửa kho xong mà
+app đang mở thì app **vẫn lỗi**, vì urllib giữ kho cũ tới khi tắt app. Phải tắt hẳn rồi mở lại.
+
+Script chạy được không cần admin. Khi phải nạp gốc nhúng sẵn mà không có admin, gốc vào kho của
+người dùng và Windows hiện hộp **Security Warning**: bấm **Yes**. Ngay ở bước kiểm, việc dựng chuỗi chứng
+chỉ đã có thể khiến Windows tự tải gốc (vô hại). Bản app có `core/net_tls.py` nạp sẵn bộ gốc
+certifi và dựng context mới mỗi lần gọi, nên không còn dính lỗi này nữa.
 
 ### Về cookie YouTube — mục duy nhất không tự sửa được hoàn toàn
 

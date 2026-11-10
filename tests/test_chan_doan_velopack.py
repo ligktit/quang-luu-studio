@@ -7,7 +7,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CD = os.path.join(ROOT, "tools", "chan_doan")
 SCRIPTS = ["QLS_ChanDoan.ps1", "QLS_SuaLoi.ps1", "QLS_SuaManHinhNhung.ps1",
-           "QLS_SuaPOToken.ps1", "KiemTraManHinhNhung.ps1"]
+           "QLS_SuaPOToken.ps1", "QLS_SuaChungChi.ps1", "KiemTraManHinhNhung.ps1"]
 
 
 def _read(name):
