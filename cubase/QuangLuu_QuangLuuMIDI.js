@@ -303,7 +303,9 @@ var HO_SO_PLUGIN = [
       // App gui Scale theo bang Pitch Correct cua ho so DAW cubase (Major 22-63 tam 43, Minor 64-105 tam 85). Tren Modern Scale
       // cua Auto-Tune 43 lai la Dorian, 85 ngoai bang -> quy doi tai day: [tu, den, gia tri Auto-Tune]. Gia tri 0-22 (bang Auto-Tune: da can chinh
       // bang app: Major 10 / Minor 18, hoac Chromatic) di thang. Nho vay may khach KHONG can calibration_overrides.json nua.
-      scale_tu_pitch_correct: [[23, 63, 10], [64, 105, 18]] }
+      scale_tu_pitch_correct: [[23, 63, 10], [64, 105, 18]] },
+    // Gop tu ban sua tay tren may 3 DESKTOP-M21N7VP (2026-11-10, nguoi khac them, minh chua do lai tren Auto-Tune Artist that).
+    { ten: 'Auto-Tune Artist', key_root: 2, scale_type: 3, tone_auto: -1, be: -1, scale_dorian: 5, scale_chromatic: 10, scale_classic: -1, scale_tu_pitch_correct: [[0, 5, 10], [6, 13, 0], [14, 22, 5], [23, 63, 0], [64, 105, 5]] }
 ]
 function scaleTheoHoSo(value) {        // value 0..1 app gui -> 0..1 theo bang cua plugin dang chon
     var bang = hoSoHienTai.scale_tu_pitch_correct

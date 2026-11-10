@@ -75,7 +75,9 @@ def test_js_gan_cc_app_vao_tham_so_plugin():
     # Chỉ số đo trên máy thật: Pitch Correct (Cubase 13.0.10, 2026-10-04),
     # Auto-Tune Pro 11 VST3 (máy khách, 2026-10-06). tone_auto = -1: nút On của insert slot.
     ho_so = _js_ho_so_plugin()
-    assert list(ho_so) == ["Pitch Correct", "Auto-Tune Pro"], "hồ sơ đầu tiên là mặc định khi plugin lạ"
+    assert list(ho_so) == ["Pitch Correct", "Auto-Tune Pro", "Auto-Tune Artist"], "hồ sơ đầu tiên là mặc định khi plugin lạ"
+    # Auto-Tune Artist: gộp từ bản sửa tay trên máy 3 (2026-11-10) — cùng Key = 2 với Pro, nên script phải chọn theo tên.
+    assert ho_so["Auto-Tune Artist"] == {"key_root": 2, "scale_type": 3, "tone_auto": -1, "be": -1, "scale_dorian": 5, "scale_chromatic": 10, "scale_classic": -1}
     assert ho_so["Pitch Correct"] == {"key_root": 6, "scale_type": 7, "tone_auto": 3, "be": -1, "scale_dorian": -1, "scale_chromatic": -1, "scale_classic": -1}
     # Auto-Tune Pro: tham số 162 "Modern Scale" là Scale trên GUI; tham số 1 "Scale" là bảng cổ điển, không dùng.
     assert ho_so["Auto-Tune Pro"] == {"key_root": 2, "scale_type": 162, "tone_auto": -1, "be": 155, "be_la_bypass": 1, "scale_dorian": 45, "scale_chromatic": 2, "scale_classic": 1}
