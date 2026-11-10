@@ -19,3 +19,30 @@
 
 Build tại máy dev (không tag): `build_installer.bat` → `releases\QuangLuuStudio-CaiDat.exe` +
 `installer_output\Setup_QuangLuuStudio_v<ver>.exe`. Cần `vpk` 1.2.161 (`dotnet tool install -g vpk --version 1.2.161`).
+
+## Việc treo: build lại 1.9.0 trước khi gửi khách (ghi 2026-11-10)
+
+Bản 1.9.0 build tại máy dev ngày 2026-10-13 (`releases\QuangLuuStudio-CaiDat.exe`, gói
+`QuangLuuStudio-1.9.0-full.nupkg`) đã **cũ**. Nó mang `cubase/QuangLuu_QuangLuuMIDI.js` có
+`QLS_SCRIPT_VERSION = '2026-10-08'`, chưa có sửa ad5b745 (2026-10-28). Sửa này giữ hồ sơ plugin đã chọn theo
+tên, để script không ghi Scale nhầm vào tham số 3 "Detune" của Auto-Tune Pro.
+
+**Đừng gửi lại bộ cài/gói đó cho máy nào nữa.**
+
+Chuyện đã xảy ra:
+
+- Máy 3 DESKTOP-M21N7VP cài gói này lúc 2026-11-09 19:28. Velopack thay `current\` bằng nội dung gói, nên script
+  kèm app quay về bản cũ.
+- Tự sửa âm thanh báo «Bản điều khiển trong phần mềm thu âm — cần làm tay». Nếu nó chép được bản cũ đè lên
+  Documents thì máy sẽ quay lại lỗi Scale→Detune.
+- Đã chữa tay qua UltraViewer: đồng bộ Documents và `current\cubase` về bản HEAD, gỡ ReadOnly.
+- Lần cài hoặc cập nhật kế tiếp bằng gói cũ sẽ làm lỗi quay lại.
+
+Khi build lại:
+
+1. Build từ HEAD của `feat/velopack-installer`. Commit trước các sửa đang ở working tree: Audio Doctor nhận
+   file ReadOnly (`core/audio_doctor/*`) và hồ sơ Auto-Tune Artist trong script Cubase.
+2. Kiểm script trong bản build trùng repo:
+   `fc /b dist\QuangLuuStudio\cubase\QuangLuu_QuangLuuMIDI.js cubase\QuangLuu_QuangLuuMIDI.js`.
+   Hoặc mở file trong gói và xem `QLS_SCRIPT_VERSION` ≥ `'2026-10-28'` và có dòng `if (hoSoHienTai.key_root === idx) return`.
+3. Bộ cài/gói mới thay cho bản cũ ở mọi chỗ đã gửi khách. Xong thì xoá mục này.
