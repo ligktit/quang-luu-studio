@@ -18,13 +18,14 @@ def _resolve_cc_number(dashboard, cc_key):
 def midi_route(dashboard, cc_key):
     """(khoá gốc, hàm gửi CC) của một kênh mixer.
 
-    Mic 2 dùng chung số CC (mức, tắt, CC phụ mute_multi_cc) với Mic nhưng đi
-    kênh MIDI 2 và không phát đôi; mọi kênh khác gửi thẳng engine.send_midi
-    như trước.
+    Mic 2 / Vang Mic 2 dùng chung số CC (mức, tắt, CC phụ mute_multi_cc) với
+    Mic / Vang nhưng đi kênh MIDI 2 và không phát đôi; mọi kênh khác gửi thẳng
+    engine.send_midi như trước.
     """
-    if cc_key == mic2.MIC2_KEY:
+    base = mic2.MIC2_CHANNELS.get(cc_key)
+    if base is not None:
         engine = dashboard.engine
-        return mic2.MIC_KEY, lambda cc, v: engine.send_midi_on_channel(mic2.MIC2_CHANNEL, cc, v)
+        return base, lambda cc, v: engine.send_midi_on_channel(mic2.MIC2_CHANNEL, cc, v)
     return cc_key, dashboard.engine.send_midi
 
 
@@ -190,8 +191,8 @@ def build_panel_mixer(dashboard) -> GlassPanel:
     dashboard._mixer_mute_setters = {}
 
     def _add_channel(ch, ch_cfg):
-        """Dựng một kênh. `ch_cfg` None = kênh không nằm trong ui_config (Mic 2)
-        → không có menu Dev Mode sửa/ẩn."""
+        """Dựng một kênh; `ch_cfg` là entry mà menu Dev Mode Sửa/Ẩn nhắm tới
+        (Mic 2 dùng entry giả id mix_mic_2 — frontend xử lý riêng)."""
         ch_view = HMixerChannel(
             icon=ch["icon"],
             label=ch["label"],
@@ -275,15 +276,31 @@ def build_panel_mixer(dashboard) -> GlassPanel:
             # thứ hai cùng CC sẽ đè kênh đầu, không đồng bộ được. Bỏ qua kênh trùng.
             print(f"[MIXER] Bỏ kênh '{ch['label']}': trùng CC {ch['cc']!r} với kênh đã có")
             continue
+        if two_mics and ch["cc"] == mic2.REVERB_KEY:
+            # Vang Mic 2 ngay dưới Vang: cùng kiểu kênh, cùng số CC, kênh MIDI 2.
+            # Tên lấy từ mic_labels (frontend _on_edit_widget đổi tên vào đó).
+            rv2 = dict(ch, cc=mic2.MIC2_REVERB_KEY, label=mic2.reverb2_label(dashboard.settings),
+                       default=_get_level(mic2.MIC2_REVERB_KEY, 0))
+            cfg_rv2 = dict(ch_cfg, id=mic2.MIC2_REVERB_KEY, cc=mic2.MIC2_REVERB_KEY,
+                           label=rv2["label"])
+            for spec, cfg in ((ch, ch_cfg), (rv2, cfg_rv2)):
+                _add_channel(spec, cfg).set_muted(bool(mute_states.get(spec["cc"], False)))
+            continue
         if not (two_mics and ch["cc"] == mic2.MIC_KEY):
             _add_channel(ch, ch_cfg)
             continue
         # Mic + Mic 2 liền nhau, cùng kiểu kênh; dựng lại (Cài đặt, Dev Mode)
         # vẫn hiện đúng trạng thái tắt đang giữ trong mute_states.
+        # Tên hai kênh lấy từ settings["mic_labels"], không từ ui_config: menu
+        # Dev Mode mang tên đang hiện để Sửa thấy đúng tên, và frontend ghi tên
+        # mới vào mic_labels (_on_edit_widget). Mic 2 không có entry ui_config —
+        # cfg giả id/cc = mix_mic_2 chỉ để menu biết đang bấm kênh nào.
         ch["label"] = mic_labels[mic2.MIC_KEY]
         ch2 = dict(ch, cc=mic2.MIC2_KEY, label=mic_labels[mic2.MIC2_KEY],
                    default=_get_level(mic2.MIC2_KEY, 0))
-        for spec, cfg in ((ch, ch_cfg), (ch2, None)):
+        cfg1 = dict(ch_cfg, label=ch["label"])
+        cfg2 = dict(ch_cfg, id=mic2.MIC2_KEY, cc=mic2.MIC2_KEY, label=ch2["label"])
+        for spec, cfg in ((ch, cfg1), (ch2, cfg2)):
             _add_channel(spec, cfg).set_muted(bool(mute_states.get(spec["cc"], False)))
 
     if two_mics and dashboard._mixer_channels:

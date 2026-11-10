@@ -591,7 +591,39 @@ class MainDashboard(QMainWindow):
             self._apply_widget_calibration(dialog.result_calibration)
             self.refresh_ui()
 
+    def _mic_channel_key(self, panel_name, widget_data):
+        """mix_mic / mix_mic_2 / mix_reverb_2 khi `widget_data` là kênh lấy tên từ
+        settings["mic_labels"] lúc đang bật 2 mic, ngược lại None.
+
+        Dev Mode đổi tên các kênh này phải ghi vào mic_labels (mixer.py đọc từ
+        đó) — ghi vào ui_config thì app bỏ qua.
+        """
+        if panel_name != "mixer" or not mic2.is_enabled(self.settings):
+            return None
+        key = widget_data.get("cc")
+        return key if key in (mic2.MIC_KEY, *mic2.MIC2_CHANNELS) else None
+
+    def _save_mic_label(self, key, name):
+        self.settings["mic_labels"] = mic2.with_label(self.settings, key, name)
+        if not backend.ConfigManager.save_settings(self.settings):
+            self._show_message("Không lưu được tên mic", is_error=True)
+
+    def _rename_mic2_channel(self, key, widget_data):
+        """Mic 2 / Vang Mic 2 không có entry ui_config (mọi thông số theo kênh
+        Mic / Vang) → chỉ đổi tên."""
+        from PySide6.QtWidgets import QInputDialog
+        what = "kênh vang mic 2" if key == mic2.MIC2_REVERB_KEY else "mic 2"
+        name, ok = QInputDialog.getText(self, f"Đổi tên {what}", f"Tên {what}:",
+                                        text=widget_data.get("label", ""))
+        if ok:
+            self._save_mic_label(key, name)
+            self.refresh_ui()
+
     def _on_edit_widget(self, panel_name, widget_data):
+        mic_key = self._mic_channel_key(panel_name, widget_data)
+        if mic_key in mic2.MIC2_CHANNELS:
+            self._rename_mic2_channel(mic_key, widget_data)
+            return
         from ui.dialogs.widget_builder import WidgetBuilderDialog
         dialog = WidgetBuilderDialog(self, panel_name=panel_name,
                                      widget_type=widget_data.get("type", "slider"),
@@ -607,7 +639,13 @@ class MainDashboard(QMainWindow):
                                    is_error=True)
                 self.refresh_ui()
                 return
-            panel_list[idx] = dialog.result_data
+            new_data = dialog.result_data
+            if mic_key == mic2.MIC_KEY:
+                # Tên mới vào mic_labels; ui_config giữ tên cũ (dùng lại khi về 1 mic),
+                # các thông số khác (dải, màu…) vẫn lưu ui_config như mọi kênh.
+                self._save_mic_label(mic_key, new_data.get("label", ""))
+                new_data = dict(new_data, label=panel_list[idx].get("label", ""))
+            panel_list[idx] = new_data
             ui_config[panel_name] = panel_list
             backend.UiConfigManager.save_ui_config(ui_config)
             self._apply_widget_calibration(dialog.result_calibration)
@@ -654,6 +692,9 @@ class MainDashboard(QMainWindow):
             self.engine.send_midi(int(MIDI_CC.get(key)), val)
             
     def _on_hide_widget(self, panel_name, widget_data):
+        if self._mic_channel_key(panel_name, widget_data) in mic2.MIC2_CHANNELS:
+            self._show_message("Muốn bỏ Mic 2: Cài đặt → Âm thanh → bỏ chọn \"Phòng có 2 micro\"")
+            return
         ui_config = backend.UiConfigManager.load_ui_config()
         panel_list = ui_config.get(panel_name, [])
         idx = _find_widget_index(panel_list, widget_data)
@@ -1049,8 +1090,10 @@ class MainDashboard(QMainWindow):
                             ("mix_reverb", "mute_reverb", 52),
                             ("mix_backing", "mute_backing", 53)]
             if mic2.is_enabled(self.settings):
-                # Mic 2: cùng CC tắt với Mic, đi kênh MIDI 2 (panels.mixer.midi_route).
+                # Mic 2 / Vang Mic 2: cùng CC tắt với Mic / Vang, đi kênh MIDI 2
+                # (panels.mixer.midi_route).
                 mute_cc_keys.insert(1, (mic2.MIC2_KEY, "mute_mic", 51))
+                mute_cc_keys.insert(3, (mic2.MIC2_REVERB_KEY, "mute_reverb", 52))
             multi_cc_map = {}
             try:
                 multi_cc_map = backend.AppConfig.get_mute_multi_cc()
@@ -1150,6 +1193,7 @@ class MainDashboard(QMainWindow):
             self.mute_states.setdefault(mic2.MIC2_KEY, self._saved_mic_mute(mic2.MIC2_KEY))
         else:
             self.mute_states.pop(mic2.MIC2_KEY, None)
+            self.mute_states.pop(mic2.MIC2_REVERB_KEY, None)
         self.refresh_ui()
         # Kênh dựng lại mặc định "mở" — trả hình tắt cho MỌI kênh đang tắt
         # (Vang, Bè...), không thì giao diện báo mở trong khi DAW vẫn tắt.
@@ -2707,14 +2751,16 @@ class MainDashboard(QMainWindow):
         Bấm mute_btn thay vì gửi CC thẳng để nút mute trong Mixer, mute_states
         và các CC phụ (mute_multi_cc) đều đồng bộ — chỉ một nguồn logic duy nhất.
         """
-        try:
-            ch = self._mixer_channels.get("mix_reverb")
-            if ch is None or not getattr(ch, "mute_btn", None):
-                return
-            if ch.is_muted() != muted:
-                ch.mute_btn.click()
-        except Exception as e:
-            print(f"[AUTO ECHO] đặt mute Vang lỗi: {e}")
+        # Hai mic: Vang Mic 2 là kênh riêng (kênh MIDI 2) — tự bật/tắt cả hai.
+        for key in ("mix_reverb", mic2.MIC2_REVERB_KEY):
+            try:
+                ch = self._mixer_channels.get(key)
+                if ch is None or not getattr(ch, "mute_btn", None):
+                    continue
+                if ch.is_muted() != muted:
+                    ch.mute_btn.click()
+            except Exception as e:
+                print(f"[AUTO ECHO] đặt mute {key} lỗi: {e}")
 
     # ── Tự động bật/tắt Khử ồn theo nhạc (Premium) ──────────────────────────
     # Nhạc vào là TẮT khử ồn: lúc hát, noise gate hay ngoạm mất đầu/đuôi câu và

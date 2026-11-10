@@ -15,9 +15,23 @@ def test_shared_excludes_per_mic():
 
 
 def test_shared_includes_custom_mute_multi():
-    mm = {"mix_reverb": [{"cc": 41}, {"cc": 42}, {"cc": 43}, {"cc": 44}], "mix_mic": [{"cc": 60}]}
-    s = shared_cc_numbers(MIDI_CC, ["mix_reverb"], {}, mm)
-    assert s == frozenset({22, 41, 42, 43, 44})       # 60 (dưới mix_mic) không phát đôi
+    mm = {"mix_backing": [{"cc": 45}], "mix_mic": [{"cc": 60}]}
+    s = shared_cc_numbers(MIDI_CC, [], {}, mm)
+    assert s == frozenset({45})                       # 60 (dưới mix_mic) không phát đôi
+
+
+def test_vang_rieng_tung_mic_khong_phat_doi():
+    """Máy 826077C: tắt Vang mic dây làm tắt luôn vang mic không dây đang hát.
+    Vang (mức, tắt, CC phụ) là của riêng từng mic — kể cả cấu hình cũ vẫn liệt kê."""
+    cc = dict(MIDI_CC, mute_reverb=52)
+    mm = {"mix_reverb": [{"cc": 41}, {"cc": 42}, {"cc": 43}, {"cc": 44}]}
+    s = shared_cc_numbers(cc, ["mix_reverb", "mute_reverb", "be"], {}, mm)
+    assert s == frozenset({47})
+
+
+def test_mac_dinh_khong_con_vang_trong_danh_sach_phat_doi():
+    from core.mic2 import DEFAULT_SHARED_NAMES
+    assert "mix_reverb" not in DEFAULT_SHARED_NAMES and "mute_reverb" not in DEFAULT_SHARED_NAMES
 
 
 def test_shared_skips_unknown_names():
@@ -52,3 +66,36 @@ def test_is_enabled_chi_studio_one():
     # Ô "2 micro" trong Cài đặt đọc ý định gốc, không phụ thuộc DAW.
     assert two_mics_configured({"mic_count": 2, "daw_kind": "cubase"})
     assert not two_mics_configured({"mic_count": 1}) and not two_mics_configured(None)
+
+
+def test_with_label_doi_mot_mic_giu_mic_kia():
+    from core.mic2 import with_label
+    s = {"mic_labels": {"mix_mic": "A", "mix_mic_2": "B"}}
+    assert with_label(s, "mix_mic", "  Mic P420 ") == {"mix_mic": "Mic P420", "mix_mic_2": "B"}
+    assert with_label({}, "mix_mic_2", "Mic KG") == {"mix_mic": "Mic Dây", "mix_mic_2": "Mic KG"}
+    # Tên trống / không phải chuỗi -> về tên mặc định, không lưu chuỗi rỗng.
+    assert with_label(s, "mix_mic", "  ")["mix_mic"] == "Mic Dây"
+    assert with_label(s, "mix_mic_2", None)["mix_mic_2"] == "Mic Không Dây"
+    # Không sửa dict settings gốc.
+    assert s["mic_labels"] == {"mix_mic": "A", "mix_mic_2": "B"}
+
+
+def test_with_label_tu_choi_khoa_la():
+    import pytest
+    from core.mic2 import with_label
+    with pytest.raises(ValueError):
+        with_label({}, "mix_reverb", "x")
+
+
+def test_ten_vang_mic2_tu_suy_va_tu_dat():
+    from core.mic2 import reverb2_label, with_label
+    assert reverb2_label({}) == "Vang Mic Không Dây"
+    assert reverb2_label({"mic_labels": {"mix_mic_2": "Mic KG"}}) == "Vang Mic KG"
+    s = {"mic_labels": {"mix_mic_2": "Mic KG"}}
+    s["mic_labels"] = with_label(s, "mix_reverb_2", " Vang KG ")
+    assert reverb2_label(s) == "Vang KG"
+    # Đổi tên mic vẫn giữ tên vang tự đặt; xoá trống -> về tên tự suy.
+    s["mic_labels"] = with_label(s, "mix_mic", "Mic P420")
+    assert s["mic_labels"] == {"mix_mic": "Mic P420", "mix_mic_2": "Mic KG", "mix_reverb_2": "Vang KG"}
+    s["mic_labels"] = with_label(s, "mix_reverb_2", "")
+    assert "mix_reverb_2" not in s["mic_labels"] and reverb2_label(s) == "Vang Mic KG"

@@ -395,3 +395,198 @@ def test_tat_mic_gui_midi_truoc_roi_moi_ghi_dia(qapp, mock_engine, save_settings
         dash._mixer_channels[key].mute_btn.click()
         # Mọi lệnh MIDI của lần bấm đi trước, ghi đĩa sau cùng.
         assert order[0] == "midi" and order[-1] == "save" and order.count("save") == 1
+
+
+def _dev_dashboard(qtbot, settings):
+    dash = _make_dashboard(qtbot, settings)
+    dash.is_dev_mode = True
+    dash.refresh_ui()
+    return dash
+
+
+def _click_menu(view, text):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QMenu
+
+    class FakeMenu(QMenu):
+        # Không mở menu thật (modal) — bấm thẳng mục cần thử.
+        def exec(self, *_a, **_k):
+            next(a for a in self.actions() if a.text() == text).trigger()
+    with patch("PySide6.QtWidgets.QMenu", FakeMenu):
+        view.customContextMenuRequested.emit(QPoint(1, 1))
+
+
+def test_dev_mode_sua_ten_mic_ghi_mic_labels(qapp, mock_engine, save_settings, qtbot):
+    """Bật 2 mic: Dev Mode → Sửa kênh Mic đổi tên phải hiện ngay (máy 826077C:
+    lưu "Mic P420" trong Dev Mode mà vẫn hiện "Mic Dây")."""
+    from PySide6.QtWidgets import QDialog
+    dash = _dev_dashboard(qtbot, {"mic_count": 2})
+    saved_ui = {}
+    seen = {}
+
+    def _make(*_a, existing_data=None, **_k):
+        seen["label"] = existing_data["label"]
+        d = MagicMock()
+        d.exec.return_value = QDialog.Accepted
+        d.result_data = dict(existing_data, label="Mic P420", color="#123456")
+        d.result_calibration = None
+        return d
+    with patch("ui.dialogs.widget_builder.WidgetBuilderDialog", side_effect=_make), \
+         patch("frontend_qt.backend.UiConfigManager.save_ui_config",
+               side_effect=lambda cfg: saved_ui.update(copy.deepcopy(cfg))):
+        _click_menu(dash._mixer_channels["mix_mic"], "Sửa")
+    assert seen["label"] == "Mic Dây"   # hộp Sửa thấy đúng tên đang hiện
+    assert dash.settings["mic_labels"] == {"mix_mic": "Mic P420", "mix_mic_2": "Mic Không Dây"}
+    save_settings.assert_called()
+    assert dash._mixer_channels["mix_mic"]._name_text == "Mic P420"
+    # ui_config giữ tên gốc (dùng khi về 1 mic), thông số khác vẫn lưu.
+    mic_entry = next(e for e in saved_ui["mixer"] if e["id"] == "mix_mic")
+    assert mic_entry["label"] == "Mic" and mic_entry["color"] == "#123456"
+
+
+def test_dev_mode_doi_ten_mic2(qapp, mock_engine, save_settings, qtbot):
+    dash = _dev_dashboard(qtbot, {"mic_count": 2, "mic_labels": {"mix_mic": "Mic P420"}})
+    with patch("PySide6.QtWidgets.QInputDialog.getText", return_value=("Mic KG", True)) as ask, \
+         patch("frontend_qt.backend.UiConfigManager.save_ui_config") as save_ui:
+        _click_menu(dash._mixer_channels["mix_mic_2"], "Sửa")
+    assert ask.call_args.kwargs["text"] == "Mic Không Dây"
+    save_ui.assert_not_called()          # Mic 2 không có entry ui_config
+    assert dash.settings["mic_labels"] == {"mix_mic": "Mic P420", "mix_mic_2": "Mic KG"}
+    assert dash._mixer_channels["mix_mic_2"]._name_text == "Mic KG"
+
+
+def test_dev_mode_huy_doi_ten_mic2_khong_luu(qapp, mock_engine, save_settings, qtbot):
+    dash = _dev_dashboard(qtbot, {"mic_count": 2})
+    save_settings.reset_mock()
+    with patch("PySide6.QtWidgets.QInputDialog.getText", return_value=("X", False)):
+        _click_menu(dash._mixer_channels["mix_mic_2"], "Sửa")
+    save_settings.assert_not_called()
+    assert "mic_labels" not in dash.settings
+
+
+def test_dev_mode_an_mic2_chi_huong_dan(qapp, mock_engine, save_settings, qtbot):
+    dash = _dev_dashboard(qtbot, {"mic_count": 2})
+    with patch("frontend_qt.backend.UiConfigManager.save_ui_config") as save_ui, \
+         patch.object(dash, "_show_message") as msg:
+        _click_menu(dash._mixer_channels["mix_mic_2"], "Ẩn")
+    save_ui.assert_not_called()
+    assert "Phòng có 2 micro" in msg.call_args.args[0]
+    assert "mix_mic_2" in dash._mixer_channels
+
+
+def test_mot_mic_dev_mode_sua_mic_van_ghi_ui_config(qapp, mock_engine, save_settings, qtbot):
+    from PySide6.QtWidgets import QDialog
+    dash = _dev_dashboard(qtbot, {})
+    with patch("ui.dialogs.widget_builder.WidgetBuilderDialog") as Dlg, \
+         patch("frontend_qt.backend.UiConfigManager.save_ui_config") as save_ui:
+        Dlg.return_value.exec.return_value = QDialog.Accepted
+        Dlg.return_value.result_data = {"id": "mix_mic", "type": "slider", "label": "Mic P420",
+                                        "cc": "mix_mic", "range": [-10, 10]}
+        Dlg.return_value.result_calibration = None
+        _click_menu(dash._mixer_channels["mix_mic"], "Sửa")
+    entry = next(e for e in save_ui.call_args.args[0]["mixer"] if e["id"] == "mix_mic")
+    assert entry["label"] == "Mic P420"
+    assert "mic_labels" not in dash.settings
+
+
+# ── Vang riêng từng mic (máy 826077C: tắt Vang mic dây làm tắt luôn vang mic
+#    không dây đang hát, vì Vang từng phát đôi sang kênh MIDI 2) ────────────────
+_REVERB_MULTI = {"mix_reverb": [{"cc": 41, "on_value": 127, "off_value": 0},
+                                {"cc": 42, "on_value": 127, "off_value": 0}]}
+
+
+def test_vang_mic2_ngay_duoi_vang_gui_kenh_2(qapp, mock_engine, save_settings, qtbot):
+    dash = _make_dashboard(qtbot, {"mic_count": 2, "mixer_levels": {"mix_reverb_2": 3},
+                                   "mic_labels": {"mix_mic_2": "Mic KG"}})
+    keys = list(dash._mixer_channels)
+    assert keys[keys.index("mix_reverb") + 1] == "mix_reverb_2"
+    assert dash._mixer_channels["mix_reverb_2"]._name_text == "Vang Mic KG"
+    assert dash._mixer_sliders["mix_reverb_2"].value() == 3
+
+    mock_engine.reset_mock()
+    dash._mixer_sliders["mix_reverb_2"].setValue(0)     # 0 dB -> CC 76 như Vang
+    mock_engine.send_midi_on_channel.assert_called_once_with(1, 22, 76)
+    mock_engine.send_midi.assert_not_called()
+
+    mock_engine.reset_mock()
+    with patch("frontend_qt.backend.AppConfig.get_mute_multi_cc", return_value=_REVERB_MULTI):
+        dash._mixer_channels["mix_reverb_2"].mute_btn.click()
+    assert _channel_calls(mock_engine) == [(1, 52, 127), (1, 41, 127), (1, 42, 127)]
+    mock_engine.send_midi.assert_not_called()
+    assert dash.mute_states["mix_reverb_2"] is True
+    assert dash.mute_states.get("mix_reverb", False) is False
+
+
+def test_tat_vang_mic1_khong_dung_kenh_2(qapp, mock_engine, save_settings, qtbot):
+    dash = _make_dashboard(qtbot, {"mic_count": 2})
+    mock_engine.reset_mock()
+    with patch("frontend_qt.backend.AppConfig.get_mute_multi_cc", return_value=_REVERB_MULTI):
+        dash._mixer_channels["mix_reverb"].mute_btn.click()
+    mock_engine.send_midi_on_channel.assert_not_called()
+    sent = [c.args[:2] for c in mock_engine.send_midi.call_args_list]
+    assert sent == [(52, 127), (41, 127), (42, 127)]
+    assert dash._mixer_channels["mix_reverb_2"].is_muted() is False
+
+
+def test_dong_bo_gui_trang_thai_vang_mic2_tren_kenh_2(qapp, mock_engine, save_settings, qtbot):
+    dash = _make_dashboard(qtbot, {"mic_count": 2})
+    dash._mixer_channels["mix_reverb_2"].mute_btn.click()
+    mock_engine.reset_mock()
+    with patch("frontend_qt.backend.AppConfig.get_mute_multi_cc", return_value=_REVERB_MULTI):
+        dash._sync_midi_states()
+    calls = _channel_calls(mock_engine)
+    assert (1, 52, 127) in calls and (1, 41, 127) in calls
+    assert (1, 22, 76) in calls                          # mức Vang Mic 2 (0 dB)
+    assert (52, 0) in [c.args[:2] for c in mock_engine.send_midi.call_args_list]  # Vang mic 1 mở
+
+
+def test_tu_bat_vang_theo_nhac_bat_tat_ca_hai_vang(qapp, mock_engine, save_settings, qtbot):
+    dash = _make_dashboard(qtbot, {"mic_count": 2})
+    dash._set_reverb_muted(True)
+    assert dash._mixer_channels["mix_reverb"].is_muted()
+    assert dash._mixer_channels["mix_reverb_2"].is_muted()
+    dash._set_reverb_muted(False)
+    assert not dash._mixer_channels["mix_reverb_2"].is_muted()
+
+
+def test_mot_mic_khong_co_vang_mic2(qapp, mock_engine, save_settings, qtbot):
+    dash = _make_dashboard(qtbot, {})
+    assert "mix_reverb_2" not in dash._mixer_channels
+    dash._set_reverb_muted(True)                         # không lỗi khi thiếu kênh
+    assert dash._mixer_channels["mix_reverb"].is_muted()
+
+
+def test_tat_2_mic_bo_vang_mic2(qapp, mock_engine, save_settings, qtbot):
+    dash = _make_dashboard(qtbot, {"mic_count": 2})
+    dash._mixer_channels["mix_reverb_2"].mute_btn.click()
+    dash.settings["mic_count"] = 1
+    dash._apply_mic_count_setting()
+    assert "mix_reverb_2" not in dash._mixer_channels
+    assert "mix_reverb_2" not in dash.mute_states
+
+
+def test_dev_mode_doi_ten_vang_mic2(qapp, mock_engine, save_settings, qtbot):
+    dash = _dev_dashboard(qtbot, {"mic_count": 2, "mic_labels": {"mix_mic": "Mic P420", "mix_mic_2": "Mic KG"}})
+    with patch("PySide6.QtWidgets.QInputDialog.getText", return_value=("Vang KG", True)) as ask, \
+         patch("frontend_qt.backend.UiConfigManager.save_ui_config") as save_ui:
+        _click_menu(dash._mixer_channels["mix_reverb_2"], "Sửa")
+    assert ask.call_args.kwargs["text"] == "Vang Mic KG"
+    save_ui.assert_not_called()
+    assert dash.settings["mic_labels"]["mix_reverb_2"] == "Vang KG"
+    assert dash.settings["mic_labels"]["mix_mic"] == "Mic P420"
+    assert dash._mixer_channels["mix_reverb_2"]._name_text == "Vang KG"
+    with patch.object(dash, "_show_message") as msg:
+        _click_menu(dash._mixer_channels["mix_reverb_2"], "Ẩn")
+    assert "Phòng có 2 micro" in msg.call_args.args[0]
+
+
+def test_cai_dat_luu_ten_mic_giu_ten_vang_mic2(qapp, mock_engine, qtbot):
+    from ui.dialogs.settings_dialog import SettingsDialog
+    s = {"mic_count": 2, "mic_labels": {"mix_reverb_2": "Vang KG"}}
+    dlg = SettingsDialog.__new__(SettingsDialog)
+    dlg._cb_two_mics = MagicMock(isEnabled=lambda: True, isChecked=lambda: True)
+    dlg._inp_mic_label_1 = MagicMock(isEnabled=lambda: True, text=lambda: "Mic P420")
+    dlg._inp_mic_label_2 = MagicMock(text=lambda: "")
+    SettingsDialog._collect_mic_settings(dlg, s)
+    assert s["mic_labels"] == {"mix_mic": "Mic P420", "mix_mic_2": "Mic Không Dây",
+                               "mix_reverb_2": "Vang KG"}

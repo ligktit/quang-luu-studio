@@ -35,8 +35,11 @@ Cả hai track đều record-arm + monitor, không mute → mở bài là cả h
 1. Trên app có **hai kênh mic riêng** trong mixer, mỗi kênh một thanh mức + một nút bật/tắt.
    Ba trạng thái dùng được: chỉ có dây, chỉ không dây, cả hai (song ca).
 2. Mọi thứ thuộc về **giọng hát nói chung** đến **cả hai** kênh mic cùng lúc: Key, Scale,
-   Auto-Tune, Fix Méo, Bè, Tắt Ồn, Tone Giọng, Hiệu Ứng Giọng, các MODE, mức Vang và mute
-   các send. Mic đang tắt cũng luôn đúng tone, bật lên là hát được ngay.
+   Auto-Tune, Fix Méo, Bè, Tắt Ồn, Tone Giọng, Hiệu Ứng Giọng, các MODE. Mic đang tắt cũng luôn
+   đúng tone, bật lên là hát được ngay.
+   **Sửa 2026-11-03:** Vang (mức Vang, mute Vang và các send Echo/Hall/Main/Vang 2) là của **riêng
+   từng mic** — kênh Vang Mic 2 trên mixer gửi các CC Vang trên kênh MIDI 2. Lý do: máy 826077C tắt
+   Vang mic dây thì tắt luôn vang mic không dây đang hát (Vang từng phát đôi).
 3. Đồng bộ lại toàn bộ khi Studio One mở bài / báo sẵn sàng (như hiện có) phải gồm cả kênh mic 2.
 
 ## 4. Không làm (non-goals)
@@ -72,10 +75,11 @@ Không đụng bảng CC hiện có, không chiếm CC mới.
 `studio_one/QuangLuuMIDI.surface.xml` thêm một bộ control `status="#B0" channel="1"` (tên có hậu tố `2`,
 vd `keyRoot2`, `muteMic2`) cho các CC liên quan tới mic:
 
-- riêng từng mic: `mix_mic` (21), `mute_mic` (51);
-- dùng chung (phát đôi): `tone_voice` 11, `mix_reverb` 22, `mode` / mode toggles 30, 37, 38, 39, 46,
+- riêng từng mic: `mix_mic` (21), `mute_mic` (51), `mix_reverb` (22), `mute_reverb` (52),
+  `mute_multi` của Vang 41–44 (từ 2026-11-03, kênh Vang Mic 2);
+- dùng chung (phát đôi): `tone_voice` 11, `mode` / mode toggles 30, 37, 38, 39, 46,
   `key_root` 33, `key_scale` 34, `scale_type` 35, `tune_on_off` 36, `tone_auto` 40,
-  `mute_multi` 41–44, `fix_meo` 45, `be` 47, `tat_on` 48, `mute_reverb` 52, `voice_fx` 54.
+  `fix_meo` 45, `be` 47, `tat_on` 48, `voice_fx` 54.
 
 Không có transmit (chỉ `readyPing` kênh 1 có transmit như cũ). `tests/test_surface_xml.py`
 phải kiểm cả bộ kênh 2.
@@ -165,7 +169,7 @@ của mình.
 - Dùng MIDI channel 2 thay vì CC mới (6.1).
 - Mặc định có dây = Mic 1, không dây = Mic 2.
 - Hai thanh mức + hai nút riêng thay vì một nút A/B.
-- Thanh Vang chung cho cả hai mic (mất phần lệch send rất nhỏ giữa hai kênh trong bài mẫu).
+- ~~Thanh Vang chung cho cả hai mic~~ — bỏ 2026-11-03: mỗi mic một thanh Vang (xem mục 3, ý 2).
 - Nhớ trạng thái bật/tắt từng mic qua lần mở app (xem phản mục tiêu ở mục 5).
 - Cubase chưa làm.
 - Một surface XML chung cho mọi máy (6.2), với điều kiện kiểm được là không mất gán cũ.
