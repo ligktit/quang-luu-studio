@@ -26,6 +26,20 @@ def test_sha256_va_copy(tmp_path):
     assert s.sha256(str(tmp_path / "khong_co")) is None
 
 
+def test_is_readonly(tmp_path):
+    import stat
+    f = tmp_path / "a.js"
+    f.write_text("x", encoding="utf-8")
+    s = SystemProbe()
+    assert not s.is_readonly(str(f))
+    os.chmod(f, stat.S_IREAD)
+    try:
+        assert s.is_readonly(str(f))
+    finally:
+        os.chmod(f, stat.S_IREAD | stat.S_IWRITE)
+    assert not s.is_readonly(str(tmp_path / "khong_co"))
+
+
 def test_start_process_mo_thu_nho_khong_cuop_tien_canh(monkeypatch):
     """Chạy thật: tự bật loopMIDI làm cửa sổ của nó hiện giữa màn hình, đè lên app."""
     import subprocess

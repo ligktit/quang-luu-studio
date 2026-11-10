@@ -161,10 +161,15 @@ class _ChannelCheck(Check):
 
     def fix(self, ctx):
         name = ctx.daw.display_name
+        known = ctx.feedback.get(self.fb_group) if ctx.feedback is not None else None
         self._send_on(ctx)
         if ctx.daw.kind == "cubase" and ctx.feedback is not None:
             if ctx.feedback.wait_for(self.fb_group, lambda s: s.muted is False, timeout=2.0):
                 return da_sua(f"Đã bật kênh {self.label}")
+            if known is None or known.muted is None:
+                # Script chỉ báo mute khi ĐỔI: kênh vốn đang bật thì "bật" không có phản hồi.
+                return da_sua(f"Đã gửi lệnh bật kênh {self.label} (Cubase chưa báo lại trạng thái — "
+                              f"nếu vẫn im, kiểm tra track {self.label} trong Cubase)")
             return can_lam_tay(f"Đã gửi lệnh bật kênh {self.label} nhưng Cubase chưa xác nhận",
                                guide=(f"Trong Cubase, xem track {self.label}: bỏ nút M (mute), kéo fader lên.",))
         return da_sua(f"Đã gửi lệnh bật kênh {self.label} ({name} không báo lại — "

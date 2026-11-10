@@ -23,6 +23,7 @@ class FakeSystem:
         self.started = []
         self.killed = []
         self.backups = []
+        self.readonly = set()         # path chỉ đọc: copy() ném PermissionError
         self.on_start = None          # callback khi start_process
 
     def process_running(self, exe): return exe.lower() in self.procs
@@ -49,7 +50,12 @@ class FakeSystem:
     def read_text(self, path): return self.files[path]
     def write_text(self, path, text): self.files[path] = text
     def sha256(self, path): return None if path not in self.files else str(hash(self.files[path]))
-    def copy(self, src, dst): self.files[dst] = self.files[src]
+    def is_readonly(self, path): return path in self.readonly
+
+    def copy(self, src, dst):
+        if dst in self.readonly:
+            raise PermissionError(13, "Access is denied", dst)
+        self.files[dst] = self.files[src]
 
     def backup(self, path):
         self.backups.append(path)

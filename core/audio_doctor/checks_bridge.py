@@ -113,14 +113,30 @@ class DawRemoteCheck(Check):
             return khong_ro(f"{name} chưa chạy lần nào trên máy này")
         if not any(ctx.system.bundled(rel) for rel, _ in pairs):
             return khong_ro("Không thấy bản điều khiển đi kèm app")
-        if self._stale(ctx, pairs):
+        stale = self._stale(ctx, pairs)
+        if any(ctx.system.is_readonly(dst) for _, dst in stale):
+            # Thường là kỹ thuật sửa tay rồi khoá lại cho app khỏi chép đè (máy 3, 2026-10-28).
+            return loi(f"Bản điều khiển trong {name} khác bản đi kèm app và đang khoá chỉ đọc — app không ghi đè",
+                       fixable=False, guide=self._GUIDE_KHOA)
+        if stale:
             return loi(f"Bản điều khiển trong {name} chưa cài hoặc đã cũ — nút mới trên app sẽ không ăn")
         return ok(f"Bản điều khiển trong {name} đúng bản đi kèm app")
 
+    _GUIDE_KHOA = ("Nếu kỹ thuật đã sửa riêng bản này cho máy bạn thì giữ nguyên.",
+                   "Không chắc thì bấm «Gửi cho kỹ thuật» bên dưới.")
+
     def fix(self, ctx):
         name = ctx.daw.display_name
+        s = ctx.system
         for src, dst in self._stale(ctx, self._pairs(ctx) or []):
-            ctx.system.copy(src, dst)
+            try:
+                if s.exists(dst):
+                    s.backup(dst)
+                s.copy(src, dst)
+            except OSError as e:
+                return can_lam_tay(f"Không ghi được bản điều khiển: {e.strerror or e}",
+                                   guide=(f"Tắt {name} rồi bấm «Tự sửa lại».",
+                                          "Vẫn không được thì bấm «Gửi cho kỹ thuật» bên dưới."))
         if ctx.system.daw_running():
             return can_lam_tay(f"Đã chép bản mới — Khởi động lại {name} để nạp",
                                guide=(f"Lưu bài rồi tắt {name}, sau đó mở lại.",))

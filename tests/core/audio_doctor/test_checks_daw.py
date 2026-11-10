@@ -150,6 +150,15 @@ def test_kenh_mic_cubase_khong_xac_nhan_thi_can_lam_tay():
     assert f.status is Status.CAN_LAM_TAY
 
 
+def test_kenh_nhac_cubase_chua_biet_trang_thai_ma_khong_bao_lai_thi_khong_bao_lam_tay():
+    # Máy 3 (2026-10-28): script Cubase chỉ báo mute khi ĐỔI → gửi "bật" cho kênh đang bật thì
+    # không có phản hồi; trước đây ra "Cubase chưa xác nhận" (cần làm tay) dù track Nhạc vẫn bật.
+    ctx = make_ctx(CUBASE)
+    f = MusicChannelCheck().fix(ctx)
+    assert f.status is Status.DA_SUA and "gửi lệnh" in f.message
+    assert (50, 0) in ctx.sent
+
+
 def test_kenh_nhac_fader_qua_thap_cubase():
     ctx = make_ctx(CUBASE)
     ctx.feedback.on_cc(50, 0)
