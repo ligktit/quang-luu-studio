@@ -91,18 +91,3 @@ def test_tat_phuc_hoi_ban_mau_thi_khong_phuc_hoi():
     with _startup(so_running=False, restore_tpl=False) as (self, restore):
         restore.assert_not_called()
 
-
-def test_tu_an_tat_khi_thoat_thi_khong_giau():
-    self = MagicMock()
-    self.settings = {"studio_one_path": r"C:\bai\mau.song"}
-    self._has_song_template = lambda: True
-    dlg = MagicMock()
-    dlg.result_data = {"status": "no_save_button", "saved": False}
-
-    with patch("ui.dialogs.shutdown_dialog.StudioOneShutdownDialog", return_value=dlg), \
-         patch("core.daw_visibility.auto_hide", return_value=False), \
-         patch("core.so_windows.hide_all") as hide, \
-         patch("frontend_qt.QTimer"):
-        MainDashboard._run_studio_one_shutdown(self)
-
-    hide.assert_not_called()

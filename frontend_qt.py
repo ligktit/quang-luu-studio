@@ -2,7 +2,7 @@
 Quang Lưu Studio — PySide6 Frontend V4.0
 QPainter Premium Edition — Custom-painted UI
 """
-import sys, os, threading
+import sys, os, threading, logging
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox,
@@ -18,6 +18,8 @@ from ui.design_tokens import C, SP, FONT, FONT_MONO, load_qss, lighten, darken
 from ui import responsive as rp
 import ui.panels as panels
 from core import mic2
+
+_log = logging.getLogger(__name__)
 from ui.components.button import _make_pill_qss, _make_circle_qss
 from ui.components.waveform_hero import WaveformHeroPanel
 from ui.components.painter_button import PainterButton
@@ -169,7 +171,8 @@ class MainDashboard(QMainWindow):
                 backend.ConfigManager.save_settings(self.settings)
         except Exception as e:
             print(f"[DAW-HIDE] bind/migrate lỗi: {e}")
-        self._so_shutdown_done = False
+        self._close_started = False      # closeEvent lượt đầu đã chạy (tàng hình + dọn)
+        self._daw_close_pending = False  # đang đóng DAW ngầm — chưa được thoát
         self._so_ready_watcher = None
 
         # State
@@ -4156,8 +4159,13 @@ class MainDashboard(QMainWindow):
             print(f"[STUDIO ONE] Không kiểm được bản mẫu: {e}")
             return False
 
-    def _run_studio_one_shutdown(self):
-        """Chờ Studio One thoát, có hộp thoại tiến trình trước mặt.
+    def _start_hidden_daw_shutdown(self):
+        """Đóng DAW ngầm (không lưu) sau khi app đã tàng hình — không hộp thoại nào.
+
+        Trước 2026-11-10 việc này chạy trong hộp thoại "Đang đóng ... mà không lưu"
+        trước mặt khách, mất 4 giây tới 45 giây nên khách thấy app tắt rất lâu. Giờ
+        cửa sổ biến mất ngay, tiến trình sống tiếp tới khi DAW thoát rồi mới đóng
+        nốt (xem `_on_hidden_daw_shutdown_done`). Mức an toàn giữ nguyên:
 
         KHÔNG lưu (`save=False`): Ctrl+S trước đây chỉ là mẹo để Studio One khỏi
         hỏi lúc đóng, nhưng nó bắt phải hiện cửa sổ Studio One lên (lộ chế độ
@@ -4169,51 +4177,107 @@ class MainDashboard(QMainWindow):
         đằng nào cũng bị chép đè ở lần khởi động sau, nên thà lưu để Studio One
         thoát sạch còn hơn để nó kẹt với hộp thoại.
         """
-        from ui.dialogs.shutdown_dialog import StudioOneShutdownDialog
-        from core import daw
-        try:
-            dlg = StudioOneShutdownDialog(
-                self.engine,
-                timeout_sec=float(self.settings.get("studio_one_close_timeout", 45)),
-                force_kill=bool(self.settings.get("force_kill_studio_one", False)),
-                save=False,
-                fallback_save=self._has_song_template(),
-                hint=(f"Đang đóng {daw.active().display_name} mà không lưu. Đừng tắt máy lúc này — "
-                      f"tắt ngang sẽ khiến lần mở sau {daw.active().display_name} đòi phục hồi phiên."),
-                parent=self,
-            )
-            dlg.exec()
-            status = (dlg.result_data or {}).get("status")
-            if status not in ("closed", "not_running"):
-                print(f"[STUDIO ONE] Thoát app khi chưa đóng xong ({status})")
-                # DAW ở lại thì phải chắc nó vẫn đang ẩn: hộp thoại hỏi lưu có
-                # thể đã kéo cửa sổ lên, app thoát xong khách ngồi trước một cửa
-                # sổ DAW đang mở.
+        import time as _time
+        from ui.dialogs.shutdown_dialog import _CloseWorker
+        from core import instance_guard
+        from core.config import DATA_DIR
+        instance_guard.mark_closing(instance_guard.closing_marker(DATA_DIR))
+        self._daw_close_pending = True
+        self._daw_close_t0 = _time.monotonic()
+        worker = _CloseWorker(
+            self.engine,
+            timeout_sec=float(self.settings.get("studio_one_close_timeout", 45)),
+            force_kill=bool(self.settings.get("force_kill_studio_one", False)),
+            should_abort=lambda: False,
+            save=False,
+            fallback_save=self._has_song_template(),
+            parent=self,
+        )
+        worker.progress.connect(lambda msg: _log.info("[ĐÓNG NGẦM] %s", msg))
+        worker.finished_result.connect(self._on_hidden_daw_shutdown_done)
+        self._daw_close_worker = worker
+        worker.start()
+
+    def _on_hidden_daw_shutdown_done(self, result):
+        """DAW đã thoát (hoặc bỏ cuộc) — đóng nốt app."""
+        import time as _time
+        status = (result or {}).get("status")
+        took = _time.monotonic() - (getattr(self, "_daw_close_t0", None) or _time.monotonic())
+        _log.info("[ĐÓNG NGẦM] DAW: %s sau %.1f s", status, took)
+        if status not in ("closed", "not_running"):
+            # DAW ở lại thì phải chắc nó vẫn đang ẩn: hộp thoại hỏi lưu có
+            # thể đã kéo cửa sổ lên, app thoát xong khách ngồi trước một cửa
+            # sổ DAW đang mở.
+            try:
                 from core import daw_visibility, so_windows
                 if daw_visibility.auto_hide():
                     so_windows.hide_all()
+            except Exception as e:
+                _log.warning("[ĐÓNG NGẦM] giấu DAW lỗi: %s", e)
+        try:
+            from core import instance_guard
+            from core.config import DATA_DIR
+            instance_guard.clear_closing(instance_guard.closing_marker(DATA_DIR))
         except Exception as e:
-            print(f"[STUDIO ONE] Đóng an toàn lỗi: {e}")
-        # Đóng lại sau khi closeEvent hiện tại đã trả về — gọi self.close() ngay
-        # trong handler là đệ quy closeEvent.
+            _log.warning("[ĐÓNG NGẦM] xoá dấu lỗi: %s", e)
+        self._daw_close_pending = False
+        # Đóng lại sau khi slot này trả về — gọi self.close() ngay trong
+        # slot của tín hiệu QThread là đóng giữa chừng lúc worker còn emit.
         QTimer.singleShot(0, self.close)
 
     def closeEvent(self, event):
-        """Đóng cửa sổ không block — set flags ngay, cleanup nặng chạy nền."""
-        # ── BƯỚC 0: đóng Studio One an toàn ───────────────────────────────────
-        # Phải xong TRƯỚC khi app tắt: chờ Studio One tự thoát mất vài chục giây,
-        # mà main.py chỉ chờ thread nền 4 giây rồi os._exit(0) — chạy nền là chắc
-        # chắn bị cắt ngang, đúng cái đã khiến Studio One đòi phục hồi phiên.
-        if not self._so_shutdown_done and self._needs_studio_one_shutdown():
-            self._so_shutdown_done = True
-            event.ignore()
-            self._run_studio_one_shutdown()
-            return
+        """Bấm X: tàng hình ngay, dọn nhanh, đóng DAW ngầm; xong DAW mới thật sự đóng.
 
+        Lượt đầu: app biến mất khỏi màn hình trước mọi việc chậm, dừng các luồng,
+        lưu cài đặt, chạy dọn nặng (trình duyệt…) song song với việc đóng DAW.
+        DAW cần đóng thì bỏ qua sự kiện — event loop sống tiếp tới khi
+        `_on_hidden_daw_shutdown_done` gọi close() lần nữa.
+
+        Phải chờ DAW TRƯỚC khi app tắt: main.py chỉ chờ thread nền 4 giây rồi
+        os._exit(0) — đóng DAW trong thread nền là chắc chắn bị cắt ngang, đúng cái
+        đã khiến Studio One đòi phục hồi phiên.
+        """
+        if not self._close_started:
+            self._close_started = True
+            self._vanish()
+            self._stop_for_close()
+            self._start_bg_shutdown()
+            if self._needs_studio_one_shutdown():
+                self._start_hidden_daw_shutdown()
+        if self._daw_close_pending:
+            event.ignore()
+            return
+        self._finish_close(event)
+
+    def _vanish(self):
+        """Ẩn mọi cửa sổ của app ngay lập tức — khách thấy app đã tắt."""
+        app = QApplication.instance()
+        if app is not None:
+            # Ẩn/đóng cửa sổ cuối cùng không được làm Qt thoát event loop: còn phải
+            # chờ DAW. `_finish_close` sẽ quit tường minh.
+            app.setQuitOnLastWindowClosed(False)
+            for w in app.topLevelWidgets():
+                try:
+                    if w is not self and w.isVisible():
+                        w.hide()
+                except Exception:
+                    pass
         self.hide()
 
+    def _finish_close(self, event):
+        event.accept()
+        super().closeEvent(event)
+        app = QApplication.instance()
+        if app is not None and _APP_LOOP_RUNNING:
+            app.quit()
+        if app is not None:
+            app.setQuitOnLastWindowClosed(True)
+
+    def _stop_for_close(self):
+        """Dừng mọi thứ còn chạy trên main thread + lưu cài đặt (nhanh, không chặn)."""
         # ── BƯỚC 1: Set stop flags (instant, thread-safe) ──────────────────────
-        # Phải set trước khi accept để các thread thoát loop nhanh nhất có thể.
+        # Set sớm để các thread thoát loop nhanh nhất có thể — và để watcher
+        # YouTube không đổi bài, gửi MIDI trong lúc DAW đang đóng.
         self.engine._youtube_watcher_active = False
         self.engine.autokey_active = False
         try:
@@ -4309,7 +4373,7 @@ class MainDashboard(QMainWindow):
         except Exception:
             pass
 
-        # ── BƯỚC 5: Accept ngay — window đóng, Qt event loop không bị block ───
+        # ── BƯỚC 5: Lưu mixer + vị trí cửa sổ ─────────────────────────────────
         try:
             mixer_levels = {}
             for cc_key, slider in getattr(self, '_mixer_sliders', {}).items():
@@ -4328,14 +4392,11 @@ class MainDashboard(QMainWindow):
         except Exception as e:
             print(f"Lỗi lưu mixer levels: {e}")
 
-        # ── BƯỚC 5: Accept ngay — window đóng, UI không bị block ──────────────
-        event.accept()
-        super().closeEvent(event)
-
+    def _start_bg_shutdown(self):
         # ── BƯỚC 6: Cleanup nặng trong daemon thread ──────────────────────────
         # Bao gồm cả đóng browser. main.py join thread này (timeout ngắn) trước
         # khi os._exit(0) để ffmpeg/yt-dlp con không bị orphan giữa chừng.
-        # (Studio One không nằm ở đây — xem BƯỚC 0.)
+        # Chạy SONG SONG với việc đóng DAW ngầm (_start_hidden_daw_shutdown).
         settings_snap = dict(self.settings)
         engine = self.engine
 
@@ -4366,8 +4427,8 @@ class MainDashboard(QMainWindow):
                     engine.close_youtube_windows()
                 except Exception:
                     pass
-            # Studio One đã được đóng ở BƯỚC 0 (có hộp thoại tiến trình) — không
-            # đụng vào nữa, tránh giết nhầm process đang lưu dở.
+            # DAW do _start_hidden_daw_shutdown lo — không đụng vào ở đây, tránh
+            # giết nhầm process đang đóng dở.
             import gc
             gc.collect()
 

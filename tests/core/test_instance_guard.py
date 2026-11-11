@@ -161,3 +161,60 @@ def test_thu_muc_dich_khong_ton_tai_thi_khong_loi(tmp_path, monkeypatch):
     monkeypatch.chdir(app_dir)
     assert ig.leave_install_dir(str(app_dir), str(tmp_path / "khong_co")) is False
     assert os.path.samefile(os.getcwd(), app_dir)
+
+
+# ── Đóng ngầm: bản mở lại chờ bản cũ đóng DAW xong ─────────────────────────────
+
+def test_danh_dau_dang_dong_roi_xoa(tmp_path):
+    from core import instance_guard as g
+    marker = tmp_path / "dang_dong.pid"
+    g.mark_closing(str(marker), pid=321)
+    assert marker.read_text().strip() == "321"
+    g.clear_closing(str(marker))
+    assert not marker.exists()
+
+
+def test_khong_co_dau_thi_khong_cho(tmp_path):
+    from core import instance_guard as g
+    slept = []
+    assert g.wait_previous_closing(str(tmp_path / "dang_dong.pid"), sleep=slept.append) is False
+    assert slept == []
+
+
+def test_cho_ban_cu_dong_dau_xong(tmp_path):
+    from core import instance_guard as g
+    marker = tmp_path / "dang_dong.pid"
+    g.mark_closing(str(marker), pid=321)
+    ticks = iter([True, True, True, False])
+    slept = []
+    waited = g.wait_previous_closing(str(marker), own_pid=999, pid_alive=lambda pid: next(ticks),
+                                     sleep=slept.append, clock=lambda: 0.0)
+    assert waited is True
+    assert len(slept) == 2
+
+
+def test_dau_cua_tien_trinh_da_chet_thi_bo_qua_va_don(tmp_path):
+    # App bị tắt ngang giữa lúc đóng ngầm → dấu còn sót, không được bắt bản mới chờ.
+    from core import instance_guard as g
+    marker = tmp_path / "dang_dong.pid"
+    g.mark_closing(str(marker), pid=321)
+    assert g.wait_previous_closing(str(marker), own_pid=999, pid_alive=lambda pid: False,
+                                   sleep=lambda s: None) is False
+    assert not marker.exists()
+
+
+def test_cho_qua_han_thi_mo_luon(tmp_path):
+    from core import instance_guard as g
+    marker = tmp_path / "dang_dong.pid"
+    g.mark_closing(str(marker), pid=321)
+    t = iter(range(0, 1000, 10))
+    assert g.wait_previous_closing(str(marker), timeout=50, own_pid=999, pid_alive=lambda pid: True,
+                                   sleep=lambda s: None, clock=lambda: next(t)) is True
+
+
+def test_dau_cua_chinh_minh_thi_khong_cho(tmp_path):
+    from core import instance_guard as g
+    marker = tmp_path / "dang_dong.pid"
+    g.mark_closing(str(marker), pid=555)
+    assert g.wait_previous_closing(str(marker), own_pid=555, pid_alive=lambda pid: True,
+                                   sleep=lambda s: None) is False

@@ -89,3 +89,70 @@ def leave_install_dir(app_dir, target):
     except Exception as e:
         log.warning("Không chuyển được thư mục làm việc ra khỏi thư mục cài: %s", e)
         return False
+
+
+# ── Đóng ngầm (2026-11-10) ─────────────────────────────────────────────────────
+# Bấm X: app tàng hình ngay nhưng tiến trình còn sống vài giây để đóng DAW không lưu.
+# Khách mở lại app trong lúc đó thì bản mới phải chờ, kẻo nó bật/đóng DAW đúng lúc
+# bản cũ đang đóng (hai bên cùng gửi WM_CLOSE, cùng bấm hộp hỏi lưu).
+
+CLOSING_MARKER = "dang_dong.pid"
+
+
+def closing_marker(data_dir):
+    return os.path.join(data_dir, CLOSING_MARKER)
+
+
+def mark_closing(path, pid=None):
+    """Ghi PID của tiến trình đang đóng DAW ngầm. Lỗi ghi → bỏ qua (chỉ mất phần chờ)."""
+    try:
+        with open(path, "w", encoding="ascii") as f:
+            f.write(str(os.getpid() if pid is None else pid))
+    except OSError as e:
+        log.warning("Không ghi được dấu đang đóng: %s", e)
+
+
+def clear_closing(path):
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        log.warning("Không xoá được dấu đang đóng: %s", e)
+
+
+def _pid_alive(pid):
+    import psutil
+    return psutil.pid_exists(pid)
+
+
+def wait_previous_closing(path, timeout=60, poll=0.25, own_pid=None, pid_alive=None,
+                          sleep=time.sleep, clock=time.monotonic):
+    """Chờ bản app trước (đang tàng hình đóng DAW) xong. True nếu đã phải chờ.
+
+    Dấu sót của tiến trình đã chết (bị tắt ngang) bị xoá, không bắt chờ. Quá hạn → mở luôn.
+    """
+    try:
+        with open(path, encoding="ascii") as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return False
+    own = os.getpid() if own_pid is None else own_pid
+    alive = pid_alive or _pid_alive
+    if pid == own:
+        return False
+    try:
+        if not alive(pid):
+            clear_closing(path)
+            return False
+        log.info("Bản trước (PID %s) đang đóng phần mềm thu âm — chờ tối đa %ss", pid, timeout)
+        start = clock()
+        while alive(pid) and os.path.exists(path):
+            if clock() - start >= timeout:
+                log.warning("Chờ bản trước quá %ss — mở app luôn", timeout)
+                break
+            sleep(poll)
+        return True
+    except Exception as e:
+        log.warning("Không kiểm được bản trước: %s", e)
+        return False

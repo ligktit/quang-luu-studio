@@ -400,6 +400,15 @@ def main():
     App lifecycle loop — avoid recursion to prevent stack accumulation
     when the user reactivates or saves setup multiple times.
     """
+    # Bấm X rồi mở lại ngay: bản trước còn đang tàng hình đóng DAW (frontend_qt
+    # _start_hidden_daw_shutdown) — chờ nó xong kẻo bản này bật/đóng DAW chồng lên.
+    try:
+        from core.instance_guard import closing_marker, wait_previous_closing
+        from core.config import DATA_DIR
+        wait_previous_closing(closing_marker(DATA_DIR))
+    except Exception as e:
+        log.debug("wait previous closing skipped: %s", e)
+
     # Dọn cache license trước cổng kiểm tra: máy nâng cấp từ bản cũ còn giữ
     # token định dạng cũ, đổi lấy token mới ở đây để không bị đá ra vô cớ.
     try:
