@@ -7,10 +7,10 @@
     <div><label>Nhập từ GitHub Release (vd 1.9.1)</label><input name="version" required></div>
     <button type="submit">Nhập</button>
   </form>
-  <p>Bản nhập xong <b>chưa phát</b>: bật lên rồi chỉnh % máy nhận. Link cài lần đầu: <code>/tai-ve</code> (bản mới nhất đang phát 100%).</p>
+  <p>Bản nhập xong <b>chưa phát</b>: bật lên rồi chỉnh % máy nhận. <b>Máy thử</b> nhận bản ngay cả khi chưa bật / ngoài % — dùng để thử trước trên máy dev hoặc máy có người trực. Link cài lần đầu: <code>/tai-ve</code> (bản mới nhất đang phát 100%).</p>
 </div>
 <table>
-  <tr><th>Version</th><th>Trạng thái</th><th>Rollout</th><th>Active</th><th></th></tr>
+  <tr><th>Version</th><th>Trạng thái</th><th>Rollout</th><th>Máy thử</th><th>Active</th><th></th></tr>
   {% for r in velopack %}
   <tr>
     <td>{{ r.version }}</td>
@@ -19,6 +19,9 @@
         {% if r.status == 'xong' and not r.setup_filename %}<br><small>không có bản cài</small>{% endif %}</td>
     <td><form method="post" action="/admin/velopack/{{ r.id }}/rollout" class="row">
           <input name="rollout_percent" type="number" min="0" max="100" value="{{ r.rollout_percent }}" style="width:5em">
+          <button class="ghost">Lưu</button></form></td>
+    <td><form method="post" action="/admin/velopack/{{ r.id }}/testers" class="row">
+          <textarea name="test_fingerprints" rows="2" style="width:16em" placeholder="mã máy, mỗi dòng một máy">{{ r.test_fingerprints or '' }}</textarea>
           <button class="ghost">Lưu</button></form></td>
     <td>{{ '🟢' if r.is_active else '⚪' }}</td>
     <td>{% if r.status == 'xong' %}<form method="post" action="/admin/velopack/{{ r.id }}/toggle"><button class="ghost">{{ 'Tắt' if r.is_active else 'Bật' }}</button></form>{% endif %}

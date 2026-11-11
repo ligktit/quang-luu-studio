@@ -132,6 +132,9 @@ class VelopackRelease(Base):
     import_token:    Mapped[str | None] = mapped_column(String(32), nullable=True)
     rollout_percent: Mapped[int] = mapped_column(Integer, default=0)
     is_active:       Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # Mã máy nhận bản này trước khách (mỗi dòng một mã), bất kể is_active/rollout —
+    # để thử trên máy dev/máy khách có người trực trước khi phát.
+    test_fingerprints: Mapped[str | None] = mapped_column(Text, nullable=True, default="")
     published_at:    Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

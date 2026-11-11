@@ -581,6 +581,21 @@ def velopack_rollout(
     return _redirect("/admin/versions")
 
 
+@router.post("/velopack/{rid}/testers")
+def velopack_testers(
+    rid: int,
+    test_fingerprints: str = Form(""),
+    admin: str = Depends(current_admin),
+    db: Session = Depends(get_db),
+):
+    """Máy thử nhận bản này ngay cả khi chưa bật / ngoài rollout. Không đụng tới phát cho khách."""
+    row = db.get(VelopackRelease, rid)
+    if row:
+        row.test_fingerprints = "\n".join(sorted(velopack_feed.parse_testers(test_fingerprints)))
+        db.commit()
+    return _redirect("/admin/versions")
+
+
 # ── Crashes ──
 @router.get("/crashes", response_class=HTMLResponse)
 def crashes_page(request: Request, admin: str = Depends(current_admin), db: Session = Depends(get_db)):

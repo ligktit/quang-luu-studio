@@ -1,6 +1,7 @@
 """Feed cập nhật Velopack (releases.win.json) dựng theo từng máy.
 
-Máy chỉ thấy gói Full của các bản đã nhập xong, đang bật và tới lượt rollout.
+Máy chỉ thấy gói Full của các bản đã nhập xong, đang bật và tới lượt rollout —
+hoặc của bản đã nhập xong có mã máy đó trong danh sách máy thử (test_fingerprints).
 Gói Delta của mọi bản đã nhập (kể cả bản bị tắt) có tuổi ≤ bản cao nhất máy đó
 được nhận vẫn được liệt kê, để chuỗi delta không bị đứt khi rút một bản giữa.
 """
@@ -28,6 +29,11 @@ def valid_filename(name):
     return bool(_NAME_RE.fullmatch(name or "")) and name not in (".", "..")
 
 
+def parse_testers(text):
+    """Danh sách máy thử admin gõ (xuống dòng/dấu phẩy/dấu cách) → tập mã máy hợp lệ."""
+    return {t for t in re.split(r"[\s,;]+", text or "") if valid_fingerprint(t)}
+
+
 def velopack_dir():
     p = settings.storage_path / "velopack"
     p.mkdir(parents=True, exist_ok=True)
@@ -41,15 +47,18 @@ def file_path(name):
     return p if p.is_file() else None
 
 
-def _eligible(row, bucket):
-    return (row.status == "xong" and row.is_active
-            and (row.rollout_percent >= 100 or bucket < row.rollout_percent))
+def _eligible(row, bucket, fingerprint):
+    if row.status != "xong":
+        return False
+    if fingerprint in parse_testers(row.test_fingerprints):
+        return True
+    return row.is_active and (row.rollout_percent >= 100 or bucket < row.rollout_percent)
 
 
 def build_feed(rows, fingerprint):
     bucket = rollout_bucket(fingerprint)
     done = sorted((r for r in rows if r.status == "xong"), key=lambda r: parse_semver(r.version))
-    ok = [r for r in done if _eligible(r, bucket)]
+    ok = [r for r in done if _eligible(r, bucket, fingerprint)]
     if not ok:
         return {"Assets": []}
     top = max(parse_semver(r.version) for r in ok)

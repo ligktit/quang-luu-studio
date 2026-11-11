@@ -208,3 +208,32 @@ def test_trang_bao_khong_co_ban_cai(admin_client):
     assert "không có bản cài" in admin_client.get("/admin/versions").text
     _release_with_files("1.9.2", ["b.nupkg"], setup="1.9.2_s.exe")
     assert admin_client.get("/admin/versions").text.count("không có bản cài") == 1
+
+
+def test_luu_danh_sach_may_thu(admin_client):
+    with SessionLocal() as db:
+        db.add(VelopackRelease(version="1.9.1", status="xong"))
+        db.commit()
+        rid = db.query(VelopackRelease).one().id
+    r = admin_client.post(f"/admin/velopack/{rid}/testers",
+                          data={"test_fingerprints": " b ,a\r\n\nb ../x"}, follow_redirects=False)
+    assert r.status_code == 303
+    row = _rows()[0]
+    assert row.test_fingerprints == "a\nb"          # sạch, không trùng, có thứ tự
+    assert row.is_active is False and row.rollout_percent == 0   # không đụng tới phát cho khách
+
+
+def test_trang_phien_ban_hien_may_thu(admin_client):
+    with SessionLocal() as db:
+        db.add(VelopackRelease(version="1.9.1", status="xong", test_fingerprints="abc123"))
+        db.commit()
+    assert "abc123" in admin_client.get("/admin/versions").text
+
+
+def test_may_thu_can_dang_nhap(client):
+    with SessionLocal() as db:
+        db.add(VelopackRelease(version="1.9.1", status="xong"))
+        db.commit()
+        rid = db.query(VelopackRelease).one().id
+    client.post(f"/admin/velopack/{rid}/testers", data={"test_fingerprints": "abc"}, follow_redirects=False)
+    assert not _rows()[0].test_fingerprints

@@ -15,7 +15,7 @@ def _asset(version, kind):
             "SHA1": "", "SHA256": "ab" * 32, "Size": 3, "NotesMarkdown": "", "NotesHtml": ""}
 
 
-def _add(version, active=True, rollout=100, status="xong", delta=True, setup=False):
+def _add(version, active=True, rollout=100, status="xong", delta=True, setup=False, testers=""):
     assets = [_asset(version, "Full")] + ([_asset(version, "Delta")] if delta else [])
     for a in assets:
         (velopack_feed.velopack_dir() / a["FileName"]).write_bytes(b"pkg")
@@ -25,7 +25,8 @@ def _add(version, active=True, rollout=100, status="xong", delta=True, setup=Fal
         (velopack_feed.velopack_dir() / setup_name).write_bytes(b"MZ" + version.encode())
     with SessionLocal() as db:
         db.add(VelopackRelease(version=version, assets_json=json.dumps(assets), status=status,
-                               is_active=active, rollout_percent=rollout, setup_filename=setup_name))
+                               is_active=active, rollout_percent=rollout, setup_filename=setup_name,
+                               test_fingerprints=testers))
         db.commit()
 
 
@@ -122,3 +123,51 @@ def test_valid_fingerprint_tu_choi(fp):
 def test_valid_hop_le():
     assert velopack_feed.valid_filename("QuangLuuStudio-1.9.1-full.nupkg") is True
     assert velopack_feed.valid_fingerprint("abc_DEF-123") is True
+
+
+# ── Máy thử: nhận bản trước khi phát cho khách (bản chưa bật, rollout 0%) ──
+
+def test_may_thu_nhan_ban_chua_bat(client):
+    _add("1.9.0")
+    _add("1.9.1", active=False, rollout=0, testers="mayThu1\nmayThu2")
+    assert "QuangLuuStudio-1.9.1-full.nupkg" in _names(client, "mayThu2")
+    assert not any("1.9.1" in n for n in _names(client, "fp1"))
+
+
+def test_may_thu_nhan_ca_khi_ngoai_rollout(client):
+    _add("1.9.1", rollout=10, testers="mayThu1")
+    ngoai = _fp(10, 100)
+    assert "QuangLuuStudio-1.9.1-full.nupkg" in _names(client, "mayThu1")
+    assert _names(client, ngoai) == []
+
+
+def test_may_thu_tai_duoc_file_cua_ban_chua_bat(client):
+    _add("1.9.1", active=False, rollout=0, testers="mayThu1")
+    r = client.get("/api/v1/updates/velopack/mayThu1/QuangLuuStudio-1.9.1-full.nupkg")
+    assert r.status_code == 200
+
+
+def test_ban_chi_cho_may_thu_khong_len_tai_ve(client):
+    _add("1.9.1", active=False, rollout=0, setup=True, testers="mayThu1")
+    assert client.get("/tai-ve").status_code == 404
+
+
+def test_ban_dang_nhap_do_thi_may_thu_cung_khong_nhan(client):
+    _add("1.9.1", status="dang_nhap", testers="mayThu1")
+    assert _names(client, "mayThu1") == []
+
+
+def test_cot_may_thu_rong_hoac_null(client):
+    _add("1.9.1", active=False, testers=None)
+    assert _names(client, "fp1") == []
+
+
+@pytest.mark.parametrize("text,expect", [
+    ("a\nb", {"a", "b"}),
+    (" a , b ;c\r\n\n", {"a", "b", "c"}),
+    ("a ../x tên", {"a"}),
+    ("", set()),
+    (None, set()),
+])
+def test_parse_testers(text, expect):
+    assert velopack_feed.parse_testers(text) == expect
