@@ -101,8 +101,35 @@ def win32_modules():
 
 # ── Tìm process / cửa sổ ─────────────────────────────────────────────────────
 
+_STILL_ACTIVE = 259
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+def _still_active(pid) -> bool:
+    """False chỉ khi chắc chắn tiến trình đã thoát (exit code khác STILL_ACTIVE).
+
+    Tiến trình đã thoát mà còn ai giữ handle thì vẫn nằm trong danh sách tiến trình
+    (máy 3, 2026-10-28: 3 PID Cubase15 HasExited, 0 luồng, chỉ reboot mới hết).
+    Không hỏi được (quyền, không phải Windows) → coi như còn chạy.
+    """
+    try:
+        k32 = ctypes.windll.kernel32
+    except Exception:
+        return True
+    h = k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not h:
+        return True
+    try:
+        code = ctypes.c_ulong(0)
+        if not k32.GetExitCodeProcess(h, ctypes.byref(code)):
+            return True
+        return code.value == _STILL_ACTIVE
+    finally:
+        k32.CloseHandle(h)
+
+
 def studio_one_pids():
-    """Tập PID của mọi process Studio One đang chạy."""
+    """Tập PID của mọi process Studio One đang chạy (bỏ tiến trình đã thoát chưa được dọn)."""
     try:
         import psutil
     except ImportError:
@@ -112,7 +139,7 @@ def studio_one_pids():
     for proc in psutil.process_iter(["pid", "name"]):
         try:
             name = (proc.info.get("name") or "").lower()
-            if any(kw in name for kw in keywords):
+            if any(kw in name for kw in keywords) and _still_active(proc.info["pid"]):
                 pids.add(proc.info["pid"])
         except Exception:
             continue

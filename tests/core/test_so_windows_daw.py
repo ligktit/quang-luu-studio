@@ -455,3 +455,23 @@ def test_dua_len_truoc_khong_bo_phong_to(iconic, want_restore):
         so_windows.force_foreground(23)
     restored = any(c.args == (23, so_windows.SW_RESTORE) for c in gui.ShowWindow.call_args_list)
     assert restored is want_restore
+
+
+def test_pids_bo_qua_tien_trinh_da_thoat_nhung_chua_duoc_don():
+    # Máy 3 (2026-10-28): Cubase15 đã thoát (HasExited, 0 luồng) nhưng còn ai giữ handle
+    # nên vẫn nằm trong danh sách tiến trình → vòng đóng chờ đủ 45 s rồi báo "đóng tay".
+    daw.bind({"daw_kind": "cubase"})
+    procs = [MagicMock(info={"pid": 1, "name": "Cubase15.exe"}),
+             MagicMock(info={"pid": 2, "name": "Cubase15.exe"})]
+    fake_psutil = MagicMock()
+    fake_psutil.process_iter.return_value = procs
+    with patch.dict("sys.modules", {"psutil": fake_psutil}), \
+         patch.object(so_windows, "_still_active", side_effect=lambda pid: pid == 2):
+        assert so_windows.studio_one_pids() == {2}
+
+
+def test_khong_hoi_duoc_trang_thai_thi_coi_nhu_con_chay():
+    # Không mở được tiến trình (quyền, pid lạ) → nghiêng về an toàn: vẫn coi là đang chạy.
+    with patch.object(so_windows.ctypes, "windll", create=True) as windll:
+        windll.kernel32.OpenProcess.return_value = 0
+        assert so_windows._still_active(4242) is True
