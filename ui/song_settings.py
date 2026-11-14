@@ -28,6 +28,8 @@ _TOGGLES = {
     "fix_meo":   ("fix_meo_state", "_on_fix_meo"),
     "be":        ("be_state", "_on_be"),
     "tat_on":    ("tat_on_state", "_on_tat_on"),
+    # Hai mic Studio One: Bè riêng của mic 2 (_on_be2 tự bỏ qua khi tắt 2 mic).
+    "be_2":      ("be2_state", "_on_be2"),
 }
 
 # Kênh mixer quen thuộc: cc_key trên UI ↔ tên ngắn trong preset.

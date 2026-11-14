@@ -12,6 +12,8 @@ MIC_KEY = "mix_mic"
 MIC2_KEY = "mix_mic_2"
 REVERB_KEY = "mix_reverb"
 MIC2_REVERB_KEY = "mix_reverb_2"
+BE_KEY = "be"
+BE2_KEY = "be_2"
 
 # Kênh mixer chỉ có khi bật 2 mic -> kênh của mic 1 mà nó mượn số CC
 # (mức, tắt, CC phụ mute_multi_cc), gửi trên kênh MIDI 2, không phát đôi.
@@ -20,7 +22,12 @@ MIC2_CHANNELS = {MIC2_KEY: MIC_KEY, MIC2_REVERB_KEY: REVERB_KEY}
 # Tên CC riêng từng mic: không phát đôi dù cấu hình mic2_shared_cc có ghi.
 # Vang từng tách riêng sau khi máy 826077C tắt Vang mic dây làm tắt luôn vang
 # mic không dây đang hát (2026-11-03).
-PER_MIC_NAMES = (MIC_KEY, "mute_mic", REVERB_KEY, "mute_reverb")
+# Bè tách riêng cùng đợt (nút Bè Mic 2, BE2_KEY).
+PER_MIC_NAMES = (MIC_KEY, "mute_mic", REVERB_KEY, "mute_reverb", BE_KEY)
+
+# Kênh/nút của mic 2 mà tên tự suy từ tên mic 2 ("Vang Mic KG", "Bè Mic KG")
+# khi chưa tự đặt trong mic_labels.
+_DERIVED_PREFIX = {MIC2_REVERB_KEY: "Vang", BE2_KEY: "Bè"}
 
 # Tên hiển thị mặc định hai kênh mic (settings["mic_labels"] sửa được).
 DEFAULT_LABELS = {MIC_KEY: "Mic Dây", MIC2_KEY: "Mic Không Dây"}
@@ -29,7 +36,7 @@ DEFAULT_LABELS = {MIC_KEY: "Mic Dây", MIC2_KEY: "Mic Không Dây"}
 # (tone, chế độ...) — mỗi mic có một chuỗi FX riêng trong Studio One.
 DEFAULT_SHARED_NAMES = (
     "tone_voice", "mode", "key_root", "key_scale", "scale_type",
-    "tune_on_off", "tone_auto", "fix_meo", "be", "tat_on",
+    "tune_on_off", "tone_auto", "fix_meo", "tat_on",
     "voice_fx", "mode_danca", "mode_lofi", "mode_remix", "mode_datheloai",
 )
 
@@ -65,26 +72,36 @@ def labels(settings) -> dict:
             for key, default in DEFAULT_LABELS.items()}
 
 
+def derived_label(settings, key) -> str:
+    """Tên kênh Vang / nút Bè của mic 2: tự đặt trong mic_labels, không có thì
+    "<Vang|Bè> <tên mic 2>"."""
+    return _saved_name(settings, key) or f"{_DERIVED_PREFIX[key]} {labels(settings)[MIC2_KEY]}"
+
+
 def reverb2_label(settings) -> str:
-    """Tên kênh Vang của mic 2: tự đặt trong mic_labels, không có thì "Vang <tên mic 2>"."""
-    return _saved_name(settings, MIC2_REVERB_KEY) or f"Vang {labels(settings)[MIC2_KEY]}"
+    return derived_label(settings, MIC2_REVERB_KEY)
+
+
+def be2_label(settings) -> str:
+    return derived_label(settings, BE2_KEY)
 
 
 def with_label(settings, key, name) -> dict:
     """mic_labels mới sau khi đặt tên `key` = `name`.
 
-    Trống -> tên mặc định (Vang Mic 2: bỏ tên tự đặt, quay về tên tự suy).
+    Trống -> tên mặc định (Vang/Bè Mic 2: bỏ tên tự đặt, quay về tên tự suy).
     Giữ nguyên các tên còn lại. Tên các kênh này chỉ đọc từ mic_labels, nên
     Dev Mode đổi tên phải ghi vào đây, không phải ui_config.
     """
-    if key not in DEFAULT_LABELS and key != MIC2_REVERB_KEY:
+    if key not in DEFAULT_LABELS and key not in _DERIVED_PREFIX:
         raise ValueError(f"không phải kênh mic: {key!r}")
     out = labels(settings)
-    rv = _saved_name(settings, MIC2_REVERB_KEY)
-    if rv:
-        out[MIC2_REVERB_KEY] = rv
+    for derived in _DERIVED_PREFIX:
+        saved = _saved_name(settings, derived)
+        if saved:
+            out[derived] = saved
     name = name.strip() if isinstance(name, str) else ""
-    if key == MIC2_REVERB_KEY:
+    if key in _DERIVED_PREFIX:
         if name:
             out[key] = name
         else:

@@ -590,3 +590,119 @@ def test_cai_dat_luu_ten_mic_giu_ten_vang_mic2(qapp, mock_engine, qtbot):
     SettingsDialog._collect_mic_settings(dlg, s)
     assert s["mic_labels"] == {"mix_mic": "Mic P420", "mix_mic_2": "Mic Không Dây",
                                "mix_reverb_2": "Vang KG"}
+
+
+
+# ── Bè riêng từng mic: nút Bè Mic 2 (CC Bè trên kênh MIDI 2) ──────────────────
+def _tool_texts(dash):
+    return list(dash._func_buttons)
+
+
+def test_nut_be_mic2_ngay_sau_be_gui_kenh_2(qapp, mock_engine, save_settings, qtbot):
+    dash = _make_dashboard(qtbot, {"mic_count": 2, "mic_labels": {"mix_mic_2": "Mic KG"}})
+    texts = _tool_texts(dash)
+    assert texts[texts.index("Bè") + 1] == "Bè Mic KG"
+    be2 = dash._be2_btn
+    assert be2 is dash._func_buttons["Bè Mic KG"]
+
+    mock_engine.reset_mock()
+    be2.clicked.emit()
+    assert dash.be2_state is True and dash.be_state is False
+    assert be2._active is True and dash._func_buttons["Bè"]._active is False
+    assert _channel_calls(mock_engine) == [(1, 47, dash._toggle_value("be", True))]
+    mock_engine.send_midi.assert_not_called()
+
+    mock_engine.reset_mock()
+    dash._func_buttons["Bè"].clicked.emit()                 # Bè mic 1: chỉ kênh 1
+    mock_engine.send_midi_on_channel.assert_not_called()
+    assert mock_engine.send_midi.call_args.args[:2] == (47, dash._toggle_value("be", True))
+    assert dash.be2_state is True                     # Bè mic 2 không đổi
+
+
+def test_be_mic2_theo_can_chinh_dao_chieu_cua_be(qapp, mock_engine, save_settings, qtbot):
+    dash = _make_dashboard(qtbot, {"mic_count": 2})
+    with patch.object(dash, "_toggle_value", side_effect=lambda key, on, **k: 0 if on else 127) as tv:
+        mock_engine.reset_mock()
+        dash._be2_btn.clicked.emit()
+    assert tv.call_args.args[0] == "be"
+    assert _channel_calls(mock_engine) == [(1, 47, 0)]
+    # Đổi cân chỉnh Bè ở Dev Mode thì bắn lại cả Bè mic 2.
+    mock_engine.reset_mock()
+    dash._resend_calibrated_states([], ["be"])
+    assert (1, 47, dash._toggle_value("be", True)) in _channel_calls(mock_engine)
+
+
+def test_mot_mic_khong_co_nut_be_mic2(qapp, mock_engine, save_settings, qtbot):
+    dash = _make_dashboard(qtbot, {})
+    assert dash._be2_btn is None
+    assert not any(t.startswith("Bè ") for t in _tool_texts(dash))
+    mock_engine.reset_mock()
+    dash._on_be2()                                   # preset cũ gọi tới: bỏ qua
+    assert dash.be2_state is False
+    mock_engine.send_midi_on_channel.assert_not_called()
+
+
+def test_tat_2_mic_bo_nut_be_mic2(qapp, mock_engine, save_settings, qtbot):
+    dash = _make_dashboard(qtbot, {"mic_count": 2})
+    assert dash._be2_btn is not None
+    dash.settings["mic_count"] = 1
+    dash._apply_mic_count_setting()
+    assert dash._be2_btn is None
+    assert not any(t.startswith("Bè ") for t in _tool_texts(dash))
+
+
+def test_dung_lai_giu_den_be_mic2(qapp, mock_engine, save_settings, qtbot):
+    dash = _make_dashboard(qtbot, {"mic_count": 2})
+    dash._be2_btn.clicked.emit()
+    dash.refresh_ui()
+    assert dash._be2_btn._active is True
+
+
+def test_dev_mode_doi_ten_nut_be_mic2(qapp, mock_engine, save_settings, qtbot):
+    dash = _dev_dashboard(qtbot, {"mic_count": 2, "mic_labels": {"mix_mic_2": "Mic KG"}})
+    with patch("PySide6.QtWidgets.QInputDialog.getText", return_value=("Bè KG", True)) as ask, \
+         patch("frontend_qt.backend.UiConfigManager.save_ui_config") as save_ui:
+        _click_menu(dash._be2_btn, "Sửa")
+    assert ask.call_args.kwargs["text"] == "Bè Mic KG"
+    save_ui.assert_not_called()
+    assert dash.settings["mic_labels"]["be_2"] == "Bè KG"
+    assert dash._be2_btn.text() == "Bè KG"
+    with patch.object(dash, "_show_message") as msg:
+        _click_menu(dash._be2_btn, "Ẩn")
+    assert "Phòng có 2 micro" in msg.call_args.args[0]
+
+
+def test_dev_mode_sua_nut_be_mic1_van_mo_hop_sua(qapp, mock_engine, save_settings, qtbot):
+    dash = _dev_dashboard(qtbot, {"mic_count": 2})
+    with patch.object(dash, "_rename_mic2_channel") as rename, \
+         patch("ui.dialogs.widget_builder.WidgetBuilderDialog") as Dlg:
+        Dlg.return_value.exec.return_value = 0
+        _click_menu(dash._func_buttons["Bè"], "Sửa")
+    rename.assert_not_called()
+    Dlg.assert_called_once()
+
+
+def test_preset_theo_bai_nho_be_mic2(qapp, mock_engine, save_settings, qtbot):
+    from ui import song_settings
+    dash = _make_dashboard(qtbot, {"mic_count": 2})
+    dash._be2_btn.clicked.emit()
+    toggles = next(s for s in song_settings.SONG_SETTINGS if s.name == "toggles")
+    snap = toggles.capture(dash)
+    assert snap["toggles"]["be_2"] is True and snap["toggles"]["be"] is False
+    dash._be2_btn.clicked.emit()
+    toggles.apply(dash, snap)
+    assert dash.be2_state is True and dash._be2_btn._active is True
+
+
+
+def test_doi_ten_nut_be_den_van_theo(qapp, mock_engine, save_settings, qtbot):
+    """Máy 826077C đặt tên "Bè Mic P420": app từng tìm nút Bè theo chữ "Bè" → đèn đứng im."""
+    from core.config import UiConfigManager
+    layout = copy.deepcopy(UiConfigManager._DEFAULT_UI_CONFIG)
+    next(e for e in layout["tools"] if e["action"] == "be")["label"] = "Bè Mic P420"
+    with patch("frontend_qt.backend.UiConfigManager.load_ui_config", return_value=layout):
+        dash = _make_dashboard(qtbot, {"mic_count": 2})
+        btn = dash._func_buttons["Bè Mic P420"]
+        btn.clicked.emit()
+        assert dash.be_state is True and btn._active is True
+        assert dash._be2_btn._active is False

@@ -39,7 +39,8 @@ Cả hai track đều record-arm + monitor, không mute → mở bài là cả h
    đúng tone, bật lên là hát được ngay.
    **Sửa 2026-11-03:** Vang (mức Vang, mute Vang và các send Echo/Hall/Main/Vang 2) là của **riêng
    từng mic** — kênh Vang Mic 2 trên mixer gửi các CC Vang trên kênh MIDI 2. Lý do: máy 826077C tắt
-   Vang mic dây thì tắt luôn vang mic không dây đang hát (Vang từng phát đôi).
+   Vang mic dây thì tắt luôn vang mic không dây đang hát (Vang từng phát đôi). Cùng đợt, **Bè** cũng
+   riêng từng mic (nút Bè Mic 2 gửi CC 47 trên kênh 2).
 3. Đồng bộ lại toàn bộ khi Studio One mở bài / báo sẵn sàng (như hiện có) phải gồm cả kênh mic 2.
 
 ## 4. Không làm (non-goals)
@@ -76,10 +77,10 @@ Không đụng bảng CC hiện có, không chiếm CC mới.
 vd `keyRoot2`, `muteMic2`) cho các CC liên quan tới mic:
 
 - riêng từng mic: `mix_mic` (21), `mute_mic` (51), `mix_reverb` (22), `mute_reverb` (52),
-  `mute_multi` của Vang 41–44 (từ 2026-11-03, kênh Vang Mic 2);
+  `mute_multi` của Vang 41–44 (từ 2026-11-03, kênh Vang Mic 2), `be` 47 (nút Bè Mic 2);
 - dùng chung (phát đôi): `tone_voice` 11, `mode` / mode toggles 30, 37, 38, 39, 46,
   `key_root` 33, `key_scale` 34, `scale_type` 35, `tune_on_off` 36, `tone_auto` 40,
-  `fix_meo` 45, `be` 47, `tat_on` 48, `voice_fx` 54.
+  `fix_meo` 45, `tat_on` 48, `voice_fx` 54.
 
 Không có transmit (chỉ `readyPing` kênh 1 có transmit như cũ). `tests/test_surface_xml.py`
 phải kiểm cả bộ kênh 2.

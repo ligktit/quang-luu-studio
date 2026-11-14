@@ -186,6 +186,9 @@ class MainDashboard(QMainWindow):
         self.current_tone = "C"
         self.current_score = None
         self.be_state = False
+        self.be2_state = False   # Bè của mic 2 (chỉ dùng khi bật 2 mic)
+        self._be_btn = None      # nút Bè / Bè Mic 2 — tools.py gán khi dựng panel
+        self._be2_btn = None
         self.vang_state = False
         self.fix_meo_state = False
         self.tat_on_state = False   # nút Tắt Ồn (khử ồn mic) — mọi phiên bản
@@ -535,6 +538,8 @@ class MainDashboard(QMainWindow):
                 del self._func_buttons[key]
         # Mode buttons nằm hoàn toàn trong body → clear toàn bộ (mode.py sẽ thêm lại)
         self._mode_buttons = {}
+        self._be2_btn = None   # tools.py dựng lại khi còn bật 2 mic
+        self._be_btn = None
 
         # Rebuild body
         self._body_layout.addWidget(self._build_body())
@@ -595,13 +600,17 @@ class MainDashboard(QMainWindow):
             self.refresh_ui()
 
     def _mic_channel_key(self, panel_name, widget_data):
-        """mix_mic / mix_mic_2 / mix_reverb_2 khi `widget_data` là kênh lấy tên từ
-        settings["mic_labels"] lúc đang bật 2 mic, ngược lại None.
+        """mix_mic / mix_mic_2 / mix_reverb_2 / be_2 khi `widget_data` là kênh/nút
+        lấy tên từ settings["mic_labels"] lúc đang bật 2 mic, ngược lại None.
 
-        Dev Mode đổi tên các kênh này phải ghi vào mic_labels (mixer.py đọc từ
-        đó) — ghi vào ui_config thì app bỏ qua.
+        Dev Mode đổi tên các mục này phải ghi vào mic_labels (mixer.py, tools.py
+        đọc từ đó) — ghi vào ui_config thì app bỏ qua.
         """
-        if panel_name != "mixer" or not mic2.is_enabled(self.settings):
+        if not mic2.is_enabled(self.settings):
+            return None
+        if panel_name == "tools":
+            return mic2.BE2_KEY if widget_data.get("id") == mic2.BE2_KEY else None
+        if panel_name != "mixer":
             return None
         key = widget_data.get("cc")
         return key if key in (mic2.MIC_KEY, *mic2.MIC2_CHANNELS) else None
@@ -615,7 +624,8 @@ class MainDashboard(QMainWindow):
         """Mic 2 / Vang Mic 2 không có entry ui_config (mọi thông số theo kênh
         Mic / Vang) → chỉ đổi tên."""
         from PySide6.QtWidgets import QInputDialog
-        what = "kênh vang mic 2" if key == mic2.MIC2_REVERB_KEY else "mic 2"
+        what = {mic2.MIC2_REVERB_KEY: "kênh vang mic 2",
+                mic2.BE2_KEY: "nút bè mic 2"}.get(key, "mic 2")
         name, ok = QInputDialog.getText(self, f"Đổi tên {what}", f"Tên {what}:",
                                         text=widget_data.get("label", ""))
         if ok:
@@ -624,7 +634,7 @@ class MainDashboard(QMainWindow):
 
     def _on_edit_widget(self, panel_name, widget_data):
         mic_key = self._mic_channel_key(panel_name, widget_data)
-        if mic_key in mic2.MIC2_CHANNELS:
+        if mic_key in mic2.MIC2_CHANNELS or mic_key == mic2.BE2_KEY:
             self._rename_mic2_channel(mic_key, widget_data)
             return
         from ui.dialogs.widget_builder import WidgetBuilderDialog
@@ -693,9 +703,13 @@ class MainDashboard(QMainWindow):
                 on_value = int(mode_map.get("Fix Méo", 127)) if isinstance(mode_map, dict) else 127
             val = self._toggle_value(key, getattr(self, attr, default), on_value=on_value)
             self.engine.send_midi(int(MIDI_CC.get(key)), val)
+            if key == "be" and mic2.is_enabled(self.settings):
+                # Bè mic 2 dùng chung cân chỉnh đảo chiều với Bè (cùng tham số Auto-Tune).
+                self._send_be2()
             
     def _on_hide_widget(self, panel_name, widget_data):
-        if self._mic_channel_key(panel_name, widget_data) in mic2.MIC2_CHANNELS:
+        key = self._mic_channel_key(panel_name, widget_data)
+        if key in mic2.MIC2_CHANNELS or key == mic2.BE2_KEY:
             self._show_message("Muốn bỏ Mic 2: Cài đặt → Âm thanh → bỏ chọn \"Phòng có 2 micro\"")
             return
         ui_config = backend.UiConfigManager.load_ui_config()
@@ -1439,7 +1453,7 @@ class MainDashboard(QMainWindow):
 
             if cc == int(MIDI_CC.get("be", 47)):
                 self.be_state = self._toggle_state("be", value)
-                btn = self._func_buttons.get("Bè")
+                btn = self._be_button()
                 if btn: btn.setActive(self.be_state)
 
             if cc == int(MIDI_CC.get("tat_on", 48)):
@@ -2631,10 +2645,33 @@ class MainDashboard(QMainWindow):
         self.be_state = not getattr(self, 'be_state', False)
         val = self._toggle_value("be", self.be_state)
         self.engine.send_midi(int(MIDI_CC.get("be", 47)), val)
-        btn = self._func_buttons.get("Bè")
+        btn = self._be_button()
         if btn:
             btn.setActive(self.be_state)
         print(f"[BE] -> {'ON' if self.be_state else 'OFF'} (Value {val})")
+
+    def _be_button(self):
+        """Nút Bè (mic 1) theo action — tên nút đổi được ở Dev Mode."""
+        return getattr(self, "_be_btn", None) or self._func_buttons.get("Bè")
+
+    def _send_be2(self):
+        val = self._toggle_value("be", self.be2_state)
+        self.engine.send_midi_on_channel(mic2.MIC2_CHANNEL, int(MIDI_CC.get("be", 47)), val)
+        return val
+
+    def _on_be2(self):
+        """Bè của mic 2 (nút "Bè Mic 2" khi bật 2 mic): cùng CC Bè, kênh MIDI 2.
+
+        Bè không phát đôi nữa — mỗi mic bật/tắt bè riêng (máy 826077C, 2026-11-03).
+        """
+        if not mic2.is_enabled(self.settings):
+            return
+        self.be2_state = not getattr(self, "be2_state", False)
+        val = self._send_be2()
+        btn = getattr(self, "_be2_btn", None)
+        if btn is not None:
+            btn.setActive(self.be2_state)
+        print(f"[BE MIC 2] -> {'ON' if self.be2_state else 'OFF'} (Value {val})")
 
     def _on_tat_on(self):
         """Toggle bộ khử tiếng ồn nền cho mic (CC "tat_on") — có ở MỌI phiên bản.
