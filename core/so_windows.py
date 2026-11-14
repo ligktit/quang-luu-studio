@@ -2,17 +2,20 @@
 Quang Lưu Studio — Thao tác cửa sổ Studio One (thuần win32, không phụ thuộc Qt).
 
 Gom một chỗ mọi thứ liên quan tới việc tìm / ẩn / hiện / đưa lên trước cửa sổ
-Studio One, để cả UI (nút mắt, khoá kỹ thuật) lẫn engine (đóng an toàn lúc thoát)
+Studio One, để cả UI (tự ẩn DAW, Cài đặt → Cửa sổ DAW) lẫn engine (đóng an toàn lúc thoát)
 dùng chung một cách hiểu về "cửa sổ nào là của Studio One".
 
 Nguyên tắc: tìm theo **PID của process** chứ không theo tiêu đề cửa sổ — plugin,
 mixer, cửa sổ nhạc cụ của Studio One có tiêu đề tuỳ ý, chỉ PID là chắc chắn.
 """
 import ctypes
+import json
 import logging
+import os
 import re
 import threading
 import time
+from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
@@ -34,11 +37,55 @@ def process_keywords() -> tuple:
 def title_is_main(title) -> bool:
     """Tiêu đề này có phải cửa sổ chính của DAW không (mọi từ bắt buộc đều có)."""
     t = (title or "").lower()
-    return all(word in t for word in _profile().main_title_requires)
+    prof = _profile()
+    words = prof.main_title_requires
+    # Tiêu đề cửa sổ chính luôn BẮT ĐẦU bằng tên DAW ("Studio One - vp",
+    # "Cubase Pro Project - mau"). Chỉ "có chứa" thì bảng ASIO Link Pro mở trong
+    # tiến trình Studio One ("O Deus ASIO Link Pro … - Studio One.exe") bị nhận nhầm.
+    prefix = getattr(prof, "main_title_prefix", "") or (words[0] if words else "")
+    return bool(words) and t.startswith(prefix) and all(word in t for word in words)
 
 SW_HIDE = 0
 SW_SHOW = 5
 SW_RESTORE = 9
+HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
+_SWP_NOMOVE_NOSIZE_NOACTIVATE = 0x0002 | 0x0001 | 0x0010
+
+# Cửa sổ nội bộ của DAW/Windows vốn ẩn từ đầu — hiện lên là rác trên màn hình
+# (đo trên Cubase 13: ô "USB Change Listener" 136×39 ở góc trái trên, bộ gõ IME).
+INTERNAL_WINDOW_CLASSES = ("IME", "MSCTFIME UI", "USB Change Listener", "SteinbergDevWnd")
+# Cửa sổ ngầm 133×38 của plugin JUCE (Auto-Tune, Waves…) — đo trên Studio One 5.
+INTERNAL_WINDOW_TITLES = ("JUCEWindow", "Default IME", "MSCTFIME UI")
+# Lớp có đuôi số đổi theo máy. ASIOLINKCLASS…: cửa sổ ngầm của driver ASIO Link Pro
+# ("O Deus ASIO Link Pro … - Studio One.exe") — không bao giờ vẽ gì, bật lên là khung
+# trắng, kể cả sau khi mở Control Panel (bảng thật mở ra là ASIO4ALL). Đo máy 1 2026-11-03.
+INTERNAL_WINDOW_CLASS_PREFIXES = ("ASIOLINKCLASS",)
+
+# Cửa sổ đang được giữ TOPMOST để nổi trên app đang "Ghim trên cùng" (show_window).
+# Phải bỏ cờ trước khi ẩn, nếu không lần hiện sau nó đè lên mọi thứ.
+_pinned_topmost = set()
+
+# KTV vừa tự hiện cửa sổ (show_all/show_window) → hide_when_ready ngừng bám ẩn:
+# "không tự ẩn lại" cái KTV vừa bật.
+_user_shown = threading.Event()
+
+# Cửa sổ do app ẩn (hide_all/hide_window). show_all chỉ hiện lại những cái này —
+# hiện "mọi cửa sổ đang ẩn" thì bật cả bảng ASIO Link chưa từng mở (khung trắng).
+_hidden_by_us = set()
+
+# Ghi nhận _hidden_by_us ra file (kèm PID DAW) để app mở lại vẫn biết cái nào
+# mình đã ẩn. None = DATA_DIR/daw_hidden.json (test đặt sang thư mục tạm).
+_RECORD_FILE = None
+_record_loaded = False
+
+# Công cụ ASIO chạy tiến trình riêng (bảng ASIO mở từ trong DAW đã thuộc tiến trình DAW).
+# So một phần với TÊN TIẾN TRÌNH (chữ thường): bản 64-bit/bản cài khác có tên exe khác
+# ("ASIOLinkPro64.exe"). Không so tiêu đề — trình duyệt mở trang ASIO4ALL không phải công cụ.
+ASIO_PROCESS_KEYWORDS = ("asiolink", "asio link", "asio4all", "asiovad")
+
+# Hộp thoại chuẩn Windows (MessageBox) — Studio One hỏi/báo lỗi bằng loại này.
+_GW_OWNER = 4
 
 
 def win32_modules():
@@ -54,8 +101,35 @@ def win32_modules():
 
 # ── Tìm process / cửa sổ ─────────────────────────────────────────────────────
 
+_STILL_ACTIVE = 259
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+def _still_active(pid) -> bool:
+    """False chỉ khi chắc chắn tiến trình đã thoát (exit code khác STILL_ACTIVE).
+
+    Tiến trình đã thoát mà còn ai giữ handle thì vẫn nằm trong danh sách tiến trình
+    (máy 3, 2026-10-28: 3 PID Cubase15 HasExited, 0 luồng, chỉ reboot mới hết).
+    Không hỏi được (quyền, không phải Windows) → coi như còn chạy.
+    """
+    try:
+        k32 = ctypes.windll.kernel32
+    except Exception:
+        return True
+    h = k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not h:
+        return True
+    try:
+        code = ctypes.c_ulong(0)
+        if not k32.GetExitCodeProcess(h, ctypes.byref(code)):
+            return True
+        return code.value == _STILL_ACTIVE
+    finally:
+        k32.CloseHandle(h)
+
+
 def studio_one_pids():
-    """Tập PID của mọi process Studio One đang chạy."""
+    """Tập PID của mọi process Studio One đang chạy (bỏ tiến trình đã thoát chưa được dọn)."""
     try:
         import psutil
     except ImportError:
@@ -65,7 +139,7 @@ def studio_one_pids():
     for proc in psutil.process_iter(["pid", "name"]):
         try:
             name = (proc.info.get("name") or "").lower()
-            if any(kw in name for kw in keywords):
+            if any(kw in name for kw in keywords) and _still_active(proc.info["pid"]):
                 pids.add(proc.info["pid"])
         except Exception:
             continue
@@ -164,25 +238,88 @@ def any_visible() -> bool:
 
 # ── Ẩn / hiện ────────────────────────────────────────────────────────────────
 
-def hide_all() -> int:
+def _record_path() -> str:
+    if _RECORD_FILE:
+        return _RECORD_FILE
+    from core.config import DATA_DIR
+    return os.path.join(DATA_DIR, "daw_hidden.json")
+
+
+def _save_record():
+    """Lưu _hidden_by_us kèm PID DAW hiện tại. Lỗi ghi chỉ mất khả năng nhớ qua lần mở app."""
+    try:
+        data = {"pids": sorted(studio_one_pids()), "hwnds": sorted(_hidden_by_us)}
+        with open(_record_path(), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception as e:
+        log.debug("Lưu ghi nhận cửa sổ đã ẩn lỗi: %s", e)
+
+
+def _load_record(hwnds) -> set:
+    """Ghi nhận của lần mở app trước — chỉ dùng khi DAW vẫn là đúng tiến trình đó."""
+    try:
+        with open(_record_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        if not set(data.get("pids") or ()) & studio_one_pids():
+            return set()
+        return {int(h) for h in data.get("hwnds") or ()} & set(hwnds)
+    except Exception:
+        return set()
+
+
+def _adopt_record(hwnds=None):
+    """Lần đầu trong phiên app: nhận lại ghi nhận của lần mở trước (cùng tiến trình DAW).
+
+    Phải nạp TRƯỚC lần ghi đầu tiên — không thì ẩn thêm một cửa sổ là file bị
+    ghi đè, mất các cửa sổ đã ẩn từ lần mở app trước.
+    """
+    global _record_loaded
+    if _record_loaded:
+        return
+    _record_loaded = True
+    _hidden_by_us.update(_load_record(all_windows() if hwnds is None else hwnds))
+
+
+def _is_dialog(win32gui, hwnd) -> bool:
+    """Hộp thoại đang chờ trả lời: MessageBox chuẩn, hoặc cửa sổ có chủ đang bị khoá (modal)."""
+    try:
+        if win32gui.GetClassName(hwnd) == DIALOG_CLASS:
+            return True
+        owner = win32gui.GetWindow(hwnd, _GW_OWNER)
+        return bool(owner) and not win32gui.IsWindowEnabled(owner)
+    except Exception:
+        return False
+
+
+def hide_all(keep_dialogs=False) -> int:
     """Ẩn mọi cửa sổ Studio One (kể cả plugin). Trả số cửa sổ vừa ẩn.
 
     SW_HIDE gỡ luôn cửa sổ khỏi thanh tác vụ và khỏi Alt+Tab — khách không còn
     đường nào chạm tới.
+
+    keep_dialogs: để nguyên hộp thoại đang chờ trả lời (dùng khi tự ẩn lúc DAW
+    vừa mở — ẩn hộp thoại "thiếu thiết bị/plugin" thì DAW kẹt chờ mà không ai thấy).
     """
     mods = win32_modules()
     if not mods:
         return 0
     win32gui = mods[0]
+    _unpin_all(win32gui)
+    hwnds = all_windows()
+    _adopt_record(hwnds)
     count = 0
-    for hwnd in all_windows():
+    for hwnd in hwnds:
         try:
             if win32gui.IsWindowVisible(hwnd):
+                if keep_dialogs and _is_dialog(win32gui, hwnd):
+                    continue
                 win32gui.ShowWindow(hwnd, SW_HIDE)
+                _hidden_by_us.add(hwnd)
                 count += 1
         except Exception:
             continue
     if count:
+        _save_record()
         log.info("Đã ẩn %d cửa sổ %s", count, _profile().display_name)
     return count
 
@@ -193,15 +330,30 @@ def show_all(focus_main=True) -> int:
     if not mods:
         return 0
     win32gui = mods[0]
+    _user_shown.set()
     hwnds = all_windows()
+    # Có ghi nhận thì chỉ hiện lại cái app đã ẩn; không có (app mở lại khi DAW đã
+    # ẩn từ phiên trước) thì hiện mọi cửa sổ hợp lệ.
+    _adopt_record(hwnds)
+    recorded = _hidden_by_us & set(hwnds)
+    if recorded:
+        recorded |= set(main_windows(hwnds))     # cửa sổ chính luôn hiện lại
     count = 0
     for hwnd in hwnds:
         try:
+            if recorded:
+                # Cửa sổ không tiêu đề app từng ẩn thì hiện lại; cửa sổ ngầm đã biết thì không.
+                if hwnd not in recorded or _is_junk(win32gui, hwnd):
+                    continue
+            elif _is_internal(win32gui, hwnd):
+                continue
             if not win32gui.IsWindowVisible(hwnd):
                 win32gui.ShowWindow(hwnd, SW_SHOW)
                 count += 1
         except Exception:
             continue
+    _hidden_by_us.clear()
+    _save_record()
     if focus_main:
         for hwnd in main_windows(hwnds):
             if force_foreground(hwnd):
@@ -209,6 +361,173 @@ def show_all(focus_main=True) -> int:
     if count:
         log.info("Đã hiện %d cửa sổ %s", count, _profile().display_name)
     return count
+
+
+# ── Từng cửa sổ (plugin, bảng ASIO…) ─────────────────────────────────────────
+
+@dataclass(frozen=True)
+class WindowEntry:
+    hwnd: int
+    title: str
+    is_main: bool
+    visible: bool
+    source: str  # "daw" | "asio"
+
+
+def _unpin(win32gui, hwnd):
+    if hwnd in _pinned_topmost:
+        _pinned_topmost.discard(hwnd)
+        try:
+            win32gui.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, _SWP_NOMOVE_NOSIZE_NOACTIVATE)
+        except Exception as e:
+            log.debug("bỏ topmost %s lỗi: %s", hwnd, e)
+
+
+def _unpin_all(win32gui):
+    for hwnd in list(_pinned_topmost):
+        _unpin(win32gui, hwnd)
+
+
+def _is_junk(win32gui, hwnd) -> bool:
+    """Cửa sổ ngầm đã biết (theo lớp/tiêu đề) — không bao giờ hiện, kể cả khi app từng ẩn nó."""
+    try:
+        if win32gui.GetWindowText(hwnd) in INTERNAL_WINDOW_TITLES:
+            return True
+        cls = win32gui.GetClassName(hwnd) or ""
+        return cls in INTERNAL_WINDOW_CLASSES or cls.startswith(INTERNAL_WINDOW_CLASS_PREFIXES)
+    except Exception:
+        return True
+
+
+def _is_internal(win32gui, hwnd) -> bool:
+    """Cửa sổ rác: không tiêu đề (tooltip, cửa sổ ngầm) hoặc cửa sổ ngầm đã biết."""
+    try:
+        if not win32gui.GetWindowText(hwnd):
+            return True
+    except Exception:
+        return True
+    return _is_junk(win32gui, hwnd)
+
+
+def asio_windows() -> list:
+    """Cửa sổ có tiêu đề của các công cụ ASIO chạy tiến trình riêng.
+
+    Chỉ nhận theo TÊN TIẾN TRÌNH — khớp theo tiêu đề thì cửa sổ trình duyệt
+    đang mở trang "ASIO4ALL download" cũng bị tính là công cụ ASIO.
+    """
+    mods = win32_modules()
+    if not mods:
+        return []
+    win32gui, _, win32process = mods
+    try:
+        import psutil
+    except ImportError:
+        return []
+    names = {}
+    found = []
+
+    def _cb(hwnd, _):
+        try:
+            if not win32gui.IsWindow(hwnd) or not win32gui.GetWindowText(hwnd):
+                return True
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            if pid not in names:
+                try:
+                    names[pid] = psutil.Process(pid).name().lower()
+                except Exception:
+                    names[pid] = ""
+            if any(kw in names[pid] for kw in ASIO_PROCESS_KEYWORDS):
+                found.append(hwnd)
+        except Exception:
+            pass
+        return True
+
+    try:
+        win32gui.EnumWindows(_cb, None)
+    except Exception as e:
+        log.debug("EnumWindows (ASIO) lỗi: %s", e)
+    return found
+
+
+def list_windows() -> list:
+    """Các cửa sổ KTV bật/tắt riêng được: cửa sổ DAW (chính đứng đầu) rồi tới ASIO.
+
+    Bỏ cửa sổ rác và cửa sổ kích thước 0 (SmtgMain của Cubase).
+    """
+    mods = win32_modules()
+    if not mods:
+        return []
+    win32gui = mods[0]
+    daw_hwnds = all_windows()
+    mains = set(main_windows(daw_hwnds))
+    entries = []
+    for source, hwnds in (("daw", daw_hwnds), ("asio", asio_windows())):
+        for hwnd in hwnds:
+            try:
+                if _is_internal(win32gui, hwnd):
+                    continue
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                if right - left <= 0 or bottom - top <= 0:
+                    continue
+                entries.append(WindowEntry(
+                    hwnd=hwnd, title=win32gui.GetWindowText(hwnd),
+                    is_main=source == "daw" and hwnd in mains,
+                    visible=bool(win32gui.IsWindowVisible(hwnd)), source=source))
+            except Exception:
+                continue
+    entries.sort(key=lambda e: (e.source != "daw", not e.is_main))
+    return entries
+
+
+def show_window(hwnd, above_topmost=False) -> bool:
+    """Hiện đúng một cửa sổ và đưa lên trước. False nếu cửa sổ không còn.
+
+    above_topmost: app đang "Ghim trên cùng" (cửa sổ topmost) thì cửa sổ thường
+    luôn nằm dưới app — giữ cửa sổ này TOPMOST cho tới khi ẩn lại (hide_window /
+    hide_all bỏ cờ). Đặt rồi bỏ ngay không đủ: NOTOPMOST = sau mọi cửa sổ topmost.
+    """
+    mods = win32_modules()
+    if not mods:
+        return False
+    win32gui = mods[0]
+    try:
+        if not win32gui.IsWindow(hwnd):
+            return False
+        _adopt_record()
+        _user_shown.set()
+        win32gui.ShowWindow(hwnd, SW_SHOW)
+        if hwnd in _hidden_by_us:
+            _hidden_by_us.discard(hwnd)
+            _save_record()
+        if above_topmost:
+            win32gui.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, _SWP_NOMOVE_NOSIZE_NOACTIVATE)
+            _pinned_topmost.add(hwnd)
+    except Exception as e:
+        log.debug("show_window(%s) lỗi: %s", hwnd, e)
+        return False
+    force_foreground(hwnd)
+    return True
+
+
+def hide_window(hwnd) -> bool:
+    """Ẩn đúng một cửa sổ. False nếu cửa sổ không còn."""
+    mods = win32_modules()
+    if not mods:
+        return False
+    win32gui = mods[0]
+    try:
+        if not win32gui.IsWindow(hwnd):
+            _pinned_topmost.discard(hwnd)
+            return False
+        _adopt_record()
+        _unpin(win32gui, hwnd)
+        win32gui.ShowWindow(hwnd, SW_HIDE)
+        _hidden_by_us.add(hwnd)
+        _save_record()
+        return True
+    except Exception as e:
+        log.debug("hide_window(%s) lỗi: %s", hwnd, e)
+        return False
 
 
 def force_foreground(hwnd) -> bool:
@@ -228,7 +547,10 @@ def force_foreground(hwnd) -> bool:
     tid_me = tid_fg = 0
     try:
         try:
-            win32gui.ShowWindow(hwnd, SW_RESTORE)
+            # Chỉ khôi phục khi đang thu nhỏ: SW_RESTORE bỏ luôn trạng thái phóng to
+            # (đo máy 1: Studio One phóng to, "Hiện" xong về cỡ nhỏ).
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, SW_RESTORE)
         except Exception:
             pass
         fg = user32.GetForegroundWindow()
@@ -441,9 +763,11 @@ def hide_when_ready(timeout=180.0, follow_seconds=60.0, on_done=None):
 
     Ẩn một phát là chưa đủ: trong lúc nạp bài, Studio One còn bật thêm cửa sổ
     plugin/mixer sau đó. Bám theo thêm `follow_seconds` để ẩn nốt những cửa sổ
-    mọc lên muộn, rồi mới buông (watchdog thường trực là tuỳ chọn riêng —
-    xem HideGuard).
+    mọc lên muộn, rồi mới buông. KTV tự hiện cửa sổ (Cài đặt) giữa chừng thì
+    ngừng bám ngay — không ẩn lại cái KTV vừa bật.
     """
+    _user_shown.clear()
+
     def _run():
         hwnd = wait_for_main_window(timeout=timeout)
         if hwnd is None:
@@ -451,60 +775,19 @@ def hide_when_ready(timeout=180.0, follow_seconds=60.0, on_done=None):
             if on_done:
                 on_done(0)
             return
-        total = hide_all()
+        total = 0 if _user_shown.is_set() else hide_all(keep_dialogs=True)
         deadline = time.monotonic() + follow_seconds
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and not _user_shown.is_set():
             time.sleep(1.5)
-            total += hide_all()
+            if _user_shown.is_set():
+                break
+            total += hide_all(keep_dialogs=True)
         if on_done:
             on_done(total)
 
     t = threading.Thread(target=_run, daemon=True, name="so-hide-when-ready")
     t.start()
     return t
-
-
-# ── Watchdog giữ ẩn ──────────────────────────────────────────────────────────
-
-class HideGuard:
-    """Vòng nền ẩn lại bất kỳ cửa sổ Studio One nào bật lên khi đang khoá.
-
-    Bắt được cả trường hợp khách tự mở Studio One từ Start Menu/desktop. Mặc
-    định TẮT (tech_lock.keep_hidden) vì mỗi vòng quét đều duyệt process list.
-    """
-
-    def __init__(self, should_hide, interval=1.5):
-        self._should_hide = should_hide
-        self._interval = interval
-        self._stop = threading.Event()
-        self._thread = None
-
-    def start(self):
-        if self.is_running():
-            return
-        # Vòng cũ vừa bị stop() có thể còn thoi thóp — phải chờ nó chết hẳn, nếu
-        # không cờ _stop sẽ bị clear ngay dưới rồi vòng cũ chạy tiếp thành hai vòng.
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=3.0)
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True, name="so-hide-guard")
-        self._thread.start()
-        log.info("Bật watchdog giữ ẩn %s", _profile().display_name)
-
-    def stop(self):
-        self._stop.set()
-        log.info("Tắt watchdog giữ ẩn %s", _profile().display_name)
-
-    def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive() and not self._stop.is_set())
-
-    def _loop(self):
-        while not self._stop.wait(self._interval):
-            try:
-                if self._should_hide():
-                    hide_all()
-            except Exception as e:
-                log.debug("HideGuard lỗi: %s", e)
 
 
 # ── Chờ Studio One sẵn sàng nhận MIDI ────────────────────────────────────────
@@ -522,7 +805,7 @@ class HideGuard:
 #      tuỳ máy, tuỳ số plugin. CC là lệnh idempotent nên gửi thừa hoàn toàn vô
 #      hại, rẻ hơn nhiều so với đoán trượt một lần rồi lệch cả buổi.
 #
-# Studio One tắt rồi mở lại giữa phiên (KTV mở khoá kỹ thuật) thì lịch được nạp
+# Studio One tắt rồi mở lại giữa phiên (KTV hoặc Tự sửa âm thanh) thì lịch được nạp
 # lại từ đầu — cửa sổ mới nghĩa là bài mới nạp, phải đồng bộ lại.
 
 # Mốc bắn lại, tính từ lúc THẤY cửa sổ chính (giây).

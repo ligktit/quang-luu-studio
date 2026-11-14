@@ -1,0 +1,273 @@
+"""Nhập bản Velopack từ GitHub Release: chỉ lấy tài sản của đúng bản, kiểm SHA256."""
+import hashlib
+import json
+import os
+import re
+from unittest.mock import patch
+
+import httpx
+
+from app.db import SessionLocal
+from app.models import VelopackRelease
+from app.services import velopack_feed, velopack_import
+
+FULL = b"full-1.9.1"
+DELTA = b"delta-1.9.1"
+SETUP = b"MZsetup"
+
+
+def _a(version, kind, data):
+    return {"PackageId": "QuangLuuStudio", "Version": version, "Type": kind,
+            "FileName": f"QuangLuuStudio-{version}-{kind.lower()}.nupkg", "SHA1": "",
+            "SHA256": hashlib.sha256(data).hexdigest(), "Size": len(data),
+            "NotesMarkdown": "", "NotesHtml": ""}
+
+
+def _transport(feed_assets, files, extra=None):
+    base = "https://github.com/dl/"
+    release = {"assets": [{"name": n, "browser_download_url": base + n, **(extra or {}).get(n, {})}
+                          for n in files]}
+
+    def handler(req):
+        url = str(req.url)
+        if url.endswith("/releases/tags/v1.9.1"):
+            return httpx.Response(200, json=release)
+        name = url.rsplit("/", 1)[-1]
+        if name == "releases.win.json":
+            return httpx.Response(200, json={"Assets": feed_assets})
+        if name in files:
+            return httpx.Response(200, content=files[name])
+        return httpx.Response(404)
+    return httpx.MockTransport(handler)
+
+
+def _new_row():
+    with SessionLocal() as db:
+        row = VelopackRelease(version="1.9.1")
+        db.add(row)
+        db.commit()
+        return row.id
+
+
+def _row(rid):
+    with SessionLocal() as db:
+        return db.get(VelopackRelease, rid)
+
+
+def test_nhap_thanh_cong(client):
+    old = _a("1.9.0", "Full", b"old")
+    full, delta = _a("1.9.1", "Full", FULL), _a("1.9.1", "Delta", DELTA)
+    files = {"releases.win.json": b"", full["FileName"]: FULL, delta["FileName"]: DELTA,
+             "QuangLuuStudio-CaiDat.exe": SETUP}
+    rid = _new_row()
+    with httpx.Client(transport=_transport([old, full, delta], files)) as c:
+        velopack_import.import_release(rid, client=c)
+    row = _row(rid)
+    assert row.status == "xong", row.import_error
+    assert [a["Version"] for a in json.loads(row.assets_json)] == ["1.9.1", "1.9.1"]
+    assert (velopack_feed.velopack_dir() / full["FileName"]).read_bytes() == FULL
+    assert row.setup_filename == "1.9.1_QuangLuuStudio-CaiDat.exe"
+    assert (velopack_feed.velopack_dir() / row.setup_filename).read_bytes() == SETUP
+    # bản nhập xong vẫn chưa phát
+    assert row.is_active is False and row.rollout_percent == 0
+
+
+def test_sai_sha_bao_loi(client):
+    full = _a("1.9.1", "Full", FULL)
+    files = {"releases.win.json": b"", full["FileName"]: b"X" * len(FULL)}
+    rid = _new_row()
+    with httpx.Client(transport=_transport([full], files)) as c:
+        velopack_import.import_release(rid, client=c)
+    row = _row(rid)
+    assert row.status == "loi"
+    assert "SHA256" in row.import_error
+    assert list(velopack_feed.velopack_dir().iterdir()) == []
+
+
+def test_sha256_chu_hoa_van_nhan(client):
+    full = _a("1.9.1", "Full", FULL)
+    full["SHA256"] = full["SHA256"].upper()
+    files = {"releases.win.json": b"", full["FileName"]: FULL}
+    rid = _new_row()
+    with httpx.Client(transport=_transport([full], files)) as c:
+        velopack_import.import_release(rid, client=c)
+    row = _row(rid)
+    assert row.status == "xong", row.import_error
+
+
+def test_loi_giua_chung_don_file_da_tai(client):
+    full = _a("1.9.1", "Full", FULL)
+    delta = _a("1.9.1", "Delta", DELTA)
+    files = {"releases.win.json": b"", full["FileName"]: FULL,
+             delta["FileName"]: b"X" * len(DELTA)}
+    rid = _new_row()
+    with httpx.Client(transport=_transport([full, delta], files)) as c:
+        velopack_import.import_release(rid, client=c)
+    row = _row(rid)
+    assert row.status == "loi"
+    assert list(velopack_feed.velopack_dir().iterdir()) == []
+
+
+def test_thieu_feed_bao_loi(client):
+    rid = _new_row()
+    with httpx.Client(transport=_transport([], {"QuangLuuStudio-CaiDat.exe": SETUP})) as c:
+        velopack_import.import_release(rid, client=c)
+    row = _row(rid)
+    assert row.status == "loi" and "releases.win.json" in row.import_error
+
+
+def test_ten_file_doc_hai_bi_tu_choi(client):
+    bad = _a("1.9.1", "Full", FULL)
+    bad["FileName"] = "../../app.db"
+    rid = _new_row()
+    with httpx.Client(transport=_transport([bad], {"releases.win.json": b"", "../../app.db": FULL})) as c:
+        velopack_import.import_release(rid, client=c)
+    row = _row(rid)
+    assert row.status == "loi"
+    assert list(velopack_feed.velopack_dir().iterdir()) == []
+
+
+def _full_files():
+    full = _a("1.9.1", "Full", FULL)
+    return full, {"releases.win.json": b"", full["FileName"]: FULL}
+
+
+def test_token_bi_thay_khong_ghi_trang_thai(client):
+    full, files = _full_files()
+    rid = _new_row()
+    with SessionLocal() as db:
+        db.get(VelopackRelease, rid).import_token = "moi" * 10 + "ab"
+        db.commit()
+    with httpx.Client(transport=_transport([full], files)) as c:
+        velopack_import.import_release(rid, "cu" * 16, client=c)
+    row = _row(rid)
+    assert row.status == "dang_nhap" and row.assets_json == "[]"
+    assert list(velopack_feed.velopack_dir().iterdir()) == []  # file lần này đã ghi bị dọn
+
+
+def test_token_khop_ghi_trang_thai(client):
+    full, files = _full_files()
+    rid = _new_row()
+    with SessionLocal() as db:
+        db.get(VelopackRelease, rid).import_token = "t" * 32
+        db.commit()
+    with httpx.Client(transport=_transport([full], files)) as c:
+        velopack_import.import_release(rid, "t" * 32, client=c)
+    assert _row(rid).status == "xong"
+
+
+def test_dong_bi_xoa_giua_chung_don_file(client):
+    full, files = _full_files()
+    rid = _new_row()
+    with SessionLocal() as db:
+        db.delete(db.get(VelopackRelease, rid))
+        db.commit()
+    with httpx.Client(transport=_transport([full], files)) as c:
+        velopack_import.import_release(rid, client=c)  # không ném lỗi
+    assert list(velopack_feed.velopack_dir().iterdir()) == []
+
+
+def test_dong_bi_xoa_trong_luc_tai_don_file(client):
+    full, files = _full_files()
+    rid = _new_row()
+    real = velopack_import._download_all
+
+    def download_then_delete(c, version, staging):
+        out = real(c, version, staging)
+        with SessionLocal() as db:
+            db.delete(db.get(VelopackRelease, rid))
+            db.commit()
+        return out
+
+    with patch.object(velopack_import, "_download_all", download_then_delete), \
+            httpx.Client(transport=_transport([full], files)) as c:
+        velopack_import.import_release(rid, client=c)
+    assert list(velopack_feed.velopack_dir().iterdir()) == []
+
+
+def test_moi_luot_tai_vao_thu_muc_staging_rieng(client):
+    full, files = _full_files()
+    rid = _new_row()
+    seen = []
+    real = velopack_import.os.replace
+
+    def spy(src, dst):
+        seen.append(str(src))
+        return real(src, dst)
+
+    with patch.object(velopack_import.os, "replace", spy), \
+            httpx.Client(transport=_transport([full], files)) as c:
+        velopack_import.import_release(rid, client=c)
+        velopack_import.import_release(rid, client=c)
+    staging = {os.path.basename(os.path.dirname(s)) for s in seen}
+    assert len(staging) == 2 and all(re.fullmatch(r"\.staging-[0-9a-f]{32}", s) for s in staging)
+    # chỉ còn gói thật, không sót thư mục staging
+    assert sorted(p.name for p in velopack_feed.velopack_dir().iterdir()) == [full["FileName"]]
+
+
+def test_luot_cu_bi_thay_khong_xoa_file_luot_moi_dang_phuc_vu(client):
+    """Lượt mới (token khớp) đã nhập xong; lượt cũ chạy xong sau với token cũ →
+    file đang phục vụ phải còn nguyên."""
+    full, files = _full_files()
+    rid = _new_row()
+    with SessionLocal() as db:
+        db.get(VelopackRelease, rid).import_token = "moi" * 10 + "ab"
+        db.commit()
+    with httpx.Client(transport=_transport([full], files)) as c:
+        velopack_import.import_release(rid, "moi" * 10 + "ab", client=c)   # lượt mới xong trước
+        velopack_import.import_release(rid, "cu" * 16, client=c)           # lượt cũ xong sau
+    assert _row(rid).status == "xong"
+    assert (velopack_feed.velopack_dir() / full["FileName"]).read_bytes() == FULL
+
+
+def test_loi_khong_dung_file_da_phuc_vu_cua_ban_khac(client):
+    """Bản 1.9.1 lỗi giữa chừng không được xoá gói trùng tên đã có sẵn trong velopack/."""
+    full = _a("1.9.1", "Full", FULL)
+    delta = _a("1.9.1", "Delta", DELTA)
+    (velopack_feed.velopack_dir() / full["FileName"]).write_bytes(FULL)
+    files = {"releases.win.json": b"", full["FileName"]: FULL, delta["FileName"]: b"X" * len(DELTA)}
+    rid = _new_row()
+    with httpx.Client(transport=_transport([full, delta], files)) as c:
+        velopack_import.import_release(rid, client=c)
+    assert _row(rid).status == "loi"
+    assert sorted(p.name for p in velopack_feed.velopack_dir().iterdir()) == [full["FileName"]]
+
+
+SETUP_NAME = "QuangLuuStudio-CaiDat.exe"
+
+
+def _setup_case(extra):
+    full, files = _full_files()
+    files[SETUP_NAME] = SETUP
+    rid = _new_row()
+    with httpx.Client(transport=_transport([full], files, {SETUP_NAME: extra})) as c:
+        velopack_import.import_release(rid, client=c)
+    return _row(rid)
+
+
+def test_setup_dung_size_va_digest(client):
+    row = _setup_case({"size": len(SETUP), "digest": "sha256:" + hashlib.sha256(SETUP).hexdigest()})
+    assert row.status == "xong", row.import_error
+    assert row.setup_filename == "1.9.1_" + SETUP_NAME
+
+
+def test_setup_sai_size_bao_loi(client):
+    row = _setup_case({"size": len(SETUP) + 1})
+    assert row.status == "loi" and "kích thước" in row.import_error
+    assert list(velopack_feed.velopack_dir().iterdir()) == []
+
+
+def test_setup_sai_digest_bao_loi(client):
+    row = _setup_case({"size": len(SETUP), "digest": "sha256:" + "0" * 64})
+    assert row.status == "loi" and "SHA256" in row.import_error
+    assert list(velopack_feed.velopack_dir().iterdir()) == []
+
+
+def test_setup_digest_chu_hoa_va_loai_khac(client):
+    ok = _setup_case({"digest": "sha256:" + hashlib.sha256(SETUP).hexdigest().upper()})
+    assert ok.status == "xong", ok.import_error
+
+
+def test_setup_digest_khong_phai_sha256_bi_bo_qua(client):
+    row = _setup_case({"digest": "md5:abc"})
+    assert row.status == "xong", row.import_error

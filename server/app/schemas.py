@@ -55,7 +55,7 @@ class TrialResponse(BaseModel):
 
 # ── Updates ──
 class UpdateCheckResponse(BaseModel):
-    """Giữ shape tương thích với core.updater._version_check.ReleaseInfo."""
+    """Giữ shape tương thích với ReleaseInfo của bộ cập nhật cũ (client ≤ 1.8)."""
     update_available: bool
     version:          str | None = None
     download_url:     str | None = None

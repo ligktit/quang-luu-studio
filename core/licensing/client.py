@@ -21,6 +21,7 @@ import time
 import urllib.error
 import urllib.request
 
+from core import net_tls
 from core.config import DEFAULT_LICENSE_SERVER_URL, ACTIVATION_FILE, AppConfig
 from core.licensing import jwt_verify
 from core.licensing.device import device_info, get_fingerprint, legacy_fingerprint
@@ -184,7 +185,7 @@ def _post(path: str, payload: dict) -> tuple[int, dict]:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+        with net_tls.urlopen(req, timeout=_TIMEOUT) as resp:
             return resp.status, json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as e:
         try:

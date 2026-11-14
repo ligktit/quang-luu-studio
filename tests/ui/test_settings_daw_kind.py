@@ -81,9 +81,8 @@ def test_auto_launch_dung_duoi_cpr_khi_cubase():
                      "auto_launch_studio_one": True, "auto_launch_browser": False}
     daw.bind(self.settings)
     try:
-        with patch("core.kiosk.is_enabled", return_value=True), \
-             patch("core.kiosk.restore_template_enabled", return_value=True), \
-             patch("core.kiosk.is_locked", return_value=False), \
+        with patch("core.daw_visibility.restore_template_enabled", return_value=True), \
+             patch("core.daw_visibility.auto_hide", return_value=False), \
              patch("core.so_windows.is_running", return_value=False), \
              patch("core.so_template.has_template", return_value=True), \
              patch("core.so_template.restore", return_value={"restored": True, "reason": ""}) as restore, \
@@ -158,9 +157,9 @@ def test_nut_chot_ban_mau_theo_duoi_cubase(qapp, mock_engine, qtbot):
     try:
         daw.bind(dashboard.settings)
         dlg = _open_dialog(qtbot, dashboard)
-        assert ".cpr" in dlg._btn_kiosk_snapshot.text()
-        assert ".cpr" in dlg._btn_kiosk_snapshot.toolTip()
+        assert ".cpr" in dlg._btn_template_snapshot.text()
+        assert ".cpr" in dlg._btn_template_snapshot.toolTip()
         assert ".cpr" in dlg._cb_restore_tpl.text()
-        assert ".song" not in dlg._btn_kiosk_snapshot.text()
+        assert ".song" not in dlg._btn_template_snapshot.text()
     finally:
         daw.bind(None)

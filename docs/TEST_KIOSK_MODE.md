@@ -1,5 +1,8 @@
 # Kịch bản test — Chế độ khách & Đóng Studio One an toàn (v1.7.0)
 
+> ⚠️ **Lỗi thời từ 2026-11-02:** khoá kỹ thuật (PIN, `Ctrl+Alt+Shift+T`) đã bỏ, thay bằng tự ẩn DAW
+> + Cài đặt → Cửa sổ {DAW} (xem `docs/KIOSK_MODE_GUIDE.md`). Các ca về đóng an toàn và bản mẫu vẫn dùng được.
+
 > **Dành cho tester.** Không cần biết lập trình. Làm tuần tự từ trên xuống.
 > Mỗi ca test có: **mục tiêu → các bước → kết quả ĐÚNG → dấu hiệu LỖI**.
 > Đánh dấu kết quả vào bảng ở [mục 9](#9-bảng-kết-quả).

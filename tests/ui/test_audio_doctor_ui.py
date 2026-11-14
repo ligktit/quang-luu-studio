@@ -57,18 +57,77 @@ def _svc(tmp_path):
     return AudioDoctorService(ctx, [_Ok(), _Mic()], log_path=tmp_path / "a.log")
 
 
-def test_dai_canh_bao_hien_loi_nang_nhat_va_an_khi_on(qapp, mock_engine, qtbot, tmp_path):
+def _fix_btn(dashboard):
+    return dashboard._func_buttons["Tự sửa âm thanh"]
+
+
+def test_loi_luc_mo_app_bat_cua_so_canh_bao(qapp, mock_engine, qtbot, tmp_path):
     dashboard = _make_dashboard(qtbot)
-    svc = _svc(tmp_path)
-    rep = svc.run("check", "startup")
+    rep = _svc(tmp_path).run("check", "startup")
     with patch.object(dashboard, "_a11y_speak") as speak:
         dashboard._on_audio_doctor_report(rep, "run")
-    assert dashboard._audio_warn_btn.isVisibleTo(dashboard)
-    assert "Kênh Mic đang tắt" in dashboard._audio_warn_btn.text()
+    dlg = dashboard._audio_alert_dialog
+    qtbot.addWidget(dlg)
+    assert dlg.isVisible()
+    assert "Kênh Mic đang tắt" in dlg.accessibleDescription()
+    assert "1 vấn đề" in dlg.title_label.text()
     speak.assert_called_once()
+    assert not hasattr(dashboard, "_audio_warn_btn")
+    assert _fix_btn(dashboard)._active is True
+
+
+def test_rerun_cap_nhat_khong_mo_cua_so_thu_hai(qapp, mock_engine, qtbot, tmp_path):
+    dashboard = _make_dashboard(qtbot)
+    rep = _svc(tmp_path).run("check", "startup")
+    dashboard._on_audio_doctor_report(rep, "run")
+    first = dashboard._audio_alert_dialog
+    qtbot.addWidget(first)
+    dashboard._on_audio_doctor_report(rep, "rerun")
+    assert dashboard._audio_alert_dialog is first
+    assert first.isVisible()
+
+
+def test_bao_cao_sach_dong_cua_so_va_tat_vien(qapp, mock_engine, qtbot, tmp_path):
+    dashboard = _make_dashboard(qtbot)
+    svc = _svc(tmp_path)
+    dashboard._on_audio_doctor_report(svc.run("check", "startup"), "run")
+    qtbot.addWidget(dashboard._audio_alert_dialog)
     _Mic.fixed = True
     dashboard._on_audio_doctor_report(svc.run("check", "startup"), "rerun")
-    assert not dashboard._audio_warn_btn.isVisibleTo(dashboard)
+    assert not dashboard._audio_alert_dialog.isVisible()
+    assert _fix_btn(dashboard)._active is False
+
+
+def test_ket_qua_tu_hop_thoai_khong_bat_canh_bao(qapp, mock_engine, qtbot, tmp_path):
+    dashboard = _make_dashboard(qtbot)
+    rep = _svc(tmp_path).run("check", "startup")
+    dashboard._on_audio_doctor_report(rep, "button")
+    dlg = getattr(dashboard, "_audio_alert_dialog", None)
+    assert dlg is None or not dlg.isVisible()
+    assert _fix_btn(dashboard)._active is True
+
+
+def test_bam_tu_sua_dong_canh_bao_va_mo_hop_thoai(qapp, mock_engine, qtbot, tmp_path):
+    dashboard = _make_dashboard(qtbot)
+    dashboard._on_audio_doctor_report(_svc(tmp_path).run("check", "startup"), "run")
+    dlg = dashboard._audio_alert_dialog
+    qtbot.addWidget(dlg)
+    with patch.object(dashboard, "_open_audio_doctor") as op:
+        dlg.fix_btn.click()
+    op.assert_called_once()
+    assert not dlg.isVisible()
+
+
+def test_bam_de_sau_chi_dong_cua_so(qapp, mock_engine, qtbot, tmp_path):
+    dashboard = _make_dashboard(qtbot)
+    dashboard._on_audio_doctor_report(_svc(tmp_path).run("check", "startup"), "run")
+    dlg = dashboard._audio_alert_dialog
+    qtbot.addWidget(dlg)
+    with patch.object(dashboard, "_open_audio_doctor") as op:
+        dlg.later_btn.click()
+    op.assert_not_called()
+    assert not dlg.isVisible()
+    assert _fix_btn(dashboard)._active is True      # vẫn còn chỗ bấm thứ hai
 
 
 def test_hop_thoai_tu_sua_va_hien_trang_thai(qapp, mock_engine, qtbot, tmp_path):
@@ -116,3 +175,20 @@ def test_nut_va_phim_tat_mo_hop_thoai(qapp, mock_engine, qtbot):
     assert "Tự sửa âm thanh" in dashboard._func_buttons["Tự sửa âm thanh"].toolTip()
     from core.accessibility import shortcuts
     assert any(k == "Ctrl+Shift+A" and t == "_open_audio_doctor" for k, t, _ in shortcuts._DEFAULT_BINDINGS)
+
+
+def test_header_khong_con_nut_mat_va_ho_tro_luon_hien(qapp, mock_engine, qtbot):
+    d = _make_dashboard(qtbot)
+    assert getattr(d, "_eye_btn", None) is None
+    assert getattr(d, "_tech_badge", None) is None
+    assert d._support_btn.isVisibleTo(d)
+
+
+def test_nut_de_sau_chu_sang_tren_nen_toi(qapp, mock_engine, qtbot):
+    """Chụp thật trên Windows: chữ "Để sau" màu tối trên nền xám tối — gần như không đọc được."""
+    from ui.design_tokens import C
+    from ui.dialogs.audio_alert_dialog import AudioAlertDialog
+    dashboard = _make_dashboard(qtbot)
+    dlg = AudioAlertDialog(dashboard)
+    qtbot.addWidget(dlg)
+    assert f"color: {C['text']}" in dlg.later_btn.styleSheet()

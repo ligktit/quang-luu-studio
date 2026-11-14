@@ -329,6 +329,8 @@ if ($AppDir) { [void]$candidates.Add($AppDir.TrimEnd('\')) }
 [void]$candidates.Add($PSScriptRoot)                      # bat/ps1 chép cạnh exe
 $proc0 = Get-Process -Name "QuangLuuStudio" -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($proc0 -and $proc0.Path) { [void]$candidates.Add((Split-Path $proc0.Path -Parent)) }
+# Bản cài Velopack (từ 1.9.0) — dò TRƯỚC Program Files: máy có thể còn cả bản Inno cũ.
+[void]$candidates.Add((Join-Path $env:LOCALAPPDATA "QuangLuuStudio\current"))
 foreach ($hive in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
                     "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
                     "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")) {
@@ -379,15 +381,32 @@ Section "1. KIỂM TRA HIỆN TRẠNG"
 $appConfig = ""
 if ($AppRoot) { $appConfig = Join-Path $AppRoot "app_config.json" } elseif ($RepoRoot) { $appConfig = Join-Path $RepoRoot "app_config.json" }
 $potDisabled = $false
+# Cấu hình HIỆU LỰC = app_config.json (đi kèm bản cài) phủ lên bởi app_config_overrides.json (phần người dùng đổi, ở DataDir).
+$overridesPath = Join-Path $DataDir "app_config_overrides.json"
+$cfg = New-Object psobject
+$potSource = ""
 if ($appConfig -and (Test-Path -LiteralPath $appConfig)) {
     try {
-        $cfg = [System.IO.File]::ReadAllText($appConfig).TrimStart([char]0xFEFF) | ConvertFrom-Json
-        if ($cfg.PSObject.Properties["youtube_pot_enabled"] -and $cfg.youtube_pot_enabled -eq $false) {
-            $potDisabled = $true
-            Say-Bad "app_config.json đang TẮT PO Token (youtube_pot_enabled = false)."
-            Say-Need ("Sửa ""youtube_pot_enabled"": true trong " + $appConfig + " (cần quyền admin nếu cài ở Program Files).")
-        }
+        $base = [System.IO.File]::ReadAllText($appConfig).TrimStart([char]0xFEFF) | ConvertFrom-Json
+        if ($null -ne $base) { $cfg = $base }
+        if ($cfg.PSObject.Properties["youtube_pot_enabled"]) { $potSource = "app_config.json" }
     } catch { Say-Info ("Không đọc được app_config.json: " + $_.Exception.Message) }
+}
+if (Test-Path -LiteralPath $overridesPath) {
+    try {
+        $ov = [System.IO.File]::ReadAllText($overridesPath).TrimStart([char]0xFEFF) | ConvertFrom-Json
+        if ($null -ne $ov) {
+            foreach ($prop in $ov.PSObject.Properties) {
+                $cfg | Add-Member -NotePropertyName $prop.Name -NotePropertyValue $prop.Value -Force
+                if ($prop.Name -eq "youtube_pot_enabled") { $potSource = "app_config_overrides.json" }
+            }
+        }
+    } catch { Say-Info ("Không đọc được app_config_overrides.json: " + $_.Exception.Message) }
+}
+if ($cfg.PSObject.Properties["youtube_pot_enabled"] -and $cfg.youtube_pot_enabled -eq $false) {
+    $potDisabled = $true
+    Say-Bad ("PO Token đang bị TẮT (youtube_pot_enabled = false, lấy từ " + $potSource + ").")
+    Say-Need ("Sửa ""youtube_pot_enabled"": true trong " + $overridesPath + " (hoặc xoá khoá đó khỏi file).")
 }
 
 $plugOk = Test-Path -LiteralPath $POT_MARKER
@@ -810,14 +829,15 @@ function Set-PreferIPv4 {
     return $false
 }
 
-# Ghi các khoá vào app_config.json (sao lưu, không BOM, xin admin nếu cần)
+# Ghi các khoá vào app_config_overrides.json (sao lưu, không BOM, xin admin nếu cần)
 function Set-AppConfigValues {
     param([hashtable]$Values, [string]$Label)
-    $cfgPath = Join-Path $AppRoot "app_config.json"
+    $cfgPath = Join-Path $DataDir "app_config_overrides.json"
+    New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
     $cfg = $null
     if (Test-Path -LiteralPath $cfgPath) {
         try { $cfg = [System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF) | ConvertFrom-Json -ErrorAction Stop }
-        catch { Say-Fail ("app_config.json hỏng, không đọc được: " + $_.Exception.Message); return $false }
+        catch { Say-Fail ("app_config_overrides.json hỏng, không đọc được: " + $_.Exception.Message); return $false }
     }
     if ($null -eq $cfg) { $cfg = New-Object psobject }
     $same = $true
@@ -826,7 +846,7 @@ function Set-AppConfigValues {
         if ($cur -ne ($Values[$k] | ConvertTo-Json -Compress)) { $same = $false }
         $cfg | Add-Member -NotePropertyName $k -NotePropertyValue $Values[$k] -Force
     }
-    if ($same) { Say-Info ("app_config.json đã " + $Label + " từ trước."); return $true }
+    if ($same) { Say-Info ("app_config_overrides.json đã " + $Label + " từ trước."); return $true }
     # KHÔNG BOM: core/config.py mở bằng encoding="utf-8", gặp BOM là json.load ném lỗi
     # và app lặng lẽ bỏ CẢ file cấu hình, dùng mặc định.
     $tmpCfg = New-TempPath ".json"
@@ -837,7 +857,7 @@ function Set-AppConfigValues {
     try {
         if (Test-Path -LiteralPath $cfgPath) {
             New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
-            Copy-Item -LiteralPath $cfgPath -Destination (Join-Path $backupDir "app_config.json") -Force -ErrorAction Stop
+            Copy-Item -LiteralPath $cfgPath -Destination (Join-Path $backupDir "app_config_overrides.json") -Force -ErrorAction Stop
         }
         Copy-Item -LiteralPath $tmpCfg -Destination $cfgPath -Force -ErrorAction Stop
         $written = $true
@@ -850,12 +870,12 @@ function Set-AppConfigValues {
             $written = ($pe.ExitCode -eq 0)
         } catch { Say-Info ("Không lấy được quyền admin: " + $_.Exception.Message) }
     } catch {
-        Say-Info ("Ghi app_config.json lỗi: " + $_.Exception.Message)
+        Say-Info ("Ghi app_config_overrides.json lỗi: " + $_.Exception.Message)
     }
     Remove-Item -LiteralPath $tmpCfg -Force -ErrorAction SilentlyContinue
-    if (-not $written) { Say-Fail "Không ghi được app_config.json (cần quyền admin)."; return $false }
-    Say-Ok ("app_config.json: " + $Label)
-    if (Test-Path -LiteralPath (Join-Path $backupDir "app_config.json")) { Say-Info ("Bản sao lưu: " + $backupDir) }
+    if (-not $written) { Say-Fail "Không ghi được app_config_overrides.json (cần quyền admin)."; return $false }
+    Say-Ok ("app_config_overrides.json: " + $Label)
+    if (Test-Path -LiteralPath (Join-Path $backupDir "app_config_overrides.json")) { Say-Info ("Bản sao lưu: " + $backupDir) }
     return $true
 }
 
@@ -1042,8 +1062,8 @@ if (-not $KhongThuTai) {
     } elseif ($hotfix -and $hotfix.Ok) {
         W ("   KẾT LUẬN: nấc đầu của app " + $(if ($first -and $first.Ok) { "chậm (" + $first.Sec + "s)" } else { "HỎNG" }) + ", nhưng BẢN VÁ NHANH tải được (" + $hotfix.Sec + "s).") "Yellow"
         if (-not $AppRoot) {
-            Say-Info "(Chế độ dev: không ép app_config.json — thang client đã sửa trong core/ytdlp_support.py.)"
-        } elseif (Ask "Áp bản vá nhanh vào app_config.json (ép client web_embedded, android, android_vr)?") {
+            Say-Info "(Chế độ dev: không ép app_config_overrides.json — thang client đã sửa trong core/ytdlp_support.py.)"
+        } elseif (Ask "Áp bản vá nhanh vào app_config_overrides.json (ép client web_embedded, android, android_vr)?") {
             if (Set-ClientHotfix) {
                 Say-Need "TẮT HẲN rồi mở lại app để bản vá có hiệu lực khi dò tone."
             }

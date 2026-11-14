@@ -11,7 +11,7 @@
 // Log xem o: Lower Zone -> MIDI Remote -> Scripting Tools -> Script Console.
 //
 // QLS_SCRIPT_VERSION: setup_all.bat va QLS_ChanDoan doc dong nay (va log 'driver active') de biet may khach chay ban nao.
-var QLS_SCRIPT_VERSION = '2026-10-08'
+var QLS_SCRIPT_VERSION = '2026-10-28'
 //
 // Ban dau day la ban tham do, do 5 dieu truoc khi viet adapter Cubase trong app:
 //   1. Cubase co nhan cong va TRA LOI ping (CC 49) khong, tre bao lau.
@@ -303,7 +303,9 @@ var HO_SO_PLUGIN = [
       // App gui Scale theo bang Pitch Correct cua ho so DAW cubase (Major 22-63 tam 43, Minor 64-105 tam 85). Tren Modern Scale
       // cua Auto-Tune 43 lai la Dorian, 85 ngoai bang -> quy doi tai day: [tu, den, gia tri Auto-Tune]. Gia tri 0-22 (bang Auto-Tune: da can chinh
       // bang app: Major 10 / Minor 18, hoac Chromatic) di thang. Nho vay may khach KHONG can calibration_overrides.json nua.
-      scale_tu_pitch_correct: [[23, 63, 10], [64, 105, 18]] }
+      scale_tu_pitch_correct: [[23, 63, 10], [64, 105, 18]] },
+    // Gop tu ban sua tay tren may 3 DESKTOP-M21N7VP (2026-11-10, nguoi khac them, minh chua do lai tren Auto-Tune Artist that).
+    { ten: 'Auto-Tune Artist', key_root: 2, scale_type: 3, tone_auto: -1, be: -1, scale_dorian: 5, scale_chromatic: 10, scale_classic: -1, scale_tu_pitch_correct: [[0, 5, 10], [6, 13, 0], [14, 22, 5], [23, 63, 0], [64, 105, 5]] }
 ]
 function scaleTheoHoSo(value) {        // value 0..1 app gui -> 0..1 theo bang cua plugin dang chon
     var bang = hoSoHienTai.scale_tu_pitch_correct
@@ -398,6 +400,9 @@ function datHoSo(hoSo, lyDo) {
     hoSoHienTai = hoSo
 }
 function chonHoSoTheoChiSoKey(idx) {
+    // Ho so da chon theo ten plugin ma Key cung o idx thi giu: nhieu plugin cung Key = 2 (Auto-Tune Pro/Artist),
+    // lay ho so DAU BANG se ghi Scale nham tham so (may 3, 2026-10-28: Scale vao tham so 3 "Detune" cua Auto-Tune Pro).
+    if (hoSoHienTai.key_root === idx) return
     for (var i = 0; i < HO_SO_PLUGIN.length; i++) {
         if (HO_SO_PLUGIN[i].key_root === idx) { datHoSo(HO_SO_PLUGIN[i], 'Key o tham so ' + idx); return }
     }

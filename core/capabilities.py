@@ -15,9 +15,9 @@ toàn khác nhau —
   1. Đúng là bản Light  → không có gì phải sửa, chỉ cần nói với khách "cài bản
      đầy đủ".
   2. Bản Heavy mà nạp QtWebEngine hỏng (file bị phần mềm diệt virus cách ly,
-     thiếu DLL, cài đè lên bản cũ...) → là LỖI, và tệ hơn: `core/updater/
-     _version_check.py` dùng chính hàm này để chọn file cài lúc tự cập nhật, nên
-     một lần nhận nhầm là khách bị đẩy sang bản Light vĩnh viễn.
+     thiếu DLL, cài đè lên bản cũ...) → là LỖI, và tệ hơn: bộ cập nhật
+     cũ (≤ 1.8, đã bỏ ở 1.9.0) dùng chính hàm này để chọn file cài lúc tự cập
+     nhật, nên một lần nhận nhầm là khách bị đẩy sang bản Light vĩnh viễn.
 
 Nhìn vào True/False thì hai ca này giống hệt nhau. Có thông điệp lỗi thì phân
 biệt được ngay từ log của khách.

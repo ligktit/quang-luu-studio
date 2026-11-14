@@ -642,6 +642,65 @@ class TestSendToneMidi:
 
 
 # ──────────────────────────────────────────────────────────────
+# E-32 — Tone Nhạc đổi lúc sang bài: Key cuối cùng phải là tone gốc + độ dịch MỚI
+#        dù lượt dò (luồng watcher) gửi trước hay sau khi GUI reset Tone Nhạc.
+#        Máy 3, 2026-10-28: bài trước Tone Nhạc +1, sang bài Dm → Cubase giữ D#.
+# ──────────────────────────────────────────────────────────────
+
+URL_TRUOC = "https://www.youtube.com/watch?v=aaaaaaaaaaa"
+URL_SAU = "https://www.youtube.com/watch?v=bbbbbbbbbbb"
+
+
+class TestToneNhacKhiDoiBai:
+
+    @pytest.fixture
+    def eng(self, engine, mocker):
+        mocker.patch("core.config.AppConfig.get_key_midi_map",
+                     return_value={"C": 0, "C#": 11, "D": 23, "D#": 34, "E": 46, "F": 57, "F#": 69,
+                                   "G": 80, "G#": 92, "A": 103, "A#": 115, "B": 127})
+        mocker.patch("core.config.AppConfig.get_scale_midi_map",
+                     return_value={"Major": 43, "Minor": 85})
+        mocker.patch("core.config.AppConfig.get_midi_cc",
+                     return_value={"key_root": 33, "scale_type": 35})
+        engine.send_midi_pair = MagicMock()
+        engine.on_song_changed = None
+        engine.note_current_song(URL_TRUOC)
+        engine._send_tone_midi({"key_index": 9, "scale": "Major"})   # bài trước: A
+        engine.tone_transpose = 1                                   # khách bấm Tone Nhạc +1
+        engine.send_midi_pair.reset_mock()
+        return engine
+
+    def test_luot_do_gui_truoc_khi_reset_thi_gui_lai_tone_dung(self, eng):
+        eng.note_current_song(URL_SAU)
+        eng._send_tone_midi({"key_index": 2, "scale": "Minor"})     # Dm, độ dịch cũ +1 → D#
+        eng.tone_transpose = 0                                      # GUI reset Tone Nhạc khi sang bài
+        eng.resend_tone_midi()
+        assert eng.send_midi_pair.call_args_list[-1] == call(33, 23, 35, 85)   # D Minor
+
+    def test_reset_truoc_luot_do_thi_khong_gui_lai_tone_bai_cu(self, eng):
+        eng.note_current_song(URL_SAU)
+        eng.tone_transpose = 0
+        eng.resend_tone_midi()
+        eng.send_midi_pair.assert_not_called()                      # không gửi lại A của bài trước
+        eng._send_tone_midi({"key_index": 2, "scale": "Minor"})
+        assert eng.send_midi_pair.call_args_list == [call(33, 23, 35, 85)]
+
+    def test_preset_bai_da_luu_ap_sau_luot_do_thi_cong_do_dich(self, eng):
+        eng.note_current_song(URL_SAU)
+        eng.tone_transpose = 0
+        eng._send_tone_midi({"key_index": 11, "scale": "Minor"})    # Bm
+        eng.tone_transpose = -2                                     # preset của bài: Tone Nhạc -2
+        eng.resend_tone_midi()
+        assert eng.send_midi_pair.call_args_list[-1] == call(33, 103, 35, 85)  # A Minor
+
+    def test_tone_chot_tay_thi_khong_gui_lai(self, eng):
+        eng.key_locked = True
+        eng.tone_transpose = 0
+        eng.resend_tone_midi()
+        eng.send_midi_pair.assert_not_called()
+
+
+# ──────────────────────────────────────────────────────────────
 # E-31 — primary_key tiêu biểu (theo thời lượng, không thiên vị intro)
 # ──────────────────────────────────────────────────────────────
 
@@ -1163,3 +1222,114 @@ def test_auto_timeline_tai_du_ca_bai(engine, mocker):
     dl = se.return_value.download_youtube_audio
     dl.assert_called_once()
     assert dl.call_args.kwargs.get("max_seconds") == ToneDetector.TIMELINE_MAX_SECONDS
+
+
+# ──────────────────────────────────────────────────────────────
+# Hai mic Studio One — engine tự phát đôi CC dùng chung sang kênh 2
+# ──────────────────────────────────────────────────────────────
+
+class TestMic2Mirror:
+
+    def test_engine_giu_dung_dict_settings_rong(self, engine):
+        # Dashboard và engine phải cùng MỘT dict settings — kể cả khi dict rỗng
+        # — để refresh_mic2_mirror đọc đúng mic_count vừa lưu từ Cài đặt.
+        from core.engine import SystemEngine
+        s = {}
+        assert SystemEngine(s).settings is s
+
+
+    @pytest.fixture
+    def mic2(self, engine, mocker):
+        mocker.patch("core.config.AppConfig.get_midi_cc",
+                     return_value={"key_root": 33, "scale_type": 35,
+                                   "mix_mic": 21, "mute_mic": 51})
+        mocker.patch("core.config.AppConfig.get_mic2_shared_cc",
+                     return_value=["key_root", "scale_type"])
+        mocker.patch("core.config.AppConfig.get_mode_config", return_value={})
+        mocker.patch("core.config.AppConfig.get_mute_multi_cc", return_value={})
+        engine.midi_handler.send_cc.return_value = True
+        engine.midi_handler.send_messages.return_value = True
+        return engine
+
+    def test_mirror_off_by_default(self, mic2):
+        mic2.refresh_mic2_mirror()
+        mic2.send_midi(33, 2)
+        mic2.midi_handler.send_cc.assert_called_once_with(33, 2)
+        mic2.midi_handler.send_messages.assert_not_called()
+
+    def test_mirror_shared_cc(self, mic2):
+        mic2.settings["mic_count"] = 2
+        mic2.refresh_mic2_mirror()
+        mic2.send_midi(33, 2)
+        mic2.midi_handler.send_messages.assert_called_once_with(
+            [(0, 33, 2), (1, 33, 2)])
+        mic2.midi_handler.send_cc.assert_not_called()
+
+    def test_mirror_skips_mix_mic(self, mic2):
+        mic2.settings["mic_count"] = 2
+        mic2.refresh_mic2_mirror()
+        mic2.send_midi(21, 76)
+        mic2.midi_handler.send_cc.assert_called_once_with(21, 76)
+        mic2.midi_handler.send_messages.assert_not_called()
+
+    def test_pair_mirror_atomic_order(self, mic2):
+        mic2.settings["mic_count"] = 2
+        mic2.refresh_mic2_mirror()
+        mic2.send_midi_pair(33, 23, 35, 85)
+        mic2.midi_handler.send_messages.assert_called_once_with(
+            [(0, 33, 23), (0, 35, 85), (1, 33, 23), (1, 35, 85)])
+        mic2.midi_handler.send_cc_pair.assert_not_called()
+
+    def test_refresh_turns_off(self, mic2):
+        mic2.settings["mic_count"] = 2
+        mic2.refresh_mic2_mirror()
+        mic2.settings["mic_count"] = 1
+        mic2.refresh_mic2_mirror()
+        mic2.send_midi(33, 2)
+        mic2.midi_handler.send_cc.assert_called_once_with(33, 2)
+        mic2.midi_handler.send_messages.assert_not_called()
+
+    def test_send_midi_on_channel(self, mic2):
+        mic2.settings["mic_count"] = 2
+        mic2.refresh_mic2_mirror()
+        assert mic2.send_midi_on_channel(1, 51, 127) is True
+        mic2.midi_handler.send_messages.assert_called_once_with([(1, 51, 127)])
+
+    def test_reconnect_retries_same_messages(self, mic2):
+        mic2.settings["mic_count"] = 2
+        mic2.refresh_mic2_mirror()
+        mic2.midi_handler.send_messages.side_effect = [False, True]
+        mic2.midi_handler.connect.return_value = True
+        assert mic2.send_midi(33, 2) is True
+        assert mic2.midi_handler.send_messages.call_count == 2
+        assert (mic2.midi_handler.send_messages.call_args_list[0]
+                == mic2.midi_handler.send_messages.call_args_list[1])
+
+    def test_midi_learn_khong_phat_doi(self, mic2, mocker):
+        # MIDI learn chỉ nhắm control kênh 1: bật phát đôi vẫn không có tin kênh 2.
+        mic2.settings["mic_count"] = 2
+        mic2.refresh_mic2_mirror()
+        mocker.patch("core.engine._midi.time.sleep")
+        started = []
+
+        class _SyncThread:
+            def __init__(self, target=None, daemon=None, **_kw):
+                self._target = target
+
+            def start(self):
+                started.append(True)
+                self._target()
+
+        mocker.patch("core.engine._midi.threading.Thread", _SyncThread)
+        mic2.trigger_midi_learn([33, 35, 21])
+        assert started == [True]
+        mic2.midi_handler.send_messages.assert_not_called()
+        assert [c.args for c in mic2.midi_handler.send_cc.call_args_list] == [
+            (33, 64), (33, 0), (35, 64), (35, 0), (21, 64), (21, 0)]
+
+    def test_refresh_never_raises(self, mic2, mocker):
+        mic2.settings["mic_count"] = 2
+        mocker.patch("core.config.AppConfig.get_midi_cc",
+                     side_effect=RuntimeError("hỏng"))
+        mic2.refresh_mic2_mirror()
+        assert mic2._mic2_shared == frozenset()

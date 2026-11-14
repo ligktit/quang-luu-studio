@@ -23,6 +23,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from core import net_tls
+
 log = logging.getLogger(__name__)
 
 _TIMEOUT = 10
@@ -139,7 +141,7 @@ def _post(path: str, payload: dict) -> tuple:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+        with net_tls.urlopen(req, timeout=_TIMEOUT) as resp:
             return resp.status, json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as e:
         try:

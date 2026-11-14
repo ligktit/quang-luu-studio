@@ -2,18 +2,20 @@
 import re
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.models import AppVersion
+from app.models import AppVersion, VelopackRelease
 from app.schemas import UpdateCheckResponse
 from app.security import rollout_bucket
-from app.services import storage
+from app.services import storage, velopack_feed
 
 router = APIRouter(prefix="/api/v1/updates", tags=["updates"])
+# Route không prefix: link tải cố định cho lần cài đầu.
+public_router = APIRouter(tags=["updates"])
 
 
 def _parse_semver(v: str) -> tuple[int, int, int]:
@@ -76,3 +78,47 @@ def download(version: str, request: Request, channel: str = "stable", db: Sessio
         media_type="application/octet-stream",
         filename=f"QuangLuuStudio_Setup_{version}.exe",
     )
+
+
+# ── Velopack (bản 1.9.0 trở đi) ─────────────────────────────────────────────
+# Mã máy nằm trong ĐƯỜNG DẪN vì Velopack nối tên file vào URL gốc của feed.
+# Route releases.win.json phải khai báo TRƯỚC route {filename}.
+@router.get("/velopack/{fingerprint}/releases.win.json")
+def velopack_feed_json(fingerprint: str, db: Session = Depends(get_db)):
+    if not velopack_feed.valid_fingerprint(fingerprint):
+        return Response(status_code=404)
+    rows = db.scalars(select(VelopackRelease)).all()
+    return JSONResponse(velopack_feed.build_feed(rows, fingerprint))
+
+
+@router.get("/velopack/{fingerprint}/{filename}")
+def velopack_file(fingerprint: str, filename: str, db: Session = Depends(get_db)):
+    if not velopack_feed.valid_fingerprint(fingerprint):
+        return Response(status_code=404)
+    rows = db.scalars(select(VelopackRelease).where(VelopackRelease.status == "xong")).all()
+    if filename not in velopack_feed.served_filenames(rows):
+        return Response(status_code=404)
+    path = velopack_feed.file_path(filename)
+    if path is None:
+        return Response(status_code=404)
+    return FileResponse(path, media_type="application/octet-stream", filename=filename)
+
+
+@public_router.get("/tai-ve")
+def tai_ve(db: Session = Depends(get_db)):
+    """Bộ cài lần đầu: bản ổn định mới nhất đã phát cho 100% máy."""
+    rows = db.scalars(
+        select(VelopackRelease).where(
+            VelopackRelease.status == "xong",
+            VelopackRelease.is_active.is_(True),
+            VelopackRelease.rollout_percent >= 100,
+        )
+    ).all()
+    rows = [r for r in rows if r.setup_filename]
+    if not rows:
+        return Response(status_code=404, content="Chưa có bản cài", media_type="text/plain; charset=utf-8")
+    best = max(rows, key=lambda r: velopack_feed.parse_semver(r.version))
+    path = velopack_feed.file_path(best.setup_filename)
+    if path is None:
+        return Response(status_code=404, content="Thiếu file bản cài", media_type="text/plain; charset=utf-8")
+    return FileResponse(path, media_type="application/octet-stream", filename="QuangLuuStudio-CaiDat.exe")

@@ -48,6 +48,11 @@ class _Dash:
         self._tone_value_labels = {}
         self.engine = MagicMock()
 
+    def _on_be(self):
+        # Đèn nút Bè theo be_state chỉ khi nút dùng hàm Bè có sẵn (không bị
+        # Dev Mode gán CC số) — dashboard thật luôn có hàm này.
+        pass
+
     def _embedded_player_enabled(self):
         return False
 

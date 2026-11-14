@@ -97,3 +97,49 @@ def test_player_nhung_dang_dung_thi_khong_bam_theo_winrt():
             time.sleep(0.05)
     threading.Thread(target=creep, daemon=True).start()
     assert _run_replay(e) == []
+
+
+# ── Đổi bài trong cùng tab: replay bài CŨ không được gửi tone của nó cho bài MỚI ──
+# Máy 3, 2026-10-28: sang video mới, vị trí CDP tụt về ~0 → vòng replay bài cũ tưởng
+# người dùng tua ngược và gửi lại tone mốc 0 của BÀI CŨ (vd "[CACHE REPLAY] t=0.2s: F"
+# ngay trước khi watcher kịp huỷ phiên). Bài mới chưa có cache thì Cubase giữ tone sai ~20s.
+
+URL_CU = "https://www.youtube.com/watch?v=aaaaaaaaaaa"
+URL_MOI = "https://www.youtube.com/watch?v=bbbbbbbbbbb&list=RDxx&index=2"
+
+
+def _replay_cdp_roi_doi_tab(replay, url_sau):
+    """Replay bài URL_CU theo CDP ở giây 5 (đã gửi tone mốc cuối "E"), rồi tab báo
+    URL `url_sau` với vị trí tụt về 0. Trả về các tone đã gửi."""
+    e = _engine(cdp_connected=True, cdp_playing=True, cdp_pos=5.0)
+    e.cdp_monitor.target_url = URL_CU
+    sent = []
+    e.on_tone_detected_callback = None
+    e._send_tone_midi = lambda entry: sent.append(entry["key_display"])
+    cancel = threading.Event()
+    e._tone_session = types.SimpleNamespace(cancel_event=cancel, url=URL_CU)
+    replay(e, cancel)
+    time.sleep(0.4)
+    e.cdp_monitor.target_url = url_sau
+    e.cdp_monitor.current_position = 0.0
+    time.sleep(0.5)
+    cancel.set()
+    time.sleep(0.2)
+    return sent
+
+
+REPLAYS = {
+    "cache": lambda e, c: e._replay_cached_timeline({"key_timeline": list(TIMELINE)}, cancel_event=c),
+    "thu_cong": lambda e, c: e._replay_manual_timeline(list(TIMELINE), cancel_event=c),
+}
+
+
+@pytest.mark.parametrize("loai", sorted(REPLAYS))
+def test_tab_sang_bai_khac_thi_replay_bai_cu_khong_gui_tone(loai):
+    assert _replay_cdp_roi_doi_tab(REPLAYS[loai], URL_MOI) == ["E"]
+
+
+@pytest.mark.parametrize("loai", sorted(REPLAYS))
+def test_tua_lai_dau_cung_bai_van_gui_lai_tone_mo_dau(loai):
+    # Cùng video (link khác dạng, có &t=) tua về đầu → vẫn phải gửi lại tone mốc 0 như trước.
+    assert _replay_cdp_roi_doi_tab(REPLAYS[loai], URL_CU + "&t=0s") == ["E", "C"]

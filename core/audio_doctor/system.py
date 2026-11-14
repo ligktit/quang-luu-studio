@@ -127,6 +127,9 @@ class SystemProbe:
         except OSError:
             return None
 
+    def is_readonly(self, path) -> bool:
+        return self.exists(path) and not os.access(path, os.W_OK)
+
     def copy(self, src, dst) -> None:
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copyfile(src, dst)

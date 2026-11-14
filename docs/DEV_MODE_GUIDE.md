@@ -3,7 +3,7 @@
 > **Ngày viết:** 2026-06-11 · đối chiếu trực tiếp với code hiện tại · cập nhật 2026-10-09 (hộp Quản lý giao diện, Xuất/Nhập, Gửi thử).
 > Dev Mode dành cho **người cài đặt/kỹ thuật viên** khi setup app cho từng phòng thu — tuỳ biến nút bấm, slider và mode mà không cần sửa code.
 >
-> ⚠️ Dev Mode **không** bị chặn bởi chế độ khách — xem [KIOSK_MODE_GUIDE.md](KIOSK_MODE_GUIDE.md)
+> ⚠️ Dev Mode **không** bị chặn khi DAW đang ẩn — xem [KIOSK_MODE_GUIDE.md](KIOSK_MODE_GUIDE.md)
 > để biết cách khoá Studio One khỏi khách hàng và giới hạn hiện tại của nó.
 
 ---

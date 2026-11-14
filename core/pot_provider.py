@@ -34,6 +34,7 @@ import zipfile
 import tempfile
 import urllib.request
 
+from core import net_tls
 from core.config import AppConfig, DATA_DIR
 
 log = logging.getLogger(__name__)
@@ -119,7 +120,7 @@ def _download(url, expected_sha256, timeout):
     request = urllib.request.Request(
         url, headers={"User-Agent": "QuangLuuStudio/pot-provider"}
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with net_tls.urlopen(request, timeout=timeout) as response:
         payload = response.read(_MAX_DOWNLOAD_BYTES + 1)
     if len(payload) > _MAX_DOWNLOAD_BYTES:
         log.error("Tệp POT provider lớn bất thường — huỷ")

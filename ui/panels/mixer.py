@@ -1,6 +1,7 @@
 """Mixer panel builder for MainDashboard."""
 import backend
 from PySide6.QtCore import Qt
+from core import mic2
 from ui.design_tokens import C
 from ui.components.painter_panel import GlassPanel
 from ui.components.hmixer_channel import HMixerChannel
@@ -12,6 +13,38 @@ def _resolve_cc_number(dashboard, cc_key):
     if isinstance(cc_key, int):
         return cc_key
     return dashboard.MIDI_CC.get(cc_key)
+
+
+def midi_route(dashboard, cc_key):
+    """(khoá gốc, hàm gửi CC) của một kênh mixer.
+
+    Mic 2 / Vang Mic 2 dùng chung số CC (mức, tắt, CC phụ mute_multi_cc) với
+    Mic / Vang nhưng đi kênh MIDI 2 và không phát đôi; mọi kênh khác gửi thẳng
+    engine.send_midi như trước.
+    """
+    base = mic2.MIC2_CHANNELS.get(cc_key)
+    if base is not None:
+        engine = dashboard.engine
+        return base, lambda cc, v: engine.send_midi_on_channel(mic2.MIC2_CHANNEL, cc, v)
+    return cc_key, dashboard.engine.send_midi
+
+
+def _remember_mic_mutes(dashboard):
+    """Hai mic: ghi NGAY trạng thái tắt/mở cả hai mic — máy hay bị tắt nguồn
+    ngang, chờ lúc thoát app mới lưu là mất."""
+    settings = dashboard.settings
+    if not mic2.is_enabled(settings):
+        return
+    settings["mic_mutes"] = {k: bool(dashboard.mute_states.get(k, False))
+                             for k in (mic2.MIC_KEY, mic2.MIC2_KEY)}
+    try:
+        backend.ConfigManager.save_settings(settings)
+    except Exception as e:
+        print(f"[MIC2] Không ghi được trạng thái tắt mic: {e}")
+
+
+# Cột tên kênh rộng nhất khi bật hai mic (px).
+_MIC_NAME_MAX_W = 110
 
 
 # Kênh chỉ điều khiển player YouTube (nhúng hoặc CDP), không gửi CC nào cho DAW
@@ -29,9 +62,10 @@ def _make_mute_callback(dashboard, cc_key, mute_cc_map, val_range=(0, 100)):
             else:
                 dashboard.engine.set_browser_volume(int(dashboard._mixer_sliders[cc_key].value()))
             return
-        mute_cc = mute_cc_map.get(cc_key)
+        base_key, send = midi_route(dashboard, cc_key)
+        mute_cc = mute_cc_map.get(base_key)
         if mute_cc is not None:
-            dashboard.engine.send_midi(dashboard.MIDI_CC[mute_cc], 127 if is_muted else 0)
+            send(dashboard.MIDI_CC[mute_cc], 127 if is_muted else 0)
         else:
             # Slider custom không có CC mute riêng: gửi 0 khi mute,
             # khôi phục giá trị hiện tại của slider khi bật lại
@@ -47,13 +81,17 @@ def _make_mute_callback(dashboard, cc_key, mute_cc_map, val_range=(0, 100)):
 
         try:
             multi_cc_map = backend.AppConfig.get_mute_multi_cc()
-            for entry in multi_cc_map.get(cc_key, []):
+            for entry in multi_cc_map.get(base_key, []):
                 cc_num = int(entry["cc"])
                 val = int(entry["on_value"]) if is_muted else int(entry["off_value"])
-                dashboard.engine.send_midi(cc_num, val)
+                send(cc_num, val)
                 print(f"[MUTE MULTI] {cc_key} -> CC {cc_num} = {val} ({'mute' if is_muted else 'unmute'})")
         except Exception as e:
             print(f"[MUTE MULTI] Lỗi gửi CC phụ cho {cc_key}: {e}")
+
+        # Ghi đĩa SAU khi đã gửi MIDI — không để việc ghi file làm chậm lệnh tắt.
+        if cc_key in (mic2.MIC_KEY, mic2.MIC2_KEY):
+            _remember_mic_mutes(dashboard)
     return toggle
 
 
@@ -73,10 +111,11 @@ def _make_value_changed_callback(dashboard, cc_key, range_tuple, unit):
         if cc_key == YOUTUBE_ONLY_KEY:
             dashboard.engine.set_browser_volume(int(raw_value))
             return
-        cc_num = _resolve_cc_number(dashboard, cc_key)
+        base_key, send = midi_route(dashboard, cc_key)
+        cc_num = _resolve_cc_number(dashboard, base_key)
         if cc_num is None:
             return
-        if cc_key in ["mix_mic", "mix_reverb"]:
+        if base_key in ["mix_mic", "mix_reverb"]:
             # 0 dB -> fader_unity_cc của DAW: Studio One 76, Cubase 100 (đo 2026-10-04)
             from core import daw
             midi = db_to_midi(raw_value, min_v, daw.active().fader_unity_cc)
@@ -86,7 +125,7 @@ def _make_value_changed_callback(dashboard, cc_key, range_tuple, unit):
             midi = int(normalized * 127)
             midi = max(0, min(127, midi))
 
-        dashboard.engine.send_midi(cc_num, midi)
+        send(cc_num, midi)
     return cb
 
 
@@ -151,18 +190,9 @@ def build_panel_mixer(dashboard) -> GlassPanel:
     # Đặt mute theo giá trị (không lật) — Tự sửa âm thanh dùng.
     dashboard._mixer_mute_setters = {}
 
-    # Một vòng duy nhất trên entry cấu hình: `ch_cfg` trong thân vòng luôn là
-    # kênh đang dựng. (Trước đây chép sang list trung gian rồi dựng ở vòng thứ
-    # hai — `ch_cfg` lọt vào vòng sau là entry cuối, menu Sửa/Ẩn nhắm nhầm Giọng.)
-    for ch_cfg in channels_config:
-        if ch_cfg.get("hidden", False):
-            continue
-        ch = _channel_spec(ch_cfg)
-        if ch["cc"] in dashboard._mixer_channels:
-            # Các bảng _mixer_* (và mixer_levels/mute_states) khoá theo CC — kênh
-            # thứ hai cùng CC sẽ đè kênh đầu, không đồng bộ được. Bỏ qua kênh trùng.
-            print(f"[MIXER] Bỏ kênh '{ch['label']}': trùng CC {ch['cc']!r} với kênh đã có")
-            continue
+    def _add_channel(ch, ch_cfg):
+        """Dựng một kênh; `ch_cfg` là entry mà menu Dev Mode Sửa/Ẩn nhắm tới
+        (Mic 2 dùng entry giả id mix_mic_2 — frontend xử lý riêng)."""
         ch_view = HMixerChannel(
             icon=ch["icon"],
             label=ch["label"],
@@ -218,7 +248,7 @@ def build_panel_mixer(dashboard) -> GlassPanel:
         ch_view.slider.valueChanged.connect(_announce_slider_value)
 
         # --- Dev Mode Context Menu ---
-        if getattr(dashboard, "is_dev_mode", False):
+        if ch_cfg is not None and getattr(dashboard, "is_dev_mode", False):
             attach_dev_ctx_menu(dashboard, "mixer", ch_view, ch_cfg)
 
         vl.addWidget(ch_view)
@@ -226,6 +256,60 @@ def build_panel_mixer(dashboard) -> GlassPanel:
         dashboard._mixer_val_labels[ch["cc"]] = ch_view.val_label
         dashboard._mixer_icon_btns[ch["cc"]] = ch_view.mute_btn
         dashboard._mixer_channels[ch["cc"]] = ch_view
+        return ch_view
+
+    # Hai mic (Studio One): kênh Mic 2 là phần mở rộng chỉ có khi bật — không
+    # thêm vào ui_config, để _merge_new_defaults không đẩy nó sang máy khác.
+    two_mics = mic2.is_enabled(dashboard.settings)
+    mic_labels = mic2.labels(dashboard.settings) if two_mics else {}
+    mute_states = getattr(dashboard, "mute_states", None) or {}
+
+    # Một vòng duy nhất trên entry cấu hình: `ch_cfg` trong thân vòng luôn là
+    # kênh đang dựng. (Trước đây chép sang list trung gian rồi dựng ở vòng thứ
+    # hai — `ch_cfg` lọt vào vòng sau là entry cuối, menu Sửa/Ẩn nhắm nhầm Giọng.)
+    for ch_cfg in channels_config:
+        if ch_cfg.get("hidden", False):
+            continue
+        ch = _channel_spec(ch_cfg)
+        if ch["cc"] in dashboard._mixer_channels:
+            # Các bảng _mixer_* (và mixer_levels/mute_states) khoá theo CC — kênh
+            # thứ hai cùng CC sẽ đè kênh đầu, không đồng bộ được. Bỏ qua kênh trùng.
+            print(f"[MIXER] Bỏ kênh '{ch['label']}': trùng CC {ch['cc']!r} với kênh đã có")
+            continue
+        if two_mics and ch["cc"] == mic2.REVERB_KEY:
+            # Vang Mic 2 ngay dưới Vang: cùng kiểu kênh, cùng số CC, kênh MIDI 2.
+            # Tên lấy từ mic_labels (frontend _on_edit_widget đổi tên vào đó).
+            rv2 = dict(ch, cc=mic2.MIC2_REVERB_KEY, label=mic2.reverb2_label(dashboard.settings),
+                       default=_get_level(mic2.MIC2_REVERB_KEY, 0))
+            cfg_rv2 = dict(ch_cfg, id=mic2.MIC2_REVERB_KEY, cc=mic2.MIC2_REVERB_KEY,
+                           label=rv2["label"])
+            for spec, cfg in ((ch, ch_cfg), (rv2, cfg_rv2)):
+                _add_channel(spec, cfg).set_muted(bool(mute_states.get(spec["cc"], False)))
+            continue
+        if not (two_mics and ch["cc"] == mic2.MIC_KEY):
+            _add_channel(ch, ch_cfg)
+            continue
+        # Mic + Mic 2 liền nhau, cùng kiểu kênh; dựng lại (Cài đặt, Dev Mode)
+        # vẫn hiện đúng trạng thái tắt đang giữ trong mute_states.
+        # Tên hai kênh lấy từ settings["mic_labels"], không từ ui_config: menu
+        # Dev Mode mang tên đang hiện để Sửa thấy đúng tên, và frontend ghi tên
+        # mới vào mic_labels (_on_edit_widget). Mic 2 không có entry ui_config —
+        # cfg giả id/cc = mix_mic_2 chỉ để menu biết đang bấm kênh nào.
+        ch["label"] = mic_labels[mic2.MIC_KEY]
+        ch2 = dict(ch, cc=mic2.MIC2_KEY, label=mic_labels[mic2.MIC2_KEY],
+                   default=_get_level(mic2.MIC2_KEY, 0))
+        cfg1 = dict(ch_cfg, label=ch["label"])
+        cfg2 = dict(ch_cfg, id=mic2.MIC2_KEY, cc=mic2.MIC2_KEY, label=ch2["label"])
+        for spec, cfg in ((ch, cfg1), (ch2, cfg2)):
+            _add_channel(spec, cfg).set_muted(bool(mute_states.get(spec["cc"], False)))
+
+    if two_mics and dashboard._mixer_channels:
+        # Tên hai mic ("Mic Không Dây") dài hơn cột tên 52px → nới cột tên mọi
+        # kênh cho thẳng hàng; chặn trên để tên quá dài không bóp thanh trượt.
+        views = dashboard._mixer_channels.values()
+        width = min(_MIC_NAME_MAX_W, max(52, *(v.name_width_hint() for v in views)))
+        for v in views:
+            v.set_name_width(width)
 
     # --- Dev Mode: + Thêm / ⚙ Quản lý ---
     if getattr(dashboard, "is_dev_mode", False):

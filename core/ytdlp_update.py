@@ -29,6 +29,7 @@ import logging
 import urllib.request
 from importlib.machinery import PathFinder
 
+from core import net_tls
 from core.config import AppConfig, DATA_DIR
 
 log = logging.getLogger(__name__)
@@ -179,7 +180,7 @@ def _fetch_pypi_metadata(timeout=20):
     request = urllib.request.Request(
         PYPI_JSON_URL, headers={"User-Agent": "QuangLuuStudio/ytdlp-update"}
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with net_tls.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -249,7 +250,7 @@ def download_override(directory=None, timeout=60):
         request = urllib.request.Request(
             wheel["url"], headers={"User-Agent": "QuangLuuStudio/ytdlp-update"}
         )
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with net_tls.urlopen(request, timeout=timeout) as response:
             payload = response.read()
     except Exception as exc:
         log.warning("Tải wheel yt-dlp thất bại: %s", exc)

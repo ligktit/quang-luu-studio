@@ -92,6 +92,50 @@ def test_script_cubase_thieu_thi_chep_khi_cubase_dang_dong():
     assert ctx.system.files[CB_JS] == "js v2"
 
 
+def test_script_cubase_sua_tay_thi_sao_luu_truoc_khi_chep_de():
+    # Máy 3 (2026-10-28): kỹ thuật sửa tay script, Tự sửa chép đè mất bản sửa, không còn đường lùi.
+    ctx = make_ctx(CUBASE)
+    _so_bundle(ctx)
+    ctx.system.files[CB_JS] = "js sua tay"
+    assert DawRemoteCheck().fix(ctx).status is Status.DA_SUA
+    assert ctx.system.backups == [CB_JS]
+    assert ctx.system.files[CB_JS] == "js v2"
+
+
+def test_script_cubase_chua_co_thi_khong_sao_luu():
+    ctx = make_ctx(CUBASE)
+    _so_bundle(ctx)
+    DawRemoteCheck().fix(ctx)
+    assert ctx.system.backups == []
+
+
+def test_script_khoa_chi_doc_thi_bao_ro_va_khong_sua():
+    # Máy 3: script bị đặt ReadOnly → fix ném PermissionError bị nuốt, UI chỉ nhắc "đã cũ",
+    # khách bấm Tự sửa 26 lần. Phải nói rõ là file đang khoá, và không thử ghi.
+    ctx = make_ctx(CUBASE)
+    _so_bundle(ctx)
+    ctx.system.files[CB_JS] = "js sua tay"
+    ctx.system.readonly.add(CB_JS)
+    f = DawRemoteCheck().detect(ctx)
+    assert f.status is Status.LOI and not f.fixable
+    assert "chỉ đọc" in f.message
+    assert f.guide
+
+
+def test_chep_khong_duoc_thi_bao_ly_do_thay_vi_nem_loi():
+    ctx = make_ctx(CUBASE)
+    _so_bundle(ctx)
+    ctx.system.files[CB_JS] = "js cu"
+
+    def copy_loi(src, dst):
+        raise PermissionError(13, "Access is denied", dst)
+    ctx.system.copy = copy_loi
+    f = DawRemoteCheck().fix(ctx)
+    assert f.status is Status.CAN_LAM_TAY
+    assert "Không ghi được" in f.message and "Access is denied" in f.message
+    assert f.guide
+
+
 def test_so_chua_tung_chay_thi_khong_ro():
     ctx = make_ctx(STUDIO_ONE)
     _so_bundle(ctx)

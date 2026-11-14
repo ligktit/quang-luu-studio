@@ -1,4 +1,5 @@
 """Tone detection pipeline for SystemEngine."""
+import contextlib
 import gc
 import sys
 import time
@@ -607,43 +608,60 @@ class _ToneMixin:
     def _send_tone_midi(self, result):
         from core.config import AppConfig
 
-        if getattr(self, 'key_locked', False) is True:
-            print(f"[MIDI] Bỏ qua tone {result.get('key_display', '?')} — tone đang chốt tay")
-            return
+        # Đọc độ dịch + gửi + nhớ kết quả trong CÙNG một khoá với resend_tone_midi:
+        # lượt dò gửi bằng độ dịch cũ ngay trước khi GUI reset Tone Nhạc thì lượt
+        # gửi lại phía GUI chạy sau và sửa thành tone đúng.
+        with getattr(self, '_tone_midi_lock', None) or contextlib.nullcontext():
+            self._last_tone_result = result
 
-        key_index = result.get('key_index', 0)
-        scale     = result.get('scale', 'Major')
+            if getattr(self, 'key_locked', False) is True:
+                print(f"[MIDI] Bỏ qua tone {result.get('key_display', '?')} — tone đang chốt tay")
+                return
 
-        key_map   = AppConfig.get_key_midi_map()
-        scale_map = AppConfig.get_scale_midi_map()
-        midi_cc   = AppConfig.get_midi_cc()
+            key_index = result.get('key_index', 0)
+            scale     = result.get('scale', 'Major')
 
-        # Key
-        key_names  = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-        if 0 <= key_index < 12:
-            # Nhạc đang dịch N bán cung (Tone Nhạc) → tone thật đang vang cũng dịch N.
-            try:
-                transpose = int(getattr(self, 'tone_transpose', 0) or 0)
-            except (TypeError, ValueError):
-                transpose = 0
-            key_name = key_names[(key_index + transpose) % 12]
-        else:
-            key_name = 'C'
-        key_cc_val = key_map.get(key_name, 0)
+            key_map   = AppConfig.get_key_midi_map()
+            scale_map = AppConfig.get_scale_midi_map()
+            midi_cc   = AppConfig.get_midi_cc()
 
-        # Scale
-        scale_cc_val = scale_map.get(scale, scale_map.get('Major', 13))
+            # Key
+            key_names  = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+            if 0 <= key_index < 12:
+                # Nhạc đang dịch N bán cung (Tone Nhạc) → tone thật đang vang cũng dịch N.
+                try:
+                    transpose = int(getattr(self, 'tone_transpose', 0) or 0)
+                except (TypeError, ValueError):
+                    transpose = 0
+                key_name = key_names[(key_index + transpose) % 12]
+            else:
+                key_name = 'C'
+            key_cc_val = key_map.get(key_name, 0)
 
-        # Send via MIDI CCs
-        tone_cc  = midi_cc.get('key_root', 33)
-        scale_cc = midi_cc.get('scale_type', midi_cc.get('key_scale', 35))
+            # Scale
+            scale_cc_val = scale_map.get(scale, scale_map.get('Major', 13))
 
-        # Gửi NGUYÊN TỬ cặp key_root + scale_type để không thread nào chen vào
-        # giữa, tránh tình huống Live nhận key mới với scale cũ (hoặc ngược lại).
-        self.send_midi_pair(tone_cc, key_cc_val, scale_cc, scale_cc_val)
+            # Send via MIDI CCs
+            tone_cc  = midi_cc.get('key_root', 33)
+            scale_cc = midi_cc.get('scale_type', midi_cc.get('key_scale', 35))
 
-        print(f"[MIDI] Key={key_name} (cc={tone_cc}, val={key_cc_val}) "
-              f"Scale={scale} (cc={scale_cc}, val={scale_cc_val})")
+            # Gửi NGUYÊN TỬ cặp key_root + scale_type để không thread nào chen vào
+            # giữa, tránh tình huống Live nhận key mới với scale cũ (hoặc ngược lại).
+            self.send_midi_pair(tone_cc, key_cc_val, scale_cc, scale_cc_val)
+
+            print(f"[MIDI] Key={key_name} (cc={tone_cc}, val={key_cc_val}) "
+                  f"Scale={scale} (cc={scale_cc}, val={scale_cc_val})")
+
+    def resend_tone_midi(self):
+        """Gửi lại tone gốc gần nhất của bài đang xem theo độ dịch Tone Nhạc hiện tại.
+
+        Gọi khi Tone Nhạc đổi mà KHÔNG phải do bấm núm (reset lúc sang bài, preset
+        của bài đã lưu). Chưa có tone của bài này (đã xoá lúc đổi bài) → không gửi.
+        """
+        with self._tone_midi_lock:
+            result = self._last_tone_result
+            if result is not None:
+                self._send_tone_midi(result)
 
     # ── Detect from system audio ────────────────────────────────────────────────
 

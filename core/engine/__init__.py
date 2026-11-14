@@ -38,11 +38,16 @@ class SystemEngine(
     _WNDENUMPROC = _WNDENUMPROC_TYPE
 
     def __init__(self, settings=None):
-        self.settings = settings or {}
+        # Giữ đúng dict được truyền (kể cả rỗng) — dashboard và engine phải dùng
+        # chung một dict để refresh_mic2_mirror đọc được mic_count vừa lưu.
+        self.settings = settings if settings is not None else {}
+        # Hai mic Studio One: tập CC phát đôi sang kênh 2 (rỗng = tắt).
+        self._mic2_shared = frozenset()
 
         # MIDI
         self.midi_handler          = MidiHandler()
         self.midi_handler.on_cc_received = self._handle_midi_in
+        self.refresh_mic2_mirror()
         # Trạng thái kênh DAW báo về (Cubase) — Tự sửa âm thanh đọc ở đây.
         from core.audio_doctor.feedback import DawFeedback
         self.daw_feedback = DawFeedback(AppConfig.get_midi_cc() or {})
@@ -97,6 +102,11 @@ class SystemEngine(
         # tone GỐC của bài; nhạc đã bị dịch thì Auto-Tune phải nhận tone gốc +
         # độ dịch — _send_tone_midi cộng vào ở MỘT chỗ duy nhất.
         self.tone_transpose           = 0
+        # Tone GỐC gửi gần nhất của bài đang xem: Tone Nhạc đổi do reset/preset
+        # thì gửi lại (resend_tone_midi). Khoá chung với _send_tone_midi → luồng
+        # dò và luồng GUI chạy trước/sau thế nào Key cuối cùng cũng đúng.
+        self._last_tone_result        = None
+        self._tone_midi_lock          = threading.RLock()
         # Người dùng đã chốt tone tay (hoặc preset của bài khôi phục tone chốt
         # tay) → mọi lượt dò/replay KHÔNG được gửi tone đè lên. UI bật/tắt cờ.
         self.key_locked               = False

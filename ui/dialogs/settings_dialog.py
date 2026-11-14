@@ -2,7 +2,7 @@ import backend
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox,
     QLineEdit, QFileDialog, QWidget, QFrame, QTabWidget,
-    QSlider, QComboBox,
+    QSlider, QComboBox, QMessageBox,
 )
 from PySide6.QtCore import Qt, QSize, QByteArray
 from PySide6.QtGui import QIcon, QPixmap, QPainter
@@ -18,6 +18,7 @@ from ui.components.svg_icons import (
     SVG_SAVE,
     SVG_SEARCH,
     SVG_SETTINGS,
+    SVG_TRASH,
     SVG_UPLOAD,
     SVG_WRENCH,
     SVG_EYE_OPEN,
@@ -404,9 +405,9 @@ class SettingsDialog(QDialog):
         self._cb_close_br.setChecked(settings.get("auto_close_browser", False))
         lay.addWidget(self._section_card(self._build_autolaunch))
 
-        # Chế độ khách — khoá Studio One khỏi tay khách hàng
-        lay.addWidget(self._section_header(SVG_LOCK, f"Chế độ khách — khoá {_daw.active().display_name}"))
-        lay.addWidget(self._section_card(self._build_kiosk))
+        # Cửa sổ DAW — tự ẩn khỏi khách, KTV hiện lại ở đây
+        lay.addWidget(self._section_header(SVG_LOCK, f"Cửa sổ {_daw.active().display_name}"))
+        lay.addWidget(self._section_card(self._build_daw_windows))
 
         # Màn hình karaoke nhúng (chỉ bản Heavy có QtWebEngine)
         lay.addWidget(self._section_header(SVG_EYE_OPEN, "Màn hình karaoke nhúng"))
@@ -591,9 +592,17 @@ class SettingsDialog(QDialog):
         worker.start()
 
     def _build_audio_tab(self, settings):
-        tab = QWidget()
-        tab.setStyleSheet("background: transparent;")
-        lay = QVBoxLayout(tab)
+        # Bọc QScrollArea như tab Hệ thống/Công cụ: thêm thẻ "Micro" mà không
+        # cuộn thì màn 768px bóp các thẻ, chữ đè ô tích.
+        from PySide6.QtWidgets import QScrollArea
+        tab = QScrollArea()
+        tab.setWidgetResizable(True)
+        tab.setFrameShape(QFrame.NoFrame)
+        tab.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        inner = QWidget()
+        inner.setStyleSheet("background: transparent;")
+        tab.setWidget(inner)
+        lay = QVBoxLayout(inner)
         lay.setContentsMargins(22, 18, 22, 18)
         lay.setSpacing(12)
 
@@ -601,6 +610,11 @@ class SettingsDialog(QDialog):
         self._combo_lb, self._combo_mic = self._create_audio_combos(settings)
         self._combo_music_dev = self._create_music_device_combo(settings)
         lay.addWidget(self._section_card(self._build_audio))
+
+        # Hai micro (Studio One) — mỗi mic một chuỗi FX, mic 2 đi kênh MIDI 2
+        lay.addWidget(self._section_header(SVG_MIC, "Micro"))
+        self._build_mic_widgets(settings)
+        lay.addWidget(self._section_card(self._build_mic))
 
         # Vang tự động theo nhạc (Premium)
         lay.addWidget(self._section_header(SVG_MIC, "Vang tự động theo nhạc (Premium)"))
@@ -625,6 +639,82 @@ class SettingsDialog(QDialog):
 
         lay.addStretch()
         return tab
+
+    _MIC_STUDIO_ONLY_TIP = "Chỉ hỗ trợ Studio One"
+
+    def _build_mic_widgets(self, settings):
+        """Ô "2 micro" + tên hai mic. Cubase chưa có script kênh 2 → khoá ô."""
+        from core import mic2
+        names = mic2.labels(settings)
+        self._cb_two_mics = QCheckBox("Phòng có 2 micro (Studio One)")
+        self._cb_two_mics.setStyleSheet(self._checkbox_qss)
+        # Ý định gốc (mic_count), kể cả khi đang Cubase — ô bị khoá vẫn hiện
+        # đúng, chuyển về Studio One rồi lưu không ghi mất số 2.
+        self._cb_two_mics.setChecked(mic2.two_mics_configured(settings))
+        self._inp_mic_label_1 = QLineEdit(names[mic2.MIC_KEY])
+        self._inp_mic_label_2 = QLineEdit(names[mic2.MIC2_KEY])
+        for inp, default in ((self._inp_mic_label_1, mic2.DEFAULT_LABELS[mic2.MIC_KEY]),
+                             (self._inp_mic_label_2, mic2.DEFAULT_LABELS[mic2.MIC2_KEY])):
+            inp.setStyleSheet(self._input_qss)
+            inp.setMinimumHeight(38)
+            inp.setMaxLength(24)
+            inp.setPlaceholderText(default)
+        self._cb_two_mics.toggled.connect(self._update_mic_widgets)
+        self._cmb_daw.currentIndexChanged.connect(self._update_mic_widgets)
+        self._update_mic_widgets()
+
+    def _update_mic_widgets(self, *_):
+        studio_one = self._collect_daw_kind() == "studio_one"
+        self._cb_two_mics.setEnabled(studio_one)
+        self._cb_two_mics.setToolTip(
+            "Mỗi mic một chuỗi hiệu ứng riêng trong bài mẫu Studio One" if studio_one
+            else self._MIC_STUDIO_ONLY_TIP)
+        names_on = studio_one and self._cb_two_mics.isChecked()
+        self._inp_mic_label_1.setEnabled(names_on)
+        self._inp_mic_label_2.setEnabled(names_on)
+
+    def _build_mic(self, vl):
+        vl.setSpacing(8)
+        self._cb_two_mics.setMinimumHeight(34)
+        vl.addWidget(self._cb_two_mics)
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        for text, inp in (("Tên mic 1:", self._inp_mic_label_1),
+                          ("Tên mic 2:", self._inp_mic_label_2)):
+            lbl = QLabel(text)
+            lbl.setStyleSheet(self._field_label_qss())
+            row.addWidget(lbl)
+            row.addWidget(inp, 1)
+        vl.addLayout(row)
+        note = QLabel(
+            "Bật khi phòng dùng cùng lúc mic dây và mic không dây: mixer có thêm "
+            "thanh Mic 2. Bài mẫu Studio One phải có sẵn hai track mic."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(self._field_label_qss(11, C["text_muted"], 600, True))
+        vl.addWidget(note)
+
+    @staticmethod
+    def _mic_state(s):
+        """Trạng thái hai mic thực chạy (gồm cả DAW) + tên — để biết có đổi."""
+        from core import mic2
+        return mic2.is_enabled(s), mic2.labels(s)
+
+    def _collect_mic_settings(self, s):
+        """Ghi mic_count / mic_labels.
+
+        Ô bị khoá (đang chọn Cubase) thì giữ nguyên giá trị cũ, không ghi đè.
+        """
+        if not hasattr(self, "_cb_two_mics"):
+            return
+        from core import mic2
+        if self._cb_two_mics.isEnabled():
+            s["mic_count"] = 2 if self._cb_two_mics.isChecked() else 1
+        if self._inp_mic_label_1.isEnabled():
+            labels = mic2.with_label(s, mic2.MIC_KEY, self._inp_mic_label_1.text())
+            # with_label giữ tên Vang Mic 2 tự đặt (Dev Mode) — ô Cài đặt không có nó.
+            s["mic_labels"] = mic2.with_label(dict(s, mic_labels=labels), mic2.MIC2_KEY,
+                                              self._inp_mic_label_2.text())
 
     def _build_auto_echo_widgets(self, settings):
         """Ô bật "tự động bật/tắt Vang theo nhạc" — tính năng Premium.
@@ -745,6 +835,8 @@ class SettingsDialog(QDialog):
         left.addWidget(self._section_card(self._build_cookie_tools))
         left.addWidget(self._section_header(SVG_GLOBE, "Thư viện tone cộng đồng"))
         left.addWidget(self._section_card(self._build_tone_share))
+        left.addWidget(self._section_header(SVG_WRENCH, "Công cụ chẩn đoán"))
+        left.addWidget(self._section_card(self._build_diag_tools))
         left.addStretch()
 
         right_col = QWidget()
@@ -920,203 +1012,182 @@ class SettingsDialog(QDialog):
         vl.addWidget(self._cb_close_so)
         vl.addWidget(self._cb_close_br)
 
-    # ── Chế độ khách (khoá kỹ thuật) ──────────────────────────
+    # ── Cửa sổ DAW (tự ẩn khỏi khách) ─────────────────────────
 
-    def _build_kiosk(self, vl):
-        """Mục cấu hình khoá kỹ thuật.
+    def _build_daw_windows(self, vl):
+        """Mục cửa sổ DAW: tự ẩn khi mở app, hiện/ẩn DAW, phục hồi bản mẫu.
 
         Khác các mục còn lại: áp dụng NGAY khi bấm, không chờ nút "Lưu thiết lập".
-        Trạng thái khoá không được phép nằm lửng lơ giữa RAM và đĩa — bấm bật là
-        khoá, đóng app đột ngột cũng vẫn khoá.
+        Nút hiện/ẩn nằm ở đây (không ở header) để khách hát khó bấm nhầm.
         """
-        from core import daw as _daw, kiosk
+        from core import daw as _daw, daw_visibility
 
+        name = _daw.active().display_name
+        ext = _daw.active().template_extension
         vl.setSpacing(8)
 
-        self._kiosk_status = QLabel("")
-        self._kiosk_status.setWordWrap(True)
-        vl.addWidget(self._kiosk_status)
+        self._cb_auto_hide = QCheckBox(f"Tự ẩn {name} khi mở app")
+        self._cb_auto_hide.setStyleSheet(self._checkbox_qss)
+        self._cb_auto_hide.setMinimumHeight(34)
+        self._cb_auto_hide.clicked.connect(
+            lambda: self._daw_windows_apply(daw_visibility.set_auto_hide,
+                                            self._cb_auto_hide.isChecked()))
+        vl.addWidget(self._cb_auto_hide)
 
-        self._cb_kiosk = QCheckBox(f"Bật chế độ khách (ẩn hẳn {_daw.active().display_name} khỏi giao diện)")
-        self._cb_kiosk.setStyleSheet(self._checkbox_qss)
-        self._cb_kiosk.setMinimumHeight(34)
-        self._cb_kiosk.clicked.connect(self._on_kiosk_toggled)
-        vl.addWidget(self._cb_kiosk)
+        row_toggle = QHBoxLayout()
+        row_toggle.setSpacing(8)
+        self._btn_toggle_all = QPushButton("")
+        self._btn_toggle_all.setCursor(Qt.PointingHandCursor)
+        self._btn_toggle_all.setFixedHeight(38)
+        self._btn_toggle_all.setStyleSheet(
+            pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 12, 14))
+        self._btn_toggle_all.clicked.connect(self._on_toggle_all_daw_windows)
+        row_toggle.addWidget(self._btn_toggle_all)
+        self._btn_refresh_windows = QPushButton("Làm mới")
+        self._btn_refresh_windows.setCursor(Qt.PointingHandCursor)
+        self._btn_refresh_windows.setFixedHeight(38)
+        self._btn_refresh_windows.setToolTip("Quét lại các cửa sổ đang có")
+        self._btn_refresh_windows.setStyleSheet(
+            pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 12, 14))
+        self._btn_refresh_windows.clicked.connect(self._refresh_daw_windows_ui)
+        row_toggle.addWidget(self._btn_refresh_windows)
+        row_toggle.addStretch()
+        vl.addLayout(row_toggle)
 
-        self._cb_keep_hidden = QCheckBox(f"Ẩn lại cả khi khách tự mở {_daw.active().display_name} (quét nền)")
-        self._cb_keep_hidden.setStyleSheet(self._checkbox_qss)
-        self._cb_keep_hidden.setMinimumHeight(34)
-        self._cb_keep_hidden.clicked.connect(
-            lambda: self._kiosk_apply(kiosk.set_keep_hidden, self._cb_keep_hidden.isChecked()))
-        vl.addWidget(self._cb_keep_hidden)
+        # Danh sách từng cửa sổ (plugin, ASIO…) — điền ở _refresh_daw_windows_ui.
+        # Plugin phải mở sẵn trong bài mẫu: app chỉ ẩn/hiện được cửa sổ đã có.
+        hint = QLabel(f"Bật riêng từng cửa sổ (Auto-Tune, bảng ASIO…) mà không hiện cả {name}:")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(self._field_label_qss(size=11))
+        vl.addWidget(hint)
+        self._window_switches = {}
+        self._daw_list_box = QVBoxLayout()
+        self._daw_list_box.setSpacing(2)
+        vl.addLayout(self._daw_list_box)
+        self._windows_empty_lbl = QLabel(
+            f"{name} chưa chạy hoặc không có cửa sổ nào. Plugin phải để mở sẵn trong bài mẫu.")
+        self._windows_empty_lbl.setWordWrap(True)
+        self._windows_empty_lbl.setStyleSheet(self._field_label_qss(11, C["text_muted"], 600, True))
+        vl.addWidget(self._windows_empty_lbl)
 
-        self._cb_restore_tpl = QCheckBox(f"Phục hồi bản mẫu {_daw.active().template_extension} mỗi lần khởi động")
+        self._cb_restore_tpl = QCheckBox(f"Phục hồi bản mẫu {ext} mỗi lần khởi động")
         self._cb_restore_tpl.setStyleSheet(self._checkbox_qss)
         self._cb_restore_tpl.setMinimumHeight(34)
         self._cb_restore_tpl.clicked.connect(
-            lambda: self._kiosk_apply(kiosk.set_restore_template, self._cb_restore_tpl.isChecked()))
+            lambda: self._daw_windows_apply(daw_visibility.set_restore_template,
+                                            self._cb_restore_tpl.isChecked()))
         vl.addWidget(self._cb_restore_tpl)
 
-        row_session = QHBoxLayout()
-        row_session.setSpacing(8)
-        lbl_session = QLabel("Phiên kỹ thuật tự khoá lại sau:")
-        lbl_session.setStyleSheet(self._field_label_qss())
-        row_session.addWidget(lbl_session)
-        self._combo_session = QComboBox()
-        self._combo_session.setStyleSheet(self._combo_qss)
-        for mins in (10, 20, 30, 60, 120):
-            self._combo_session.addItem(f"{mins} phút", mins)
-        self._combo_session.activated.connect(
-            lambda: self._kiosk_apply(kiosk.set_session_minutes,
-                                      self._combo_session.currentData()))
-        row_session.addWidget(self._combo_session)
-        row_session.addStretch()
-        vl.addLayout(row_session)
-
-        self._kiosk_tpl_lbl = QLabel("")
-        self._kiosk_tpl_lbl.setWordWrap(True)
-        self._kiosk_tpl_lbl.setStyleSheet(self._field_label_qss(size=11))
-        vl.addWidget(self._kiosk_tpl_lbl)
+        self._template_lbl = QLabel("")
+        self._template_lbl.setWordWrap(True)
+        self._template_lbl.setStyleSheet(self._field_label_qss(size=11))
+        vl.addWidget(self._template_lbl)
 
         row_btn = QHBoxLayout()
         row_btn.setSpacing(8)
-        self._btn_kiosk_unlock = QPushButton("Mở khoá kỹ thuật")
-        self._btn_kiosk_unlock.setCursor(Qt.PointingHandCursor)
-        self._btn_kiosk_unlock.setFixedHeight(38)
-        self._btn_kiosk_unlock.setStyleSheet(
-            pill_btn_qss(C["orange"], _lighten(C["orange"], 0.12), 12, 14))
-        self._btn_kiosk_unlock.clicked.connect(self._on_kiosk_unlock)
-        row_btn.addWidget(self._btn_kiosk_unlock)
-
-        self._btn_kiosk_pin = QPushButton("Đặt mã PIN")
-        self._btn_kiosk_pin.setCursor(Qt.PointingHandCursor)
-        self._btn_kiosk_pin.setFixedHeight(38)
-        self._btn_kiosk_pin.setStyleSheet(
-            pill_btn_qss(C["teal"], _lighten(C["teal"], 0.12), 12, 14))
-        self._btn_kiosk_pin.clicked.connect(self._on_kiosk_set_pin)
-        row_btn.addWidget(self._btn_kiosk_pin)
-
-        self._btn_kiosk_snapshot = QPushButton(f"Chốt bản mẫu {_daw.active().template_extension}")
-        self._btn_kiosk_snapshot.setCursor(Qt.PointingHandCursor)
-        self._btn_kiosk_snapshot.setFixedHeight(38)
-        self._btn_kiosk_snapshot.setStyleSheet(
+        self._btn_template_snapshot = QPushButton(f"Chốt bản mẫu {ext}")
+        self._btn_template_snapshot.setCursor(Qt.PointingHandCursor)
+        self._btn_template_snapshot.setFixedHeight(38)
+        self._btn_template_snapshot.setStyleSheet(
             pill_btn_qss(C["green"], _lighten(C["green"], 0.12), 12, 14))
-        self._btn_kiosk_snapshot.setToolTip(f"Chốt file {_daw.active().template_extension} hiện tại làm bản gốc")
-        self._btn_kiosk_snapshot.clicked.connect(self._on_kiosk_snapshot)
-        row_btn.addWidget(self._btn_kiosk_snapshot)
+        self._btn_template_snapshot.setToolTip(f"Chốt file {ext} hiện tại làm bản gốc")
+        self._btn_template_snapshot.clicked.connect(self._on_template_snapshot)
+        row_btn.addWidget(self._btn_template_snapshot)
         row_btn.addStretch()
         vl.addLayout(row_btn)
 
         note_tpl = QLabel(
-            "Mỗi lần mở app sẽ khôi phục bản mẫu đã chốt, xoá mọi chỉnh sửa của khách."
+            "Bật phục hồi thì mỗi lần mở app sẽ khôi phục bản mẫu đã chốt, xoá mọi chỉnh sửa của khách."
         )
         note_tpl.setWordWrap(True)
         note_tpl.setStyleSheet(self._field_label_qss(11, C["text_muted"], 600, True))
         vl.addWidget(note_tpl)
 
-        self._refresh_kiosk_ui()
+        self._refresh_daw_windows_ui()
 
-    def _refresh_kiosk_ui(self):
-        from core import daw, kiosk, so_template
+    def _refresh_daw_windows_ui(self):
+        from core import daw, daw_visibility, so_template, so_windows
 
         name = daw.active().display_name
-        locked = kiosk.is_locked()
-        enabled = kiosk.is_enabled()
-
-        if not enabled:
-            text, color = f"Đang TẮT — khách vẫn thấy và mở được {name}.", C["text_muted"]
-        elif locked:
-            text, color = (f"Đang KHOÁ — {name} bị ẩn khỏi khách. Mở khoá để"
-                           " chỉnh mục này.", C["orange"])
-        else:
-            mins_left = (kiosk.session_remaining() + 59) // 60
-            text, color = (f"Đang MỞ KHOÁ — còn {mins_left} phút rồi tự khoá lại.",
-                           C["green"])
-        self._kiosk_status.setText(text)
-        self._kiosk_status.setStyleSheet(self._field_label_qss(size=12, color=color))
-
-        for w in (self._cb_kiosk, self._cb_keep_hidden, self._cb_restore_tpl,
-                  self._combo_session, self._btn_kiosk_snapshot):
-            w.setEnabled(not locked)
-        self._btn_kiosk_pin.setText("Đổi mã PIN" if kiosk.has_pin() else "Đặt mã PIN")
-        self._btn_kiosk_pin.setEnabled(not locked)
-        self._btn_kiosk_unlock.setVisible(locked)
-
-        self._cb_kiosk.setChecked(enabled)
-        self._cb_keep_hidden.setChecked(kiosk.keep_hidden())
-        self._cb_restore_tpl.setChecked(kiosk.restore_template_enabled())
-        idx = self._combo_session.findData(kiosk.session_minutes())
-        self._combo_session.setCurrentIndex(idx if idx >= 0 else 1)
+        self._cb_auto_hide.setChecked(daw_visibility.auto_hide())
+        self._cb_restore_tpl.setChecked(daw_visibility.restore_template_enabled())
+        try:
+            visible = so_windows.any_visible()
+        except Exception:
+            visible = False
+        self._btn_toggle_all.setText(f"Ẩn {name} + plugin" if visible else f"Hiện {name} + plugin")
+        self._refresh_window_list()
 
         info = so_template.info()
         if info:
-            self._kiosk_tpl_lbl.setText(
+            self._template_lbl.setText(
                 f"Bản mẫu đã chốt lúc {info.get('saved_at', '?')}"
                 f" ({info.get('size', 0) // 1024} KB) — nguồn: {info.get('source', '?')}")
         else:
-            self._kiosk_tpl_lbl.setText(
+            self._template_lbl.setText(
                 f"Chưa chốt bản mẫu. Tinh chỉnh xong trong {name}, lưu bài, đóng"
                 f" {name} rồi bấm \"Chốt bản mẫu {daw.active().template_extension}\".")
 
-    def _kiosk_apply(self, fn, value):
+    def _refresh_window_list(self):
+        from core import so_windows
+        # Dựng lại danh sách xoá mất công tắc đang giữ chỗ bàn phím — nhớ nó là
+        # cửa sổ nào để trao lại cho công tắc mới (mất hẳn thì về nút Làm mới).
+        focused = self.focusWidget()
+        focus_hwnd = next((h for h, cb in self._window_switches.items() if cb is focused), None)
+        while self._daw_list_box.count():
+            w = self._daw_list_box.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        self._window_switches = {}
+        try:
+            entries = so_windows.list_windows()
+        except Exception as e:
+            print(f"[SETTINGS] liệt kê cửa sổ lỗi: {e}")
+            entries = []
+        for e in entries:
+            label = e.title
+            if e.is_main:
+                label += " (cửa sổ chính)"
+            if e.source == "asio":
+                label += " · ASIO"
+            cb = QCheckBox(label)
+            cb.setStyleSheet(self._checkbox_qss)
+            cb.setMinimumHeight(30)
+            cb.setChecked(e.visible)
+            cb.setToolTip("Bật: hiện cửa sổ này · Tắt: ẩn")
+            cb.clicked.connect(lambda checked, h=e.hwnd: self._on_window_switch(h, checked))
+            self._daw_list_box.addWidget(cb)
+            self._window_switches[e.hwnd] = cb
+        self._windows_empty_lbl.setVisible(not entries)
+        if focus_hwnd is not None:
+            (self._window_switches.get(focus_hwnd) or self._btn_refresh_windows).setFocus()
+
+    def _on_window_switch(self, hwnd, checked):
+        from core import so_windows
+        if checked:
+            ontop = bool((self._dashboard.settings or {}).get("always_on_top"))
+            ok = so_windows.show_window(hwnd, above_topmost=ontop)
+        else:
+            ok = so_windows.hide_window(hwnd)
+        if not ok:
+            self._dashboard._show_message("Cửa sổ không còn — đã quét lại", is_error=True)
+        self._refresh_daw_windows_ui()
+
+    def _daw_windows_apply(self, fn, value):
         try:
             fn(value)
         except Exception as e:
-            self._dashboard._show_message(f"Lỗi lưu chế độ khách: {e}", is_error=True)
-            return
-        self._sync_dashboard_kiosk()
-        self._refresh_kiosk_ui()
+            self._dashboard._show_message(f"Lỗi lưu thiết lập cửa sổ: {e}", is_error=True)
+        self._refresh_daw_windows_ui()
 
-    def _sync_dashboard_kiosk(self):
+    def _on_toggle_all_daw_windows(self):
         try:
-            self._dashboard._apply_kiosk_visibility()
+            self._dashboard._on_toggle_studio_one()
         except Exception as e:
-            print(f"[SETTINGS] áp dụng chế độ khách lỗi: {e}")
+            print(f"[SETTINGS] hiện/ẩn DAW lỗi: {e}")
+        self._refresh_daw_windows_ui()
 
-    def _on_kiosk_toggled(self):
-        from core import kiosk
-        want = self._cb_kiosk.isChecked()
-        if want and not kiosk.has_pin():
-            from ui.dialogs.tech_unlock import SetPinDialog
-            if SetPinDialog(self).exec() != QDialog.Accepted:
-                self._cb_kiosk.setChecked(False)
-                return
-        try:
-            if want:
-                kiosk.enable()
-            else:
-                kiosk.disable()
-        except ValueError as e:
-            self._cb_kiosk.setChecked(False)
-            self._dashboard._show_message(str(e), is_error=True)
-            return
-
-        # Bật khoá = giấu Studio One ngay, không đợi lần khởi động sau.
-        from core import so_windows
-        try:
-            if want:
-                so_windows.hide_all()
-            else:
-                so_windows.show_all(focus_main=False)
-        except Exception as e:
-            print(f"[SETTINGS] ẩn/hiện Studio One lỗi: {e}")
-        self._sync_dashboard_kiosk()
-        self._refresh_kiosk_ui()
-
-    def _on_kiosk_unlock(self):
-        from ui.dialogs.tech_unlock import TechUnlockDialog
-        if TechUnlockDialog(self).exec() != QDialog.Accepted:
-            return
-        self._sync_dashboard_kiosk()
-        self._refresh_kiosk_ui()
-
-    def _on_kiosk_set_pin(self):
-        from ui.dialogs.tech_unlock import SetPinDialog
-        if SetPinDialog(self).exec() == QDialog.Accepted:
-            self._dashboard._show_message("Đã lưu mã PIN kỹ thuật")
-            self._refresh_kiosk_ui()
-
-    def _on_kiosk_snapshot(self):
+    def _on_template_snapshot(self):
         from core import daw, so_template, so_windows
         name = daw.active().display_name
         path = self._inp_so.text().strip() or self._dashboard.settings.get("studio_one_path", "")
@@ -1129,7 +1200,7 @@ class SettingsDialog(QDialog):
             self._dashboard._show_message(f"Đã chốt bản mẫu {name}")
         else:
             self._dashboard._show_message(f"Chốt bản mẫu lỗi: {result['error']}", is_error=True)
-        self._refresh_kiosk_ui()
+        self._refresh_daw_windows_ui()
 
     def _create_music_device_combo(self, settings):
         from PySide6.QtWidgets import QComboBox
@@ -1361,138 +1432,83 @@ class SettingsDialog(QDialog):
 
     def _build_update_tools(self, vl):
         from core.version import __version__
+        from core.updater import get_updater, status_text
 
         version_lbl = QLabel(f"Phiên bản hiện tại: <b>{__version__}</b>")
         version_lbl.setStyleSheet(self._field_label_qss(size=12, weight=600))
         version_lbl.setTextFormat(Qt.RichText)
         vl.addWidget(version_lbl)
-        vl.addSpacing(2)
 
-        # Last check timestamp
-        last_check_text = self._format_last_update_check()
-        self._update_last_check_lbl = QLabel(last_check_text)
-        self._update_last_check_lbl.setStyleSheet(
-            self._field_label_qss(size=11, weight=500, italic=True)
-        )
-        vl.addWidget(self._update_last_check_lbl)
-        vl.addSpacing(8)
-
-        # Action row
-        action_row = QHBoxLayout()
-        action_row.setContentsMargins(0, 4, 0, 4)
-        action_row.setSpacing(10)
-        check_btn = QPushButton("Kiểm tra cập nhật")
-        check_btn.setIcon(self._svg_icon(SVG_SEARCH, "white", 16))
-        check_btn.setIconSize(QSize(16, 16))
-        check_btn.setCursor(Qt.PointingHandCursor)
-        check_btn.setFixedHeight(38)
-        check_btn.setFixedWidth(180)
-        check_btn.setStyleSheet(pill_btn_qss(C["teal"], _lighten(C["teal"], 0.1), 12, 14))
-        add_shadow(check_btn, C["teal"], 8, (0, 2))
-        check_btn.clicked.connect(self._action_check_for_updates)
-        self._update_check_btn = check_btn
-
-        self._update_status_lbl = QLabel("")
-        self._update_status_lbl.setStyleSheet(
-            f"color: {C['teal']}; font-size: 11px; font-family: {FONT};"
-            " background:transparent; border:none;"
-        )
+        # Cập nhật chạy ngầm (core/updater): không nút, không hộp thoại — chỉ báo trạng thái.
+        auto = bool(((self._dashboard.settings or {}).get("update") or {}).get("auto_check", True))
+        self._update_status_lbl = QLabel(status_text(__version__, get_updater(), auto_check=auto))
+        self._update_status_lbl.setStyleSheet(self._field_label_qss(size=11, weight=500, italic=True))
         self._update_status_lbl.setWordWrap(True)
+        vl.addWidget(self._update_status_lbl)
 
-        action_row.addWidget(check_btn)
-        action_row.addSpacing(10)
-        action_row.addWidget(self._update_status_lbl, 1)
-        vl.addLayout(action_row)
+    def _build_diag_tools(self, vl):
+        """Thay shortcut Start Menu của bộ cài cũ: Velopack chỉ tạo shortcut cho exe chính."""
+        from core import app_tools
+        from core.config import APP_DIR, _get_recordings_dir
 
-    def _format_last_update_check(self):
-        try:
-            settings = self._dashboard.settings or {}
-            ts = settings.get("update", {}).get("last_check_timestamp", 0)
-            if not ts:
-                return "Lần kiểm tra cuối: chưa có"
-            from datetime import datetime
-            return f"Lần kiểm tra cuối: {datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M')}"
-        except Exception:
-            return "Lần kiểm tra cuối: chưa có"
+        def _btn(text, color, slot):
+            b = QPushButton(text)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedHeight(36)
+            b.setStyleSheet(pill_btn_qss(color, _lighten(color, 0.1), 12, 12))
+            b.clicked.connect(slot)
+            return b
 
-    def _action_check_for_updates(self):
-        import threading
-        from PySide6.QtCore import QTimer
+        def _run_bat(name):
+            if app_tools.launch_bat(APP_DIR, name):
+                self._lbl_cong_cu.setText("")
+            else:
+                self._lbl_cong_cu.setText(f"Không mở được {name} — thiếu file trong thư mục cài đặt.")
 
-        self._update_check_btn.setEnabled(False)
-        self._update_status_lbl.setText("Đang kết nối GitHub...")
-        self._update_status_lbl.setStyleSheet(
-            f"color: {C['teal']}; font-size: 11px; font-family: {FONT};"
-            " background:transparent; border:none;"
-        )
+        def _open_recordings():
+            if app_tools.open_folder(_get_recordings_dir()):
+                self._lbl_cong_cu.setText("")
+            else:
+                self._lbl_cong_cu.setText("Không mở được thư mục bản thu.")
 
-        def _run():
-            result = {"release": None, "error": None}
-            try:
-                from core.updater import check_latest_release, is_newer
-                release = check_latest_release()
-                if release is None:
-                    result["error"] = "Không kết nối được GitHub hoặc chưa có release nào."
-                elif not is_newer(release.version):
-                    result["release"] = release
-                    result["up_to_date"] = True
-                else:
-                    result["release"] = release
-                    result["up_to_date"] = False
-            except Exception as exc:
-                result["error"] = f"Lỗi khi kiểm tra: {exc}"
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self._btn_kiem_tra_tone = _btn("Kiểm tra dò tone", C["blue"],
+                                       lambda: _run_bat("kiem_tra_tone.bat"))
+        self._btn_thu_tai = _btn("Thử tải YouTube", C["blue"],
+                                 lambda: _run_bat("thu_tai_youtube.bat"))
+        row.addWidget(self._btn_kiem_tra_tone)
+        row.addWidget(self._btn_thu_tai)
+        vl.addLayout(row)
 
-            QTimer.singleShot(0, lambda: self._on_update_check_done(result))
+        self._btn_mo_ban_thu = _btn("Mở thư mục bản thu", C["teal"], _open_recordings)
+        vl.addWidget(self._btn_mo_ban_thu)
+        self._lbl_cong_cu = QLabel("")
+        self._lbl_cong_cu.setWordWrap(True)
+        self._lbl_cong_cu.setStyleSheet(self._field_label_qss(size=11, weight=500, italic=True))
+        vl.addWidget(self._lbl_cong_cu)
 
-        threading.Thread(target=_run, daemon=True, name="update-check").start()
+        self._btn_xoa_du_lieu = _btn("Xoá dữ liệu…", C["accent"], self._action_wipe_data)
+        self._btn_xoa_du_lieu.setIcon(self._svg_icon(SVG_TRASH, "white", 16))
+        vl.addWidget(self._btn_xoa_du_lieu)
+        self._lbl_xoa_du_lieu = QLabel("")
+        self._lbl_xoa_du_lieu.setWordWrap(True)
+        self._lbl_xoa_du_lieu.setStyleSheet(self._field_label_qss(size=11, weight=500, italic=True))
+        vl.addWidget(self._lbl_xoa_du_lieu)
 
-    def _on_update_check_done(self, result):
-        self._update_check_btn.setEnabled(True)
-
-        # Update last_check timestamp regardless
-        try:
-            import time as _t
-            settings = self._dashboard.settings
-            update_cfg = settings.get("update", {}) or {}
-            update_cfg["last_check_timestamp"] = _t.time()
-            settings["update"] = update_cfg
-            backend.ConfigManager.save_settings(settings)
-            self._update_last_check_lbl.setText(self._format_last_update_check())
-        except Exception:
-            pass
-
-        if result.get("error"):
-            self._update_status_lbl.setText(result["error"])
-            self._update_status_lbl.setStyleSheet(
-                f"color: {C['accent']}; font-size: 11px; font-family: {FONT};"
-                " background:transparent; border:none;"
-            )
+    def _action_wipe_data(self):
+        import sys
+        from core import app_tools
+        from core.config import DATA_DIR, _get_recordings_dir
+        ok, include_recordings = _ask_wipe(self)
+        if not ok:
             return
-
-        release = result.get("release")
-        if result.get("up_to_date"):
-            self._update_status_lbl.setText(f"Đã là phiên bản mới nhất ({release.version}).")
-            self._update_status_lbl.setStyleSheet(
-                f"color: {C['green']}; font-size: 11px; font-family: {FONT};"
-                " background:transparent; border:none;"
-            )
+        targets = app_tools.wipe_targets(DATA_DIR, _get_recordings_dir(), include_recordings,
+                                         frozen=getattr(sys, "frozen", False))
+        if not targets or not app_tools.schedule_wipe_after_exit(targets):
+            self._lbl_xoa_du_lieu.setText("Không xoá được: bản chạy từ mã nguồn hoặc thư mục dữ liệu lạ.")
             return
-
-        # New version available — show update dialog
-        self._update_status_lbl.setText(f"Có phiên bản mới: {release.version}")
-        self._update_status_lbl.setStyleSheet(
-            f"color: {C['orange']}; font-size: 11px; font-family: {FONT};"
-            " background:transparent; border:none;"
-        )
-        try:
-            from ui.dialogs.update_dialog import UpdateDialog
-            UpdateDialog(release).exec()
-        except Exception as exc:
-            self._update_status_lbl.setText(f"Không mở được hộp thoại cập nhật: {exc}")
-            self._update_status_lbl.setStyleSheet(
-                f"color: {C['accent']}; font-size: 11px; font-family: {FONT};"
-                " background:transparent; border:none;"
-            )
+        self._lbl_xoa_du_lieu.setText("Dữ liệu sẽ bị xoá ngay sau khi bạn đóng app.")
 
     # ── Accessibility tab ────────────────────────────────────
 
@@ -1837,6 +1853,8 @@ class SettingsDialog(QDialog):
             s["studio_one_path"] = new_so
         if new_br:
             s["browser_path"] = new_br
+        # Chụp TRƯỚC khi ghi daw_kind: đổi DAW cũng bật/tắt hai mic.
+        mic_before = self._mic_state(s)
         old_daw = daw.kind_of(s)
         s["daw_kind"] = self._collect_daw_kind()
         daw_changed = s["daw_kind"] != old_daw
@@ -1867,6 +1885,8 @@ class SettingsDialog(QDialog):
         if hasattr(self, "_cb_auto_echo"):
             s["auto_echo_enabled"]      = self._cb_auto_echo.isChecked()
             s["auto_noise_enabled"]     = self._cb_auto_noise.isChecked()
+        self._collect_mic_settings(s)
+        mic_changed = self._mic_state(s) != mic_before
 
         acc = backend.AppConfig.get("accessibility") or {}
         if hasattr(self, "_cb_tts"):
@@ -1927,6 +1947,13 @@ class SettingsDialog(QDialog):
                 self._dashboard._apply_auto_noise_setting()
         except Exception as e:
             print(f"[SETTINGS] apply auto noise lỗi: {e}")
+
+        # Hai mic: thêm/bỏ kênh Mic 2, đổi nhãn, bật/tắt phát đôi kênh MIDI 2
+        if mic_changed:
+            try:
+                self._dashboard._apply_mic_count_setting()
+            except Exception as e:
+                print(f"[SETTINGS] apply mic count lỗi: {e}")
 
         # Đóng TRƯỚC rồi mới báo: toast bám vào cửa sổ modal đang hoạt động, mà
         # dialog này sắp biến mất — báo trước là khách không thấy gì.
@@ -2041,3 +2068,18 @@ class SettingsDialog(QDialog):
             self._dashboard._show_message("Đang chạy chế độ dự phòng")
         else:
             self._dashboard._show_message("Chưa kết nối — hãy mở YouTube trên Chrome/Edge", is_error=True)
+
+
+def _ask_wipe(parent):
+    """Hỏi xác nhận xoá dữ liệu. Trả (đồng ý, xoá cả bản thu)."""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Warning)
+    box.setWindowTitle("Xoá dữ liệu")
+    box.setText("Xoá toàn bộ bài hát đã lưu, cài đặt, kích hoạt và bộ nhớ đệm của Quang Lưu Studio?")
+    box.setInformativeText("Việc xoá diễn ra ngay sau khi bạn đóng app và KHÔNG khôi phục được. "
+                           "Sau đó app cần kích hoạt lại.")
+    cb = QCheckBox("Xoá cả các bản thu âm trong Documents\\QuangLuuStudio")
+    box.setCheckBox(cb)
+    box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+    box.setDefaultButton(QMessageBox.No)
+    return box.exec() == QMessageBox.Yes, cb.isChecked()

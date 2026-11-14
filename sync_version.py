@@ -1,5 +1,5 @@
 """
-Sync version from core/version.py → QuangLuuStudio_Setup.iss
+Sync version from core/version.py → QuangLuuStudio_Bridge.iss, build_installer.bat, ...
 Run this before building the installer.
 """
 import re
@@ -9,10 +9,10 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from core.version import __version__
 
-ISS_PATH = Path(__file__).parent / "QuangLuuStudio_Setup.iss"
-
-# 1. Update ISS
-content = ISS_PATH.read_text(encoding="utf-8")
+# 1. Update bộ cài cầu nối (máy 1.8.x → Velopack). Bản cài chính là Velopack:
+#    số phiên bản lấy thẳng từ core/version.py (tools/build_velopack.ps1 -Version).
+ISS_PATH = Path(__file__).parent / "QuangLuuStudio_Bridge.iss"
+content = ISS_PATH.read_text(encoding="utf-8-sig")
 updated = re.sub(
     r'(#define MyAppVersion\s+")[^"]+(")',
     rf'\g<1>{__version__}\g<2>',
@@ -20,38 +20,10 @@ updated = re.sub(
 )
 
 if updated != content:
-    ISS_PATH.write_text(updated, encoding="utf-8")
-    print(f"[sync_version] Updated .iss -> v{__version__}")
+    ISS_PATH.write_text(updated, encoding="utf-8-sig")
+    print(f"[sync_version] Updated QuangLuuStudio_Bridge.iss -> v{__version__}")
 
-# 2. Update build_installer.bat
-BAT_PATH = Path(__file__).parent / "build_installer.bat"
-if BAT_PATH.exists():
-    content = BAT_PATH.read_text(encoding="utf-8")
-    # \d+(\.\d+)* chứ KHÔNG phải [\d\.]+ — lớp ký tự tham lam nuốt luôn dấu
-    # chấm của ".exe" nên câu thông báo cuối build thành "..._v1.7.4exe".
-    updated = re.sub(
-        r'(Setup_QuangLuuStudio_v)\d+(?:\.\d+)*',
-        rf'\g<1>{__version__}',
-        content,
-    )
-    if updated != content:
-        BAT_PATH.write_text(updated, encoding="utf-8")
-        print(f"[sync_version] Updated build_installer.bat -> v{__version__}")
-
-    # Bản Heavy dùng script riêng, cũng in tên file cài ở cuối.
-    HEAVY_PATH = Path(__file__).parent / "build_installer_heavy.bat"
-    if HEAVY_PATH.exists():
-        content = HEAVY_PATH.read_text(encoding="utf-8")
-        updated = re.sub(
-            r'(Setup_QuangLuuStudio_Heavy_v)\d+(?:\.\d+)*',
-            rf'\g<1>{__version__}',
-            content,
-        )
-        if updated != content:
-            HEAVY_PATH.write_text(updated, encoding="utf-8")
-            print(f"[sync_version] Updated build_installer_heavy.bat -> v{__version__}")
-
-# 3. Update BUNDLED_YTDLP_VERSION in core/ytdlp_update.py
+# 2. Update BUNDLED_YTDLP_VERSION in core/ytdlp_update.py
 #    Phải khớp với bản yt-dlp thực sự bị PyInstaller gói vào .exe, nếu không bản
 #    yt-dlp nạp ngoài (cũ hơn) sẽ được ưu tiên nhầm sau khi build mới.
 YTDLP_UPDATE_PATH = Path(__file__).parent / "core" / "ytdlp_update.py"
@@ -73,7 +45,7 @@ else:
     else:
         print(f"[sync_version] BUNDLED_YTDLP_VERSION da dung: {bundled}")
 
-# 4. Update so hieu phien ban in tren so tay nguoi dung.
+# 3. Update so hieu phien ban in tren so tay nguoi dung.
 #    Truoc day sua tay nen no dung yen o 1.5.1 suot nhieu ban phat hanh — khach
 #    doc so tay tuong minh dang cai ban cu.
 MANUAL_PATH = Path(__file__).parent / "docs" / "manual" / "index.html"

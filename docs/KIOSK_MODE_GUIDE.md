@@ -1,6 +1,7 @@
-# Chế độ khách — khoá Studio One & đóng an toàn
+# Ẩn DAW khỏi khách, bản mẫu & đóng an toàn
 
-> **Ngày viết:** 2026-08-09 · đối chiếu trực tiếp với code hiện tại.
+> **Ngày viết:** 2026-08-09 · **cập nhật 2026-11-02:** bỏ khoá kỹ thuật (PIN), thay bằng
+> tự ẩn DAW khi mở app + nút hiện/ẩn trong Cài đặt.
 > Dành cho **nhân viên kỹ thuật** khi setup máy cho phòng thu.
 
 ---
@@ -9,56 +10,52 @@
 
 | Vấn đề | Cách xử lý |
 |---|---|
-| Khách táy máy chỉnh thông số trong Studio One → phần mềm chạy sai | **Chế độ khách**: ẩn hẳn cửa sổ Studio One, chỉ mở lại được bằng mã PIN |
-| Khách đã lỡ chỉnh và lưu đè → sai vĩnh viễn | **Bản mẫu .song**: mỗi lần khởi động app chép đè bản KTV đã chốt lên file đang dùng |
+| Khách táy máy chỉnh thông số trong Studio One/Cubase → phần mềm chạy sai | **Tự ẩn DAW**: mỗi lần mở app, mọi cửa sổ DAW (kể cả plugin) bị ẩn. Hiện lại chỉ ở **Cài đặt → Cửa sổ {DAW}** |
+| Khách đã lỡ chỉnh và lưu đè → sai vĩnh viễn | **Bản mẫu .song/.cpr**: mỗi lần khởi động app chép đè bản KTV đã chốt lên file đang dùng |
 | Thoát app xong, mở Studio One lần sau nó đòi phục hồi phiên, không vào thẳng file đã lưu | **Đóng an toàn**: để Studio One tự thoát, không còn `taskkill /F` |
 
-Ba phần này ăn khớp với nhau. App **không lưu** khi đóng: hộp thoại "lưu hay
-không" được trả lời bằng đúng nút **"Don't Save"**, bấm qua `BM_CLICK` nên cửa sổ
-Studio One đang ẩn vẫn đóng được — không phải hiện lên (lộ chế độ khách) chỉ để
-gõ Ctrl+S. Chỉnh sửa của khách chết theo phiên, đúng ý đồ của bản mẫu.
+App **không lưu** khi đóng: hộp thoại "lưu hay không" được trả lời bằng đúng nút
+**"Don't Save"**, bấm qua `BM_CLICK` nên cửa sổ DAW đang ẩn vẫn đóng được — không
+phải hiện lên chỉ để gõ Ctrl+S. Chỉnh sửa của khách chết theo phiên, đúng ý đồ của
+bản mẫu.
+
+> Bản cũ (đến 1.9.0) dùng **khoá kỹ thuật**: mã PIN + `Ctrl+Alt+Shift+T` + phiên 20
+> phút. KTV phải thử nhiều lần mới mở được nên đã bỏ. Máy cũ được chuyển tự động lần
+> đầu chạy bản mới: máy đang bật chế độ khách giữ việc phục hồi bản mẫu; dữ liệu PIN
+> (`tech_lock`) bị xoá.
 
 ---
 
-## 2. Bật chế độ khách (làm một lần lúc setup)
+## 2. Cài đặt → "Cửa sổ {DAW}"
 
-**Thiết lập → Hệ thống → "Chế độ khách — khoá Studio One"**
+Mục này **áp dụng ngay khi bấm**, không cần bấm "Lưu thiết lập".
 
-1. Bấm **Đặt mã PIN** → nhập PIN (tối thiểu 4 ký tự) hai lần.
-2. Tích **"Bật chế độ khách"** → Studio One bị ẩn ngay lập tức.
-3. (Tuỳ chọn) Tích **"Ẩn lại cả khi khách tự mở Studio One"** — bật watchdog nền
-   quét mỗi 1.5 giây, ẩn lại cả cửa sổ do khách tự mở từ Start Menu/desktop.
-   **Mặc định TẮT.** Bật nếu máy khách có shortcut Studio One ngoài desktop.
-4. Chọn thời lượng **phiên kỹ thuật tự khoá lại** (mặc định 20 phút).
-
-Mục này **áp dụng ngay khi bấm**, không cần bấm "Lưu thiết lập" — trạng thái khoá
-không được phép nằm lửng lơ giữa RAM và đĩa.
-
-Khi đang khoá:
-- Nút mắt 👁 (ẩn/hiện Studio One) **biến mất khỏi header** — không phải làm mờ mà
-  ẩn hẳn, nên cũng không bấm Tab tới được và trình đọc màn hình cũng bỏ qua.
-- Lệnh ẩn/hiện Studio One bị chặn ở tầng dưới (`_on_toggle_studio_one`), nên nút
-  custom / MIDI / lệnh giọng nói cũng không lách qua được.
-- Mọi ô cấu hình trong chính mục "Chế độ khách" bị khoá cho tới khi mở khoá.
-
-## 3. Mở khoá / khoá lại
-
-| Thao tác | Cách làm |
+| Thành phần | Tác dụng |
 |---|---|
-| Mở phiên kỹ thuật | **`Ctrl + Alt + Shift + T`** → nhập PIN. Hoặc Thiết lập → nút **Mở khoá kỹ thuật** |
-| Khoá lại ngay | Bấm lại **`Ctrl + Alt + Shift + T`** |
-| Tự khoá lại | Hết thời lượng phiên, hoặc đóng app |
+| **Tự ẩn {DAW} khi mở app** | Mặc định **bật**. Ẩn DAW lúc mở app, khi Tự sửa âm thanh mở/mở lại DAW giữa buổi, và khi thoát app mà DAW còn ở lại |
+| **Hiện / Ẩn {DAW} + plugin** | Hiện hoặc ẩn mọi cửa sổ của DAW. Hiện rồi thì DAW cứ hiện tới lần mở app sau |
+| **Danh sách cửa sổ** | Bật/tắt riêng từng cửa sổ (Auto-Tune, bảng ASIO…) mà không hiện cả DAW — xem mục 3 |
+| **Phục hồi bản mẫu mỗi lần khởi động** | Xem mục 4 |
+| **Chốt bản mẫu** | Xem mục 4 |
 
-Trong phiên kỹ thuật, header hiện huy hiệu cam **KỸ THUẬT** để KTV không quên.
+Header **không còn nút mắt** — khách hát không bấm nhầm được. Nút **Hỗ trợ kỹ thuật**
+luôn hiện.
 
-Phiên chỉ nằm trong RAM — đóng app là khoá lại, không có kiểu "quên tắt qua đêm".
-Nhập sai PIN 5 lần thì bị chặn 60 giây, 5 lần tiếp theo nhân đôi (tối đa 15 phút).
+## 3. Mở riêng một cửa sổ plugin
+
+Cửa sổ plugin (Auto-Tune…) và bảng ASIO phải **để mở sẵn trong bài mẫu** — app chỉ
+ẩn/hiện được cửa sổ đã có, không tự mở plugin được.
+
+Cài đặt → Cửa sổ {DAW} → gạt công tắc của cửa sổ cần chỉnh → cửa sổ đó hiện lên
+trên cùng, DAW chính vẫn ẩn. Chỉnh xong gạt tắt (hoặc để vậy — lần mở app sau tự ẩn).
+Bấm **Làm mới** nếu vừa mở thêm cửa sổ. Danh sách có cả công cụ ASIO chạy riêng
+(ASIO Link Pro, ASIOVADPRO…) — những cửa sổ này không bị tự ẩn khi mở app.
 
 ## 4. Bản mẫu .song
 
 Quy trình chuẩn khi setup hoặc khi cần sửa thiết lập trong Studio One:
 
-1. Mở khoá kỹ thuật → tinh chỉnh trong Studio One → **lưu bài (Ctrl+S)**.
+1. Cài đặt → Cửa sổ {DAW} → **Hiện** → tinh chỉnh trong DAW → **lưu bài (Ctrl+S)**.
 2. **Đóng Studio One** (bắt buộc — không ghi đè file đang mở được).
 3. Thiết lập → **Chốt bản mẫu .song**.
 
@@ -95,7 +92,7 @@ One"*, ba nút **Yes – No – Cancel**; **No** chính là "không lưu". App t
 
 Không bấm được nút đó thì app **huỷ luôn việc đóng** (Escape), để Studio One chạy
 tiếp và bỏ qua phục hồi phiên đó — thà mất một phiên còn hơn lưu đè bản khách đã
-chỉnh lên bài gốc. Log ghi `[KIOSK] Không đóng được Studio One (no_save_button)`.
+chỉnh lên bài gốc. Log ghi `[DAW-HIDE] Không đóng được Studio One (no_save_button)`.
 
 Cùng cơ chế bấm "Don't Save" đó cũng được dùng ở **luồng thoát app** (mục 5), chỉ
 khác nước cuối khi hụt nút — xem bên dưới.
@@ -138,7 +135,7 @@ Khi thoát app, hiện hộp thoại *"Đang đóng Studio One an toàn"* và ch
 **Vì sao không lưu.** Bản cũ gõ Ctrl+S trước khi đóng, nhưng đó chỉ là *mẹo* để
 Studio One khỏi hỏi — không phải nhu cầu giữ dữ liệu, vì bản mẫu chép đè hết ở
 lần khởi động sau. Cái giá của mẹo đó quá đắt: phải **hiện cửa sổ Studio One lên**
-để gõ phím (lộ chế độ khách), chậm, và ghi đè bài mẫu bằng đúng bản khách vừa táy
+để gõ phím (lộ DAW cho khách), chậm, và ghi đè bài mẫu bằng đúng bản khách vừa táy
 máy. Trả lời thẳng hộp thoại bằng "Don't Save" bỏ được cả ba.
 
 **Nước cuối khi hụt nút "Don't Save"** (`fallback_save`): nếu **đã chốt bản mẫu
@@ -165,11 +162,8 @@ Nằm ở `%APPDATA%\QuangLuuStudio\settings.json` (bản cài) hoặc thư mụ
   "auto_close_studio_one": true,
   "studio_one_close_timeout": 45,
   "force_kill_studio_one": false,
-  "tech_lock": {
-    "enabled": true,
-    "pin_salt": "…", "pin_hash": "…", "iterations": 260000,
-    "keep_hidden": false,
-    "session_minutes": 20,
+  "daw_windows": {
+    "auto_hide": true,
     "restore_template": true
   }
 }
@@ -179,26 +173,18 @@ Nằm ở `%APPDATA%\QuangLuuStudio\settings.json` (bản cài) hoặc thư mụ
 |---|---|
 | `studio_one_close_timeout` | Số giây chờ Studio One thoát (mặc định 45) |
 | `force_kill_studio_one` | `true` = hết giờ thì tắt cứng như bản cũ. **Để `false`** trừ khi có máy cá biệt treo hẳn |
-| `tech_lock.keep_hidden` | Watchdog nền ẩn lại mọi cửa sổ Studio One |
-
-PIN lưu dạng băm PBKDF2-HMAC-SHA256 260k vòng + salt ngẫu nhiên — đọc file cũng
-không lấy lại được PIN.
+| `daw_windows.auto_hide` | Tự ẩn DAW khi mở app (mặc định `true`) |
+| `daw_windows.restore_template` | Phục hồi bản mẫu mỗi lần khởi động (mặc định `false`; máy cũ bật chế độ khách → `true`) |
 
 ## 7. Hạn chế đã biết
 
-1. **Không chặn Dev Mode.** `Ctrl+Shift+D` vẫn mở được khi đang khoá, khách vẫn
-   sửa/ẩn được nút và MIDI CC. Muốn chặn thì phải gọi `kiosk.is_locked()` trong
-   `_toggle_dev_mode` (`frontend_qt.py`).
-2. **Ô đường dẫn Studio One trong Thiết lập không bị khoá** — khách vẫn đổi được
-   đường dẫn `.song`/`.exe` và các tuỳ chọn tự mở/tự đóng.
-3. **Khe hở lúc khởi động.** Studio One nạp bài mất hàng chục giây; app chỉ ẩn
-   được sau khi cửa sổ chính hiện ra, rồi bám ẩn thêm 60 giây cho các cửa sổ
-   plugin mọc muộn. Trong khoảng nạp đó cửa sổ vẫn thấy trên màn hình.
-4. **Khách tự mở Studio One** (Start Menu/desktop) chỉ bị ẩn nếu bật
-   `keep_hidden`. Không bật thì app không đụng tới instance đó.
-5. **Quên PIN thì không có cửa hậu**: phải xoá mục `"tech_lock"` trong
-   `settings.json` bằng tay.
-6. **Chỉnh sửa của khách không được giữ lại.** Thoát app là đóng Studio One
+1. **Không có mật khẩu.** Rào chắn duy nhất là phải mở Cài đặt; khách mò vào Cài
+   đặt vẫn hiện được DAW. Dev Mode (`Ctrl+Shift+D`) cũng không bị chặn.
+2. **Khe hở lúc khởi động.** DAW nạp bài mất hàng chục giây; app chỉ ẩn được sau
+   khi cửa sổ chính hiện ra, rồi bám ẩn thêm 60 giây cho các cửa sổ plugin mọc
+   muộn. Trong khoảng nạp đó cửa sổ vẫn thấy trên màn hình.
+3. **Khách tự mở DAW** (Start Menu/desktop) sau khi app đã chạy thì không bị ẩn.
+4. **Chỉnh sửa của khách không được giữ lại.** Thoát app là đóng Studio One
    **không lưu** — cố ý, để bài mẫu không bị bản khách đè lên. KTV muốn giữ
    thay đổi thì phải tự Ctrl+S trong Studio One **trước khi** thoát app, rồi
    chốt lại bản mẫu.
@@ -207,8 +193,7 @@ không lấy lại được PIN.
 
 | Hiện tượng | Nguyên nhân / cách xử lý |
 |---|---|
-| Bấm `Ctrl+Alt+Shift+T` báo "Chế độ khách chưa bật" | Chưa tích ô bật trong Thiết lập |
-| "Studio One đang khoá — cần mở khoá kỹ thuật" | Đúng như thiết kế: mở phiên kỹ thuật trước |
+| Không thấy cửa sổ Auto-Tune trong danh sách | Plugin chưa mở sẵn trong bài mẫu, hoặc vừa mở — bấm **Làm mới** |
 | Chốt bản mẫu báo "Hãy đóng Studio One trước" | File `.song` đang mở, không ghi đè được |
 | Thoát app báo "Studio One chưa đóng xong" | Studio One đang kẹt hộp thoại lạ. Đóng tay, hoặc tăng `studio_one_close_timeout` |
 | Thoát app báo "Đã huỷ đóng Studio One để không lưu nhầm" | Không bấm được nút "Don't Save" và **chưa chốt bản mẫu** nên app không dám lưu. Chốt bản mẫu (mục 4) là lần sau app tự lưu-rồi-đóng được |
@@ -223,7 +208,7 @@ One** — nó mở được ngay cả khi Studio One chưa chạy. Nên `is_midi
 bật `True` từ giây đầu, app tưởng "đã thông" và bắn hết trạng thái khởi tạo
 (mode, vang, auto-tune, khử ồn, tone, mức trộn) trong khi Studio One còn đang nạp
 bài. Lệnh rơi vào khoảng không: cả buổi Studio One lệch trạng thái với giao diện,
-mà chế độ khách lại giấu cửa sổ nên không ai thấy để sửa.
+mà DAW lại đang ẩn nên không ai thấy để sửa.
 
 **Cách xử lý** (`core/so_windows.py` → `ReadySchedule` / `ReadyWatcher`):
 
@@ -235,7 +220,7 @@ mà chế độ khách lại giấu cửa sổ nên không ai thấy để sửa
    tuỳ máy, tuỳ số plugin. Không có cách nào hỏi Studio One "xong chưa".
 3. CC là lệnh **idempotent** nên gửi thừa hoàn toàn vô hại. Rẻ hơn nhiều so với
    đoán trượt một lần rồi lệch cả buổi.
-4. Studio One **tắt rồi mở lại** giữa phiên (KTV mở khoá kỹ thuật) → lịch nạp lại
+4. Studio One **tắt rồi mở lại** giữa phiên (KTV hoặc Tự sửa âm thanh) → lịch nạp lại
    từ đầu: cửa sổ mới nghĩa là bài mới nạp, phải đồng bộ lại.
 
 Mỗi lượt bắn gọi `frontend_qt.py:_sync_midi_states`, đẩy 6 nhóm: Auto-Tune, MODE
@@ -253,12 +238,14 @@ họ đang thấy.
 
 ---
 
-*Các file liên quan: `core/kiosk.py` (trạng thái khoá + PIN), `core/so_windows.py`
-(tìm/ẩn/hiện cửa sổ theo PID), `core/so_template.py` (bản mẫu .song),
-`core/engine/_lifecycle.py:close_studio_one_safely`, `ui/dialogs/tech_unlock.py`,
-`ui/dialogs/shutdown_dialog.py`, `ui/panels/header.py`, `frontend_qt.py`
-(`_apply_kiosk_visibility`, `_toggle_tech_session`, `_auto_launch_apps`,
-`_start_so_ready_watcher`, `_sync_midi_states`, `closeEvent`).
-Kiểm thử: `tests/core/test_kiosk.py`, `tests/core/test_so_template.py`,
-`tests/core/test_close_studio_one_no_save.py`, `tests/core/test_so_ready_watcher.py`,
-`tests/ui/test_exit_close_studio_one.py`, `tests/ui/test_midi_resync_on_so_ready.py`.*
+*Các file liên quan: `core/daw_visibility.py` (cấu hình tự ẩn + chuyển từ khoá cũ),
+`core/so_windows.py` (tìm/ẩn/hiện cửa sổ theo PID, từng cửa sổ, công cụ ASIO),
+`core/so_template.py` (bản mẫu), `core/engine/_lifecycle.py:close_studio_one_safely`,
+`ui/dialogs/settings_dialog.py` (`_build_daw_windows`), `ui/dialogs/shutdown_dialog.py`,
+`ui/audio_doctor_bridge.py` (`launch_daw`), `frontend_qt.py` (`_auto_launch_apps`,
+`_on_toggle_studio_one`, `_start_so_ready_watcher`, `_sync_midi_states`, `closeEvent`).
+Kiểm thử: `tests/core/test_daw_visibility.py`, `tests/core/test_so_windows_daw.py`,
+`tests/core/test_so_template.py`, `tests/core/test_close_studio_one_no_save.py`,
+`tests/core/test_so_ready_watcher.py`, `tests/ui/test_settings_daw_windows.py`,
+`tests/ui/test_exit_close_studio_one.py`, `tests/ui/test_startup_template_restore.py`,
+`tests/ui/test_midi_resync_on_so_ready.py`.*

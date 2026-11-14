@@ -50,12 +50,14 @@ def premium():
         yield
 
 
-def _make_dashboard(qtbot):
+def _make_dashboard(qtbot, settings=None):
+    base = {"studio_one_path": "", "auto_close_studio_one": False}
+    base.update(settings or {})
     with patch("frontend_qt.backend.SongManager.load_songs", return_value=[]), \
          patch("frontend_qt.backend.ActivationManager.is_activated", return_value=True), \
          patch("frontend_qt.backend.ActivationManager.needs_activation", return_value=False), \
          patch("frontend_qt.QTimer.start"):
-        dash = MainDashboard({"studio_one_path": "", "auto_close_studio_one": False})
+        dash = MainDashboard(base)
         qtbot.addWidget(dash)
         if dash._so_ready_watcher is not None:
             dash._so_ready_watcher.stop()
@@ -113,6 +115,48 @@ def test_sang_bai_moi_go_khoa_tone_chinh_tay_va_timeline_cu(qapp, mock_engine, q
     assert dash._manual_tone_override is False
     assert mock_engine.key_locked is False
     assert dash._tone_timeline == []
+
+
+def _ghi_do_dich_luc_gui_lai(engine):
+    """Độ dịch engine đang giữ ở MỖI lần app nhờ gửi lại tone."""
+    seen = []
+    engine.resend_tone_midi.side_effect = lambda: seen.append(engine.tone_transpose)
+    return seen
+
+
+def test_sang_bai_moi_reset_tone_nhac_thi_nho_engine_gui_lai_tone(qapp, mock_engine, qtbot):
+    # Máy 3, 2026-10-28: lượt dò (luồng watcher) gửi Key bằng độ dịch +1 của bài trước
+    # TRƯỚC khi GUI reset Tone Nhạc → Cubase giữ D# trong khi app hiện D. Reset xong
+    # phải nhờ engine gửi lại tone gốc của bài với độ dịch mới.
+    dash = _make_dashboard(qtbot)
+    dash._set_tone_offset("tone_music", 1)
+    seen = _ghi_do_dich_luc_gui_lai(mock_engine)
+
+    dash._on_song_changed(URL_B)
+
+    assert seen == [0]
+
+
+def test_bam_nut_tone_nhac_khong_nho_gui_lai(qapp, mock_engine, qtbot):
+    # Bấm núm: _shift_key_by đã tự gửi Key dịch theo — gửi lại thêm là thừa.
+    dash = _make_dashboard(qtbot)
+    seen = _ghi_do_dich_luc_gui_lai(mock_engine)
+
+    dash._set_tone_offset("tone_music", 1)
+
+    assert seen == []
+
+
+def test_khoi_phuc_preset_tone_nhac_thi_nho_engine_gui_lai_tone(qapp, mock_engine, qtbot, premium):
+    dash = _make_dashboard(qtbot)
+    dash._set_tone_offset("tone_music", -2)
+    _save_current_as(dash, URL_A)
+    dash._on_song_changed(URL_B)
+    seen = _ghi_do_dich_luc_gui_lai(mock_engine)
+
+    dash._on_song_changed(URL_A)                    # mở lại bài đã lưu (Tone Nhạc -2)
+
+    assert seen == [-2]
 
 
 # ── R-04..R-07 — lưu rồi khôi phục ────────────────────────────────────────
@@ -260,6 +304,22 @@ def test_luu_bai_tu_hop_thoai_kem_thiet_lap(qapp, mock_engine, qtbot):
     assert saved["toggles"]["be"] is True
     assert saved["mixer"]["mic"] == 4
     assert saved["v"] == 2
+
+
+def test_mixer_recall_mic2(qapp, mock_engine, qtbot):
+    # Hai mic: mức Mic 2 lưu theo bài dưới tên ngắn "mic2" và áp lại được.
+    dash = _make_dashboard(qtbot, {"mic_count": 2})
+    dash._mixer_sliders["mix_mic_2"].setValue(-3)
+    preset = dash._capture_current_preset()
+    assert preset["mixer"]["mic2"] == -3
+    assert "mix_mic_2" not in preset["mixer"]
+
+    dash._mixer_sliders["mix_mic_2"].setValue(0)
+    mock_engine.reset_mock()
+    from ui import song_settings
+    song_settings._mixer_apply(dash, {"mixer": {"mic2": -3}})
+    assert dash._mixer_sliders["mix_mic_2"].value() == -3
+    mock_engine.send_midi_on_channel.assert_called_with(1, 21, 53)
 
 
 # ── R-08..R-10 — Tone Nhạc ≠ 0 ────────────────────────────────────────────

@@ -2,7 +2,7 @@
 import os
 
 import backend
-from core import daw
+from core import daw, mic2
 from core.audio_doctor import default_checks
 from core.audio_doctor.context import DoctorContext
 from core.audio_doctor.service import AudioDoctorService
@@ -11,7 +11,8 @@ from core.audio_doctor.win_audio import WinAudio
 from core.config import DATA_DIR, MIDI_FEEDBACK_PORT_NAME, MIDI_PORT_NAME
 from ui.ui_invoker import UiInvoker
 
-MIC_KEY = "mix_mic"
+MIC_KEY = mic2.MIC_KEY
+MIC2_KEY = mic2.MIC2_KEY
 MUSIC_KEY = "mix_music"
 MUSIC_MIN_PCT = 5
 MUSIC_RESTORE_PCT = 80
@@ -28,6 +29,11 @@ class DashboardDoctorActions:
         if not path or not os.path.exists(path):
             return False
         self._d.engine.launch_app(path)
+        # Tự sửa mở/mở lại DAW giữa buổi (khách bấm) — DAW mới bật lên cũng phải
+        # ẩn như lúc mở app.
+        from core import daw_visibility, so_windows
+        if daw_visibility.auto_hide():
+            so_windows.hide_when_ready()
         return True
 
     def reconnect_midi(self):
@@ -48,30 +54,58 @@ class DashboardDoctorActions:
     def _slider(self, key):
         return (getattr(self._d, "_mixer_sliders", None) or {}).get(key)
 
+    def _mic_keys(self):
+        """Các kênh mic đang có trên mixer: thêm Mic 2 khi bật hai mic (Studio One)."""
+        if mic2.is_enabled(getattr(self._d, "settings", None)) and self._slider(MIC2_KEY) is not None:
+            return (MIC_KEY, MIC2_KEY)
+        return (MIC_KEY,)
+
+    def _read_mic(self, key):
+        sl = self._slider(key)
+        if sl is None:
+            return None
+        # Thanh Mic -10..+10 dB, nấc dưới cùng là -∞ (tắt hẳn).
+        level = float("-inf") if sl.value() <= sl.minimum() else float(sl.value())
+        return bool(self._d.mute_states.get(key, False)), level
+
+    def _ensure_mic(self, key):
+        sl = self._slider(key)
+        setter = (getattr(self._d, "_mixer_mute_setters", None) or {}).get(key)
+        if sl is None:
+            return
+        if setter is not None and self._d.mute_states.get(key, False):
+            setter(False)
+        if sl.value() <= sl.minimum():
+            sl.setValue(0)              # valueChanged → gửi CC mức Mic (0 dB)
+        else:
+            send = (getattr(self._d, "_mixer_senders", None) or {}).get(key)
+            if send:
+                send(sl.value())        # DAW có thể đang lệch mức với app
+
     def app_mic_state(self):
         def read():
-            sl = self._slider(MIC_KEY)
-            if sl is None:
+            states = [self._read_mic(k) for k in self._mic_keys()]
+            states = [s for s in states if s is not None]
+            if not states:
                 return None
-            # Thanh Mic -10..+10 dB, nấc dưới cùng là -∞ (tắt hẳn).
-            level = float("-inf") if sl.value() <= sl.minimum() else float(sl.value())
-            return bool(self._d.mute_states.get(MIC_KEY, False)), level
+            # Hai mic: coi là "tắt" chỉ khi mọi mic đều tắt; mức = cao nhất
+            # trong các mic đang mở (cả hai tắt → mức Mic 1).
+            on = [s for s in states if not s[0]]
+            if not on:
+                return True, states[0][1]
+            return False, max(lv for _m, lv in on)
         return self._inv.call(read)
 
     def ensure_app_mic_on(self):
         def do():
-            sl = self._slider(MIC_KEY)
-            setter = (getattr(self._d, "_mixer_mute_setters", None) or {}).get(MIC_KEY)
-            if sl is None:
-                return
-            if setter is not None and self._d.mute_states.get(MIC_KEY, False):
-                setter(False)
-            if sl.value() <= sl.minimum():
-                sl.setValue(0)              # valueChanged → gửi CC mức Mic (0 dB)
-            else:
-                send = (getattr(self._d, "_mixer_senders", None) or {}).get(MIC_KEY)
-                if send:
-                    send(sl.value())        # DAW có thể đang lệch mức với app
+            # Hai mic: còn mic nào đang mở thì chỉ đẩy lại mức các mic đang
+            # mở — mic đang tắt là KTV/khách cố ý tắt (mic không dây nằm trên
+            # bàn), mở ra là hú/lọt tiếng. Chỉ khi MỌI mic đều tắt mới mở hết
+            # (không biết khách cầm mic nào).
+            keys = self._mic_keys()
+            on = [k for k in keys if not self._d.mute_states.get(k, False)]
+            for key in (on or keys):
+                self._ensure_mic(key)
         self._inv.call(do)
 
     def app_music_state(self):

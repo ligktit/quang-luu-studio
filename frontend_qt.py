@@ -2,7 +2,7 @@
 Quang Lưu Studio — PySide6 Frontend V4.0
 QPainter Premium Edition — Custom-painted UI
 """
-import sys, os, threading
+import sys, os, threading, logging
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox,
@@ -11,11 +11,15 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, Signal, QSignalBlocker
 from PySide6.QtGui import QColor, QIcon, QFontDatabase, QKeySequence
 import backend
+from core.config import APP_ICON_FILE
 
 # ─── Design System (Single Source of Truth) ───
 from ui.design_tokens import C, SP, FONT, FONT_MONO, load_qss, lighten, darken
 from ui import responsive as rp
 import ui.panels as panels
+from core import mic2
+
+_log = logging.getLogger(__name__)
 from ui.components.button import _make_pill_qss, _make_circle_qss
 from ui.components.waveform_hero import WaveformHeroPanel
 from ui.components.painter_button import PainterButton
@@ -155,19 +159,21 @@ class MainDashboard(QMainWindow):
         except Exception as e:
             print(f"[DAW] bind lỗi: {e}")
         # Backend
-        self.engine = backend.SystemEngine(settings)
+        # Cùng MỘT dict settings với dashboard — engine đọc mic_count từ đây.
+        self.engine = backend.SystemEngine(self.settings)
 
-        # Khoá kỹ thuật đọc/ghi trên chính dict settings này — phải gắn TRƯỚC khi
-        # dựng header, vì header hỏi kiosk.is_locked() để quyết định hiện nút mắt.
+        # Tự ẩn DAW đọc/ghi trên chính dict settings này. Máy cũ còn cấu hình
+        # khoá kỹ thuật (tech_lock) được chuyển một lần, rồi lưu ngay.
         try:
-            from core import kiosk
-            kiosk.bind(self.settings)
+            from core import daw_visibility
+            daw_visibility.bind(self.settings)
+            if daw_visibility.migrate(self.settings):
+                backend.ConfigManager.save_settings(self.settings)
         except Exception as e:
-            print(f"[KIOSK] bind lỗi: {e}")
-        self._so_hide_guard = None
-        self._so_shutdown_done = False
+            print(f"[DAW-HIDE] bind/migrate lỗi: {e}")
+        self._close_started = False      # closeEvent lượt đầu đã chạy (tàng hình + dọn)
+        self._daw_close_pending = False  # đang đóng DAW ngầm — chưa được thoát
         self._so_ready_watcher = None
-        self._kiosk_timer = None
 
         # State
         self.tone_music_value = 0
@@ -180,6 +186,9 @@ class MainDashboard(QMainWindow):
         self.current_tone = "C"
         self.current_score = None
         self.be_state = False
+        self.be2_state = False   # Bè của mic 2 (chỉ dùng khi bật 2 mic)
+        self._be_btn = None      # nút Bè / Bè Mic 2 — tools.py gán khi dựng panel
+        self._be2_btn = None
         self.vang_state = False
         self.fix_meo_state = False
         self.tat_on_state = False   # nút Tắt Ồn (khử ồn mic) — mọi phiên bản
@@ -187,6 +196,7 @@ class MainDashboard(QMainWindow):
             "mix_music": False, "mix_mic": False,
             "mix_reverb": False, "mix_backing": False
         }
+        self._load_mic_mutes()
         self.autokey_active = False
         self.tune_state = True
         self.fix_meo_state = False
@@ -256,7 +266,7 @@ class MainDashboard(QMainWindow):
 
         # Window — cỡ đi theo tỉ lệ màn hình (xem ui/responsive.py), không fix cứng
         self.setWindowTitle("Quang Lưu Studio")
-        self.setWindowIcon(QIcon("app_icon.ico"))
+        self.setWindowIcon(QIcon(APP_ICON_FILE))
         rp.set_min_size(self, 780, 200)
         self._autotune_on = False
         self.setStyleSheet(APP_QSS)
@@ -319,6 +329,7 @@ class MainDashboard(QMainWindow):
         # Tự sửa âm thanh: lúc mở app chỉ KIỂM TRA (chờ DAW sẵn sàng) rồi báo.
         self._audio_doctor_report_signal.connect(self._on_audio_doctor_report)
         self._audio_doctor_speak_next = True
+        self._audio_alert_dialog = None
         try:
             from ui.audio_doctor_bridge import build_service
             self._audio_doctor = build_service(self)
@@ -384,11 +395,6 @@ class MainDashboard(QMainWindow):
         from PySide6.QtGui import QShortcut, QKeySequence
         self._dev_mode_shortcut = QShortcut(QKeySequence("Ctrl+Shift+D"), self)
         self._dev_mode_shortcut.activated.connect(self._toggle_dev_mode)
-
-        # Khoá kỹ thuật — phím tắt không ghi ở đâu trong giao diện khách.
-        self._tech_shortcut = QShortcut(QKeySequence("Ctrl+Alt+Shift+T"), self)
-        self._tech_shortcut.activated.connect(self._toggle_tech_session)
-        self._apply_kiosk_visibility()
 
         # Hiệu ứng chuyển động (lấp lánh theo nhạc, nhấp nháy…) — sau khi toàn
         # bộ UI đã dựng, theo thiết lập "Tắt hiệu ứng bắt mắt".
@@ -506,103 +512,6 @@ class MainDashboard(QMainWindow):
         if self.settings.get("always_on_top", False):
             QTimer.singleShot(0, self, lambda: self._set_always_on_top(True))
 
-    # ── Khoá kỹ thuật (chế độ khách) ─────────────────────────────────────────
-
-    def _apply_kiosk_visibility(self):
-        """Đồng bộ giao diện + watchdog với trạng thái khoá hiện tại.
-
-        Gọi mỗi khi trạng thái khoá đổi (mở/đóng phiên kỹ thuật, bật/tắt chế độ
-        khách trong Thiết lập) và một lần lúc khởi động.
-        """
-        from core import kiosk, so_windows
-
-        locked = kiosk.is_locked()
-        if self._eye_btn is not None:
-            self._eye_btn.setVisible(not locked)
-        support_btn = getattr(self, "_support_btn", None)
-        if support_btn is not None:
-            support_btn.setVisible(not locked)
-        if getattr(self, "_tech_badge", None) is not None:
-            self._tech_badge.setVisible(kiosk.is_enabled() and kiosk.session_active())
-
-        # Watchdog giữ ẩn (tuỳ chọn) — chỉ chạy khi đang khoá.
-        want_guard = locked and kiosk.keep_hidden()
-        if want_guard:
-            if self._so_hide_guard is None:
-                self._so_hide_guard = so_windows.HideGuard(
-                    should_hide=lambda: kiosk.is_locked() and kiosk.keep_hidden()
-                )
-            self._so_hide_guard.start()
-        elif self._so_hide_guard is not None:
-            self._so_hide_guard.stop()
-
-        # Đồng hồ tự khoá lại khi hết phiên — KTV hay quên bấm khoá.
-        timer = getattr(self, "_kiosk_timer", None)
-        if kiosk.is_enabled() and kiosk.session_active():
-            if timer is None:
-                self._kiosk_timer = QTimer(self)
-                self._kiosk_timer.timeout.connect(self._kiosk_session_tick)
-                self._kiosk_timer.start(5000)
-        elif timer is not None:
-            timer.stop()
-            self._kiosk_timer = None
-
-    def _kiosk_session_tick(self):
-        from core import kiosk
-        if kiosk.session_active():
-            return
-        from core import daw
-        self._lock_studio_one(f"Hết phiên kỹ thuật — đã khoá lại {daw.active().display_name}")
-
-    def _lock_studio_one(self, message):
-        from core import kiosk, so_windows
-        kiosk.end_session()
-        try:
-            so_windows.hide_all()
-        except Exception as e:
-            print(f"[KIOSK] ẩn Studio One lỗi: {e}")
-        self._studio_one_visible = False
-        self._apply_kiosk_visibility()
-        self._show_message(message)
-
-    def _toggle_tech_session(self):
-        """Ctrl+Alt+Shift+T — mở/đóng phiên kỹ thuật."""
-        from core import kiosk, so_windows
-
-        if not kiosk.is_enabled():
-            self._show_message("Chế độ khách chưa bật (Thiết lập → Hệ thống)")
-            return
-
-        if kiosk.session_active():
-            from core import daw
-            self._lock_studio_one(f"Đã khoá lại — {daw.active().display_name} ẩn khỏi khách")
-            return
-
-        if not kiosk.has_pin():
-            self._show_message("Chưa đặt mã PIN kỹ thuật", is_error=True)
-            return
-
-        from ui.dialogs.tech_unlock import TechUnlockDialog
-        if TechUnlockDialog(self).exec() != QDialog.Accepted:
-            return
-
-        self._apply_kiosk_visibility()
-        try:
-            shown = so_windows.show_all()
-        except Exception as e:
-            shown = 0
-            print(f"[KIOSK] hiện Studio One lỗi: {e}")
-        self._studio_one_visible = True
-        if self._eye_btn is not None:
-            from ui.components.svg_icons import SVG_EYE_OPEN
-            self._eye_btn.setSvg(SVG_EYE_OPEN)
-        from core import daw
-        if shown or so_windows.is_running():
-            self._show_message(f"Mở khoá kỹ thuật {kiosk.session_minutes()} phút")
-        else:
-            self._show_message(
-                f"Mở khoá kỹ thuật {kiosk.session_minutes()} phút — {daw.active().display_name} chưa chạy")
-
     def refresh_ui(self):
         # Gỡ dải visualizer TRƯỚC khi dọn layout: xoá widget qua layout thôi thì
         # stop() không chạy, ref AudioPulse rò thêm một nấc mỗi lần rebuild.
@@ -629,6 +538,8 @@ class MainDashboard(QMainWindow):
                 del self._func_buttons[key]
         # Mode buttons nằm hoàn toàn trong body → clear toàn bộ (mode.py sẽ thêm lại)
         self._mode_buttons = {}
+        self._be2_btn = None   # tools.py dựng lại khi còn bật 2 mic
+        self._be_btn = None
 
         # Rebuild body
         self._body_layout.addWidget(self._build_body())
@@ -688,7 +599,44 @@ class MainDashboard(QMainWindow):
             self._apply_widget_calibration(dialog.result_calibration)
             self.refresh_ui()
 
+    def _mic_channel_key(self, panel_name, widget_data):
+        """mix_mic / mix_mic_2 / mix_reverb_2 / be_2 khi `widget_data` là kênh/nút
+        lấy tên từ settings["mic_labels"] lúc đang bật 2 mic, ngược lại None.
+
+        Dev Mode đổi tên các mục này phải ghi vào mic_labels (mixer.py, tools.py
+        đọc từ đó) — ghi vào ui_config thì app bỏ qua.
+        """
+        if not mic2.is_enabled(self.settings):
+            return None
+        if panel_name == "tools":
+            return mic2.BE2_KEY if widget_data.get("id") == mic2.BE2_KEY else None
+        if panel_name != "mixer":
+            return None
+        key = widget_data.get("cc")
+        return key if key in (mic2.MIC_KEY, *mic2.MIC2_CHANNELS) else None
+
+    def _save_mic_label(self, key, name):
+        self.settings["mic_labels"] = mic2.with_label(self.settings, key, name)
+        if not backend.ConfigManager.save_settings(self.settings):
+            self._show_message("Không lưu được tên mic", is_error=True)
+
+    def _rename_mic2_channel(self, key, widget_data):
+        """Mic 2 / Vang Mic 2 không có entry ui_config (mọi thông số theo kênh
+        Mic / Vang) → chỉ đổi tên."""
+        from PySide6.QtWidgets import QInputDialog
+        what = {mic2.MIC2_REVERB_KEY: "kênh vang mic 2",
+                mic2.BE2_KEY: "nút bè mic 2"}.get(key, "mic 2")
+        name, ok = QInputDialog.getText(self, f"Đổi tên {what}", f"Tên {what}:",
+                                        text=widget_data.get("label", ""))
+        if ok:
+            self._save_mic_label(key, name)
+            self.refresh_ui()
+
     def _on_edit_widget(self, panel_name, widget_data):
+        mic_key = self._mic_channel_key(panel_name, widget_data)
+        if mic_key in mic2.MIC2_CHANNELS or mic_key == mic2.BE2_KEY:
+            self._rename_mic2_channel(mic_key, widget_data)
+            return
         from ui.dialogs.widget_builder import WidgetBuilderDialog
         dialog = WidgetBuilderDialog(self, panel_name=panel_name,
                                      widget_type=widget_data.get("type", "slider"),
@@ -704,7 +652,13 @@ class MainDashboard(QMainWindow):
                                    is_error=True)
                 self.refresh_ui()
                 return
-            panel_list[idx] = dialog.result_data
+            new_data = dialog.result_data
+            if mic_key == mic2.MIC_KEY:
+                # Tên mới vào mic_labels; ui_config giữ tên cũ (dùng lại khi về 1 mic),
+                # các thông số khác (dải, màu…) vẫn lưu ui_config như mọi kênh.
+                self._save_mic_label(mic_key, new_data.get("label", ""))
+                new_data = dict(new_data, label=panel_list[idx].get("label", ""))
+            panel_list[idx] = new_data
             ui_config[panel_name] = panel_list
             backend.UiConfigManager.save_ui_config(ui_config)
             self._apply_widget_calibration(dialog.result_calibration)
@@ -749,8 +703,15 @@ class MainDashboard(QMainWindow):
                 on_value = int(mode_map.get("Fix Méo", 127)) if isinstance(mode_map, dict) else 127
             val = self._toggle_value(key, getattr(self, attr, default), on_value=on_value)
             self.engine.send_midi(int(MIDI_CC.get(key)), val)
+            if key == "be" and mic2.is_enabled(self.settings):
+                # Bè mic 2 dùng chung cân chỉnh đảo chiều với Bè (cùng tham số Auto-Tune).
+                self._send_be2()
             
     def _on_hide_widget(self, panel_name, widget_data):
+        key = self._mic_channel_key(panel_name, widget_data)
+        if key in mic2.MIC2_CHANNELS or key == mic2.BE2_KEY:
+            self._show_message("Muốn bỏ Mic 2: Cài đặt → Âm thanh → bỏ chọn \"Phòng có 2 micro\"")
+            return
         ui_config = backend.UiConfigManager.load_ui_config()
         panel_list = ui_config.get(panel_name, [])
         idx = _find_widget_index(panel_list, widget_data)
@@ -1021,8 +982,13 @@ class MainDashboard(QMainWindow):
         if send:
             self.engine.send_midi(MIDI_CC.get(which, 10 if which == "tone_music" else 11),
                                   int(((value + 12) / 24) * 127))
-        if which == "tone_music" and shift_key and value != old:
-            self._shift_key_by(value - old)
+        if which == "tone_music" and value != old:
+            if shift_key:
+                self._shift_key_by(value - old)
+            else:
+                # Reset lúc sang bài / preset: lượt dò có thể đã gửi Key bằng độ dịch
+                # cũ (luồng khác, chạy trước) → engine gửi lại tone gốc với độ dịch mới.
+                self.engine.resend_tone_midi()
         return value
 
     def _shift_key_by(self, delta):
@@ -1137,9 +1103,14 @@ class MainDashboard(QMainWindow):
             # 4. Mute Mic / Vang / Bè theo đúng nút trên app. Thiếu Mic/Bè thì
             # DAW mở lại giữ trạng thái mute của bản mẫu — khách thấy nút Mic
             # sáng mà không có tiếng.
-            mute_cc_keys = (("mix_mic", "mute_mic", 51),
+            mute_cc_keys = [("mix_mic", "mute_mic", 51),
                             ("mix_reverb", "mute_reverb", 52),
-                            ("mix_backing", "mute_backing", 53))
+                            ("mix_backing", "mute_backing", 53)]
+            if mic2.is_enabled(self.settings):
+                # Mic 2 / Vang Mic 2: cùng CC tắt với Mic / Vang, đi kênh MIDI 2
+                # (panels.mixer.midi_route).
+                mute_cc_keys.insert(1, (mic2.MIC2_KEY, "mute_mic", 51))
+                mute_cc_keys.insert(3, (mic2.MIC2_REVERB_KEY, "mute_reverb", 52))
             multi_cc_map = {}
             try:
                 multi_cc_map = backend.AppConfig.get_mute_multi_cc()
@@ -1153,12 +1124,13 @@ class MainDashboard(QMainWindow):
                     continue
                 is_muted = self.mute_states.get(key, False)
                 cc = int(MIDI_CC.get(cc_name, cc_default))
-                self.engine.send_midi(cc, 127 if is_muted else 0)
+                base_key, send = panels.mixer.midi_route(self, key)
+                send(cc, 127 if is_muted else 0)
                 print(f"[MUTE] Đồng bộ {key} -> {'MUTED' if is_muted else 'ACTIVE'} (CC {cc})")
-                for entry in multi_cc_map.get(key, []):
+                for entry in multi_cc_map.get(base_key, []):
                     try:
                         val = int(entry["on_value"]) if is_muted else int(entry["off_value"])
-                        self.engine.send_midi(int(entry["cc"]), val)
+                        send(int(entry["cc"]), val)
                     except Exception as e:
                         print(f"[MIDI SYNC] Multi CC {key} lỗi: {e}")
 
@@ -1181,6 +1153,70 @@ class MainDashboard(QMainWindow):
                 self._set_tone_offset(which, self._tone_offset(which), shift_key=False)
         except Exception as e:
             print(f"[MIDI SYNC] Đồng bộ trạng thái MIDI lỗi: {e}")
+
+    # Chưa ghi mic_mutes (lần đầu bật 2 mic): Mic 1 mở, Mic 2 TẮT sẵn — mic
+    # không dây không dùng không được để mở (spec 5.3).
+    _MIC_MUTE_DEFAULTS = {mic2.MIC_KEY: False, mic2.MIC2_KEY: True}
+
+    def _saved_mic_mute(self, key):
+        saved = self.settings.get("mic_mutes")
+        if not isinstance(saved, dict):
+            saved = {}
+        return bool(saved.get(key, self._MIC_MUTE_DEFAULTS[key]))
+
+    def _load_mic_mutes(self):
+        """Hai mic: trạng thái tắt/mở hai mic đã ghi.
+
+        Chỉ đọc khi bật 2 mic — máy một mic khởi động y như trước.
+        """
+        if not mic2.is_enabled(self.settings):
+            return
+        for key in (mic2.MIC_KEY, mic2.MIC2_KEY):
+            self.mute_states[key] = self._saved_mic_mute(key)
+
+    def _mute_mic2_in_daw(self):
+        """Gửi lệnh tắt Mic 2 (mute_mic + CC phụ mute_multi_cc của Mic) trên kênh MIDI 2."""
+        try:
+            base_key, send = panels.mixer.midi_route(self, mic2.MIC2_KEY)
+            send(int(MIDI_CC.get("mute_mic", 51)), 127)
+            for entry in backend.AppConfig.get_mute_multi_cc().get(base_key, []):
+                try:
+                    send(int(entry["cc"]), int(entry["on_value"]))
+                except Exception as e:
+                    print(f"[MIC2] CC phụ tắt Mic 2 lỗi: {e}")
+            print("[MIC2] Tắt hai mic -> đã tắt Mic 2 trên kênh MIDI 2")
+        except Exception as e:
+            print(f"[MIC2] Không tắt được Mic 2: {e}")
+
+    def _apply_mic_count_setting(self):
+        """Áp ngay thiết lập hai mic (số mic / tên) vừa lưu ở Cài đặt.
+
+        Thứ tự: engine bật/tắt phát đôi → dựng lại mixer (thêm/bỏ kênh Mic 2,
+        đổi nhãn) → bắn lại toàn bộ trạng thái để kênh MIDI 2 khớp giao diện.
+        Tắt hai mic: tắt Mic 2 trong Studio One TRƯỚC khi ngừng điều khiển kênh
+        MIDI 2 — mic không dây không dùng không được để mở (spec 5.3).
+        """
+        had_mic2 = mic2.MIC2_KEY in (getattr(self, "_mixer_sliders", None) or {})
+        if had_mic2 and not mic2.is_enabled(self.settings):
+            self._mute_mic2_in_daw()
+        self.engine.refresh_mic2_mirror()
+        # Mixer dựng lại lấy mức từ mixer_levels — chốt mức đang chỉnh trước,
+        # không thì thanh trượt nhảy về mức lúc mở app.
+        levels = dict(self.settings.get("mixer_levels") or {})
+        for cc_key, slider in (getattr(self, "_mixer_sliders", None) or {}).items():
+            levels[cc_key] = slider.value()
+        self.settings["mixer_levels"] = levels
+        if mic2.is_enabled(self.settings):
+            self.mute_states.setdefault(mic2.MIC2_KEY, self._saved_mic_mute(mic2.MIC2_KEY))
+        else:
+            self.mute_states.pop(mic2.MIC2_KEY, None)
+            self.mute_states.pop(mic2.MIC2_REVERB_KEY, None)
+        self.refresh_ui()
+        # Kênh dựng lại mặc định "mở" — trả hình tắt cho MỌI kênh đang tắt
+        # (Vang, Bè...), không thì giao diện báo mở trong khi DAW vẫn tắt.
+        for cc_key, ch in (self._mixer_channels or {}).items():
+            ch.set_muted(bool(self.mute_states.get(cc_key, False)))
+        self._sync_midi_states()
 
     def _sync_tone_midi(self):
         """Gửi lại tone gốc + thể hiện hành (không đụng cờ chỉnh tay)."""
@@ -1241,23 +1277,36 @@ class MainDashboard(QMainWindow):
         self._audio_doctor_dialog.show()
 
     def _on_audio_doctor_report(self, report, action):
-        """Cập nhật dải cảnh báo header. Chỉ đọc TTS ở lượt khởi động đầu tiên."""
+        """Lượt kiểm tra thấy lỗi → cửa sổ cảnh báo riêng + nút Tự sửa ở thanh dưới
+        sáng lên. Kết quả từ hộp thoại Tự sửa ("button") chỉ cập nhật nút, không
+        bật lại cảnh báo — kết quả đã hiện ngay trong hộp thoại. Chỉ đọc TTS ở lượt
+        khởi động đầu tiên."""
         problems = report.problems()
-        btn = getattr(self, "_audio_warn_btn", None)
-        if btn is None:
-            return
+        self._set_audio_fix_highlight(bool(problems))
+        dlg = getattr(self, "_audio_alert_dialog", None)
         if not problems:
-            btn.hide()
+            if dlg is not None:
+                dlg.close()
             return
+        if action in ("run", "rerun"):
+            if dlg is None:
+                from ui.dialogs.audio_alert_dialog import AudioAlertDialog
+                dlg = self._audio_alert_dialog = AudioAlertDialog(self)
+            dlg.set_report(report)
+            dlg.show_on_top()
         _, first = problems[0]
-        extra = f" · +{len(problems) - 1} vấn đề khác" if len(problems) > 1 else ""
-        btn.setText(f"⚠ {first.message}{extra} · Bấm để tự sửa")
-        btn.setToolTip("\n".join(f"• {f.message}" for _, f in problems))
-        btn.show()
         if action == "run" and self._audio_doctor_speak_next:
             self._audio_doctor_speak_next = False
             self._a11y_speak(f"Có {len(problems)} vấn đề âm thanh. {first.message}. "
                              "Nhấn Control Shift A để tự sửa.")
+
+    def _set_audio_fix_highlight(self, on: bool):
+        """Nút "Tự sửa âm thanh" ở thanh dưới đỏ lên + đèn khi còn lỗi âm thanh."""
+        btn = (getattr(self, "_func_buttons", None) or {}).get("Tự sửa âm thanh")
+        if btn is None:
+            return
+        btn.setColor(C["accent"] if on else C["orange"])
+        btn.setActive(bool(on))
 
     def _daw_running_cached(self) -> bool:
         """so_windows.is_running() quét process — gọi tối đa 5 s/lần từ timer UI."""
@@ -1404,7 +1453,7 @@ class MainDashboard(QMainWindow):
 
             if cc == int(MIDI_CC.get("be", 47)):
                 self.be_state = self._toggle_state("be", value)
-                btn = self._func_buttons.get("Bè")
+                btn = self._be_button()
                 if btn: btn.setActive(self.be_state)
 
             if cc == int(MIDI_CC.get("tat_on", 48)):
@@ -1439,14 +1488,14 @@ class MainDashboard(QMainWindow):
 
     def _auto_launch_apps(self):
         """Tự động mở Studio One và/hoặc YouTube browser khi khởi động (theo settings)."""
-        from core import daw, kiosk, so_windows
+        from core import daw, daw_visibility, so_windows
 
         studio_one_path = self.settings.get("studio_one_path", "")
 
         # Phục hồi bản mẫu .song TRƯỚC khi mở Studio One — mọi thứ khách chỉnh
         # buổi trước biến mất, kỹ thuật viên không phải sửa lại tay.
         closed_for_restore = False
-        if kiosk.is_enabled() and kiosk.restore_template_enabled():
+        if daw_visibility.restore_template_enabled():
             try:
                 from core import so_template
                 # Studio One còn sống từ phiên trước (lần thoát bị timeout hoặc
@@ -1461,11 +1510,11 @@ class MainDashboard(QMainWindow):
 
                 result = so_template.restore(studio_one_path)
                 if result["restored"]:
-                    print(f"[KIOSK] Đã phục hồi bản mẫu {daw.active().display_name}")
+                    print(f"[DAW-HIDE] Đã phục hồi bản mẫu {daw.active().display_name}")
                 elif so_template.has_template() and so_template.is_song_file(studio_one_path):
-                    print(f"[KIOSK] CHƯA phục hồi bản mẫu: {result['reason']}")
+                    print(f"[DAW-HIDE] CHƯA phục hồi bản mẫu: {result['reason']}")
             except Exception as e:
-                print(f"[KIOSK] phục hồi bản mẫu lỗi: {e}")
+                print(f"[DAW-HIDE] phục hồi bản mẫu lỗi: {e}")
 
         # Studio One — mở lại cả khi tắt auto-launch, nếu vừa đóng nó để phục hồi
         # bản mẫu (nó đang chạy sẵn trước khi app khởi động).
@@ -1478,16 +1527,16 @@ class MainDashboard(QMainWindow):
                 except Exception:
                     pass
 
-        # Chế độ khách: giấu Studio One đi. Vừa khởi chạy thì phải chờ nó dựng
-        # xong cửa sổ (nạp bài + quét plugin mất hàng chục giây) rồi mới ẩn được.
-        if kiosk.is_locked():
+        # Tự ẩn DAW khỏi khách. Vừa khởi chạy thì phải chờ nó dựng xong cửa sổ
+        # (nạp bài + quét plugin mất hàng chục giây) rồi mới ẩn được.
+        if daw_visibility.auto_hide():
             try:
                 if launched:
                     so_windows.hide_when_ready()
                 elif so_windows.is_running():
-                    so_windows.hide_all()
+                    so_windows.hide_all(keep_dialogs=True)
             except Exception as e:
-                print(f"[KIOSK] ẩn Studio One lúc khởi động lỗi: {e}")
+                print(f"[DAW-HIDE] ẩn {daw.active().display_name} lúc khởi động lỗi: {e}")
         # Browser YouTube
         if self.settings.get("auto_launch_browser", False):
             browser_path = self.settings.get("browser_path", "")
@@ -2596,10 +2645,33 @@ class MainDashboard(QMainWindow):
         self.be_state = not getattr(self, 'be_state', False)
         val = self._toggle_value("be", self.be_state)
         self.engine.send_midi(int(MIDI_CC.get("be", 47)), val)
-        btn = self._func_buttons.get("Bè")
+        btn = self._be_button()
         if btn:
             btn.setActive(self.be_state)
         print(f"[BE] -> {'ON' if self.be_state else 'OFF'} (Value {val})")
+
+    def _be_button(self):
+        """Nút Bè (mic 1) theo action — tên nút đổi được ở Dev Mode."""
+        return getattr(self, "_be_btn", None) or self._func_buttons.get("Bè")
+
+    def _send_be2(self):
+        val = self._toggle_value("be", self.be2_state)
+        self.engine.send_midi_on_channel(mic2.MIC2_CHANNEL, int(MIDI_CC.get("be", 47)), val)
+        return val
+
+    def _on_be2(self):
+        """Bè của mic 2 (nút "Bè Mic 2" khi bật 2 mic): cùng CC Bè, kênh MIDI 2.
+
+        Bè không phát đôi nữa — mỗi mic bật/tắt bè riêng (máy 826077C, 2026-11-03).
+        """
+        if not mic2.is_enabled(self.settings):
+            return
+        self.be2_state = not getattr(self, "be2_state", False)
+        val = self._send_be2()
+        btn = getattr(self, "_be2_btn", None)
+        if btn is not None:
+            btn.setActive(self.be2_state)
+        print(f"[BE MIC 2] -> {'ON' if self.be2_state else 'OFF'} (Value {val})")
 
     def _on_tat_on(self):
         """Toggle bộ khử tiếng ồn nền cho mic (CC "tat_on") — có ở MỌI phiên bản.
@@ -2719,14 +2791,16 @@ class MainDashboard(QMainWindow):
         Bấm mute_btn thay vì gửi CC thẳng để nút mute trong Mixer, mute_states
         và các CC phụ (mute_multi_cc) đều đồng bộ — chỉ một nguồn logic duy nhất.
         """
-        try:
-            ch = self._mixer_channels.get("mix_reverb")
-            if ch is None or not getattr(ch, "mute_btn", None):
-                return
-            if ch.is_muted() != muted:
-                ch.mute_btn.click()
-        except Exception as e:
-            print(f"[AUTO ECHO] đặt mute Vang lỗi: {e}")
+        # Hai mic: Vang Mic 2 là kênh riêng (kênh MIDI 2) — tự bật/tắt cả hai.
+        for key in ("mix_reverb", mic2.MIC2_REVERB_KEY):
+            try:
+                ch = self._mixer_channels.get(key)
+                if ch is None or not getattr(ch, "mute_btn", None):
+                    continue
+                if ch.is_muted() != muted:
+                    ch.mute_btn.click()
+            except Exception as e:
+                print(f"[AUTO ECHO] đặt mute {key} lỗi: {e}")
 
     # ── Tự động bật/tắt Khử ồn theo nhạc (Premium) ──────────────────────────
     # Nhạc vào là TẮT khử ồn: lúc hát, noise gate hay ngoạm mất đầu/đuôi câu và
@@ -3339,28 +3413,9 @@ class MainDashboard(QMainWindow):
 
         threading.Thread(target=_task, daemon=True).start()
 
-    def _on_eye_toggle_studio_one(self):
-        """Nút mắt: Ẩn/Hiện Studio One + cập nhật icon mắt nhắm/mở."""
-        from ui.components.svg_icons import SVG_EYE_OPEN, SVG_EYE_CLOSED
-        # Gọi logic ẩn/hiện PID-based
-        self._on_toggle_studio_one()
-        # Đọc lại trạng thái thật thay vì đảo cờ: lệnh trên có thể đã bỏ qua
-        # (đang khoá, Studio One chưa chạy) — đảo mù sẽ làm icon lệch thực tế.
-        from core import so_windows
-        self._studio_one_visible = so_windows.any_visible()
-        if self._eye_btn is not None:
-            new_svg = SVG_EYE_OPEN if self._studio_one_visible else SVG_EYE_CLOSED
-            self._eye_btn.setSvg(new_svg)
-
     def _on_toggle_studio_one(self):
         """Ẩn/Hiện Studio One + tất cả plugin windows (theo PID, không theo title)."""
-        from core import daw, kiosk, so_windows
-
-        # Chốt chặn cuối: nút mắt đã bị ẩn khi khoá, nhưng lệnh này còn tới được
-        # từ MIDI/giọng nói/nút custom nên phải chặn ngay tại đây.
-        if kiosk.is_locked():
-            self._show_message(f"{daw.active().display_name} đang khoá — cần mở khoá kỹ thuật", is_error=True)
-            return
+        from core import daw, so_windows
 
         if so_windows.win32_modules() is None:
             self._show_message("Thiếu thành phần hệ thống — báo kỹ thuật", is_error=True)
@@ -3380,94 +3435,6 @@ class MainDashboard(QMainWindow):
         else:
             so_windows.show_all()
             self._show_message(f"Đã hiện {daw.active().display_name}")
-
-    def _on_toggle_asiolink(self):
-        """Ẩn/Hiện cửa sổ ASIOLINK (ASIO4ALL, ASIOVADPRO, ASIOLink Pro, v.v.)"""
-        try:
-            import win32gui
-            import win32con
-            import win32process
-        except ImportError:
-            self._show_message("Thiếu thành phần hệ thống — báo kỹ thuật", is_error=True)
-            return
-
-        # Danh sách process name phổ biến của ASIO link/driver tools
-        ASIO_PROCESS_NAMES = [
-            "asiolink.exe", "asio link pro.exe", "asio link tool.exe",
-            "asio4all.exe", "asio4allv2.exe", "asiovadpro.exe",
-            "ASIOLink2.exe", "ASIOLinkTool.exe",
-        ]
-        ASIO_TITLE_KEYWORDS = [
-            "ASIO Link", "ASIO4ALL", "ASIOVADPRO", "ASIO Pro",
-        ]
-
-        found_hwnds = []
-
-        def _enum_cb(hwnd, _):
-            if not win32gui.IsWindow(hwnd):
-                return True
-            # Kiểm tra theo process name (đáng tin hơn title)
-            try:
-                _, pid = win32process.GetWindowThreadProcessId(hwnd)
-                import psutil
-                proc_name = psutil.Process(pid).name().lower()
-                if any(p.lower() in proc_name for p in ASIO_PROCESS_NAMES):
-                    found_hwnds.append(hwnd)
-                    return True
-            except Exception:
-                pass
-            # Fallback: kiểm tra title
-            title = win32gui.GetWindowText(hwnd)
-            if any(kw in title for kw in ASIO_TITLE_KEYWORDS):
-                if hwnd not in found_hwnds:
-                    found_hwnds.append(hwnd)
-            return True
-
-        try:
-            win32gui.EnumWindows(_enum_cb, None)
-        except Exception as e:
-            self._show_message(f"Lỗi tìm bảng điều khiển âm thanh: {e}", is_error=True)
-            return
-
-        if not found_hwnds:
-            self._show_message("Không tìm thấy bảng điều khiển âm thanh", is_error=True)
-            # Reset state để lần sau tìm lại từ đầu
-            self._asiolink_hidden = False
-            return
-
-        # Dùng state variable (_asiolink_hidden) — NOT IsWindowVisible()
-        # IsWindowVisible trả về sai khi có child window chain hoặc đang loading
-        is_hidden = getattr(self, '_asiolink_hidden', False)
-
-        if not is_hidden:
-            for h in found_hwnds:
-                try:
-                    win32gui.ShowWindow(h, win32con.SW_HIDE)
-                except Exception:
-                    pass
-            self._asiolink_hidden = True
-            # Cập nhật nút
-            btn = self._func_buttons.get("🔊 ASIOLINK")
-            if btn:
-                btn.setText("🔊 ASIO [ẩn]")
-            self._show_message("Đã ẩn bảng điều khiển âm thanh")
-        else:
-            for h in found_hwnds:
-                try:
-                    win32gui.ShowWindow(h, win32con.SW_SHOWNOACTIVATE)
-                except Exception:
-                    pass
-            try:
-                win32gui.SetForegroundWindow(found_hwnds[0])
-            except Exception:
-                pass
-            self._asiolink_hidden = False
-            # Khôi phục label nút
-            btn = self._func_buttons.get("🔊 ASIO [ẩn]")
-            if btn:
-                btn.setText("🔊 ASIOLINK")
-                self._func_buttons["🔊 ASIOLINK"] = self._func_buttons.pop("🔊 ASIO [ẩn]", btn)
-            self._show_message("Đã hiện bảng điều khiển âm thanh")
 
     def _on_open_recordings_folder(self):
         """Mở thư mục lưu trữ file ghi âm"""
@@ -3783,7 +3750,7 @@ class MainDashboard(QMainWindow):
         """Thiết lập Tab order rõ ràng cho điều hướng bằng bàn phím."""
         # Header → Tools → Mixer → Mode → Bottom
         chain = []
-        for attr in ("tone_combo", "scale_combo", "_pin_btn", "_support_btn", "_settings_btn", "_eye_btn"):
+        for attr in ("tone_combo", "scale_combo", "_pin_btn", "_support_btn", "_settings_btn"):
             w = getattr(self, attr, None)
             if w is not None:
                 chain.append(w)
@@ -4196,7 +4163,7 @@ class MainDashboard(QMainWindow):
         """
         from ui.dialogs.shutdown_dialog import StudioOneShutdownDialog
         from core import daw
-        print(f"[KIOSK] {daw.active().display_name} còn chạy từ phiên trước — đóng lại để phục hồi bản mẫu")
+        print(f"[DAW-HIDE] {daw.active().display_name} còn chạy từ phiên trước — đóng lại để phục hồi bản mẫu")
         try:
             dlg = StudioOneShutdownDialog(
                 self.engine,
@@ -4214,9 +4181,9 @@ class MainDashboard(QMainWindow):
             status = (dlg.result_data or {}).get("status")
             if status in ("closed", "not_running"):
                 return True
-            print(f"[KIOSK] Không đóng được {daw.active().display_name} ({status}) — bỏ qua phục hồi bản mẫu")
+            print(f"[DAW-HIDE] Không đóng được {daw.active().display_name} ({status}) — bỏ qua phục hồi bản mẫu")
         except Exception as e:
-            print(f"[KIOSK] đóng Studio One để phục hồi lỗi: {e}")
+            print(f"[DAW-HIDE] đóng Studio One để phục hồi lỗi: {e}")
         return False
 
     def _has_song_template(self) -> bool:
@@ -4229,8 +4196,13 @@ class MainDashboard(QMainWindow):
             print(f"[STUDIO ONE] Không kiểm được bản mẫu: {e}")
             return False
 
-    def _run_studio_one_shutdown(self):
-        """Chờ Studio One thoát, có hộp thoại tiến trình trước mặt.
+    def _start_hidden_daw_shutdown(self):
+        """Đóng DAW ngầm (không lưu) sau khi app đã tàng hình — không hộp thoại nào.
+
+        Trước 2026-11-10 việc này chạy trong hộp thoại "Đang đóng ... mà không lưu"
+        trước mặt khách, mất 4 giây tới 45 giây nên khách thấy app tắt rất lâu. Giờ
+        cửa sổ biến mất ngay, tiến trình sống tiếp tới khi DAW thoát rồi mới đóng
+        nốt (xem `_on_hidden_daw_shutdown_done`). Mức an toàn giữ nguyên:
 
         KHÔNG lưu (`save=False`): Ctrl+S trước đây chỉ là mẹo để Studio One khỏi
         hỏi lúc đóng, nhưng nó bắt phải hiện cửa sổ Studio One lên (lộ chế độ
@@ -4242,51 +4214,107 @@ class MainDashboard(QMainWindow):
         đằng nào cũng bị chép đè ở lần khởi động sau, nên thà lưu để Studio One
         thoát sạch còn hơn để nó kẹt với hộp thoại.
         """
-        from ui.dialogs.shutdown_dialog import StudioOneShutdownDialog
-        from core import daw
-        try:
-            dlg = StudioOneShutdownDialog(
-                self.engine,
-                timeout_sec=float(self.settings.get("studio_one_close_timeout", 45)),
-                force_kill=bool(self.settings.get("force_kill_studio_one", False)),
-                save=False,
-                fallback_save=self._has_song_template(),
-                hint=(f"Đang đóng {daw.active().display_name} mà không lưu. Đừng tắt máy lúc này — "
-                      f"tắt ngang sẽ khiến lần mở sau {daw.active().display_name} đòi phục hồi phiên."),
-                parent=self,
-            )
-            dlg.exec()
-            status = (dlg.result_data or {}).get("status")
-            if status not in ("closed", "not_running"):
-                print(f"[STUDIO ONE] Thoát app khi chưa đóng xong ({status})")
-                # Studio One ở lại thì phải chắc nó vẫn đang ẩn: hộp thoại hỏi
-                # lưu có thể đã kéo cửa sổ lên, app thoát xong khách ngồi trước
-                # một cửa sổ Studio One đang mở là hỏng chế độ khách.
-                from core import kiosk, so_windows
-                if kiosk.is_locked():
+        import time as _time
+        from ui.dialogs.shutdown_dialog import _CloseWorker
+        from core import instance_guard
+        from core.config import DATA_DIR
+        instance_guard.mark_closing(instance_guard.closing_marker(DATA_DIR))
+        self._daw_close_pending = True
+        self._daw_close_t0 = _time.monotonic()
+        worker = _CloseWorker(
+            self.engine,
+            timeout_sec=float(self.settings.get("studio_one_close_timeout", 45)),
+            force_kill=bool(self.settings.get("force_kill_studio_one", False)),
+            should_abort=lambda: False,
+            save=False,
+            fallback_save=self._has_song_template(),
+            parent=self,
+        )
+        worker.progress.connect(lambda msg: _log.info("[ĐÓNG NGẦM] %s", msg))
+        worker.finished_result.connect(self._on_hidden_daw_shutdown_done)
+        self._daw_close_worker = worker
+        worker.start()
+
+    def _on_hidden_daw_shutdown_done(self, result):
+        """DAW đã thoát (hoặc bỏ cuộc) — đóng nốt app."""
+        import time as _time
+        status = (result or {}).get("status")
+        took = _time.monotonic() - (getattr(self, "_daw_close_t0", None) or _time.monotonic())
+        _log.info("[ĐÓNG NGẦM] DAW: %s sau %.1f s", status, took)
+        if status not in ("closed", "not_running"):
+            # DAW ở lại thì phải chắc nó vẫn đang ẩn: hộp thoại hỏi lưu có
+            # thể đã kéo cửa sổ lên, app thoát xong khách ngồi trước một cửa
+            # sổ DAW đang mở.
+            try:
+                from core import daw_visibility, so_windows
+                if daw_visibility.auto_hide():
                     so_windows.hide_all()
+            except Exception as e:
+                _log.warning("[ĐÓNG NGẦM] giấu DAW lỗi: %s", e)
+        try:
+            from core import instance_guard
+            from core.config import DATA_DIR
+            instance_guard.clear_closing(instance_guard.closing_marker(DATA_DIR))
         except Exception as e:
-            print(f"[STUDIO ONE] Đóng an toàn lỗi: {e}")
-        # Đóng lại sau khi closeEvent hiện tại đã trả về — gọi self.close() ngay
-        # trong handler là đệ quy closeEvent.
+            _log.warning("[ĐÓNG NGẦM] xoá dấu lỗi: %s", e)
+        self._daw_close_pending = False
+        # Đóng lại sau khi slot này trả về — gọi self.close() ngay trong
+        # slot của tín hiệu QThread là đóng giữa chừng lúc worker còn emit.
         QTimer.singleShot(0, self.close)
 
     def closeEvent(self, event):
-        """Đóng cửa sổ không block — set flags ngay, cleanup nặng chạy nền."""
-        # ── BƯỚC 0: đóng Studio One an toàn ───────────────────────────────────
-        # Phải xong TRƯỚC khi app tắt: chờ Studio One tự thoát mất vài chục giây,
-        # mà main.py chỉ chờ thread nền 4 giây rồi os._exit(0) — chạy nền là chắc
-        # chắn bị cắt ngang, đúng cái đã khiến Studio One đòi phục hồi phiên.
-        if not self._so_shutdown_done and self._needs_studio_one_shutdown():
-            self._so_shutdown_done = True
-            event.ignore()
-            self._run_studio_one_shutdown()
-            return
+        """Bấm X: tàng hình ngay, dọn nhanh, đóng DAW ngầm; xong DAW mới thật sự đóng.
 
+        Lượt đầu: app biến mất khỏi màn hình trước mọi việc chậm, dừng các luồng,
+        lưu cài đặt, chạy dọn nặng (trình duyệt…) song song với việc đóng DAW.
+        DAW cần đóng thì bỏ qua sự kiện — event loop sống tiếp tới khi
+        `_on_hidden_daw_shutdown_done` gọi close() lần nữa.
+
+        Phải chờ DAW TRƯỚC khi app tắt: main.py chỉ chờ thread nền 4 giây rồi
+        os._exit(0) — đóng DAW trong thread nền là chắc chắn bị cắt ngang, đúng cái
+        đã khiến Studio One đòi phục hồi phiên.
+        """
+        if not self._close_started:
+            self._close_started = True
+            self._vanish()
+            self._stop_for_close()
+            self._start_bg_shutdown()
+            if self._needs_studio_one_shutdown():
+                self._start_hidden_daw_shutdown()
+        if self._daw_close_pending:
+            event.ignore()
+            return
+        self._finish_close(event)
+
+    def _vanish(self):
+        """Ẩn mọi cửa sổ của app ngay lập tức — khách thấy app đã tắt."""
+        app = QApplication.instance()
+        if app is not None:
+            # Ẩn/đóng cửa sổ cuối cùng không được làm Qt thoát event loop: còn phải
+            # chờ DAW. `_finish_close` sẽ quit tường minh.
+            app.setQuitOnLastWindowClosed(False)
+            for w in app.topLevelWidgets():
+                try:
+                    if w is not self and w.isVisible():
+                        w.hide()
+                except Exception:
+                    pass
         self.hide()
 
+    def _finish_close(self, event):
+        event.accept()
+        super().closeEvent(event)
+        app = QApplication.instance()
+        if app is not None and _APP_LOOP_RUNNING:
+            app.quit()
+        if app is not None:
+            app.setQuitOnLastWindowClosed(True)
+
+    def _stop_for_close(self):
+        """Dừng mọi thứ còn chạy trên main thread + lưu cài đặt (nhanh, không chặn)."""
         # ── BƯỚC 1: Set stop flags (instant, thread-safe) ──────────────────────
-        # Phải set trước khi accept để các thread thoát loop nhanh nhất có thể.
+        # Set sớm để các thread thoát loop nhanh nhất có thể — và để watcher
+        # YouTube không đổi bài, gửi MIDI trong lúc DAW đang đóng.
         self.engine._youtube_watcher_active = False
         self.engine.autokey_active = False
         try:
@@ -4382,7 +4410,7 @@ class MainDashboard(QMainWindow):
         except Exception:
             pass
 
-        # ── BƯỚC 5: Accept ngay — window đóng, Qt event loop không bị block ───
+        # ── BƯỚC 5: Lưu mixer + vị trí cửa sổ ─────────────────────────────────
         try:
             mixer_levels = {}
             for cc_key, slider in getattr(self, '_mixer_sliders', {}).items():
@@ -4401,14 +4429,11 @@ class MainDashboard(QMainWindow):
         except Exception as e:
             print(f"Lỗi lưu mixer levels: {e}")
 
-        # ── BƯỚC 5: Accept ngay — window đóng, UI không bị block ──────────────
-        event.accept()
-        super().closeEvent(event)
-
+    def _start_bg_shutdown(self):
         # ── BƯỚC 6: Cleanup nặng trong daemon thread ──────────────────────────
         # Bao gồm cả đóng browser. main.py join thread này (timeout ngắn) trước
         # khi os._exit(0) để ffmpeg/yt-dlp con không bị orphan giữa chừng.
-        # (Studio One không nằm ở đây — xem BƯỚC 0.)
+        # Chạy SONG SONG với việc đóng DAW ngầm (_start_hidden_daw_shutdown).
         settings_snap = dict(self.settings)
         engine = self.engine
 
@@ -4439,8 +4464,8 @@ class MainDashboard(QMainWindow):
                     engine.close_youtube_windows()
                 except Exception:
                     pass
-            # Studio One đã được đóng ở BƯỚC 0 (có hộp thoại tiến trình) — không
-            # đụng vào nữa, tránh giết nhầm process đang lưu dở.
+            # DAW do _start_hidden_daw_shutdown lo — không đụng vào ở đây, tránh
+            # giết nhầm process đang đóng dở.
             import gc
             gc.collect()
 
@@ -4465,7 +4490,7 @@ class ActivationDialog(QDialog):
         self.needs_renewal = needs_renewal
         self.activated = False
         self.setWindowTitle("Kích hoạt Quang Lưu Studio")
-        self.setWindowIcon(QIcon("app_icon.ico"))
+        self.setWindowIcon(QIcon(APP_ICON_FILE))
         # Khối gia hạn thêm một đoạn chữ + nút Thử lại nên cần cao hơn.
         rp.apply_dialog_size(self, 520, 640 if needs_renewal else 510,
                              fixed=True, max_scale=1.25)
@@ -4720,7 +4745,7 @@ class SetupView(QDialog):
         existing = backend.ConfigManager.load_settings() or {}
 
         self.setWindowTitle("Cài đặt Quang Lưu Studio")
-        self.setWindowIcon(QIcon("app_icon.ico"))
+        self.setWindowIcon(QIcon(APP_ICON_FILE))
         rp.apply_dialog_size(self, 580, 460, fixed=True, max_scale=1.25)
         self.setStyleSheet(f"background-color: {C['bg']}; color: {C['text']};")
 

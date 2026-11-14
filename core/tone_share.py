@@ -21,6 +21,7 @@ import time
 import urllib.error
 import urllib.request
 
+from core import net_tls
 from core.utils import extract_video_id
 
 log = logging.getLogger(__name__)
@@ -123,7 +124,7 @@ def _post(path: str, payload: dict):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+        with net_tls.urlopen(req, timeout=_TIMEOUT) as resp:
             return resp.status, json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as e:
         try:

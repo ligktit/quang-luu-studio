@@ -1,9 +1,8 @@
 """Phân biệt "bản Light đúng thiết kế" với "bản Heavy nạp QtWebEngine hỏng".
 
 Hai ca này cùng cho `embedded_player_available() == False` nhưng chữa khác hẳn
-nhau, và còn quyết định app tự tải file cài nào khi cập nhật
-(`core/updater/_version_check.py`) — nhận nhầm là đẩy khách sang bản Light vĩnh
-viễn.
+nhau, và bộ cập nhật cũ (≤ 1.8, đã bỏ ở 1.9.0) còn dùng nó để chọn file cài —
+nhận nhầm là đẩy khách sang bản Light vĩnh viễn.
 """
 import importlib
 import sys

@@ -115,7 +115,20 @@ class MidiHandler:
                 if not self._send_cc_unlocked(cc, value, channel=channel):
                     all_ok = False
             return all_ok
-    
+
+    def send_messages(self, msgs):
+        """Gửi NGUYÊN TỬ nhiều tin (channel, cc, value) trong một lần giữ lock.
+
+        Dùng cho hai mic Studio One (kênh 0 rồi kênh 1). True nếu tất cả
+        thành công; không dừng giữa chừng.
+        """
+        with self._send_lock:
+            all_ok = True
+            for channel, cc, value in msgs:
+                if not self._send_cc_unlocked(cc, value, channel=channel):
+                    all_ok = False
+            return all_ok
+
     def start_listening(self, port_name=MIDI_FEEDBACK_PORT_NAME):
         """Bắt đầu lắng nghe cổng PHẢN HỒI của DAW (QLS_PhanHoi) ở thread nền.
 
@@ -173,7 +186,10 @@ class MidiHandler:
         while self._is_listening and self.inport:
             try:
                 for msg in self.inport.iter_pending():
-                    if msg.type == 'control_change' and self.on_cc_received:
+                    # Chỉ nghe kênh 0: phản hồi DAW luôn ở kênh 0, kênh 2 (mic 2)
+                    # không được lẫn vào trạng thái của mic 1.
+                    if (msg.type == 'control_change' and self.on_cc_received
+                            and getattr(msg, "channel", 0) == 0):
                         self.on_cc_received(msg.control, msg.value)
             except Exception as e:
                 # Nuốt exception để listener không chết, nhưng vẫn log lại

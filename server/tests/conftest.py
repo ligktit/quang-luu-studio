@@ -59,3 +59,13 @@ def client():
 def admin_client(client):
     client.post("/admin/login", data={"username": "admin", "password": "testpass"})
     return client
+
+
+@pytest.fixture(autouse=True)
+def _fresh_velopack_storage():
+    import shutil
+    from app.config import settings
+    d = settings.storage_path / "velopack"
+    shutil.rmtree(d, ignore_errors=True)
+    yield
+    shutil.rmtree(d, ignore_errors=True)

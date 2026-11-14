@@ -2,7 +2,7 @@
 import time
 import threading
 
-from core.config import MIDI_PORT_NAME
+from core.config import AppConfig, MIDI_PORT_NAME
 
 
 class _MidiMixin:
@@ -81,51 +81,90 @@ class _MidiMixin:
 
     # ── Send / Learn ────────────────────────────────────────────────────────────
 
-    def send_midi(self, cc, value, auto_reconnect=True):
-        success = self.midi_handler.send_cc(cc, value)
+    def refresh_mic2_mirror(self):
+        """Đọc lại cấu hình hai mic; không bao giờ ném lỗi (lỗi -> tắt phát đôi)."""
+        try:
+            from core import mic2
+            if not mic2.is_enabled(self.settings):
+                self._mic2_shared = frozenset()
+                return
+            self._mic2_shared = mic2.shared_cc_numbers(
+                AppConfig.get_midi_cc() or {},
+                AppConfig.get_mic2_shared_cc(),
+                AppConfig.get_mode_config(),
+                AppConfig.get_mute_multi_cc(),
+            )
+        except Exception as e:
+            print(f"[MIC2] Không đọc được cấu hình phát đôi: {e}")
+            self._mic2_shared = frozenset()
+
+    def _send_with_reconnect(self, send, label, auto_reconnect):
+        success = send()
         if not success and auto_reconnect:
             # Throttle warnings to avoid spamming console
             now = time.time()
             last_warn = getattr(self, '_last_midi_fail_warn', 0)
             if now - last_warn > 10:
-                print(f"Gửi MIDI thất bại (cc={cc}), đang thử kết nối lại...")
+                print(f"Gửi MIDI thất bại ({label}), đang thử kết nối lại...")
                 self._last_midi_fail_warn = now
-            
+
             if self.connect_midi():
-                success = self.midi_handler.send_cc(cc, value)
+                success = send()
         return success
+
+    def send_midi(self, cc, value, auto_reconnect=True):
+        shared = self._mic2_shared
+        if shared and cc in shared:
+            from core import mic2
+            msgs = mic2.expand([(cc, value)], shared)
+            send = lambda: self.midi_handler.send_messages(msgs)
+        else:
+            send = lambda: self.midi_handler.send_cc(cc, value)
+        return self._send_with_reconnect(send, f"cc={cc}", auto_reconnect)
 
     def send_midi_pair(self, cc1, val1, cc2, val2, auto_reconnect=True):
         """Gửi NGUYÊN TỬ một cặp CC (vd: key_root + scale_type).
 
         Wrapper của MidiHandler.send_cc_pair: cả 2 CC được gửi trong cùng
-        một lần giữ lock nên không thread nào chen vào giữa. Giữ nguyên cơ
-        chế auto_reconnect như send_midi.
+        một lần giữ lock nên không thread nào chen vào giữa. Khi bật hai mic,
+        cả bốn tin (kênh 1 rồi kênh 2) đi trong MỘT lần giữ lock qua
+        send_messages. Giữ nguyên cơ chế auto_reconnect như send_midi.
 
         Trả về True nếu cả 2 CC gửi thành công.
         """
-        success = self.midi_handler.send_cc_pair(cc1, val1, cc2, val2)
-        if not success and auto_reconnect:
-            now = time.time()
-            last_warn = getattr(self, '_last_midi_fail_warn', 0)
-            if now - last_warn > 10:
-                print(f"Gửi MIDI pair thất bại (cc={cc1},{cc2}), đang thử kết nối lại...")
-                self._last_midi_fail_warn = now
+        shared = self._mic2_shared
+        if shared and (cc1 in shared or cc2 in shared):
+            from core import mic2
+            msgs = mic2.expand([(cc1, val1), (cc2, val2)], shared)
+            send = lambda: self.midi_handler.send_messages(msgs)
+        else:
+            send = lambda: self.midi_handler.send_cc_pair(cc1, val1, cc2, val2)
+        return self._send_with_reconnect(send, f"cc={cc1},{cc2}", auto_reconnect)
 
-            if self.connect_midi():
-                success = self.midi_handler.send_cc_pair(cc1, val1, cc2, val2)
-        return success
+    def send_midi_on_channel(self, channel, cc, value, auto_reconnect=True):
+        """Gửi đúng một tin lên kênh chỉ định, không phát đôi."""
+        msgs = [(channel, cc, value)]
+        return self._send_with_reconnect(
+            lambda: self.midi_handler.send_messages(msgs),
+            f"ch={channel} cc={cc}", auto_reconnect)
 
     def trigger_midi_learn(self, cc_list=None):
         if cc_list is None:
             cc_list = [10, 11, 20, 21, 22, 23, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 50, 51, 52, 53]
 
+        # MIDI learn chỉ gán control kênh 1 — không phát đôi sang Mic 2, không
+        # thì Studio One "chạm sau cùng" là control kênh 2. Đúng đường gửi của
+        # send_midi khi không phát đôi (máy một mic giữ nguyên từng byte).
+        def send_ch1(cc, value):
+            return self._send_with_reconnect(
+                lambda: self.midi_handler.send_cc(cc, value), f"cc={cc}", True)
+
         def run_learn():
             print(f"[MIDI LEARN] Bắt đầu gửi {len(cc_list)} tín hiệu MIDI...")
             for cc in cc_list:
-                self.send_midi(cc, 64)
+                send_ch1(cc, 64)
                 time.sleep(0.2)
-                self.send_midi(cc, 0)
+                send_ch1(cc, 0)
                 time.sleep(0.1)
             print("[MIDI LEARN] Hoàn tất gửi chuỗi tín hiệu.")
 

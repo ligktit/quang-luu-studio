@@ -28,11 +28,15 @@ _TOGGLES = {
     "fix_meo":   ("fix_meo_state", "_on_fix_meo"),
     "be":        ("be_state", "_on_be"),
     "tat_on":    ("tat_on_state", "_on_tat_on"),
+    # Hai mic Studio One: Bè riêng của mic 2 (_on_be2 tự bỏ qua khi tắt 2 mic).
+    "be_2":      ("be2_state", "_on_be2"),
 }
 
 # Kênh mixer quen thuộc: cc_key trên UI ↔ tên ngắn trong preset.
 _MIXER_NAMES = {"mix_music": "music", "mix_mic": "mic",
-                "mix_reverb": "reverb", "mix_backing": "backing"}
+                "mix_reverb": "reverb", "mix_backing": "backing",
+                # Hai mic Studio One — chỉ có thanh này khi bật 2 mic.
+                "mix_mic_2": "mic2", "mix_reverb_2": "reverb2"}
 # Kênh do setting riêng lo — không lưu 2 lần. ("tone_music" chỉ còn ở
 # ui_config.json kỹ thuật viên tự sửa tay; Tone Nhạc đã có setting riêng.)
 _MIXER_SKIP = {"tone_music"}

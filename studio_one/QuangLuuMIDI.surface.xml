@@ -36,6 +36,17 @@
               bài đã nạp xong và bảng MIDI của bài đang chạy.
   - CC 50-53: Mute toggles (buttons)
   - CC 54:    Hiệu ứng giọng em bé ↔ robot (knob) — thanh "Giọng" ở mixer của app
+
+  MIC 2 (hai micro) — MIDI channel 2 (status="#B0" channel="1"):
+  Control có hậu tố "2" (vd keyRoot2, muteMulti1_2) nhận trên kênh MIDI 2, cùng
+  số CC với kênh 1, tiêu đề thêm " (Mic 2)". Gán Control Link của chúng vào
+  track/FX của MIC 2. mixMic2 (CC 21) và muteMic2 (CC 51) là RIÊNG từng mic;
+  mọi control còn lại chỉ phản chiếu bản kênh 1 (app tự phát đôi).
+  Kênh 1 giữ nguyên — không đổi tên control cũ.
+  MỌI MidiMessage phải ghi rõ channel="0"/"1": Studio One 5 coi control không ghi
+  channel là nhận mọi kênh (lệnh Mic 2 rơi vào link Mic 1) và không nhận status
+  "#B1" (đã kiểm trên máy khách 2026-11-02). Đổi chỉ thuộc tính channel không làm
+  mất Control Link của bài cũ (link lưu theo tên control).
 -->
 <ControlSurface name="QuangLuuMIDI" 
                 manufacturer="QuangLuuStudio" 
@@ -50,12 +61,12 @@
     
     <!-- tone_music: Pitch shift nhạc nền (-12 đến +12 semitones, mapped 0-127) -->
     <Control name="toneMusic" title="Tone Nhạc" type="knob" options="receive public">
-      <MidiMessage status="#B0" address="10"/>
+      <MidiMessage status="#B0" channel="0" address="10"/>
     </Control>
     
     <!-- tone_voice: Pitch shift giọng hát (-12 đến +12 semitones, mapped 0-127) -->
     <Control name="toneVoice" title="Tone Giọng" type="knob" options="receive public">
-      <MidiMessage status="#B0" address="11"/>
+      <MidiMessage status="#B0" channel="0" address="11"/>
     </Control>
 
     <!-- ============================================ -->
@@ -64,22 +75,22 @@
     
     <!-- mix_music: Volume nhạc nền (0-100%, mapped 0-127) -->
     <Control name="mixMusic" title="Mix Nhạc" type="fader" options="receive public">
-      <MidiMessage status="#B0" address="20"/>
+      <MidiMessage status="#B0" channel="0" address="20"/>
     </Control>
     
     <!-- mix_mic: Volume microphone (0-100%, mapped 0-127) -->
     <Control name="mixMic" title="Mix Mic" type="fader" options="receive public">
-      <MidiMessage status="#B0" address="21"/>
+      <MidiMessage status="#B0" channel="0" address="21"/>
     </Control>
     
     <!-- mix_reverb: Reverb level (0-100%, mapped 0-127) -->
     <Control name="mixReverb" title="Mix Vang" type="fader" options="receive public">
-      <MidiMessage status="#B0" address="22"/>
+      <MidiMessage status="#B0" channel="0" address="22"/>
     </Control>
     
     <!-- mix_backing: Backing vocal level (0-100%, mapped 0-127) -->
     <Control name="mixBacking" title="Mix Bè" type="fader" options="receive public">
-      <MidiMessage status="#B0" address="23"/>
+      <MidiMessage status="#B0" channel="0" address="23"/>
     </Control>
 
     <!-- ============================================ -->
@@ -89,39 +100,39 @@
     <!-- mode: Control "Mode" của live-tuner (calibration.py đọc MIDI_CC["mode"]).
          KHÔNG phải nút Dân Ca — nút đó nằm ở CC 46 bên dưới. -->
     <Control name="liveTunerMode" title="Mode (Live Tuner)" type="knob" options="receive public">
-      <MidiMessage status="#B0" address="30"/>
+      <MidiMessage status="#B0" channel="0" address="30"/>
     </Control>
 
     <!-- mode_danca: Chế độ Dân Ca (0=Off, 127=On) — TÁCH khỏi CC 30 để không
          đè control live-tuner ở trên. -->
     <Control name="modeDanca" title="Mode Dân Ca" type="button" options="receive public">
-      <MidiMessage status="#B0" address="46"/>
+      <MidiMessage status="#B0" channel="0" address="46"/>
     </Control>
 
     <!-- mode_lofi: Chế độ Lofi (0=Off, 127=On) -->
     <Control name="modeLofi" title="Mode Lofi" type="button" options="receive public">
-      <MidiMessage status="#B0" address="37"/>
+      <MidiMessage status="#B0" channel="0" address="37"/>
     </Control>
     
     <!-- mode_remix: Chế độ Remix (0=Off, 127=On) -->
     <Control name="modeRemix" title="Mode Remix" type="button" options="receive public">
-      <MidiMessage status="#B0" address="38"/>
+      <MidiMessage status="#B0" channel="0" address="38"/>
     </Control>
     
     <!-- mode_datheloai: Chế độ Đa Thể Loại (0=Off, 127=On) -->
     <Control name="modeDatheloai" title="Mode Đa Thể Loại" type="button" options="receive public">
-      <MidiMessage status="#B0" address="39"/>
+      <MidiMessage status="#B0" channel="0" address="39"/>
     </Control>
     
     <!-- autokey: Bật/tắt AutoKey (0=Off, 127=On).
          Nút Auto-Tune của app KHÔNG dùng CC này — xem toneAuto (CC 40). -->
     <Control name="autokey" title="AutoKey" type="button" options="receive public">
-      <MidiMessage status="#B0" address="31"/>
+      <MidiMessage status="#B0" channel="0" address="31"/>
     </Control>
     
     <!-- score_trigger: Trigger hiển thị/ẩn score (0=Off, 127=On) -->
     <Control name="scoreTrigger" title="Score Trigger" type="button" options="receive public">
-      <MidiMessage status="#B0" address="32"/>
+      <MidiMessage status="#B0" channel="0" address="32"/>
     </Control>
 
     <!-- ============================================ -->
@@ -130,46 +141,46 @@
     
     <!-- key_root: Key gốc cho Auto-Tune (0-127, mapped to C-B) -->
     <Control name="keyRoot" title="Key Root" type="knob" options="receive public">
-      <MidiMessage status="#B0" address="33"/>
+      <MidiMessage status="#B0" channel="0" address="33"/>
     </Control>
     
     <!-- key_scale: Scale gốc cho Auto-Tune (0-127, mapped to Major/Minor) -->
     <Control name="keyScale" title="Key Scale" type="knob" options="receive public">
-      <MidiMessage status="#B0" address="34"/>
+      <MidiMessage status="#B0" channel="0" address="34"/>
     </Control>
     
     <!-- scale_type: Loại scale (Major value=13, Minor value=18) -->
     <Control name="scaleType" title="Scale Type" type="knob" options="receive public">
-      <MidiMessage status="#B0" address="35"/>
+      <MidiMessage status="#B0" channel="0" address="35"/>
     </Control>
     
     <!-- tune_on_off: Auto-Tune bypass (0=Off, 127=On).
          Nút Fix Méo của app KHÔNG dùng CC này — xem fixMeo (CC 45). -->
     <Control name="tuneOnOff" title="Tune On/Off" type="button" options="receive public">
-      <MidiMessage status="#B0" address="36"/>
+      <MidiMessage status="#B0" channel="0" address="36"/>
     </Control>
 
     <!-- tone_auto: nút Auto-Tune THẬT trên app (0=Off, 127=On) — TÁCH khỏi CC 31. -->
     <Control name="toneAuto" title="Auto-Tune" type="button" options="receive public">
-      <MidiMessage status="#B0" address="40"/>
+      <MidiMessage status="#B0" channel="0" address="40"/>
     </Control>
 
     <!-- fix_meo: nút Fix Méo THẬT trên app (0=Off, 127=On) — TÁCH khỏi CC 36. -->
     <Control name="fixMeo" title="Fix Méo" type="button" options="receive public">
-      <MidiMessage status="#B0" address="45"/>
+      <MidiMessage status="#B0" channel="0" address="45"/>
     </Control>
 
     <!-- be: Bật/tắt hiệu ứng bè giọng (0=Off, 127=On) — CC 47.
          KHÁC mixBacking (CC 23, âm lượng bè) và muteBacking (CC 53). -->
     <Control name="be" title="Bè" type="button" options="receive public">
-      <MidiMessage status="#B0" address="47"/>
+      <MidiMessage status="#B0" channel="0" address="47"/>
     </Control>
 
     <!-- tat_on: Bật/tắt bộ khử tiếng ồn nền cho mic (0=Off, 127=On) — CC 48.
          KHÁC muteMic (CC 51, tắt hẳn kênh mic): control này chỉ đóng/mở
          noise gate nên người hát vẫn nghe được giọng mình. -->
     <Control name="tatOn" title="Tắt Ồn" type="button" options="receive public">
-      <MidiMessage status="#B0" address="48"/>
+      <MidiMessage status="#B0" channel="0" address="48"/>
     </Control>
 
     <!-- ============================================ -->
@@ -178,22 +189,22 @@
     
     <!-- mute_multi_1: Phụ trợ Mute Vang 1 (CC 41) -->
     <Control name="muteMulti1" title="Mute Multi 1" type="button" options="receive public">
-      <MidiMessage status="#B0" address="41"/>
+      <MidiMessage status="#B0" channel="0" address="41"/>
     </Control>
     
     <!-- mute_multi_2: Phụ trợ Mute Vang 2 (CC 42) -->
     <Control name="muteMulti2" title="Mute Multi 2" type="button" options="receive public">
-      <MidiMessage status="#B0" address="42"/>
+      <MidiMessage status="#B0" channel="0" address="42"/>
     </Control>
     
     <!-- mute_multi_3: Phụ trợ Mute Vang 3 (CC 43) -->
     <Control name="muteMulti3" title="Mute Multi 3" type="button" options="receive public">
-      <MidiMessage status="#B0" address="43"/>
+      <MidiMessage status="#B0" channel="0" address="43"/>
     </Control>
     
     <!-- mute_multi_4: Phụ trợ Mute Vang 4 (CC 44) -->
     <Control name="muteMulti4" title="Mute Multi 4" type="button" options="receive public">
-      <MidiMessage status="#B0" address="44"/>
+      <MidiMessage status="#B0" channel="0" address="44"/>
     </Control>
 
     <!-- ============================================ -->
@@ -202,22 +213,22 @@
     
     <!-- mute_music: Tắt/mở kênh nhạc (0=Unmute, 127=Mute) -->
     <Control name="muteMusic" title="Mute Nhạc" type="button" options="receive public">
-      <MidiMessage status="#B0" address="50"/>
+      <MidiMessage status="#B0" channel="0" address="50"/>
     </Control>
     
     <!-- mute_mic: Tắt/mở kênh microphone (0=Unmute, 127=Mute) -->
     <Control name="muteMic" title="Mute Mic" type="button" options="receive public">
-      <MidiMessage status="#B0" address="51"/>
+      <MidiMessage status="#B0" channel="0" address="51"/>
     </Control>
     
     <!-- mute_reverb: Tắt/mở reverb (0=Unmute, 127=Mute) -->
     <Control name="muteReverb" title="Mute Vang" type="button" options="receive public">
-      <MidiMessage status="#B0" address="52"/>
+      <MidiMessage status="#B0" channel="0" address="52"/>
     </Control>
     
     <!-- mute_backing: Tắt/mở backing vocal (0=Unmute, 127=Mute) -->
     <Control name="muteBacking" title="Mute Bè" type="button" options="receive public">
-      <MidiMessage status="#B0" address="53"/>
+      <MidiMessage status="#B0" channel="0" address="53"/>
     </Control>
     
     <!-- ============================================ -->
@@ -227,7 +238,7 @@
     <!-- voice_fx: thanh "Giọng" ở mixer của app — chất giọng em bé ↔ robot
          (-12 đến +12, mapped 0-127). KHÁC Tone Giọng (CC 11, dịch cao độ). -->
     <Control name="voiceFx" title="Hiệu Ứng Giọng" type="knob" options="receive public">
-      <MidiMessage status="#B0" address="54"/>
+      <MidiMessage status="#B0" channel="0" address="54"/>
     </Control>
 
     <!-- ============================================ -->
@@ -241,7 +252,105 @@
          trước cả khi bài nạp xong, đúng cái lỗi cần tránh.
          Chưa gán thì app không nhận được trả lời và tự quay về cách hẹn giờ. -->
     <Control name="readyPing" title="Ping San Sang" type="knob" options="transmit receive public">
-      <MidiMessage status="#B0" address="49"/>
+      <MidiMessage status="#B0" channel="0" address="49"/>
+    </Control>
+
+    <!-- ============================================ -->
+    <!-- MIC 2 — MIDI CHANNEL 2 (channel="1")          -->
+    <!-- ============================================ -->
+    <!-- Chỉ dùng khi bật 2 micro (mic_count=2). Cùng số CC với kênh 1,
+         nhưng tới từ MIDI channel 2. Gán Control Link vào track MIC 2. -->
+
+    <Control name="toneVoice2" title="Tone Giọng (Mic 2)" type="knob" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="11"/>
+    </Control>
+
+    <Control name="mixMic2" title="Mix Mic (Mic 2)" type="fader" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="21"/>
+    </Control>
+
+    <Control name="mixReverb2" title="Mix Vang (Mic 2)" type="fader" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="22"/>
+    </Control>
+
+    <Control name="liveTunerMode2" title="Mode (Live Tuner) (Mic 2)" type="knob" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="30"/>
+    </Control>
+
+    <Control name="modeDanca2" title="Mode Dân Ca (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="46"/>
+    </Control>
+
+    <Control name="modeLofi2" title="Mode Lofi (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="37"/>
+    </Control>
+
+    <Control name="modeRemix2" title="Mode Remix (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="38"/>
+    </Control>
+
+    <Control name="modeDatheloai2" title="Mode Đa Thể Loại (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="39"/>
+    </Control>
+
+    <Control name="keyRoot2" title="Key Root (Mic 2)" type="knob" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="33"/>
+    </Control>
+
+    <Control name="keyScale2" title="Key Scale (Mic 2)" type="knob" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="34"/>
+    </Control>
+
+    <Control name="scaleType2" title="Scale Type (Mic 2)" type="knob" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="35"/>
+    </Control>
+
+    <Control name="tuneOnOff2" title="Tune On/Off (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="36"/>
+    </Control>
+
+    <Control name="toneAuto2" title="Auto-Tune (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="40"/>
+    </Control>
+
+    <Control name="fixMeo2" title="Fix Méo (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="45"/>
+    </Control>
+
+    <Control name="be2" title="Bè (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="47"/>
+    </Control>
+
+    <Control name="tatOn2" title="Tắt Ồn (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="48"/>
+    </Control>
+
+    <Control name="muteMulti1_2" title="Mute Multi 1 (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="41"/>
+    </Control>
+
+    <Control name="muteMulti2_2" title="Mute Multi 2 (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="42"/>
+    </Control>
+
+    <Control name="muteMulti3_2" title="Mute Multi 3 (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="43"/>
+    </Control>
+
+    <Control name="muteMulti4_2" title="Mute Multi 4 (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="44"/>
+    </Control>
+
+    <Control name="muteMic2" title="Mute Mic (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="51"/>
+    </Control>
+
+    <Control name="muteReverb2" title="Mute Vang (Mic 2)" type="button" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="52"/>
+    </Control>
+
+    <Control name="voiceFx2" title="Hiệu Ứng Giọng (Mic 2)" type="knob" options="receive public">
+      <MidiMessage status="#B0" channel="1" address="54"/>
     </Control>
 
   </Controls>

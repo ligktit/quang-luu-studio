@@ -110,14 +110,14 @@ jobs:
       # chạy file đó, nên __file__ của đoạn exec là thư mục temp — mà
       # sync_version.py định vị mọi file theo Path(__file__).parent. Đó chính là
       # lỗi đã làm hỏng lượt build của v1.6.2 lẫn v1.6.3:
-      #   FileNotFoundError: 'D:\a\_temp\QuangLuuStudio_Setup.iss'
+      #   FileNotFoundError: 'D:\a\_temp\<tên file>.iss'
       # Hai bản đó cuối cùng phải build tay.
-      - name: Sync version to .iss
+      - name: Sync version
         shell: pwsh
         run: |
           python sync_version.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Select-String -Path QuangLuuStudio_Setup.iss -Pattern '#define MyAppVersion'
+          Select-String -Path QuangLuuStudio_Bridge.iss -Pattern '#define MyAppVersion'
 
       # ── 6. Build exe (MỘT bản duy nhất, không QtWebEngine) ────────────────────
       # Từ 2026-10-04 tạm bỏ màn hình karaoke nhúng (bản Heavy) để chỉ còn một
@@ -130,33 +130,37 @@ jobs:
         run: |
           if (Test-Path build) { Remove-Item build -Recurse -Force }
           pyinstaller QuangLuuStudio.spec --noconfirm
-          # Rename _2 → production name expected by .iss
-          if (Test-Path "dist\QuangLuuStudio_2.exe") {
-            Rename-Item "dist\QuangLuuStudio_2.exe" "QuangLuuStudio.exe"
-            Write-Host "Renamed dist\QuangLuuStudio_2.exe → dist\QuangLuuStudio.exe"
-          } elseif (Test-Path "dist\QuangLuuStudio.exe") {
-            Write-Host "dist\QuangLuuStudio.exe already exists"
-          } else {
-            Write-Host "ERROR: No exe found in dist\"
+          if (-not (Test-Path "dist\QuangLuuStudio\QuangLuuStudio.exe")) {
+            Write-Host "ERROR: Khong thay dist\QuangLuuStudio\QuangLuuStudio.exe (onedir)"
             Get-ChildItem dist\
             exit 1
           }
-          $toc = "build\QuangLuuStudio\PKG-00.toc"
-          if (-not (Test-Path $toc)) {
-            Write-Host "ERROR: Khong thay $toc de kiem chung noi dung goi"
-            exit 1
-          }
-          # So ĐÚNG tên file .dll. Gói vẫn hợp lệ khi mang theo
-          # PySide6\include\QtWebEngineCore, qml\QtWebEngine và các file .pyi —
-          # chúng chỉ là khai báo/tài nguyên, không kéo nổi màn hình nhúng dậy
-          # nếu thiếu Qt6WebEngineCore.dll.
-          $hit = Select-String -Path $toc -SimpleMatch 'Qt6WebEngineCore.dll'
+          # So ĐÚNG tên file .dll trong thư mục onedir (PKG-00.toc chỉ có ở onefile).
+          $hit = Get-ChildItem dist\QuangLuuStudio -Recurse -Filter 'Qt6WebEngineCore.dll' -ErrorAction SilentlyContinue
           if ($hit) {
             Write-Host "ERROR: Goi lai co Qt6WebEngineCore.dll - ban nay khong duoc kem QtWebEngine"
-            $hit | Select-Object -First 5 | ForEach-Object { Write-Host "  $($_.Line.Trim())" }
+            $hit | Select-Object -First 5 | ForEach-Object { Write-Host "  $($_.FullName)" }
             exit 1
           }
-          Write-Host "OK: build khong kem QtWebEngine"
+          Write-Host "OK: build onedir khong kem QtWebEngine"
+
+      # ── 6b. Đóng gói Velopack ─────────────────────────────────────────────────
+      # vpk PHẢI cùng số với pip velopack trong requirements.txt. Bản trước được tải
+      # (prerelease, --pre) để sinh gói delta; bản đầu tiên chỉ có gói Full.
+      - name: Set up .NET (vpk)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Pack Velopack
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dotnet tool install -g vpk --version 1.2.161
+          $ver = "${{ github.ref_name }}".TrimStart('v')
+          & .\tools\build_velopack.ps1 -Version $ver -OutputDir releases -GithubToken $env:GITHUB_TOKEN
+          if (-not (Test-Path releases\QuangLuuStudio-CaiDat.exe)) { exit 1 }
 
       # ── 7. Install Inno Setup ──────────────────────────────────────────────────
       # Tải thẳng https://jrsoftware.org/download.php/is.exe ra file KHÔNG chạy
@@ -179,14 +183,14 @@ jobs:
           Write-Host "Inno Setup: $iscc"
 
       # ── 8. Build installer (một bản) ───────────────────────────────────────────
-      - name: Build installer
+      - name: Build bridge installer (máy 1.8.x)
         shell: pwsh
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) {
             $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
           }
-          & $iscc QuangLuuStudio_Setup.iss
+          & $iscc /DVelopackDir=releases QuangLuuStudio_Bridge.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host "Installer built:"
           Get-ChildItem installer_output\
@@ -211,13 +215,14 @@ jobs:
       #     signtool sign /f $certPath /p $env:CERT_PASSWORD `
       #       /tr http://timestamp.sectigo.com /td sha256 /fd sha256 $setup
       #     Remove-Item $certPath
+      #     (vpk pack: thêm --signParams "/f cert.pfx /p ... /tr http://timestamp.sectigo.com /td sha256 /fd sha256" trong tools/build_velopack.ps1)
 
       # ── 10. Generate SHA256SUMS.txt ────────────────────────────────────────────
       - name: Generate SHA256SUMS.txt
         shell: pwsh
         run: |
           $outFile = "installer_output\SHA256SUMS.txt"
-          $exes = @(Get-ChildItem installer_output\*.exe)
+          $exes = @(Get-ChildItem installer_output\*.exe) + @(Get-ChildItem releases\QuangLuuStudio-CaiDat.exe)
           $exes | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             "$hash  $($_.Name)"
@@ -276,14 +281,29 @@ jobs:
           print("Release notes generated")
 
       # ── 12. Create GitHub Release ──────────────────────────────────────────────
+      # Gói của các bản trước (vpk download kéo về releases\) bị xoá để chỉ đính kèm
+      # gói của bản này; releases.win.json vẫn liệt kê bản trước — server lọc theo Version.
+      - name: Drop previous-version packages
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}".TrimStart('v')
+          Get-ChildItem releases\*.nupkg | Where-Object { $_.Name -notlike "QuangLuuStudio-$ver-*" } | Remove-Item -Force
+          Get-ChildItem releases
+
+      # Prerelease: bộ cập nhật cũ (≤ 1.8) đọc GitHub releases/latest — bỏ qua prerelease,
+      # nên máy cũ chỉ nhận bộ cài cầu nối qua server (giữ được rollout_percent).
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: "Quang Lưu Studio ${{ github.ref_name }}"
           body_path: RELEASE_NOTES.md
           draft: false
-          prerelease: false
+          prerelease: true
           files: |
+            releases/releases.win.json
+            releases/QuangLuuStudio-*-full.nupkg
+            releases/QuangLuuStudio-*-delta.nupkg
+            releases/QuangLuuStudio-CaiDat.exe
             installer_output/Setup_QuangLuuStudio_v*.exe
             installer_output/SHA256SUMS.txt
         env:
@@ -294,5 +314,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: installer-${{ github.ref_name }}
-          path: installer_output/
+          path: |
+            installer_output/
+            releases/
           retention-days: 30

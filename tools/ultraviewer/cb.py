@@ -32,14 +32,17 @@ from PIL import Image, ImageChops
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.05
 SIZE = (1920, 1080)          # man hinh khach (toa do logic ma moi lenh dung)
+SIZE = (int(os.environ.get('QLS_W', SIZE[0])), int(os.environ.get('QLS_H', SIZE[1])))   # khach khac 1080p: ghi vao calib.txt hoac QLS_W/QLS_H
 TMP = os.path.join(os.environ.get('LOCALAPPDATA', r'C:\Users\Public'), 'Temp', 'qls_cb')
 os.makedirs(TMP, exist_ok=True)
 CALIB = os.path.join(TMP, 'calib.txt')     # "offx offy scale" do lenh calib ghi
 OFF, SCALE = (294, 192), 1.0
 if os.path.exists(CALIB):
     try:
-        _ox, _oy, _sc = open(CALIB).read().split()
+        _ox, _oy, _sc, *_kt = open(CALIB).read().split()   # tuy chon: rong cao man khach (vd 1366 768)
         OFF, SCALE = (int(_ox), int(_oy)), float(_sc)
+        if len(_kt) == 2 and 'QLS_W' not in os.environ:
+            SIZE = (int(_kt[0]), int(_kt[1]))
     except Exception:
         pass
 OFF = (int(os.environ.get('QLS_OFFX', OFF[0])), int(os.environ.get('QLS_OFFY', OFF[1])))
@@ -113,7 +116,17 @@ def focus():
     for w in pygetwindow.getAllWindows():
         if 'UltraViewer' in w.title and ' - UltraViewer' in w.title:
             try:
-                w.activate()
+                w.activate()   # cua so dang thu nho thi activate() nem loi -> khong duoc bo qua buoc duoi
+            except Exception:
+                pass
+            # Bi thu nho (-32000,-32000) hoac "Show desktop" (Win+D: visible, khong iconic, toa do van dung
+            # nhung khong ve) -> activate() khong dua len, click/OCR rot ra desktop may dev. Ep ShowWindow.
+            try:
+                import ctypes
+                u32 = ctypes.windll.user32
+                if u32.IsIconic(w._hWnd) or u32.GetForegroundWindow() != w._hWnd:
+                    u32.ShowWindow(w._hWnd, 9); time.sleep(0.3); u32.ShowWindow(w._hWnd, 3)
+                    pyautogui.press('alt'); u32.SetForegroundWindow(w._hWnd); time.sleep(0.8)
             except Exception:
                 pass
             time.sleep(0.4)

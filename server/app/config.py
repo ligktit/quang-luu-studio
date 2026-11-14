@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     # Thư mục chứa installer .exe đã upload.
     storage_dir: str = "./storage/releases"
     max_upload_mb: int = 500
+    # Repo GitHub chứa Release do CI tạo — nguồn để trang admin nhập bản Velopack.
+    github_repo: str = "ligktit/quang-luu-studio"
 
     # ── Rate limit ──
     # Tính theo IP THẬT của khách (cần --forwarded-allow-ips trong Dockerfile,

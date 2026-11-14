@@ -35,6 +35,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
+from core import net_tls
 from core.config import (
     MANUAL_TIMELINES_FILE,
     SONGS_FILE,
@@ -123,7 +124,7 @@ def _request(method: str, path: str, payload: dict) -> tuple[int, dict]:
         method=method,
     )
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+        with net_tls.urlopen(req, timeout=_TIMEOUT) as resp:
             return resp.status, json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as e:
         try:

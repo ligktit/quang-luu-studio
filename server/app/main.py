@@ -60,6 +60,7 @@ async def _admin_required_handler(request: Request, exc: AdminRequired):
 app.include_router(activation.router)
 app.include_router(sync.router)
 app.include_router(updates.router)
+app.include_router(updates.public_router)
 app.include_router(crashes.router)
 app.include_router(support.router)
 app.include_router(library.router)

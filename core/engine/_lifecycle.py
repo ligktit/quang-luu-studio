@@ -272,7 +272,8 @@ class _LifecycleMixin:
                     enter_count += 1
                     break
 
-            time.sleep(0.4)
+            # Ngắn để app (đang tàng hình) thoát ngay khi DAW vừa đi — không thêm độ trễ thừa.
+            time.sleep(0.15)
 
         if force_kill:
             _p(f"Quá hạn chờ — buộc phải tắt cứng (lần sau {name} sẽ đòi phục hồi)")

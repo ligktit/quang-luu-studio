@@ -1,12 +1,12 @@
 """Header panel builder for MainDashboard."""
-from PySide6.QtWidgets import QComboBox, QLabel, QPushButton, QSizePolicy
+from PySide6.QtWidgets import QComboBox, QLabel, QSizePolicy
 from PySide6.QtCore import Qt
 
 from ui.design_tokens import C, SP, FONT
 from ui.components.painter_button import PainterButton
 from ui.components.painter_header import PaintedHeaderBar, PaintedMidiDot
 from ui.components.marquee import SmoothMarqueeLabel
-from ui.components.svg_icons import SVG_EYE_OPEN, SVG_HELP, SVG_PIN, SVG_SETTINGS
+from ui.components.svg_icons import SVG_HELP, SVG_PIN, SVG_SETTINGS
 from ui.components.tone_display import ToneDisplay, ScaleToggle, NextTonePill
 
 
@@ -59,17 +59,6 @@ def build_header(dashboard) -> PaintedHeaderBar:
             dashboard._marquee_widget.set_led_border(True)
     except Exception as e:
         print(f"[PREMIUM-LED] init lỗi: {e}")
-    # Dải cảnh báo Tự sửa âm thanh — chỉ hiện khi lượt kiểm tra thấy lỗi.
-    dashboard._audio_warn_btn = QPushButton("")
-    dashboard._audio_warn_btn.setFlat(True)
-    dashboard._audio_warn_btn.setCursor(Qt.PointingHandCursor)
-    dashboard._audio_warn_btn.setStyleSheet(
-        f"QPushButton {{ color: {C['orange']}; border: 1px solid {C['orange']};"
-        f" border-radius: 8px; padding: 2px 8px; font-weight: 600; }}")
-    dashboard._audio_warn_btn.setAccessibleName("Cảnh báo âm thanh — bấm để tự sửa")
-    dashboard._audio_warn_btn.clicked.connect(dashboard._open_audio_doctor)
-    dashboard._audio_warn_btn.hide()
-    layout.addWidget(dashboard._audio_warn_btn)
     layout.addWidget(dashboard._marquee_widget, 1)
     dashboard.marquee_label = dashboard._marquee_widget
 
@@ -140,8 +129,7 @@ def build_header(dashboard) -> PaintedHeaderBar:
 
     layout.addSpacing(SP.XS)
     # Hỗ trợ — kênh hai chiều với đội kỹ thuật. Nút đỏ lên khi có trả lời chưa
-    # đọc (MainDashboard._refresh_support_badge). Ẩn khi khoá kiosk: khách hát
-    # không phải người gửi ticket.
+    # đọc (MainDashboard._refresh_support_badge). Luôn hiện.
     dashboard._support_btn = PainterButton(
         "", color=C["card_hover"], height=28, radius=6,
         font_size=10, svg_content=SVG_HELP, svg_size=16, fixed_width=30,
@@ -163,33 +151,5 @@ def build_header(dashboard) -> PaintedHeaderBar:
     dashboard._settings_btn.setCursor(Qt.PointingHandCursor)
     dashboard._settings_btn.clicked.connect(dashboard._show_settings_dialog)
     layout.addWidget(dashboard._settings_btn)
-
-    # Nút mắt ẩn/hiện Studio One. Ở chế độ khách nút bị setVisible(False) — widget
-    # ẩn thì không vẽ, không bấm được, không nằm trong thứ tự Tab và trình đọc màn
-    # hình cũng bỏ qua, tức là khách không còn lối nào chạm tới Studio One.
-    # Bật/tắt qua MainDashboard._apply_kiosk_visibility().
-    dashboard._studio_one_visible = True
-    dashboard._eye_btn = PainterButton(
-        "", color=C["card_hover"], height=28, radius=6,
-        font_size=10, svg_content=SVG_EYE_OPEN, svg_size=16, fixed_width=30,
-    )
-    dashboard._eye_btn.setToolTip(f"Ẩn/Hiện {name} + Plugin")
-    dashboard._eye_btn.setAccessibleName(f"Ẩn hiện {name}")
-    dashboard._eye_btn.setCursor(Qt.PointingHandCursor)
-    dashboard._eye_btn.clicked.connect(dashboard._on_eye_toggle_studio_one)
-    layout.addWidget(dashboard._eye_btn)
-
-    # Huy hiệu nhắc kỹ thuật viên rằng máy đang mở khoá (kẻo quên khoá lại).
-    dashboard._tech_badge = QLabel("KỸ THUẬT")
-    dashboard._tech_badge.setStyleSheet(
-        f"color: {C['bg']}; background-color: {C['orange']};"
-        f" border-radius: 6px; padding: 3px 8px; font-size: 10px;"
-        f" font-weight: 900; font-family: {FONT};"
-    )
-    dashboard._tech_badge.setToolTip("Đang mở khoá · Ctrl+Alt+Shift+T để khoá")
-    dashboard._tech_badge.setAccessibleName("Đang mở khoá kỹ thuật")
-    dashboard._tech_badge.setVisible(False)
-    layout.addSpacing(SP.XS)
-    layout.addWidget(dashboard._tech_badge)
 
     return header
