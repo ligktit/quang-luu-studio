@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
+from core import mic2
 from ui.design_tokens import C, SP, FONT, FONT_MONO, lighten
 from ui.components.painter_button import PainterButton
 from ui.components.mode_button import ModeToggleButton
@@ -14,7 +15,7 @@ from ui.panels._dev_buttons import attach_dev_ctx_menu, build_dev_row
 
 # Nút có sẵn kiểu bật/tắt (giữ trạng thái, có setActive). Nút còn lại trong
 # panel (Dò Lại, Chế độ Nhanh/Full…) bấm một lần, không có "đang bật".
-_TOGGLE_ACTIONS = {"tone_auto", "fix_meo", "be", "tat_on"}
+_TOGGLE_ACTIONS = {"tone_auto", "fix_meo", "be", "tat_on", mic2.BE2_KEY}
 
 
 def _build_search_bar(dashboard) -> QWidget:
@@ -207,6 +208,16 @@ def build_panel_tools(dashboard) -> GlassPanel:
             
         desc = t_cfg.get("desc", "")
         func_btns.append((text, c_val, cb, desc, t_cfg))
+
+        # Hai mic: nút Bè Mic 2 ngay sau Bè — cùng CC Bè, gửi kênh MIDI 2 (mỗi
+        # mic bật/tắt bè riêng). Không nằm trong ui_config; cfg giả id be_2 để
+        # menu Dev Mode đổi tên được (frontend ghi vào mic_labels).
+        if (action_name == mic2.BE_KEY and cb == getattr(dashboard, "_on_be", None)
+                and mic2.is_enabled(getattr(dashboard, "settings", None))):
+            be2_text = mic2.be2_label(dashboard.settings)
+            be2_cfg = dict(t_cfg, id=mic2.BE2_KEY, action=mic2.BE2_KEY, label=be2_text)
+            func_btns.append((be2_text, c_val, dashboard._on_be2,
+                              "Bật/tắt bè giọng của mic 2", be2_cfg))
         
     for i, (text, color, cb, desc, t_cfg) in enumerate(func_btns):
         # Nút bật/tắt vẽ như nút MODE: tắt = viền mỏng, bật = đổ đầy + phát
@@ -229,7 +240,12 @@ def build_panel_tools(dashboard) -> GlassPanel:
             btn.setActive(getattr(dashboard, "tune_state", True))
         elif text == "Fix Méo":
             btn.setActive(getattr(dashboard, "fix_meo_state", False))
-        elif text == "Bè":
+        elif t_cfg.get("action") == mic2.BE2_KEY:
+            dashboard._be2_btn = btn
+            btn.setActive(getattr(dashboard, "be2_state", False))
+        elif t_cfg.get("action") == mic2.BE_KEY and cb == getattr(dashboard, "_on_be", None):
+            # Theo action, không theo chữ: đổi tên nút (vd "Bè Mic P420") đèn vẫn theo.
+            dashboard._be_btn = btn
             btn.setActive(getattr(dashboard, "be_state", False))
         elif text == "Tắt Ồn":
             btn.setActive(getattr(dashboard, "tat_on_state", False))
