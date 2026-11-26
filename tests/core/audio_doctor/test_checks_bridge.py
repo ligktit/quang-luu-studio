@@ -163,3 +163,59 @@ def test_loopmidi_khoi_dong_lai_khi_daw_dang_chay_thi_nhac_mo_lai_daw():
     f = LoopMidiCheck().fix(ctx)
     assert s.killed == ["loopMIDI.exe"]
     assert f.status is Status.CAN_LAM_TAY and "Khởi động lại" in f.message
+
+
+_SURF_APP = ('<ControlSurface name="QuangLuuMIDI">\r\n  <Controls>\r\n'
+             '    <Control name="be" type="button"><MidiMessage status="#B0" channel="0" address="47"/></Control>\r\n'
+             '    <Control name="be2" type="button"><MidiMessage status="#B0" channel="1" address="47"/></Control>\r\n'
+             '  </Controls>\r\n</ControlSurface>\r\n')
+# Studio One ghi lại khi kỹ thuật học "Be KG" (máy 826077C 2026-11-26): tab, hex, thêm controlb003c.
+_SURF_SO_HOC = ('<ControlSurface>\n\t<Controls>\n'
+                '\t\t<Control name="be" type="button"><MidiMessage status="#B0" channel="0" address="#2F"/></Control>\n'
+                '\t\t<Control name="be2" type="button"><MidiMessage status="#B0" channel="1" address="#2F"/></Control>\n'
+                '\t\t<Control name="controlb003c" title="Be KG" type="button">'
+                '<MidiMessage status="#B0" channel="0" address="#3C"/></Control>\n'
+                '\t</Controls>\n</ControlSurface>\n')
+
+
+def _so_bundle_xml(ctx, device_surface):
+    _so_bundle(ctx)
+    ctx.system.files.update({"SRC_SURF": _SURF_APP, SO_SURF: device_surface, SO_INFO: "info"})
+
+
+def test_surface_studio_one_hoc_them_control_khong_bi_coi_la_cu():
+    # Máy 826077C: mỗi lần mở app báo "đã cũ" → khách bấm Tự sửa → mất "Be KG" (6 lần/buổi sáng).
+    ctx = make_ctx(STUDIO_ONE)
+    _so_bundle_xml(ctx, _SURF_SO_HOC)
+    assert DawRemoteCheck().detect(ctx).status is Status.OK
+
+
+def test_surface_khoa_chi_doc_nhung_du_control_thi_ok():
+    ctx = make_ctx(STUDIO_ONE)
+    _so_bundle_xml(ctx, _SURF_SO_HOC)
+    ctx.system.readonly.add(SO_SURF)
+    assert DawRemoteCheck().detect(ctx).status is Status.OK
+
+
+def test_surface_thieu_control_app_thi_gop_va_giu_control_hoc_tay():
+    ctx = make_ctx(STUDIO_ONE)
+    thieu_be2 = _SURF_SO_HOC.replace(
+        '\t\t<Control name="be2" type="button"><MidiMessage status="#B0" channel="1" address="#2F"/></Control>\n', '')
+    _so_bundle_xml(ctx, thieu_be2)
+    c = DawRemoteCheck()
+    assert c.detect(ctx).status is Status.LOI
+    assert c.fix(ctx).status is Status.DA_SUA
+    moi = ctx.system.files[SO_SURF]
+    assert 'name="be2"' in moi and 'name="controlb003c"' in moi and 'title="Be KG"' in moi
+    assert moi.startswith('<ControlSurface name="QuangLuuMIDI">')
+    assert ctx.system.backups == [SO_SURF]
+    assert c.detect(ctx).status is Status.OK
+
+
+def test_surface_tren_may_khong_doc_duoc_xml_thi_chep_de_nhu_cu():
+    ctx = make_ctx(STUDIO_ONE)
+    _so_bundle_xml(ctx, "<ControlSurface><Controls>")
+    c = DawRemoteCheck()
+    assert c.detect(ctx).status is Status.LOI
+    c.fix(ctx)
+    assert ctx.system.files[SO_SURF] == _SURF_APP
