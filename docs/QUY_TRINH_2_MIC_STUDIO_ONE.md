@@ -138,6 +138,13 @@ trên app (Vang, Vang Mic 2); tên kênh Vang Mic 2 tự theo tên mic 2, đổi
 của app; thiếu key thì app dùng mặc định `core/mic2.py` → `DEFAULT_SHARED_NAMES`. Các CC trong `mode_config` và CC phụ `mute_multi_cc` (trừ của Mic)
 tự được phát đôi. `mix_mic`, `mute_mic`, `mix_reverb`, `mute_reverb`, CC phụ của Vang và `be` không bao giờ phát đôi (riêng từng mic). Sửa xong phải mở lại app mới áp.
 
+**Control học tay trong Studio One (learn) và nút Tự sửa:** học một control mới thì Studio One ghi lại cả file
+`QuangLuuMIDI.surface.xml` (thêm `controlbXXXX`, đổi định dạng, có khi làm rơi control của app).
+- App **≤ 1.9.1**: Tự sửa coi file đó là "cũ" và **chép đè** → mất control học tay; link trong bài còn nhưng chết
+  (máy 826077C, 2026-11-26, mất "Be KG" sáu lần). Cách giữ: khoá file chỉ đọc (Tự sửa thấy chỉ đọc thì không ghi đè).
+- App **sau 1.9.1**: Tự sửa so theo từng control; file đủ control của app thì không báo cũ, còn thiếu thì **gộp**
+  (bản đi kèm + control học tay), không mất gì. Không cần khoá chỉ đọc nữa — máy đã khoá thì bỏ khoá sau khi cập nhật.
+
 ## 4. Tắt sẵn track không dùng, lưu bài mẫu
 
 1. Cả hai track đang record-arm + monitor, không mute → mở bài là hai mic cùng kêu. Đặt trạng thái mặc định: **Mic 2 (`MIC KG`) mute** (khớp với app lần đầu bật), Mic 1 mở. Tắt mic nào không dùng thì mute track đó.

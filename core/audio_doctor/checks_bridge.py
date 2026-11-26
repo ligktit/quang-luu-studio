@@ -1,7 +1,10 @@
 """Cầu nối app ↔ DAW: loopMIDI và bản điều khiển (surface SO / script Cubase)."""
 import os
 
+from core import so_surface
 from core.audio_doctor.model import Check, ok, loi, khong_ro, da_sua, can_lam_tay
+
+_SO_SURFACE = "studio_one/QuangLuuMIDI.surface.xml"
 
 LOOPMIDI_PORTS_KEY = r"Software\Tobias Erichsen\loopMIDI\Ports"
 _LOOPMIDI_EXE = "loopMIDI.exe"
@@ -91,9 +94,16 @@ class DawRemoteCheck(Check):
         pairs = []
         for d in dirs:
             base = os.path.join(d, "User Devices", "QuangLuuMIDI")
-            pairs.append(("studio_one/QuangLuuMIDI.surface.xml", os.path.join(base, "QuangLuuMIDI.surface.xml")))
+            pairs.append((_SO_SURFACE, os.path.join(base, "QuangLuuMIDI.surface.xml")))
             pairs.append(("studio_one/deviceinfo.xml", os.path.join(base, "deviceinfo.xml")))
         return pairs
+
+    @staticmethod
+    def _read(ctx, path):
+        try:
+            return ctx.system.read_text(path)
+        except (OSError, UnicodeError, KeyError):
+            return None
 
     def _stale(self, ctx, pairs):
         s = ctx.system
@@ -102,9 +112,30 @@ class DawRemoteCheck(Check):
             src = s.bundled(rel)
             if src is None:
                 continue
-            if not s.exists(dst) or s.sha256(dst) != s.sha256(src):
-                out.append((src, dst))
+            if s.exists(dst) and s.sha256(dst) == s.sha256(src):
+                continue
+            if (rel == _SO_SURFACE and s.exists(dst)
+                    and so_surface.covers(self._read(ctx, src), self._read(ctx, dst))):
+                # Studio One ghi lại file khi kỹ thuật học control mới → SHA khác nhưng
+                # đủ mọi control của app: không cũ (máy 826077C, 2026-11-26).
+                continue
+            out.append((src, dst))
         return out
+
+    def _install(self, ctx, src, dst):
+        """Chép bản đi kèm; riêng surface Studio One thì gộp, giữ control kỹ thuật tự học."""
+        s = ctx.system
+        merged = None
+        if s.exists(dst) and dst.endswith(os.path.basename(_SO_SURFACE)):
+            src_text, dst_text = self._read(ctx, src), self._read(ctx, dst)
+            if src_text is not None and dst_text is not None:
+                merged = so_surface.merge(src_text, dst_text)
+        if s.exists(dst):
+            s.backup(dst)
+        if merged is not None:
+            s.write_text(dst, merged)
+        else:
+            s.copy(src, dst)
 
     def detect(self, ctx):
         name = ctx.daw.display_name
@@ -130,9 +161,7 @@ class DawRemoteCheck(Check):
         s = ctx.system
         for src, dst in self._stale(ctx, self._pairs(ctx) or []):
             try:
-                if s.exists(dst):
-                    s.backup(dst)
-                s.copy(src, dst)
+                self._install(ctx, src, dst)
             except OSError as e:
                 return can_lam_tay(f"Không ghi được bản điều khiển: {e.strerror or e}",
                                    guide=(f"Tắt {name} rồi bấm «Tự sửa lại».",
